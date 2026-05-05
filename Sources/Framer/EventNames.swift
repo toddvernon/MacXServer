@@ -1,0 +1,61 @@
+public func eventName(_ code: UInt8) -> String? {
+    switch code {
+    case 2:  return "KeyPress"
+    case 3:  return "KeyRelease"
+    case 4:  return "ButtonPress"
+    case 5:  return "ButtonRelease"
+    case 6:  return "MotionNotify"
+    case 7:  return "EnterNotify"
+    case 8:  return "LeaveNotify"
+    case 9:  return "FocusIn"
+    case 10: return "FocusOut"
+    case 11: return "KeymapNotify"
+    case 12: return "Expose"
+    case 13: return "GraphicsExposure"
+    case 14: return "NoExposure"
+    case 15: return "VisibilityNotify"
+    case 16: return "CreateNotify"
+    case 17: return "DestroyNotify"
+    case 18: return "UnmapNotify"
+    case 19: return "MapNotify"
+    case 20: return "MapRequest"
+    case 21: return "ReparentNotify"
+    case 22: return "ConfigureNotify"
+    case 23: return "ConfigureRequest"
+    case 24: return "GravityNotify"
+    case 25: return "ResizeRequest"
+    case 26: return "CirculateNotify"
+    case 27: return "CirculateRequest"
+    case 28: return "PropertyNotify"
+    case 29: return "SelectionClear"
+    case 30: return "SelectionRequest"
+    case 31: return "SelectionNotify"
+    case 32: return "ColormapNotify"
+    case 33: return "ClientMessage"
+    case 34: return "MappingNotify"
+    default: return nil
+    }
+}
+
+public func errorName(_ code: UInt8) -> String? {
+    switch code {
+    case 1:  return "BadRequest"
+    case 2:  return "BadValue"
+    case 3:  return "BadWindow"
+    case 4:  return "BadPixmap"
+    case 5:  return "BadAtom"
+    case 6:  return "BadCursor"
+    case 7:  return "BadFont"
+    case 8:  return "BadMatch"
+    case 9:  return "BadDrawable"
+    case 10: return "BadAccess"
+    case 11: return "BadAlloc"
+    case 12: return "BadColor"
+    case 13: return "BadGC"
+    case 14: return "BadIDChoice"
+    case 15: return "BadName"
+    case 16: return "BadLength"
+    case 17: return "BadImplementation"
+    default: return nil
+    }
+}
