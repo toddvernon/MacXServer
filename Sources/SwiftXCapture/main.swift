@@ -44,6 +44,23 @@ if args.first == "summary" {
     exit(0)
 }
 
+if args.first == "replay" {
+    let rest = Array(args.dropFirst())
+    do {
+        let parsed = try CLI.parseReplay(rest)
+        writeStderr("replaying \(parsed.inputPath) → \(parsed.targetHost):\(parsed.targetPort)\n")
+        let result = try Replay.run(args: parsed)
+        writeStderr("sent \(result.c2sFramesSent) frames, \(result.c2sBytesSent) bytes; received \(result.s2cBytesReceived) bytes from target\n")
+    } catch let error as CLIError {
+        writeStderr("\(error)\n\n\(CLI.usage)\n")
+        exit(2)
+    } catch {
+        writeStderr("replay error: \(error)\n")
+        exit(1)
+    }
+    exit(0)
+}
+
 do {
     let parsed = try CLI.parseCapture(args)
     let listenDescription = "\(parsed.listenHost):\(parsed.listenPort)"

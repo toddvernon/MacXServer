@@ -62,6 +62,16 @@ Aggregate statistics for a recording:
 ./run.sh summary captures/quickplot.xtap
 ```
 
+Replay a recorded session's client-to-server bytes against a target X server
+(useful for driving a fresh server with a known-good byte stream):
+
+```
+./run.sh replay captures/xterm_long.xtap --target localhost:6000
+```
+
+`--target` defaults to `127.0.0.1:6000` if omitted. Replay sends bytes as fast
+as the target accepts them; original timing is not honored.
+
 ## Tests
 
 ```
@@ -85,6 +95,7 @@ The full project context lives in markdown at the repo root:
 from the captured Sun sessions decode by typed name. The framer covers ~60%
 of the X11 spec but 100% of the opcodes any of these vintage apps actually
 use. SHAPE extension calls pass through correctly but are not yet typed.
+Capture, dump, summary, and replay subcommands all work.
 
 **Phase 2** (Sun-to-Sun bridge over CrossFeed via a Raspberry Pi pair):
 not started.

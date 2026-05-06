@@ -25,6 +25,7 @@ public enum CLI {
     public static let usage = """
     swiftx-capture --listen <[host:]port> --forward <host:port> --output <path>
     swiftx-capture dump <path-to-xtap>
+    swiftx-capture replay <path-to-xtap> [--target <host:port>]
 
       --listen <[host:]port>    Address to listen for X clients on
       --forward <host:port>     Address of the upstream X server
@@ -32,6 +33,8 @@ public enum CLI {
 
       dump <path>               Chronological per-message dump
       summary <path>            Aggregate analysis of a recorded .xtap
+      replay <path>             Send a recorded session's C2S bytes to a target X server
+        --target <host:port>    Defaults to 127.0.0.1:6000
     """
 
     public static func parseCapture(_ args: [String]) throws -> CaptureArgs {
@@ -75,6 +78,31 @@ public enum CLI {
             forwardPort: forwardHP.port,
             outputPath: output
         )
+    }
+
+    public static func parseReplay(_ args: [String]) throws -> ReplayArgs {
+        var path: String?
+        var target: String?
+
+        var i = 0
+        while i < args.count {
+            let arg = args[i]
+            switch arg {
+            case "--target":
+                i += 1
+                guard i < args.count else { throw CLIError.missingValue(flag: "--target") }
+                target = args[i]
+            default:
+                if arg.hasPrefix("--") { throw CLIError.unknownFlag(arg) }
+                guard path == nil else { throw CLIError.unknownFlag(arg) }
+                path = arg
+            }
+            i += 1
+        }
+
+        guard let path = path else { throw CLIError.missingFlag("<path>") }
+        let targetHP = try parseHostPort(target ?? "127.0.0.1:6000", defaultHost: nil)
+        return ReplayArgs(inputPath: path, targetHost: targetHP.host, targetPort: targetHP.port)
     }
 
     public static func parseHostPort(_ s: String, defaultHost: String?) throws -> (host: String, port: UInt16) {
