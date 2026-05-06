@@ -188,6 +188,35 @@ If I find a specific app I want to run that needs another extension, I'll add it
 
 ---
 
+## 2026-05-06: No stateful replay translation; replay stays as a smoke test
+
+**Chosen**: The replay subcommand stays as a dumb byte-pump (with `--realtime` and `--hold` flags for visual inspection). It does not translate resource IDs or atoms between captures and replay targets. Replay is a smoke test, not a Product 2 integration test.
+
+**Rejected**: Building a stateful replay translator (parse the captured C2S stream, track resource-id-base and atom mappings between original server and replay target, rewrite IDs in flight). Yesterday's plan flagged this as the next step.
+
+**Why this changed**:
+
+- Empirically tested on 2026-05-06: replaying `captures/xclock.xtap` against u5 with `--realtime --hold` rendered xclock correctly with 0 protocol errors. Same-server byte-pump replay just works as long as no other client has connected since the capture, because Sun's X server hands the first client a deterministic resource-id-base and the WM has already pre-interned the relevant atoms.
+- The original justification for translation was Product 2 testing: feed captures into the Swift X server to validate it. But Product 2 will hand out a different resource-id-base than u5 did, and InternAtom replies will assign different atom IDs, so byte-pump replay against Product 2 will fail. Translation would fix that, but at the cost of a parser-rewriter pipeline of meaningful complexity.
+- The honest answer is that Product 2 testing wants live Sun clients connecting through real Xlib to Product 2, not replayed bytes. That's a more realistic test (driven by the same client logic that drove the original capture) and exercises Product 2 against the same workload it'll see in production. Replay translation buys us "deterministic regression test of past sessions" but at significant code cost, against an alternative (live clients) that is both simpler and more representative.
+- The capture corpus's job is now narrower: framer round-trip regression tests (see `Tests/SwiftXCaptureCoreTests/CorpusRoundTripTests.swift`) and source material for documentation. The "fixtures for Product 2" framing was always optimistic.
+
+**What replay is good for now**:
+
+- Smoke-testing the framer against real Sun behavior (decode → encode → send → observe response)
+- Visual demonstration: pointing the tool at a Sun and seeing a recorded session render
+- Bug reproduction against the *same* server when no other clients are connected
+
+**What it isn't good for**:
+
+- Driving Product 2 (different IDs and atoms; would need translation)
+- Replaying captures that included user-driven window resizes (drawing requests are aimed at dimensions the replay doesn't cause)
+- Any case where the original session depended on server timing or events that won't reproduce identically
+
+If at some later point we have a specific need that translation would solve and live clients won't, revisit this entry.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
