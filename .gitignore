@@ -11,3 +11,7 @@ Package.resolved
 # Xcode
 xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
+
+# External X11 reference material — synced via Dropbox, not via git.
+# Re-fetchable with reference/fetch.sh.
+reference/
