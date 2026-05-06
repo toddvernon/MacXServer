@@ -96,6 +96,115 @@ final class ReplayTests: XCTestCase {
         XCTAssertEqual(args.inputPath, "session.xtap")
         XCTAssertEqual(args.targetHost, "127.0.0.1")
         XCTAssertEqual(args.targetPort, 6000)
+        XCTAssertFalse(args.hold)
+        XCTAssertFalse(args.realtime)
+    }
+
+    func testParseReplayHoldFlag() throws {
+        let args = try CLI.parseReplay(["session.xtap", "--hold"])
+        XCTAssertTrue(args.hold)
+    }
+
+    func testParseReplayHoldFlagBeforePath() throws {
+        let args = try CLI.parseReplay(["--hold", "--target", "u5:6000", "session.xtap"])
+        XCTAssertTrue(args.hold)
+        XCTAssertEqual(args.targetHost, "u5")
+        XCTAssertEqual(args.inputPath, "session.xtap")
+    }
+
+    func testParseReplayRealtimeFlag() throws {
+        let args = try CLI.parseReplay(["session.xtap", "--realtime"])
+        XCTAssertTrue(args.realtime)
+        XCTAssertFalse(args.hold)
+    }
+
+    func testParseReplayRealtimeAndHoldTogether() throws {
+        let args = try CLI.parseReplay(["session.xtap", "--realtime", "--hold"])
+        XCTAssertTrue(args.realtime)
+        XCTAssertTrue(args.hold)
+    }
+
+    func testRealtimePacingHonorsTimestamps() throws {
+        // Record three frames spaced ~150ms apart so the .xtap timestamps reflect
+        // that, then verify --realtime replay takes at least that long.
+        let path = makeTempFilePath(prefix: "replay-realtime")
+        let recorder = try Recorder(outputPath: path, listen: ":6000", forward: "host:6000")
+        recorder.record(direction: .clientToServer, bytes: [0xAA])
+        Thread.sleep(forTimeInterval: 0.15)
+        recorder.record(direction: .clientToServer, bytes: [0xBB])
+        Thread.sleep(forTimeInterval: 0.15)
+        recorder.record(direction: .clientToServer, bytes: [0xCC])
+        try recorder.finalize()
+
+        let (serverFd, serverPort) = try makeListener()
+        defer { Darwin.close(serverFd) }
+
+        let serverDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            do {
+                let cfd = try acceptOne(serverFd)
+                _ = readUntilEOF(cfd)
+                Darwin.close(cfd)
+            } catch {
+                XCTFail("server side error: \(error)")
+            }
+            serverDone.signal()
+        }
+
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        let result = try Replay.run(args: ReplayArgs(
+            inputPath: path,
+            targetHost: "127.0.0.1",
+            targetPort: serverPort,
+            realtime: true
+        ))
+        let elapsedNs = DispatchTime.now().uptimeNanoseconds - t0
+
+        XCTAssertEqual(serverDone.wait(timeout: .now() + 5.0), .success)
+        XCTAssertEqual(result.c2sFramesSent, 3)
+        // Realtime replay should take roughly as long as the original ~300ms
+        // gap. Allow 250ms floor for measurement noise.
+        XCTAssertGreaterThanOrEqual(elapsedNs, 250_000_000)
+    }
+
+    func testFastReplayIgnoresTimestamps() throws {
+        // Same recording, but without --realtime the replay should pump in <50ms
+        // even though the original spanned ~300ms.
+        let path = makeTempFilePath(prefix: "replay-fast")
+        let recorder = try Recorder(outputPath: path, listen: ":6000", forward: "host:6000")
+        recorder.record(direction: .clientToServer, bytes: [0xAA])
+        Thread.sleep(forTimeInterval: 0.15)
+        recorder.record(direction: .clientToServer, bytes: [0xBB])
+        Thread.sleep(forTimeInterval: 0.15)
+        recorder.record(direction: .clientToServer, bytes: [0xCC])
+        try recorder.finalize()
+
+        let (serverFd, serverPort) = try makeListener()
+        defer { Darwin.close(serverFd) }
+
+        let serverDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            do {
+                let cfd = try acceptOne(serverFd)
+                _ = readUntilEOF(cfd)
+                Darwin.close(cfd)
+            } catch {
+                XCTFail("server side error: \(error)")
+            }
+            serverDone.signal()
+        }
+
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        _ = try Replay.run(args: ReplayArgs(
+            inputPath: path,
+            targetHost: "127.0.0.1",
+            targetPort: serverPort
+        ))
+        let elapsedNs = DispatchTime.now().uptimeNanoseconds - t0
+
+        XCTAssertEqual(serverDone.wait(timeout: .now() + 5.0), .success)
+        // Generous: well under the 300ms the realtime replay would take.
+        XCTAssertLessThan(elapsedNs, 100_000_000)
     }
 
     func testParseReplayWithExplicitTarget() throws {

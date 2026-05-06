@@ -5,11 +5,15 @@ public struct ReplayArgs: Equatable, Sendable {
     public var inputPath: String
     public var targetHost: String
     public var targetPort: UInt16
+    public var hold: Bool
+    public var realtime: Bool
 
-    public init(inputPath: String, targetHost: String, targetPort: UInt16) {
+    public init(inputPath: String, targetHost: String, targetPort: UInt16, hold: Bool = false, realtime: Bool = false) {
         self.inputPath = inputPath
         self.targetHost = targetHost
         self.targetPort = targetPort
+        self.hold = hold
+        self.realtime = realtime
     }
 }
 
@@ -55,7 +59,16 @@ public enum Replay {
 
         var c2sFrames = 0
         var c2sBytes = 0
+        let startNs = DispatchTime.now().uptimeNanoseconds
         for frame in frames where frame.direction == .clientToServer {
+            if args.realtime {
+                let deadline = startNs &+ frame.timestamp
+                let nowNs = DispatchTime.now().uptimeNanoseconds
+                if deadline > nowNs {
+                    let sleepNs = deadline - nowNs
+                    Thread.sleep(forTimeInterval: TimeInterval(sleepNs) / 1_000_000_000.0)
+                }
+            }
             let ok = writeAllReplay(fd: fd, bytes: frame.bytes)
             if !ok {
                 shutdown(fd, Int32(SHUT_RDWR))
@@ -65,6 +78,15 @@ public enum Replay {
             }
             c2sFrames += 1
             c2sBytes += frame.bytes.count
+        }
+
+        if args.hold {
+            // Don't half-close: keep the connection alive so the server doesn't
+            // tear down our windows. Most C2S streams complete in milliseconds,
+            // way before a window manager has time to reparent and expose. Wait
+            // for SIGINT, then close cleanly.
+            FileHandle.standardError.write(Data("holding connection — Ctrl-C to disconnect\n".utf8))
+            waitForSIGINT()
         }
 
         // Half-close the write side so the target sees EOF, finishes any pending
@@ -103,6 +125,19 @@ private func writeAllReplay(fd: Int32, bytes: [UInt8]) -> Bool {
 private func replaySetNoDelay(_ fd: Int32) {
     var one: Int32 = 1
     _ = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, socklen_t(MemoryLayout<Int32>.size))
+}
+
+private func waitForSIGINT() {
+    let semaphore = DispatchSemaphore(value: 0)
+    let source = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
+    source.setEventHandler { semaphore.signal() }
+    source.resume()
+    // Suppress the default handler (which terminates the process) so the
+    // dispatch source actually fires.
+    signal(SIGINT, SIG_IGN)
+    semaphore.wait()
+    source.cancel()
+    signal(SIGINT, SIG_DFL)
 }
 
 private func replayDial(host: String, port: UInt16) throws -> Int32 {

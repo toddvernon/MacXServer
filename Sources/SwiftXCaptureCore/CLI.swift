@@ -35,6 +35,11 @@ public enum CLI {
       summary <path>            Aggregate analysis of a recorded .xtap
       replay <path>             Send a recorded session's C2S bytes to a target X server
         --target <host:port>    Defaults to 127.0.0.1:6000
+        --realtime              Pace C2S frames using their original .xtap timestamps
+                                (slow but lets the WM reparent and expose between frames,
+                                so drawing actually appears on screen)
+        --hold                  After sending, keep the connection open until Ctrl-C
+                                (so windows stay mapped long enough to actually appear)
     """
 
     public static func parseCapture(_ args: [String]) throws -> CaptureArgs {
@@ -83,6 +88,8 @@ public enum CLI {
     public static func parseReplay(_ args: [String]) throws -> ReplayArgs {
         var path: String?
         var target: String?
+        var hold = false
+        var realtime = false
 
         var i = 0
         while i < args.count {
@@ -92,6 +99,10 @@ public enum CLI {
                 i += 1
                 guard i < args.count else { throw CLIError.missingValue(flag: "--target") }
                 target = args[i]
+            case "--hold":
+                hold = true
+            case "--realtime":
+                realtime = true
             default:
                 if arg.hasPrefix("--") { throw CLIError.unknownFlag(arg) }
                 guard path == nil else { throw CLIError.unknownFlag(arg) }
@@ -102,7 +113,7 @@ public enum CLI {
 
         guard let path = path else { throw CLIError.missingFlag("<path>") }
         let targetHP = try parseHostPort(target ?? "127.0.0.1:6000", defaultHost: nil)
-        return ReplayArgs(inputPath: path, targetHost: targetHP.host, targetPort: targetHP.port)
+        return ReplayArgs(inputPath: path, targetHost: targetHP.host, targetPort: targetHP.port, hold: hold, realtime: realtime)
     }
 
     public static func parseHostPort(_ s: String, defaultHost: String?) throws -> (host: String, port: UInt16) {
