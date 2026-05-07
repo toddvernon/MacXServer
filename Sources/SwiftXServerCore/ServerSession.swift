@@ -52,6 +52,65 @@ public final class ServerSession: @unchecked Sendable {
         bridge?.setOnTopLevelResize { [weak self] id, width, height in
             self?.handleTopLevelResize(id: id, width: width, height: height)
         }
+        bridge?.setOnKey { [weak self] topLevel, macKeyCode, modifierFlags, isDown in
+            self?.handleKeyEvent(
+                topLevel: topLevel, macKeyCode: macKeyCode,
+                modifierFlags: modifierFlags, isDown: isDown
+            )
+        }
+    }
+
+    /// Called by the bridge from main thread when a keyDown/keyUp NSEvent
+    /// arrives. Resolves which X window in the top-level's subtree should
+    /// receive the event (the deepest viewable window with KeyPressMask /
+    /// KeyReleaseMask in its event mask), translates to X keycode + state,
+    /// and queues a KeyPress / KeyRelease event.
+    public func handleKeyEvent(
+        topLevel: UInt32, macKeyCode: UInt8, modifierFlags: UInt, isDown: Bool
+    ) {
+        guard let order = byteOrder else { return }
+        let mask: UInt32 = isDown ? (1 << 0) : (1 << 1)        // KeyPress / KeyRelease
+        guard let target = keyTarget(topLevel: topLevel, eventMaskBit: mask) else {
+            log?.log("  keyEvent: no target window with mask 0x\(String(mask, radix: 16)) under 0x\(String(topLevel, radix: 16))")
+            return
+        }
+        let xKeycode = USKeymap.xKeycode(forMacKeyCode: macKeyCode)
+        let state = USKeymap.translateModifiers(modifierFlags)
+        // X11 InputEvent shape covers KeyPress / KeyRelease / button / motion.
+        // code: 2 = KeyPress, 3 = KeyRelease.
+        let code: UInt8 = isDown ? 2 : 3
+        let event = InputEvent(
+            detail: xKeycode,
+            sequenceNumber: sequenceNumber,
+            time: 0,                                          // server time; xterm doesn't care
+            root: config.rootWindowId,
+            event: target,
+            child: 0,
+            rootX: 0, rootY: 0, eventX: 0, eventY: 0,         // pointer position; not relevant for keys
+            state: state,
+            sameScreen: true
+        )
+        log?.log("  → \(isDown ? "KeyPress" : "KeyRelease") xKey=0x\(String(xKeycode, radix: 16)) target=0x\(String(target, radix: 16)) state=0x\(String(state, radix: 16))")
+        outbound.append(event.encode(code: code, byteOrder: order))
+    }
+
+    /// Walk the subtree rooted at `topLevel` looking for a viewable window
+    /// whose event mask has the given bit set. Per X11 spec, key events
+    /// propagate to the smallest enclosing window with the relevant mask.
+    /// Phase 1: just find any descendant with the mask; fall back to top-level.
+    private func keyTarget(topLevel: UInt32, eventMaskBit: UInt32) -> UInt32? {
+        // BFS through the subtree.
+        var queue: [UInt32] = [topLevel]
+        while !queue.isEmpty {
+            let id = queue.removeFirst()
+            if let entry = windows.get(id), entry.eventMask & eventMaskBit != 0 {
+                return id
+            }
+            for (cid, w) in windows.windows where w.parent == id {
+                queue.append(cid)
+            }
+        }
+        return windows.get(topLevel) != nil ? topLevel : nil
     }
 
     /// Called by the bridge from main thread when the user resizes an
@@ -74,6 +133,23 @@ public final class ServerSession: @unchecked Sendable {
             overrideRedirect: false
         )
         outbound.append(event.encode(byteOrder: order))
+
+        // The outer's resize means descendants' visible region changed too —
+        // for xterm specifically, the inner's drawing area is now bigger
+        // (or smaller) and any newly-exposed pixels need redrawing. Real
+        // Xsun emits Expose on each viewable descendant with ExposureMask.
+        // We do the same (emit Expose covering full new descendant size,
+        // even if shrinking — slight over-emit, but xterm copes).
+        let exposureMask: UInt32 = 1 << 15
+        for descendant in mappedDescendantSnapshots(of: id) {
+            guard descendant.eventMask & exposureMask != 0 else { continue }
+            log?.log("  → emit Expose on descendant 0x\(String(descendant.id, radix: 16)) \(descendant.width)x\(descendant.height)")
+            let expose = ExposeEvent(
+                sequenceNumber: sequenceNumber, window: descendant.id,
+                x: 0, y: 0, width: descendant.width, height: descendant.height, count: 0
+            )
+            outbound.append(expose.encode(byteOrder: order))
+        }
     }
 
     /// True if `window` is a known top-level (parent == root). Used to decide
@@ -287,6 +363,41 @@ public final class ServerSession: @unchecked Sendable {
             x: r.x &+ dx, y: r.y &+ dy,
             string: r.string
         )
+    }
+
+    private func handleCopyArea(_ r: CopyArea, byteOrder: ByteOrder) {
+        guard let bridge = bridge else { return }
+        // Phase 1: same-window copies only (xterm's scrolling case). If src
+        // and dst drawables resolve to different top-levels, drop on the
+        // floor with a log line — implement cross-window CopyArea later.
+        guard let (srcTop, srcDX, srcDY) = topLevelAndOffset(for: r.srcDrawable),
+              let (dstTop, dstDX, dstDY) = topLevelAndOffset(for: r.dstDrawable),
+              srcTop == dstTop else {
+            log?.log("  CopyArea: cross-window copy not supported yet (src=0x\(String(r.srcDrawable, radix: 16)) dst=0x\(String(r.dstDrawable, radix: 16)))")
+            return
+        }
+        log?.log("  CopyArea top=0x\(String(srcTop, radix: 16)) src=(\(r.srcX),\(r.srcY)) dst=(\(r.dstX),\(r.dstY)) \(r.width)x\(r.height)")
+        bridge.copyArea(
+            topLevel: srcTop,
+            srcX: r.srcX &+ srcDX, srcY: r.srcY &+ srcDY,
+            dstX: r.dstX &+ dstDX, dstY: r.dstY &+ dstDY,
+            width: r.width, height: r.height
+        )
+        // X11 spec: every CopyArea on a GC with graphics-exposures=True must
+        // be followed by GraphicsExpose events (one per obscured source
+        // region) OR a single NoExpose if the source had no obscured
+        // pixels. graphics-exposures defaults to True; xterm's CopyWait
+        // (util.c:709) BLOCKS in XWindowEvent waiting for one of these.
+        // Without it, the first scroll works but every subsequent scroll
+        // hangs xterm. Our same-window backing-store copies never have
+        // obscured source regions, so we always emit NoExpose.
+        let noExpose = NoExposureEvent(
+            sequenceNumber: sequenceNumber,
+            drawable: r.dstDrawable,
+            minorOpcode: 0,
+            majorOpcode: 62  // X_CopyArea
+        )
+        outbound.append(noExpose.encode(byteOrder: byteOrder))
     }
 
     private func handleClearArea(_ r: ClearArea, byteOrder: ByteOrder) {
@@ -677,10 +788,13 @@ public final class ServerSession: @unchecked Sendable {
         case .imageText8(let r):
             handleImageText8(r, byteOrder: byteOrder)
 
+        case .copyArea(let r):
+            handleCopyArea(r, byteOrder: byteOrder)
+
         // Silent no-ops: requests xclock or other apps may issue that we
         // don't yet wire to rendering. Add real handlers as needed.
         case .polyArc, .polyRectangle,
-             .polyFillArc, .copyArea,
+             .polyFillArc,
              .setClipRectangles, .setDashes, .putImage, .polyText8,
              .sendEvent, .reparentWindow, .destroySubwindows,
              .grabPointer, .ungrabPointer, .grabButton, .grabKeyboard,

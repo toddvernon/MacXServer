@@ -17,6 +17,15 @@ import CoreGraphics
 
 public final class FlippedXView: NSView {
 
+    /// X window id this view backs. Used by the keyboard event path so the
+    /// session can resolve which X window in the subtree should receive
+    /// key events. Set by the bridge at NSWindow creation.
+    public var topLevelXWindowId: UInt32 = 0
+
+    /// Keyboard event sink. The bridge installs this; FlippedXView calls it
+    /// from keyDown / keyUp. Args: (NSEvent, isDown).
+    public var keyHandler: ((NSEvent, Bool) -> Void)?
+
     /// CGBitmapContext sized at `logicalWidth * scale × logicalHeight * scale`.
     /// The CGContext has a pre-applied transform so callers can issue draw
     /// commands in logical coordinates — the transform handles the scale-up
@@ -35,6 +44,19 @@ public final class FlippedXView: NSView {
     public private(set) var scaleFactor: Int = 1
 
     public override var isFlipped: Bool { true }
+
+    /// We accept keyboard focus so the NSWindow can route keyDown / keyUp
+    /// events to us. The bridge calls makeFirstResponder(view) right after
+    /// makeKeyAndOrderFront in mapTopLevel.
+    public override var acceptsFirstResponder: Bool { true }
+
+    public override func keyDown(with event: NSEvent) {
+        keyHandler?(event, true)
+    }
+
+    public override func keyUp(with event: NSEvent) {
+        keyHandler?(event, false)
+    }
 
     /// Allocate (or re-allocate) the backing CGBitmapContext at
     /// `logicalWidth * scale × logicalHeight * scale` device pixels and

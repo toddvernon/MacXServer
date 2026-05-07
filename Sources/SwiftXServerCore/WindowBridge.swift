@@ -101,6 +101,14 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// Always invoked on the main thread.
     func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void)
 
+    /// Called by the session at startup. The bridge stores the closure and
+    /// invokes it on every keyDown / keyUp NSEvent in any of its NSWindows.
+    /// Args: (top-level X window id, macOS virtual keyCode, raw modifierFlags,
+    /// isDown). The session translates to an X KeyPress / KeyRelease event,
+    /// resolves the key target via the X subtree, and queues the event.
+    /// Always invoked on the main thread.
+    func setOnKey(_ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void)
+
     // MARK: - Drawing (M3)
     //
     // Coordinates are already translated to the top-level NSWindow's view
@@ -111,6 +119,15 @@ public protocol WindowBridge: AnyObject, Sendable {
     func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool)
     func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, rectangles: [Rectangle])
     func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16)
+    /// In-window CopyArea: copies a rectangular region of pixels from
+    /// (srcX, srcY, w, h) to (dstX, dstY, w, h) within the same top-level
+    /// X window's backing context. Used by xterm for scrolling.
+    func copyArea(
+        topLevel: UInt32,
+        srcX: Int16, srcY: Int16,
+        dstX: Int16, dstY: Int16,
+        width: UInt16, height: UInt16
+    )
 
     /// ImageText8: fill bg rect, then draw text. `(x, y)` is the baseline of
     /// the first glyph in top-level logical pixel coords. The bridge owns
@@ -128,12 +145,19 @@ public extension WindowBridge {
     func descendantResized(id: UInt32, parent: UInt32, geometry: TopLevelGeometry) {}
     func drawingTarget(for drawable: UInt32) -> Any? { nil }
     func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {}
+    func setOnKey(_ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {}
     // Default no-ops so unit-test bridges don't have to implement every method.
     func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment]) {}
     func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint]) {}
     func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool) {}
     func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, rectangles: [Rectangle]) {}
     func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16) {}
+    func copyArea(
+        topLevel: UInt32,
+        srcX: Int16, srcY: Int16,
+        dstX: Int16, dstY: Int16,
+        width: UInt16, height: UInt16
+    ) {}
     func drawImageText8(
         topLevel: UInt32,
         foreground: RGB16, background: RGB16,

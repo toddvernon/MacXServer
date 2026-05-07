@@ -8,9 +8,9 @@ M1, M2, M3 all shipped and live-verified against xclock running on u5 (a real SP
 
 **Phase 1 of `SERVER_RESOLUTION_SCALING_AND_FONTS.md` shipped same day** (2026-05-07): display-adaptive integer scaling at startup, Core Text scalable font substitution with cell-snapping, ImageText8 + PolyFillRectangle rendering, plus the Xlib-startup replies xterm needs (ListFonts, GetKeyboardMapping, GetModifierMapping, GetPointerMapping, QueryColors, GetSelectionOwner). Captured xterm session (752 requests) replays cleanly through the session.
 
-295/295 tests green. The xclock PoC is fully met; the xterm rendering foundation is in place. Live xterm-from-u5 verification pending.
+295/295 tests green. The xclock PoC is fully met; the xterm rendering foundation is in place.
 
-Next: live test xterm from u5. Likely-blockers if it fails: empty keymap (typed input won't echo, but xterm should display its prompt), missing replies for opcodes the captured trace didn't exercise (GetGeometry / GetWindowAttributes / TranslateCoordinates / etc.), text orientation in the y-flipped backing context. See "Beyond M3" at the end for the priority order after live xterm works.
+**Live xterm from u5 working as of 2026-05-07.** xterm renders, prompt appears, keys echo (US-ASCII keymap via `USKeymap.swift`), output scrolls when it fills the window (CopyArea + NoExpose follow-up), resize repaints correctly (ConfigureNotify + Expose on descendants, live-resize bracketed via windowDidEndLiveResize). Known cosmetic issue: cursor outline boxes around characters left behind by the cursor PolyLine — not visually-blocking, deferred per the metrics-tightening discussion in `CHATGPT_REVIEW.md`.
 
 ## Goal for the proof of concept
 

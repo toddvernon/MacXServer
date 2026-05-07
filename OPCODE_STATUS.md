@@ -33,7 +33,8 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | 8  | MapWindow | impl (M2) | medium | 2026-05-07 | Top-level: bridge brings up NSWindow, emits ReparentNotify+ConfigureNotify+MapNotify+Expose. Descendant: bridge emits MapNotify only. |
 | 9  | MapSubwindows | impl (M2) | medium | 2026-05-07 | Marks every direct child mapped + bridge.mapDescendant for each. |
 | 10 | UnmapWindow | impl (M2) | low | 2026-05-07 | Top-level: bridge orderOut + UnmapNotify. Descendant: tracking only. Not exercised by xclock. |
-| 12 | ConfigureWindow | impl (M3 part-b) | medium | 2026-05-07 | Width/height/x/y honoured. Size change on a window with ExposureMask emits Expose. NSWindow user-resize → ConfigureNotify on top-level via NSWindowDelegate path. Sibling/stack-mode/border-width unhandled. |
+| 12 | ConfigureWindow | impl (M3 part-b) | medium | 2026-05-07 | Width/height/x/y honoured. Size change on a window with ExposureMask emits Expose. NSWindow user-resize → ConfigureNotify on top-level via NSWindowDelegate path; descendants with ExposureMask also receive Expose. Sibling/stack-mode/border-width unhandled. |
+| 62 | CopyArea | impl (Phase 1) | medium | 2026-05-07 | Same-window backing-store copies via memmove on the bitmap data; cross-window not supported yet. Always emits NoExpose follow-up event (xterm's CopyWait blocks waiting for it; without it scrolling hangs after the first scroll). |
 | 16 | InternAtom | impl | high | 2026-05-07 | Monotonic ID assignment, name-stable across calls. Tested. |
 | 18 | ChangeProperty | impl | medium | 2026-05-07 | Replace/prepend/append all supported. Per-window dictionary. |
 | 20 | GetProperty | impl (stub-ish) | low | 2026-05-07 | Returns stored prop if present, otherwise empty. xclock's RESOURCE_MANAGER hits empty path. |
@@ -45,9 +46,9 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | 76 | ImageText8 | impl (Phase 1) | medium | 2026-05-07 | Fills bg rect, then renders glyphs via CTFontGetGlyphsForCharacters + CTFontDrawGlyphs at exact cell-snapped positions with subpixel positioning OFF. textMatrix counter-flip handles y-flipped backing context. CTFont cached by name+size. |
 | 84 | AllocColor | impl | medium | 2026-05-07 | Monotonic pixel (start=16), pixel→RGB cached. No real palette. |
 | 91 | QueryColors | impl (Phase 1) | medium | 2026-05-07 | Looks up requested pixels in ColorTable; unknown pixels resolve to black. |
-| 101 | GetKeyboardMapping | impl (Phase 1 stub) | low | 2026-05-07 | Returns 2 keysyms per keycode, all NoSymbol. Xlib accepts; typed input won't translate to characters. Phase 4 polish: real US-ASCII keymap. |
+| 101 | GetKeyboardMapping | impl (Phase 1) | medium | 2026-05-07 | US-ASCII keymap from USKeymap.swift. macOS NSEvent virtual keyCode +8 = X keycode; letters / digits / punctuation / arrows / modifiers covered. Phase 4: international layouts. |
 | 117 | GetPointerMapping | impl (Phase 1) | medium | 2026-05-07 | Returns [1, 2, 3] (left/middle/right buttons). |
-| 119 | GetModifierMapping | impl (Phase 1 stub) | low | 2026-05-07 | 8 modifier groups × 2 slots, all 0. Phase 4: real shift/control/etc. mappings. |
+| 119 | GetModifierMapping | impl (Phase 1) | medium | 2026-05-07 | Real Shift / Lock / Control / Mod1 (Option) / Mod4 (Command) → keycode mapping from USKeymap.swift. |
 | 22 | SetSelectionOwner | accepted, no-op | — | 2026-05-07 | Per X11 spec no reply expected. We don't track selection state yet. |
 | 23 | GetSelectionOwner | impl (Phase 1 stub) | low | 2026-05-07 | Returns owner=None. Phase 4 polish: real PRIMARY/CLIPBOARD ↔ NSPasteboard bridge. |
 | 53 | CreatePixmap | impl (M1 track-only) | medium | 2026-05-07 | Records id/depth/dimensions. No backing pixels (M3). |

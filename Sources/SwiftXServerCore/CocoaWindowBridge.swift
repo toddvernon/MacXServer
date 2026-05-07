@@ -27,6 +27,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private var slots: [UInt32: Slot] = [:]
     private let lock = NSLock()
     private var resizeHandler: (@Sendable (UInt32, UInt16, UInt16) -> Void)?
+    private var keyHandler: (@Sendable (UInt32, UInt8, UInt, Bool) -> Void)?
     private weak var log: ServerLogSink?
 
     /// Integer scale factor: 1 X-logical pixel = `scale` device pixels.
@@ -40,6 +41,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
     public func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {
         resizeHandler = handler
+    }
+
+    public func setOnKey(_ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {
+        keyHandler = handler
     }
 
     // MARK: - WindowBridge
@@ -80,10 +85,22 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             let pointsH = CGFloat(geometry.height) * CGFloat(scale) / backingScale
 
             let view = FlippedXView(frame: NSRect(x: 0, y: 0, width: pointsW, height: pointsH))
+            view.topLevelXWindowId = id
             view.resizeBacking(logicalWidth: Int(geometry.width),
                                logicalHeight: Int(geometry.height),
                                scale: scale)
             view.autoresizingMask = [.width, .height]
+            // Route NSEvent keyDown / keyUp into the session via the
+            // bridge-level keyHandler closure (set by ServerSession at init).
+            // The view captures a snapshot of the closure; on each keystroke
+            // it invokes with (topLevelXWindowId, macOS keyCode, modifierFlags
+            // raw value, isDown).
+            if let keyHandler = self.keyHandler {
+                view.keyHandler = { event, isDown in
+                    keyHandler(id, UInt8(event.keyCode & 0xFF),
+                               event.modifierFlags.rawValue, isDown)
+                }
+            }
 
             let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
             let contentRect = NSRect(x: 100, y: 100, width: pointsW, height: pointsH)
@@ -96,6 +113,9 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             win.delegate = delegate
 
             win.makeKeyAndOrderFront(nil)
+            // Make the FlippedXView the first responder so keyDown / keyUp
+            // route to it. Without this, NSWindow swallows key events.
+            win.makeFirstResponder(view)
             NSApp.activate(ignoringOtherApps: true)
 
             self.lock.lock()
@@ -233,6 +253,72 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             applyFill(ctx, background)
             ctx.fill(CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height)))
             ctx.restoreGState()
+            view.setNeedsDisplay(view.bounds)
+        }
+    }
+
+    public func copyArea(
+        topLevel: UInt32,
+        srcX: Int16, srcY: Int16,
+        dstX: Int16, dstY: Int16,
+        width: UInt16, height: UInt16
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let view = self.slot(topLevel)?.view,
+                  let ctx = view.backing,
+                  let dataPtr = ctx.data else { return }
+
+            // Logical X-coords (y-down) translate to memory pixel coords
+            // (top-down) via `mem = logical * scale`. Memory is row-major
+            // with byte 0 = top-left pixel.
+            let scale = view.scaleFactor
+            let bpr = ctx.bytesPerRow
+            let bmpW = ctx.width
+            let bmpH = ctx.height
+            let bytesPerPixel = 4
+
+            let srcMemX = Int(srcX) * scale
+            let srcMemY = Int(srcY) * scale
+            let dstMemX = Int(dstX) * scale
+            let dstMemY = Int(dstY) * scale
+            let copyW = Int(width) * scale
+            let copyH = Int(height) * scale
+
+            // Bounds-check both rects. CopyArea outside the bitmap is a
+            // silent no-op rather than a crash.
+            guard srcMemX >= 0, srcMemY >= 0, copyW > 0, copyH > 0,
+                  srcMemX + copyW <= bmpW, srcMemY + copyH <= bmpH,
+                  dstMemX >= 0, dstMemY >= 0,
+                  dstMemX + copyW <= bmpW, dstMemY + copyH <= bmpH else { return }
+
+            let bytes = dataPtr.assumingMemoryBound(to: UInt8.self)
+            let copyByteWidth = copyW * bytesPerPixel
+
+            // Direction matters with overlap: copy rows from the side
+            // farthest from overlap inward. memmove handles within-row.
+            if dstMemY < srcMemY {
+                // Moving content UP in memory (typical xterm scroll-up).
+                // Iterate top-down so we read src rows before they're
+                // overwritten as dst rows.
+                for i in 0..<copyH {
+                    let srcOffset = (srcMemY + i) * bpr + srcMemX * bytesPerPixel
+                    let dstOffset = (dstMemY + i) * bpr + dstMemX * bytesPerPixel
+                    memmove(bytes.advanced(by: dstOffset),
+                            bytes.advanced(by: srcOffset),
+                            copyByteWidth)
+                }
+            } else {
+                // Moving content DOWN (or same row). Iterate bottom-up.
+                for i in (0..<copyH).reversed() {
+                    let srcOffset = (srcMemY + i) * bpr + srcMemX * bytesPerPixel
+                    let dstOffset = (dstMemY + i) * bpr + dstMemX * bytesPerPixel
+                    memmove(bytes.advanced(by: dstOffset),
+                            bytes.advanced(by: srcOffset),
+                            copyByteWidth)
+                }
+            }
+
             view.setNeedsDisplay(view.bounds)
         }
     }
@@ -375,7 +461,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         let bounds = view.bounds
         let newLogicalW = Int((bounds.width * backingScale / CGFloat(scaleFactor)).rounded())
         let newLogicalH = Int((bounds.height * backingScale / CGFloat(scaleFactor)).rounded())
-        log?.log("  windowDidResize id=0x\(String(id, radix: 16)) bounds=\(bounds.width)x\(bounds.height)pt → logical \(newLogicalW)x\(newLogicalH) (was \(view.logicalWidth)x\(view.logicalHeight))")
+        log?.log("  windowDidResize id=0x\(String(id, radix: 16)) bounds=\(bounds.width)x\(bounds.height)pt → logical \(newLogicalW)x\(newLogicalH) (was \(view.logicalWidth)x\(view.logicalHeight)) liveResize=\(view.inLiveResize)")
         guard newLogicalW > 0, newLogicalH > 0 else { return }
         if newLogicalW != view.logicalWidth || newLogicalH != view.logicalHeight {
             view.resizeBacking(logicalWidth: newLogicalW,
@@ -387,7 +473,25 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // xterm to react to a zero-delta resize).
             return
         }
+        // During a live resize (user dragging the window corner), AppKit fires
+        // windowDidResize on every pixel of mouse movement. Emitting a
+        // ConfigureNotify per fire floods the X client (xterm reallocates its
+        // grid on every event and falls behind). Defer the protocol-level
+        // notification until the user releases the drag — see
+        // `windowDidEndLiveResize` on ResizeWindowDelegate.
+        guard !view.inLiveResize else { return }
         resizeHandler?(id, UInt16(min(newLogicalW, 65535)), UInt16(min(newLogicalH, 65535)))
+    }
+
+    /// Called by the NSWindowDelegate when a live-resize gesture ends. Emit
+    /// the deferred ConfigureNotify with the final dimensions.
+    @MainActor
+    fileprivate func handleNSWindowDidEndLiveResize(id: UInt32) {
+        guard let view = slot(id)?.view else { return }
+        log?.log("  windowDidEndLiveResize id=0x\(String(id, radix: 16)) final logical=\(view.logicalWidth)x\(view.logicalHeight)")
+        resizeHandler?(id,
+                       UInt16(min(view.logicalWidth, 65535)),
+                       UInt16(min(view.logicalHeight, 65535)))
     }
 }
 
@@ -405,6 +509,10 @@ private final class ResizeWindowDelegate: NSObject, NSWindowDelegate {
 
     func windowDidResize(_ notification: Notification) {
         bridge?.handleNSWindowResize(id: windowId)
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        bridge?.handleNSWindowDidEndLiveResize(id: windowId)
     }
 }
 

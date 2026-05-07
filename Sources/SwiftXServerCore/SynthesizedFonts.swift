@@ -126,26 +126,24 @@ public enum SynthesizedFonts {
     }
 }
 
-// MARK: - Phase 1 keyboard / modifier / pointer defaults
+// MARK: - Keyboard / modifier / pointer defaults
 
-/// Bare-bones US-ASCII keysyms — Phase 4 polish replaces with real keymap.
-/// Returns `count * keysymsPerKeycode` keysym values. For Phase 1 we report
-/// 2 keysyms per keycode (unshifted, shifted), all NoSymbol (0). Xlib
-/// accepts this as a valid empty keymap; KeyPress events from Phase 4
-/// onwards populate it properly.
+/// US-ASCII keymap defaults backed by `USKeymap`. Returns real keysyms so
+/// Xlib can decode keys and applications get correct case / typed text.
 public enum DefaultKeyboardMap {
-    public static let keysymsPerKeycode: UInt8 = 2
+    public static var keysymsPerKeycode: UInt8 { USKeymap.keysymsPerKeycode }
 
     public static func keysyms(firstKeycode: UInt8, count: UInt8) -> [UInt32] {
-        let n = Int(count) * Int(keysymsPerKeycode)
-        return Array(repeating: UInt32(0), count: n)
+        USKeymap.keymapPayload(firstKeycode: firstKeycode, count: count)
     }
 }
 
-/// Default modifier mapping: 2 keycodes per modifier, all unmapped.
+/// Default modifier mapping from `USKeymap`. Maps Shift / Lock / Control /
+/// Mod1 (Option) / Mod4 (Command) to the X keycodes that correspond to the
+/// macOS modifier keys.
 public enum DefaultModifierMap {
-    public static let keycodesPerModifier: UInt8 = 2
-    public static let keycodes: [UInt8] = Array(repeating: 0, count: 8 * 2)
+    public static var keycodesPerModifier: UInt8 { USKeymap.keycodesPerModifier }
+    public static var keycodes: [UInt8] { USKeymap.modifierKeycodes }
 }
 
 /// Default pointer mapping: 1, 2, 3 (left, middle, right buttons).

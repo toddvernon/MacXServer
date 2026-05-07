@@ -338,6 +338,15 @@ Honest expectation: pixmaps will be softer at fractional scales than integer. Th
 
 ---
 
+## External reviews
+
+- `CHATGPT_REVIEW.md` (2026-05-07) — independent review affirming the design direction. Key affirmation: the "logical root independent from Retina device pixels" decision and the three-plane scaling model are the right abstraction boundary. The review's framing of the contract — "old UNIX/X11 clients believe they are rendering to a classic ~90 DPI workstation display while the Mac secretly renders everything sharply" — is the load-bearing illusion this whole spec exists to deliver.
+
+## Future refinements (not yet binding decisions, just things to revisit)
+
+- **Tighten the report-vs-render contract for font metrics.** Today's implementation reports cell metrics derived from `pointSize = cellWidth / 0.6` and `ascent = ceil(pointSize × 0.85)`, then renders glyphs with `CTFontCreateWithName(font.macFontName, pointSize)`. Core Text's actual ascent/descent for Monaco at any given point size is not exactly our formula — there's drift. The spec's invariant (line 296) is "Reported metrics === rendered metrics." A stricter implementation would: (a) snap point size to nearest device-integer per the doc, (b) instantiate the CTFont, (c) query Core Text for its actual ascent/descent/advance, (d) report THOSE numbers in QueryFont. We accept the drift today because it isn't visibly bad; revisit when we hit a client whose layout sensitivity exposes the gap (likely Motif or a programmatically-precise client).
+- **Snapped point sizes.** Per spec (line 80-86) the render pipeline should `snappedSize = round(naturalRenderSize)` then derive cell metrics from the snapped value. Current code uses raw `cellWidth / 0.6` which happens to land on integers for many of our cell aliases at integer scale (5x7, 6x10, 9x15, 12x24 all clean) but not all (7x13, 7x14, 7x15, 8x13 produce 11.667 / 13.333 etc). Revisit when we move beyond Phase 1.
+
 ## Open questions for later
 
 - RENDER extension support? (Modern clients send pre-rasterized alpha masks; bypasses XLFD entirely. Not needed for R5/R6 target but easy to add later.)
