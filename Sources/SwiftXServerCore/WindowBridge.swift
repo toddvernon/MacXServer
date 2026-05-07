@@ -54,13 +54,17 @@ public protocol WindowBridge: AnyObject, Sendable {
     func registerTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32)
 
     /// The client mapped a top-level window. The bridge brings the NSWindow
-    /// on screen and emits ReparentNotify / ConfigureNotify / MapNotify on
+    /// on screen at the supplied current geometry (which may differ from
+    /// what was registered at CreateWindow time — many clients create a
+    /// top-level at 1×1 and ConfigureWindow it to its real size before
+    /// mapping). It emits ReparentNotify / ConfigureNotify / MapNotify on
     /// the top-level, plus Expose on the top-level and each descendant whose
     /// event mask includes ExposureMask (the X11 spec's "newly viewable"
     /// rule). `eventMask` is the top-level's event mask; descendants is a
     /// snapshot of all already-mapped descendants of the top-level.
     func mapTopLevel(
         id: UInt32,
+        geometry: TopLevelGeometry,
         eventMask: UInt32,
         descendants: [DescendantSnapshot],
         byteOrder: ByteOrder,

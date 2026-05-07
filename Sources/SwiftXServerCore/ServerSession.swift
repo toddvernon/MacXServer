@@ -63,10 +63,8 @@ public final class ServerSession: @unchecked Sendable {
         guard let result = windows.resize(id, width: width, height: height, x: nil, y: nil) else { return }
         let (old, new) = result
         guard old.width != new.width || old.height != new.height else { return }
-        // Sequence number can be stale here (we're not in feed) but X11 lets
-        // unsolicited events carry the most recent request's sequence number,
-        // which is what we have stashed in `sequenceNumber`.
         guard let order = byteOrder else { return }
+        log?.log("  → emit ConfigureNotify on 0x\(String(id, radix: 16)) \(new.width)x\(new.height) (was \(old.width)x\(old.height))")
         let event = ConfigureNotifyEvent(
             sequenceNumber: sequenceNumber,
             event: id, window: id, aboveSibling: 0,
@@ -300,6 +298,7 @@ public final class ServerSession: @unchecked Sendable {
         // fill to bottom.
         let fillW = r.width == 0 ? UInt16(max(0, Int(entry.width) - Int(r.x))) : r.width
         let fillH = r.height == 0 ? UInt16(max(0, Int(entry.height) - Int(r.y))) : r.height
+        log?.log("  ClearArea window=0x\(String(r.window, radix: 16)) at (\(r.x),\(r.y)) \(fillW)x\(fillH) (req w=\(r.width) h=\(r.height) win=\(entry.width)x\(entry.height) exposures=\(r.exposures))")
         bridge.clearArea(
             topLevel: top,
             x: r.x &+ dx, y: r.y &+ dy,
@@ -406,6 +405,7 @@ public final class ServerSession: @unchecked Sendable {
 
         do {
             let request = try Request.decode(from: bytes, byteOrder: byteOrder)
+            log?.log("req[\(sequenceNumber)] \(opcodeName(request))")
             dispatch(request, byteOrder: byteOrder)
         } catch {
             log?.log("request: decode error opcode=\(bytes[0]) seq=\(sequenceNumber): \(error)")
@@ -432,7 +432,9 @@ public final class ServerSession: @unchecked Sendable {
                 mapped: false, eventMask: eventMask
             )
             windows.insert(entry)
-            if r.parent == config.rootWindowId {
+            let isTop = r.parent == config.rootWindowId
+            log?.log("  CreateWindow wid=0x\(String(r.wid, radix: 16)) parent=0x\(String(r.parent, radix: 16)) \(r.width)x\(r.height) at (\(r.x),\(r.y)) eventMask=0x\(String(eventMask, radix: 16)) topLevel=\(isTop)")
+            if isTop {
                 bridge?.registerTopLevel(
                     id: r.wid,
                     geometry: TopLevelGeometry(
@@ -461,11 +463,20 @@ public final class ServerSession: @unchecked Sendable {
 
         case .mapWindow(let r):
             windows.setMapped(r.window, true)
-            if isTopLevel(r.window) {
+            let isTop = isTopLevel(r.window)
+            log?.log("  MapWindow window=0x\(String(r.window, radix: 16)) topLevel=\(isTop)")
+            if isTop {
                 let descendants = mappedDescendantSnapshots(of: r.window)
-                let topMask = windows.get(r.window)?.eventMask ?? 0
+                let entry = windows.get(r.window)
+                let topMask = entry?.eventMask ?? 0
+                let currentGeom = entry.map { TopLevelGeometry(
+                    x: $0.x, y: $0.y,
+                    width: $0.width, height: $0.height,
+                    borderWidth: $0.borderWidth
+                ) } ?? TopLevelGeometry(x: 0, y: 0, width: 1, height: 1, borderWidth: 0)
                 bridge?.mapTopLevel(
-                    id: r.window, eventMask: topMask, descendants: descendants,
+                    id: r.window, geometry: currentGeom,
+                    eventMask: topMask, descendants: descendants,
                     byteOrder: byteOrder, sequence: sequenceNumber,
                     outbound: outbound
                 )
@@ -500,6 +511,7 @@ public final class ServerSession: @unchecked Sendable {
             let y = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.y, byteOrder: byteOrder).map { Int16(truncatingIfNeeded: $0) }
             let w = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.width, byteOrder: byteOrder).map { UInt16(truncatingIfNeeded: $0) }
             let h = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.height, byteOrder: byteOrder).map { UInt16(truncatingIfNeeded: $0) }
+            log?.log("  ConfigureWindow window=0x\(String(r.window, radix: 16)) mask=0x\(String(r.valueMask, radix: 16)) x=\(x.map(String.init) ?? "-") y=\(y.map(String.init) ?? "-") w=\(w.map(String.init) ?? "-") h=\(h.map(String.init) ?? "-")")
             let result = windows.resize(r.window, width: w, height: h, x: x, y: y)
             if let (old, new) = result, let entry = windows.get(r.window) {
                 if entry.parent != config.rootWindowId {
@@ -512,12 +524,32 @@ public final class ServerSession: @unchecked Sendable {
                         )
                     )
                 }
-                // Per X11 spec: a size-changing ConfigureWindow on a window
-                // with ExposureMask in its event mask triggers Expose for
-                // the (newly-grown) area. We oversimplify by emitting Expose
-                // for the whole window region — spec allows that.
                 let sizeChanged = old.width != new.width || old.height != new.height
-                if sizeChanged && (entry.eventMask & MockWindowBridge.exposureMask != 0) {
+                let posChanged = old.x != new.x || old.y != new.y
+                // Per X11 spec: emit ConfigureNotify if the configuration
+                // actually changed, on every window with StructureNotifyMask
+                // set in its event mask. xterm's Xt geometry manager waits
+                // for this synchronous confirmation before completing widget
+                // realization — without it, Xt does a probing ping-pong
+                // resize that wipes xterm's screen buffer.
+                let structureNotifyMask: UInt32 = 1 << 17
+                if (sizeChanged || posChanged) && (entry.eventMask & structureNotifyMask != 0) {
+                    log?.log("  → emit ConfigureNotify on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height) at (\(new.x),\(new.y))")
+                    let cfgEv = ConfigureNotifyEvent(
+                        sequenceNumber: sequenceNumber,
+                        event: r.window, window: r.window, aboveSibling: 0,
+                        x: new.x, y: new.y,
+                        width: new.width, height: new.height,
+                        borderWidth: new.borderWidth,
+                        overrideRedirect: false
+                    )
+                    outbound.append(cfgEv.encode(byteOrder: byteOrder))
+                }
+                // Per X11 spec: Expose only on size GROW (newly visible
+                // area). Shrinking just hides content.
+                let sizeGrew = new.width > old.width || new.height > old.height
+                if sizeGrew && (entry.eventMask & MockWindowBridge.exposureMask != 0) {
+                    log?.log("  → emit Expose on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height)")
                     let expose = ExposeEvent(
                         sequenceNumber: sequenceNumber, window: r.window,
                         x: 0, y: 0, width: new.width, height: new.height, count: 0

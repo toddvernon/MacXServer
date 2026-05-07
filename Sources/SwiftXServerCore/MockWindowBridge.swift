@@ -44,6 +44,7 @@ public final class MockWindowBridge: WindowBridge, @unchecked Sendable {
 
     public func mapTopLevel(
         id: UInt32,
+        geometry: TopLevelGeometry,
         eventMask: UInt32,
         descendants: [DescendantSnapshot],
         byteOrder: ByteOrder,
@@ -51,9 +52,8 @@ public final class MockWindowBridge: WindowBridge, @unchecked Sendable {
         outbound: OutboundQueue
     ) {
         mapped.append(id)
-        guard let entry = registered.last(where: { $0.id == id }) else { return }
         Self.emitMapSequence(
-            window: id, geometry: entry.geometry,
+            window: id, geometry: geometry,
             topLevelEventMask: eventMask,
             descendants: descendants,
             byteOrder: byteOrder, sequence: sequence,

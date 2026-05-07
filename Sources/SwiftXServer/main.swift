@@ -66,16 +66,16 @@ do {
 }
 
 // Run the listener on a background thread so the main thread can drive AppKit.
+// We deliberately DO NOT terminate NSApp on disconnect — this keeps any
+// windows the client created visible after it exits, so we can inspect what
+// rendered. Quit via Cmd-Q (or `pkill swiftx-server`).
 DispatchQueue.global(qos: .userInitiated).async {
     do {
         try listener.runOne(config: serverConfig, bridge: bridge)
     } catch {
         writeStderr("listener error: \(error)\n")
     }
-    DispatchQueue.main.async {
-        writeStderr("done.\n")
-        NSApp.terminate(nil)
-    }
+    writeStderr("client gone; windows retained for inspection (Cmd-Q to quit).\n")
 }
 
 let app = NSApplication.shared

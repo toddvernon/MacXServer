@@ -52,6 +52,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
     public func mapTopLevel(
         id: UInt32,
+        geometry: TopLevelGeometry,
         eventMask: UInt32,
         descendants: [DescendantSnapshot],
         byteOrder: ByteOrder,
@@ -59,13 +60,15 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         outbound: OutboundQueue
     ) {
         lock.lock()
-        guard let slot = slots[id] else { lock.unlock(); return }
-        let geometry = slot.geometry
-        let pendingTitle = slot.pendingTitle ?? "swift-x"
+        if slots[id] != nil {
+            slots[id]?.geometry = geometry            // sync to current
+        }
+        let pendingTitle = slots[id]?.pendingTitle ?? "swift-x"
         lock.unlock()
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            self.log?.log("  bridge: bringing up NSWindow for 0x\(String(id, radix: 16)) \(geometry.width)x\(geometry.height) (logical)")
             let scale = self.scaleFactor
 
             // NSWindow content rect is in points. Convert from logical:
@@ -256,6 +259,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         x: Int16, y: Int16,
         string: [UInt8]
     ) {
+        let printable = String(decoding: string.prefix(40), as: UTF8.self)
+        log?.log("  drawImageText8 top=0x\(String(topLevel, radix: 16)) font=\(font.macFontName) cell=\(font.cellWidth)x\(font.cellHeight) at (\(x),\(y)) fg=(\(foreground.red >> 8),\(foreground.green >> 8),\(foreground.blue >> 8)) str=\"\(printable)\" len=\(string.count)")
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
@@ -278,23 +283,37 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             applyFill(ctx, background)
             ctx.fill(bgRect)
 
-            // Glyph rendering. Cell-snapped: each glyph's origin is at
-            // (x + i*cellW, y) with subpixel positioning OFF. CTFont's
-            // natural advance may differ from cellW; we override by
-            // explicit position so monospace cells stay aligned.
             applyFill(ctx, foreground)
             ctx.setShouldAntialias(true)
             ctx.setShouldSmoothFonts(true)
             ctx.setAllowsFontSubpixelPositioning(false)
             ctx.setShouldSubpixelPositionFonts(false)
 
-            // Our backing context's CTM has y-flipped so X-style top-left
-            // coordinates pass through. Glyphs in CG's default orientation
-            // extend in +y user-space (visually down in our flipped frame),
-            // which would render text upside-down. The text matrix
-            // counter-flips glyph local coords; combined with the flipped
-            // CTM the net y-axis is identity, so glyphs render right-side-up.
-            ctx.textMatrix = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: 0)
+            // [Y-FLIP #3 of 3] Glyph local y-flip.
+            //
+            // CTFontDrawGlyphs renders glyph art in CG's default orientation
+            // — ascent extends in +y user space, descent in -y — same as
+            // any text drawing. Our backing CTM (Y-FLIP #1) has user-space
+            // y-axis flipped (so X coords pass through). Drawing glyphs
+            // straight into that context puts ascent visually DOWN — text
+            // appears upside-down.
+            //
+            // We translate to the glyph BASELINE first, then apply a local
+            // scale(1, -1) inside saveGState/restoreGState. Inside that
+            // scope, the local user-space has y running in CG's natural
+            // direction relative to the baseline. Glyph art (which CG
+            // draws +y from origin) now extends "up" relative to the
+            // local origin, which is "up" visually because we're inside
+            // the backing's flipped space.
+            //
+            // Glyph positions are relative to the local (post-translate,
+            // post-flip) origin — `(i*cellW, 0)` per glyph for monospace.
+            //
+            // This y-flip is one of three (see Y-FLIP #1 in
+            // FlippedXView.resizeBacking and Y-FLIP #2 in FlippedXView.draw).
+            // Each addresses a separate concern.
+            ctx.translateBy(x: CGFloat(x), y: CGFloat(y))
+            ctx.scaleBy(x: 1, y: -1)
 
             let ctFont = ctFont(for: font)
 
@@ -307,15 +326,9 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
             var positions = [CGPoint](repeating: .zero, count: n)
             for i in 0..<n {
-                positions[i] = CGPoint(
-                    x: CGFloat(Int(x) + i * cellW),
-                    y: CGFloat(y)
-                )
+                positions[i] = CGPoint(x: CGFloat(i * cellW), y: 0)
             }
 
-            // CTFontDrawGlyphs respects the current fill color (foreground),
-            // the CTM (logical→device scale + y-flip), and the textMatrix
-            // (counter-flip set above for upright glyphs).
             CTFontDrawGlyphs(ctFont, &glyphs, &positions, n, ctx)
 
             ctx.restoreGState()
@@ -362,12 +375,17 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         let bounds = view.bounds
         let newLogicalW = Int((bounds.width * backingScale / CGFloat(scaleFactor)).rounded())
         let newLogicalH = Int((bounds.height * backingScale / CGFloat(scaleFactor)).rounded())
+        log?.log("  windowDidResize id=0x\(String(id, radix: 16)) bounds=\(bounds.width)x\(bounds.height)pt → logical \(newLogicalW)x\(newLogicalH) (was \(view.logicalWidth)x\(view.logicalHeight))")
         guard newLogicalW > 0, newLogicalH > 0 else { return }
         if newLogicalW != view.logicalWidth || newLogicalH != view.logicalHeight {
             view.resizeBacking(logicalWidth: newLogicalW,
                                logicalHeight: newLogicalH,
                                scale: scaleFactor)
             view.setNeedsDisplay(view.bounds)
+        } else {
+            // No actual size change — don't notify the session (would cause
+            // xterm to react to a zero-delta resize).
+            return
         }
         resizeHandler?(id, UInt16(min(newLogicalW, 65535)), UInt16(min(newLogicalH, 65535)))
     }

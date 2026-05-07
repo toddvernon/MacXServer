@@ -33,7 +33,7 @@ private final class RecordingBridge: WindowBridge, @unchecked Sendable {
     func registerTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32) {
         registered.append((id, geometry))
     }
-    func mapTopLevel(id: UInt32, eventMask: UInt32, descendants: [DescendantSnapshot], byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {}
+    func mapTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32, descendants: [DescendantSnapshot], byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {}
     func mapDescendant(id: UInt32, byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {}
     func unmapTopLevel(id: UInt32, byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {}
     func destroyTopLevel(id: UInt32, byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {}
