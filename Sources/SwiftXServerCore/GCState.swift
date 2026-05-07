@@ -34,6 +34,7 @@ public struct GCState: Equatable, Sendable {
     public var background: UInt32 = 0xFFFFFF
     public var lineWidth: UInt32 = 0        // 0 = 1px thin line per X11 spec
     public var fillRuleEvenOdd: Bool = true
+    public var font: UInt32 = 0             // X font id; 0 = none set
 
     public init() {}
 
@@ -66,6 +67,9 @@ public struct GCState: Equatable, Sendable {
         }
         if let v = ValueListReader.read(valueList: entry.valueList, mask: entry.valueMask, bit: GCBits.fillRule, byteOrder: byteOrder) {
             state.fillRuleEvenOdd = (v == 0)        // 0 = EvenOdd, 1 = Winding per spec
+        }
+        if let v = ValueListReader.read(valueList: entry.valueList, mask: entry.valueMask, bit: GCBits.font, byteOrder: byteOrder) {
+            state.font = v
         }
         return state
     }

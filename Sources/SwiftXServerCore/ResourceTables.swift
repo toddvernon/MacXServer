@@ -154,8 +154,14 @@ public final class PixmapTable {
 public struct FontEntry: Equatable, Sendable {
     public var id: UInt32
     public var name: [UInt8]
+    /// Resolved Mac font + cell metrics. Populated at OpenFont time so
+    /// QueryFont can answer without re-parsing, and the bridge can
+    /// instantiate the CTFont without round-tripping back to the session.
+    public var resolved: ResolvedFont
 
-    public init(id: UInt32, name: [UInt8]) { self.id = id; self.name = name }
+    public init(id: UInt32, name: [UInt8], resolved: ResolvedFont) {
+        self.id = id; self.name = name; self.resolved = resolved
+    }
 }
 
 public final class FontTable {

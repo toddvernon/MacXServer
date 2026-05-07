@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import CoreText
 import Framer
 
 // Cocoa-side WindowBridge. Owns an NSWindow per top-level X window. AppKit
@@ -231,6 +232,104 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
+    }
+
+    public func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, rectangles: [Framer.Rectangle]) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
+            ctx.saveGState()
+            applyFill(ctx, foreground)
+            for r in rectangles {
+                ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
+                                width: CGFloat(r.width), height: CGFloat(r.height)))
+            }
+            ctx.restoreGState()
+            view.setNeedsDisplay(view.bounds)
+        }
+    }
+
+    public func drawImageText8(
+        topLevel: UInt32,
+        foreground: RGB16, background: RGB16,
+        font: ResolvedFont,
+        x: Int16, y: Int16,
+        string: [UInt8]
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
+
+            // Per X11 ImageText8 spec: fill bg rect under the text first,
+            // then draw glyphs. Rect spans (x, y-ascent) to
+            // (x + n*cellWidth, y+descent) where (x, y) is the baseline of
+            // the first glyph. We use the cell-snapped metrics so the bg
+            // exactly covers what xterm expects.
+            let cellW = font.cellWidth
+            let n = string.count
+            let bgRect = CGRect(
+                x: CGFloat(x),
+                y: CGFloat(Int(y) - font.ascent),
+                width: CGFloat(cellW * n),
+                height: CGFloat(font.cellHeight)
+            )
+
+            ctx.saveGState()
+            applyFill(ctx, background)
+            ctx.fill(bgRect)
+
+            // Glyph rendering. Cell-snapped: each glyph's origin is at
+            // (x + i*cellW, y) with subpixel positioning OFF. CTFont's
+            // natural advance may differ from cellW; we override by
+            // explicit position so monospace cells stay aligned.
+            applyFill(ctx, foreground)
+            ctx.setShouldAntialias(true)
+            ctx.setShouldSmoothFonts(true)
+            ctx.setAllowsFontSubpixelPositioning(false)
+            ctx.setShouldSubpixelPositionFonts(false)
+
+            let ctFont = ctFont(for: font)
+
+            // Decode bytes as Latin-1 → UniChar (each byte is its codepoint).
+            // Phase 4 adds proper iso8859-1 / iso10646-1 handling.
+            var unichars = [UniChar](repeating: 0, count: n)
+            for i in 0..<n { unichars[i] = UniChar(string[i]) }
+            var glyphs = [CGGlyph](repeating: 0, count: n)
+            CTFontGetGlyphsForCharacters(ctFont, &unichars, &glyphs, n)
+
+            var positions = [CGPoint](repeating: .zero, count: n)
+            for i in 0..<n {
+                positions[i] = CGPoint(
+                    x: CGFloat(Int(x) + i * cellW),
+                    y: CGFloat(y)
+                )
+            }
+
+            // CTFontDrawGlyphs respects the current fill color (which we
+            // just set to foreground) and works with our compound CTM
+            // (logical → device pixel scale).
+            CTFontDrawGlyphs(ctFont, &glyphs, &positions, n, ctx)
+
+            ctx.restoreGState()
+            view.setNeedsDisplay(view.bounds)
+        }
+    }
+
+    /// Cache of CTFont instances keyed by (macFontName, pointSize). Avoids
+    /// re-instantiating the same font on every ImageText8 dispatch.
+    nonisolated(unsafe) private static let ctFontCache = NSCache<NSString, CTFont>()
+
+    /// Resolve to a CTFont, caching by name+size key. Falls back to system
+    /// monospace if the named font fails to load (very rare on macOS for
+    /// the substitutes in our table).
+    fileprivate func ctFont(for font: ResolvedFont) -> CTFont {
+        let key = "\(font.macFontName)@\(font.pointSize)" as NSString
+        if let cached = Self.ctFontCache.object(forKey: key) {
+            return cached
+        }
+        let ct = CTFontCreateWithName(font.macFontName as CFString, CGFloat(font.pointSize), nil)
+        Self.ctFontCache.setObject(ct, forKey: key)
+        return ct
     }
 
     // MARK: - Helpers

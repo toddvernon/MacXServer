@@ -105,16 +105,36 @@ public protocol WindowBridge: AnyObject, Sendable {
     func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment])
     func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint])
     func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool)
+    func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, rectangles: [Rectangle])
     func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16)
+
+    /// ImageText8: fill bg rect, then draw text. `(x, y)` is the baseline of
+    /// the first glyph in top-level logical pixel coords. The bridge owns
+    /// CTFont instantiation per the resolved font's macFontName + pointSize.
+    func drawImageText8(
+        topLevel: UInt32,
+        foreground: RGB16, background: RGB16,
+        font: ResolvedFont,
+        x: Int16, y: Int16,
+        string: [UInt8]
+    )
 }
 
 public extension WindowBridge {
     func descendantResized(id: UInt32, parent: UInt32, geometry: TopLevelGeometry) {}
     func drawingTarget(for drawable: UInt32) -> Any? { nil }
     func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {}
-    // M3 default no-ops so M1/M2 unit tests compile without implementing every method.
+    // Default no-ops so unit-test bridges don't have to implement every method.
     func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment]) {}
     func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint]) {}
     func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool) {}
+    func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, rectangles: [Rectangle]) {}
     func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16) {}
+    func drawImageText8(
+        topLevel: UInt32,
+        foreground: RGB16, background: RGB16,
+        font: ResolvedFont,
+        x: Int16, y: Int16,
+        string: [UInt8]
+    ) {}
 }

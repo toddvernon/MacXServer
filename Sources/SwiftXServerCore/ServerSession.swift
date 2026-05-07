@@ -127,6 +127,36 @@ public final class ServerSession: @unchecked Sendable {
         return out
     }
 
+    /// Build a QueryFontReply that reports the resolved font's cell-snapped
+    /// metrics. Monospace path: min/max CharInfo bounds equal, charInfos
+    /// empty (means "every char in range has metrics equal to minBounds"
+    /// per X11 spec). Range covers printable ASCII 32..126 — Phase 4 polish
+    /// extends to full Latin-1 / iso10646 BMP.
+    private func makeQueryFontReply(resolved: ResolvedFont, sequence: UInt16) -> QueryFontReply {
+        let bounds = CharInfo(
+            leftSideBearing: 0,
+            rightSideBearing: Int16(resolved.cellWidth),
+            characterWidth: Int16(resolved.cellWidth),
+            ascent: Int16(resolved.ascent),
+            descent: Int16(resolved.descent),
+            attributes: 0
+        )
+        return QueryFontReply(
+            sequenceNumber: sequence,
+            minBounds: bounds,
+            maxBounds: bounds,
+            minCharOrByte2: 32, maxCharOrByte2: 126,
+            defaultChar: 32,
+            drawDirection: .leftToRight,
+            minByte1: 0, maxByte1: 0,
+            allCharsExist: true,
+            fontAscent: Int16(resolved.ascent),
+            fontDescent: Int16(resolved.descent),
+            properties: [],
+            charInfos: []
+        )
+    }
+
     /// Resolve the GC by id and translate to a typed `GCState`.
     private func gcState(_ gcId: UInt32, byteOrder: ByteOrder) -> GCState {
         guard let entry = gcs.get(gcId) else { return GCState() }
@@ -220,6 +250,44 @@ public final class ServerSession: @unchecked Sendable {
             foreground: resolveColor(state.foreground),
             points: points,
             evenOdd: state.fillRuleEvenOdd
+        )
+    }
+
+    private func handlePolyFillRectangle(_ r: PolyFillRectangle, byteOrder: ByteOrder) {
+        guard let bridge = bridge,
+              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        let state = gcState(r.gc, byteOrder: byteOrder)
+        let translated = r.rectangles.map {
+            Rectangle(
+                x: $0.x &+ dx, y: $0.y &+ dy,
+                width: $0.width, height: $0.height
+            )
+        }
+        bridge.drawPolyFillRectangle(
+            topLevel: top,
+            foreground: resolveColor(state.foreground),
+            rectangles: translated
+        )
+    }
+
+    private func handleImageText8(_ r: ImageText8, byteOrder: ByteOrder) {
+        guard let bridge = bridge,
+              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        let state = gcState(r.gc, byteOrder: byteOrder)
+        // Pull the GC's font; fall back to "fixed" if no font set.
+        let resolvedFont: ResolvedFont
+        if let entry = fonts.get(state.font) {
+            resolvedFont = entry.resolved
+        } else {
+            resolvedFont = FontResolver.resolve(name: "fixed")
+        }
+        bridge.drawImageText8(
+            topLevel: top,
+            foreground: resolveColor(state.foreground),
+            background: resolveColor(state.background),
+            font: resolvedFont,
+            x: r.x &+ dx, y: r.y &+ dy,
+            string: r.string
         )
     }
 
@@ -497,23 +565,25 @@ public final class ServerSession: @unchecked Sendable {
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .openFont(let r):
-            fonts.insert(FontEntry(id: r.fid, name: r.name))
+            // Parse the font name (XLFD or alias), resolve to a Mac substitute
+            // with cell-snapped metrics. Stored on the FontEntry so QueryFont
+            // and any future text-rendering dispatch can answer without
+            // re-parsing.
+            let nameStr = String(decoding: r.name, as: UTF8.self)
+            let resolved = FontResolver.resolve(name: nameStr)
+            fonts.insert(FontEntry(id: r.fid, name: r.name, resolved: resolved))
 
         case .closeFont(let r):
             fonts.remove(r.font)
 
-        case .queryFont:
-            // Stub reply — xclock asks for metrics it never uses. See SHORTCUTS.md.
-            let reply = QueryFontReply(
-                sequenceNumber: sequenceNumber,
-                minBounds: CharInfo(leftSideBearing: 0, rightSideBearing: 6, characterWidth: 6, ascent: 11, descent: 2, attributes: 0),
-                maxBounds: CharInfo(leftSideBearing: 0, rightSideBearing: 6, characterWidth: 6, ascent: 11, descent: 2, attributes: 0),
-                minCharOrByte2: 32, maxCharOrByte2: 126, defaultChar: 32,
-                drawDirection: .leftToRight,
-                minByte1: 0, maxByte1: 0, allCharsExist: true,
-                fontAscent: 11, fontDescent: 2,
-                properties: [], charInfos: []
-            )
+        case .queryFont(let r):
+            // Look up the font and answer with cell-snapped metrics derived
+            // from the resolved Mac substitute. Per
+            // SERVER_RESOLUTION_SCALING_AND_FONTS.md "critical invariant":
+            // the metrics we report must match what we actually render.
+            let resolved = fonts.get(r.font)?.resolved
+                ?? FontResolver.resolve(name: "fixed")
+            let reply = makeQueryFontReply(resolved: resolved, sequence: sequenceNumber)
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .createPixmap(let r):
@@ -569,11 +639,17 @@ public final class ServerSession: @unchecked Sendable {
         case .clearArea(let r):
             handleClearArea(r, byteOrder: byteOrder)
 
+        case .polyFillRectangle(let r):
+            handlePolyFillRectangle(r, byteOrder: byteOrder)
+
+        case .imageText8(let r):
+            handleImageText8(r, byteOrder: byteOrder)
+
         // Silent no-ops: requests xclock or other apps may issue that we
         // don't yet wire to rendering. Add real handlers as needed.
         case .polyArc, .polyRectangle,
-             .polyFillRectangle, .polyFillArc, .copyArea,
-             .setClipRectangles, .setDashes, .putImage, .imageText8, .polyText8,
+             .polyFillArc, .copyArea,
+             .setClipRectangles, .setDashes, .putImage, .polyText8,
              .sendEvent, .reparentWindow, .destroySubwindows,
              .grabPointer, .ungrabPointer, .grabButton, .grabKeyboard,
              .ungrabKeyboard, .grabKey, .allowEvents, .grabServer, .ungrabServer,
