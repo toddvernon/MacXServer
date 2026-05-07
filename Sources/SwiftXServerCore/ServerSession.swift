@@ -657,14 +657,67 @@ public final class ServerSession: @unchecked Sendable {
              .recolorCursor, .bell, .unmapSubwindows:
             break
 
+        case .listFonts(let r):
+            // Pattern-match against the synthesized Phase-1 font list.
+            let pattern = String(decoding: r.pattern, as: UTF8.self)
+            let names = SynthesizedFonts.match(pattern: pattern, max: Int(r.maxNames))
+            let reply = ListFontsReply(sequenceNumber: sequenceNumber, names: names)
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        case .getKeyboardMapping(let r):
+            let keysyms = DefaultKeyboardMap.keysyms(firstKeycode: r.firstKeycode, count: r.count)
+            let reply = GetKeyboardMappingReply(
+                sequenceNumber: sequenceNumber,
+                keysymsPerKeycode: DefaultKeyboardMap.keysymsPerKeycode,
+                keysyms: keysyms
+            )
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        case .getModifierMapping:
+            let reply = GetModifierMappingReply(
+                sequenceNumber: sequenceNumber,
+                keycodesPerModifier: DefaultModifierMap.keycodesPerModifier,
+                keycodes: DefaultModifierMap.keycodes
+            )
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        case .getPointerMapping:
+            let reply = GetPointerMappingReply(
+                sequenceNumber: sequenceNumber,
+                map: DefaultPointerMap.map
+            )
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        case .queryColors(let r):
+            // Look up each requested pixel in our ColorTable; unknown pixels
+            // resolve to black (consistent with the dispatch-time fallback).
+            let entries: [QueryColorsRGB] = r.pixels.map { pixel in
+                let rgb = colors.rgb(for: pixel) ?? RGB16(red: 0, green: 0, blue: 0)
+                return QueryColorsRGB(red: rgb.red, green: rgb.green, blue: rgb.blue)
+            }
+            let reply = QueryColorsReply(sequenceNumber: sequenceNumber, colors: entries)
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        case .getSelectionOwner:
+            // We don't track selection ownership yet — return None so xterm
+            // proceeds (it'll just show "selection unavailable" to itself).
+            // Phase 4 polish wires up real PRIMARY/CLIPBOARD ↔ NSPasteboard.
+            let reply = GetSelectionOwnerReply(sequenceNumber: sequenceNumber, owner: 0)
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        // SetSelectionOwner has no reply per X11 spec — silent no-op for now
+        // since we don't track selection state.
+        case .setSelectionOwner:
+            break
+
         // Replies we don't yet implement — note them so the live test surfaces
         // what's missing without dropping the connection.
         case .getWindowAttributes, .getGeometry, .queryTree,
-             .getAtomName, .getSelectionOwner, .setSelectionOwner,
-             .queryPointer, .translateCoordinates,
-             .listFonts, .queryColors, .lookupColor, .allocNamedColor,
+             .getAtomName,
+             .translateCoordinates, .queryPointer,
+             .lookupColor, .allocNamedColor,
              .queryBestSize, .listExtensions,
-             .getKeyboardMapping, .getModifierMapping, .getPointerMapping, .queryKeymap:
+             .queryKeymap:
             log?.log("dispatch: reply for \(opcodeName(request)) not implemented yet")
 
         case .unknown(let op, _):
