@@ -28,7 +28,12 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private var resizeHandler: (@Sendable (UInt32, UInt16, UInt16) -> Void)?
     private weak var log: ServerLogSink?
 
-    public init(log: ServerLogSink? = nil) {
+    /// Integer scale factor: 1 X-logical pixel = `scale` device pixels.
+    /// Pulled from `DisplayConfig.scale` at startup.
+    public let scaleFactor: Int
+
+    public init(scaleFactor: Int = 1, log: ServerLogSink? = nil) {
+        self.scaleFactor = scaleFactor
         self.log = log
     }
 
@@ -60,14 +65,24 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            let view = FlippedXView(frame: NSRect(x: 0, y: 0, width: Int(geometry.width), height: Int(geometry.height)))
-            view.resizeBacking(width: Int(geometry.width), height: Int(geometry.height))
+            let scale = self.scaleFactor
+
+            // NSWindow content rect is in points. Convert from logical:
+            // points = logical * scale / backingScale (typically 2.0 on Retina).
+            // The result: 1 X-logical pixel = `scale` device pixels regardless of
+            // the macOS backing factor.
+            let backingScale = NSScreen.main?.backingScaleFactor ?? 2.0
+            let pointsW = CGFloat(geometry.width) * CGFloat(scale) / backingScale
+            let pointsH = CGFloat(geometry.height) * CGFloat(scale) / backingScale
+
+            let view = FlippedXView(frame: NSRect(x: 0, y: 0, width: pointsW, height: pointsH))
+            view.resizeBacking(logicalWidth: Int(geometry.width),
+                               logicalHeight: Int(geometry.height),
+                               scale: scale)
             view.autoresizingMask = [.width, .height]
 
             let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
-            let contentRect = NSRect(x: 100, y: 100,
-                                     width: CGFloat(geometry.width),
-                                     height: CGFloat(geometry.height))
+            let contentRect = NSRect(x: 100, y: 100, width: pointsW, height: pointsH)
             let win = NSWindow(contentRect: contentRect, styleMask: style, backing: .buffered, defer: false)
             win.contentView = view
             win.title = pendingTitle
@@ -226,23 +241,28 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         return slots[id]
     }
 
-    /// Called from the NSWindowDelegate after a user-driven resize. Resizes
-    /// the FlippedXView's backing CGBitmapContext to match the new view size,
-    /// then calls back into the session via `resizeHandler` so it can update
-    /// WindowTable + emit ConfigureNotify.
+    /// Called from the NSWindowDelegate after a user-driven resize. Compute
+    /// the new logical (X) dimensions from the NSView's points-bounds via
+    /// `points × backingScale / scaleFactor`, reallocate the FlippedXView's
+    /// backing CGBitmapContext at the new logical size, then call back into
+    /// the session via `resizeHandler` so it can update WindowTable + emit
+    /// ConfigureNotify.
     @MainActor
     fileprivate func handleNSWindowResize(id: UInt32) {
         let view = slot(id)?.view
         guard let view = view else { return }
+        let backingScale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
         let bounds = view.bounds
-        let newWidth = Int(bounds.width)
-        let newHeight = Int(bounds.height)
-        guard newWidth > 0, newHeight > 0 else { return }
-        if newWidth != view.backingWidth || newHeight != view.backingHeight {
-            view.resizeBacking(width: newWidth, height: newHeight)
+        let newLogicalW = Int((bounds.width * backingScale / CGFloat(scaleFactor)).rounded())
+        let newLogicalH = Int((bounds.height * backingScale / CGFloat(scaleFactor)).rounded())
+        guard newLogicalW > 0, newLogicalH > 0 else { return }
+        if newLogicalW != view.logicalWidth || newLogicalH != view.logicalHeight {
+            view.resizeBacking(logicalWidth: newLogicalW,
+                               logicalHeight: newLogicalH,
+                               scale: scaleFactor)
             view.setNeedsDisplay(view.bounds)
         }
-        resizeHandler?(id, UInt16(min(newWidth, 65535)), UInt16(min(newHeight, 65535)))
+        resizeHandler?(id, UInt16(min(newLogicalW, 65535)), UInt16(min(newLogicalH, 65535)))
     }
 }
 

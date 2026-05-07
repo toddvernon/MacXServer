@@ -45,12 +45,20 @@ while i < args.count {
 
 let log = StderrLogSink()
 let listener = Listener(host: host, port: port, log: log)
-let bridge = CocoaWindowBridge(log: log)
+
+// Detect the connected display and pick a logical-root + integer-scale
+// combination per `SERVER_RESOLUTION_SCALING_AND_FONTS.md`.
+let displayConfig = DisplayConfig.forMainDisplay()
+let serverConfig = ServerConfig(displayConfig: displayConfig)
+let bridge = CocoaWindowBridge(scaleFactor: displayConfig.scale, log: log)
 
 do {
     let actual = try listener.bind()
     let display = port == 6000 ? "0" : String(Int(port) - 6000)
     writeStderr("swiftx-server listening on \(host):\(actual) (X display :\(display))\n")
+    writeStderr("display: native \(displayConfig.nativePixelWidth)×\(displayConfig.nativePixelHeight)px → ")
+    writeStderr("X-logical \(displayConfig.logicalWidth)×\(displayConfig.logicalHeight) at \(displayConfig.scale)x ")
+    writeStderr("(\(displayConfig.deviceWidth)×\(displayConfig.deviceHeight) device px), ~90 DPI\n")
     writeStderr("waiting for one client...\n\n")
 } catch {
     writeStderr("error: \(error)\n")
@@ -60,7 +68,7 @@ do {
 // Run the listener on a background thread so the main thread can drive AppKit.
 DispatchQueue.global(qos: .userInitiated).async {
     do {
-        try listener.runOne(bridge: bridge)
+        try listener.runOne(config: serverConfig, bridge: bridge)
     } catch {
         writeStderr("listener error: \(error)\n")
     }

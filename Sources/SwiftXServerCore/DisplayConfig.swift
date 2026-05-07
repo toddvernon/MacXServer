@@ -1,0 +1,119 @@
+import Foundation
+import AppKit
+
+// Picks a logical-root size + integer scale factor that fits the connected
+// display per `SERVER_RESOLUTION_SCALING_AND_FONTS.md`. Goal: highest
+// scale (preferring 3x) with logical width in 960..1280 that fits without
+// overflowing native pixel dimensions. ~90 DPI reported regardless, so
+// Sun-era Xt/Motif font auto-sizing stays sane.
+//
+// Algorithm is pure data in/out so it's testable without a display.
+
+public struct DisplayConfig: Equatable, Sendable {
+    /// X-protocol "screen size" in logical pixels. This is what clients see.
+    public let logicalWidth: Int
+    public let logicalHeight: Int
+    /// Integer multiplier from logical pixels to device (physical) pixels.
+    public let scale: Int
+    /// Native pixel dimensions of the display we picked for. Stored so the
+    /// caller can sanity-check. Not sent to clients.
+    public let nativePixelWidth: Int
+    public let nativePixelHeight: Int
+    /// Reported physical size in millimetres, derived so reported DPI ≈ 90
+    /// regardless of actual display physical size. Sun-era apps use this to
+    /// auto-size fonts; reporting actual macOS DPI (218 / 264) would make
+    /// every Xt/Motif app pick comically large fonts.
+    public let widthMm: Int
+    public let heightMm: Int
+
+    /// Backing-store dimensions: how many device pixels we allocate.
+    public var deviceWidth: Int { logicalWidth * scale }
+    public var deviceHeight: Int { logicalHeight * scale }
+
+    public init(
+        logicalWidth: Int, logicalHeight: Int, scale: Int,
+        nativePixelWidth: Int, nativePixelHeight: Int
+    ) {
+        self.logicalWidth = logicalWidth
+        self.logicalHeight = logicalHeight
+        self.scale = scale
+        self.nativePixelWidth = nativePixelWidth
+        self.nativePixelHeight = nativePixelHeight
+        // 90 DPI target: mm = pixels × 25.4 / 90.
+        self.widthMm = Int((Double(logicalWidth) * 25.4 / 90.0).rounded())
+        self.heightMm = Int((Double(logicalHeight) * 25.4 / 90.0).rounded())
+    }
+
+    // MARK: - Picker
+
+    /// Candidate (logicalWidth, logicalHeight) pairs in preference order.
+    /// Matches the preset table in `SERVER_RESOLUTION_SCALING_AND_FONTS.md`.
+    /// 1280×900 is the "ideal" — Sun-authentic vertical, room for two 80-col
+    /// terminals side by side; 1280×720 used when 16:9 height is what fits;
+    /// progressively smaller for compact Retina laptops; 960×540 for 1080p.
+    private static let logicalCandidates: [(width: Int, height: Int)] = [
+        (1280, 900),
+        (1280, 720),
+        (1152, 720),
+        (1008, 648),
+        (960, 540),
+    ]
+
+    /// Try integer scales in this order. 3× is the sweet spot for current
+    /// Retina displays; 2× is the fallback for 1080p externals; 4× isn't
+    /// triggered by the algorithm because it never strictly fits where 3×
+    /// doesn't (subset relationship), but Phase 2 may add explicit 4× as
+    /// a user override on Pro Display XDR.
+    private static let scaleCandidates: [Int] = [3, 2]
+
+    /// Pick the best (logical, scale) for a display of `nativeWidth × nativeHeight`
+    /// pixels. First (scale, logical) combination whose device dimensions
+    /// don't exceed the native pixel dimensions wins. Falls back to scale=1
+    /// at native dimensions if no preset fits (very small or unusual displays).
+    public static func pick(nativeWidth: Int, nativeHeight: Int) -> DisplayConfig {
+        for scale in scaleCandidates {
+            for c in logicalCandidates {
+                if c.width * scale <= nativeWidth && c.height * scale <= nativeHeight {
+                    return DisplayConfig(
+                        logicalWidth: c.width,
+                        logicalHeight: c.height,
+                        scale: scale,
+                        nativePixelWidth: nativeWidth,
+                        nativePixelHeight: nativeHeight
+                    )
+                }
+            }
+        }
+        // Fallback for tiny / unusual displays: 1:1 with whatever's there.
+        return DisplayConfig(
+            logicalWidth: max(nativeWidth, 1),
+            logicalHeight: max(nativeHeight, 1),
+            scale: 1,
+            nativePixelWidth: nativeWidth,
+            nativePixelHeight: nativeHeight
+        )
+    }
+
+    /// Inspect `NSScreen.main` and pick a config for the user's actual display.
+    /// On a system with no main screen (very unusual on macOS), falls back
+    /// to the Studio Display preset.
+    @MainActor
+    public static func forMainDisplay() -> DisplayConfig {
+        guard let screen = NSScreen.main else {
+            return .studioDisplay
+        }
+        let backingScale = screen.backingScaleFactor
+        let pointsFrame = screen.frame
+        let pixelW = Int((pointsFrame.width * backingScale).rounded())
+        let pixelH = Int((pointsFrame.height * backingScale).rounded())
+        return pick(nativeWidth: pixelW, nativeHeight: pixelH)
+    }
+
+    // MARK: - Named presets
+
+    /// Studio Display 27" 5K — the design-target display.
+    public static let studioDisplay = DisplayConfig(
+        logicalWidth: 1280, logicalHeight: 900, scale: 3,
+        nativePixelWidth: 5120, nativePixelHeight: 2880
+    )
+}

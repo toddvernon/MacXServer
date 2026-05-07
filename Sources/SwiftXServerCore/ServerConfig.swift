@@ -15,26 +15,25 @@ public struct ServerConfig: Sendable {
     public var rootVisualId: UInt32
     public var resourceIdBase: UInt32
     public var resourceIdMask: UInt32
+    /// Logical pixel width — what X clients see as the screen size. Per
+    /// `SERVER_RESOLUTION_SCALING_AND_FONTS.md` the rendering pipeline
+    /// scales this up to device pixels by `scaleFactor`.
     public var widthInPixels: UInt16
     public var heightInPixels: UInt16
+    /// Reported physical size, derived to keep DPI ≈ 90 regardless of
+    /// underlying display so Sun-era Xt/Motif font auto-sizing stays sane.
     public var widthInMillimeters: UInt16
     public var heightInMillimeters: UInt16
     public var vendor: [UInt8]
     public var releaseNumber: UInt32
+    /// Integer multiplier from logical pixels to device pixels. The X
+    /// protocol layer never sees this; the rendering layer uses it.
+    public var scaleFactor: Int
 
-    public static let `default` = ServerConfig(
-        rootWindowId: 0x28,
-        defaultColormapId: 0x21,
-        rootVisualId: 0x22,
-        resourceIdBase: 0x4400000,
-        resourceIdMask: 0x1FFFFF,
-        widthInPixels: 1280,
-        heightInPixels: 1024,
-        widthInMillimeters: 360,
-        heightInMillimeters: 290,
-        vendor: Array("swift-x".utf8),
-        releaseNumber: 1
-    )
+    /// Studio Display preset. Used as fallback when no real display info
+    /// is available (e.g., test environment where the session is driven
+    /// directly without a Cocoa runloop).
+    public static let `default` = ServerConfig(displayConfig: .studioDisplay)
 
     public init(
         rootWindowId: UInt32,
@@ -47,7 +46,8 @@ public struct ServerConfig: Sendable {
         widthInMillimeters: UInt16,
         heightInMillimeters: UInt16,
         vendor: [UInt8],
-        releaseNumber: UInt32
+        releaseNumber: UInt32,
+        scaleFactor: Int = 1
     ) {
         self.rootWindowId = rootWindowId
         self.defaultColormapId = defaultColormapId
@@ -60,6 +60,35 @@ public struct ServerConfig: Sendable {
         self.heightInMillimeters = heightInMillimeters
         self.vendor = vendor
         self.releaseNumber = releaseNumber
+        self.scaleFactor = scaleFactor
+    }
+
+    /// Build a ServerConfig from a DisplayConfig + protocol-layer constants.
+    /// The dimensions and physical mm come from the picked display preset.
+    public init(
+        displayConfig: DisplayConfig,
+        rootWindowId: UInt32 = 0x28,
+        defaultColormapId: UInt32 = 0x21,
+        rootVisualId: UInt32 = 0x22,
+        resourceIdBase: UInt32 = 0x4400000,
+        resourceIdMask: UInt32 = 0x1FFFFF,
+        vendor: [UInt8] = Array("swift-x".utf8),
+        releaseNumber: UInt32 = 1
+    ) {
+        self.init(
+            rootWindowId: rootWindowId,
+            defaultColormapId: defaultColormapId,
+            rootVisualId: rootVisualId,
+            resourceIdBase: resourceIdBase,
+            resourceIdMask: resourceIdMask,
+            widthInPixels: UInt16(displayConfig.logicalWidth),
+            heightInPixels: UInt16(displayConfig.logicalHeight),
+            widthInMillimeters: UInt16(displayConfig.widthMm),
+            heightInMillimeters: UInt16(displayConfig.heightMm),
+            vendor: vendor,
+            releaseNumber: releaseNumber,
+            scaleFactor: displayConfig.scale
+        )
     }
 
     public func makeSetupAccepted() -> SetupAccepted {
