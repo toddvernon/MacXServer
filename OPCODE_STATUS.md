@@ -33,7 +33,7 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | 8  | MapWindow | impl (M2) | medium | 2026-05-07 | Top-level: bridge brings up NSWindow, emits ReparentNotify+ConfigureNotify+MapNotify+Expose. Descendant: bridge emits MapNotify only. |
 | 9  | MapSubwindows | impl (M2) | medium | 2026-05-07 | Marks every direct child mapped + bridge.mapDescendant for each. |
 | 10 | UnmapWindow | impl (M2) | low | 2026-05-07 | Top-level: bridge orderOut + UnmapNotify. Descendant: tracking only. Not exercised by xclock. |
-| 12 | ConfigureWindow | impl (M2 track-only) | low | 2026-05-07 | Width/height/x/y honoured in tracking. NSWindow user-resize → ConfigureNotify+Expose still TODO (M3). |
+| 12 | ConfigureWindow | impl (M3 part-b) | medium | 2026-05-07 | Width/height/x/y honoured. Size change on a window with ExposureMask emits Expose. NSWindow user-resize → ConfigureNotify on top-level via NSWindowDelegate path. Sibling/stack-mode/border-width unhandled. |
 | 16 | InternAtom | impl | high | 2026-05-07 | Monotonic ID assignment, name-stable across calls. Tested. |
 | 18 | ChangeProperty | impl | medium | 2026-05-07 | Replace/prepend/append all supported. Per-window dictionary. |
 | 20 | GetProperty | impl (stub-ish) | low | 2026-05-07 | Returns stored prop if present, otherwise empty. xclock's RESOURCE_MANAGER hits empty path. |

@@ -1,3 +1,4 @@
+import Foundation
 import Framer
 
 // Lightweight resource tables for windows, GCs, pixmaps, fonts, and properties.
@@ -34,36 +35,62 @@ public struct WindowEntry: Equatable, Sendable {
     }
 }
 
-public final class WindowTable {
-    private(set) public var windows: [UInt32: WindowEntry] = [:]
+public final class WindowTable: @unchecked Sendable {
+    // Thread-safety: read thread and the Cocoa main thread (resize handler)
+    // both touch this table. NSLock keeps the underlying dictionary safe.
+    private let lock = NSLock()
+    private var _windows: [UInt32: WindowEntry] = [:]
+
     public init() {}
 
-    public func insert(_ window: WindowEntry) { windows[window.id] = window }
-    public func remove(_ id: UInt32) { windows.removeValue(forKey: id) }
-    public func get(_ id: UInt32) -> WindowEntry? { windows[id] }
+    public var windows: [UInt32: WindowEntry] {
+        lock.lock(); defer { lock.unlock() }
+        return _windows
+    }
+    public var count: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _windows.count
+    }
+
+    public func insert(_ window: WindowEntry) {
+        lock.lock(); _windows[window.id] = window; lock.unlock()
+    }
+    public func remove(_ id: UInt32) {
+        lock.lock(); _windows.removeValue(forKey: id); lock.unlock()
+    }
+    public func get(_ id: UInt32) -> WindowEntry? {
+        lock.lock(); defer { lock.unlock() }
+        return _windows[id]
+    }
 
     public func setMapped(_ id: UInt32, _ value: Bool) {
-        guard var w = windows[id] else { return }
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
         w.mapped = value
-        windows[id] = w
+        _windows[id] = w
     }
 
     public func setEventMask(_ id: UInt32, _ mask: UInt32) {
-        guard var w = windows[id] else { return }
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
         w.eventMask = mask
-        windows[id] = w
+        _windows[id] = w
     }
 
-    public func resize(_ id: UInt32, width: UInt16?, height: UInt16?, x: Int16?, y: Int16?) {
-        guard var w = windows[id] else { return }
+    /// Returns `(oldEntry, newEntry)` so callers can decide whether the size
+    /// actually changed (and thus whether to emit Expose / regrow backing).
+    @discardableResult
+    public func resize(_ id: UInt32, width: UInt16?, height: UInt16?, x: Int16?, y: Int16?) -> (WindowEntry, WindowEntry)? {
+        lock.lock(); defer { lock.unlock() }
+        guard let old = _windows[id] else { return nil }
+        var w = old
         if let width = width   { w.width = width }
         if let height = height { w.height = height }
         if let x = x           { w.x = x }
         if let y = y           { w.y = y }
-        windows[id] = w
+        _windows[id] = w
+        return (old, w)
     }
-
-    public var count: Int { windows.count }
 }
 
 public struct GCEntry: Equatable, Sendable {

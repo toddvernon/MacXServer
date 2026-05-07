@@ -44,22 +44,26 @@ final class XclockReplayTests: XCTestCase {
 
         var offset = setupBytes.count
         var replyCount = 0
+        var eventCount = 0
         var errorCount = 0
         while offset < allOutput.count {
             let remaining = Array(allOutput[offset...])
             let msg = try ServerMessage.decodeOne(from: remaining, byteOrder: byteOrder)
             switch msg {
             case .reply: replyCount += 1
+            case .event: eventCount += 1
             case .xError(let err):
                 errorCount += 1
                 XCTFail("server emitted XError code=\(err.errorCode) majorOp=\(err.majorOpcode) seq=\(err.sequenceNumber(byteOrder: byteOrder))")
-            case .event:
-                XCTFail("M1 should not be emitting events")
             }
             offset += msg.bytes.count
         }
-        XCTAssertEqual(errorCount, 0, "M1 must not emit XErrors during xclock replay")
+        XCTAssertEqual(errorCount, 0, "must not emit XErrors during xclock replay")
         XCTAssertGreaterThan(replyCount, 0, "expected some replies (InternAtom, AllocColor, etc.)")
+        // Events expected: M2 map sequence (Reparent, Configure, Map, plus
+        // descendant MapNotify on inner) + M3 Expose on inner from each
+        // ConfigureWindow size change in the captured resize bursts.
+        XCTAssertGreaterThan(eventCount, 0, "expected map / expose events")
         XCTAssertEqual(offset, allOutput.count, "output should parse cleanly with no trailing bytes")
     }
 

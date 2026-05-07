@@ -90,6 +90,13 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// returns the CGContext / target. Default impl can be no-op for M2.
     func drawingTarget(for drawable: UInt32) -> Any?
 
+    /// Called by the session at startup. The bridge stores the closure and
+    /// invokes it whenever the user resizes a top-level NSWindow. Args:
+    /// (top-level X window id, new width, new height). The session uses this
+    /// to update its WindowTable and emit ConfigureNotify back to the client.
+    /// Always invoked on the main thread.
+    func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void)
+
     // MARK: - Drawing (M3)
     //
     // Coordinates are already translated to the top-level NSWindow's view
@@ -104,6 +111,7 @@ public protocol WindowBridge: AnyObject, Sendable {
 public extension WindowBridge {
     func descendantResized(id: UInt32, parent: UInt32, geometry: TopLevelGeometry) {}
     func drawingTarget(for drawable: UInt32) -> Any? { nil }
+    func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {}
     // M3 default no-ops so M1/M2 unit tests compile without implementing every method.
     func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment]) {}
     func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint]) {}

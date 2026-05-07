@@ -49,6 +49,33 @@ public final class ServerSession: @unchecked Sendable {
         self.bridge = bridge
         self.outbound = outbound
         self.log = log
+        bridge?.setOnTopLevelResize { [weak self] id, width, height in
+            self?.handleTopLevelResize(id: id, width: width, height: height)
+        }
+    }
+
+    /// Called by the bridge from main thread when the user resizes an
+    /// NSWindow. Updates the X tracking and emits ConfigureNotify on the
+    /// top-level. The X client (xclock) will respond by re-issuing
+    /// ConfigureWindow on its drawing-target descendant; that in turn
+    /// triggers the descendant Expose path in `dispatch`.
+    public func handleTopLevelResize(id: UInt32, width: UInt16, height: UInt16) {
+        guard let result = windows.resize(id, width: width, height: height, x: nil, y: nil) else { return }
+        let (old, new) = result
+        guard old.width != new.width || old.height != new.height else { return }
+        // Sequence number can be stale here (we're not in feed) but X11 lets
+        // unsolicited events carry the most recent request's sequence number,
+        // which is what we have stashed in `sequenceNumber`.
+        guard let order = byteOrder else { return }
+        let event = ConfigureNotifyEvent(
+            sequenceNumber: sequenceNumber,
+            event: id, window: id, aboveSibling: 0,
+            x: new.x, y: new.y,
+            width: new.width, height: new.height,
+            borderWidth: new.borderWidth,
+            overrideRedirect: false
+        )
+        outbound.append(event.encode(byteOrder: order))
     }
 
     /// True if `window` is a known top-level (parent == root). Used to decide
@@ -405,16 +432,30 @@ public final class ServerSession: @unchecked Sendable {
             let y = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.y, byteOrder: byteOrder).map { Int16(truncatingIfNeeded: $0) }
             let w = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.width, byteOrder: byteOrder).map { UInt16(truncatingIfNeeded: $0) }
             let h = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.height, byteOrder: byteOrder).map { UInt16(truncatingIfNeeded: $0) }
-            windows.resize(r.window, width: w, height: h, x: x, y: y)
-            if let entry = windows.get(r.window), entry.parent != config.rootWindowId {
-                bridge?.descendantResized(
-                    id: r.window, parent: entry.parent,
-                    geometry: TopLevelGeometry(
-                        x: entry.x, y: entry.y,
-                        width: entry.width, height: entry.height,
-                        borderWidth: entry.borderWidth
+            let result = windows.resize(r.window, width: w, height: h, x: x, y: y)
+            if let (old, new) = result, let entry = windows.get(r.window) {
+                if entry.parent != config.rootWindowId {
+                    bridge?.descendantResized(
+                        id: r.window, parent: entry.parent,
+                        geometry: TopLevelGeometry(
+                            x: entry.x, y: entry.y,
+                            width: entry.width, height: entry.height,
+                            borderWidth: entry.borderWidth
+                        )
                     )
-                )
+                }
+                // Per X11 spec: a size-changing ConfigureWindow on a window
+                // with ExposureMask in its event mask triggers Expose for
+                // the (newly-grown) area. We oversimplify by emitting Expose
+                // for the whole window region — spec allows that.
+                let sizeChanged = old.width != new.width || old.height != new.height
+                if sizeChanged && (entry.eventMask & MockWindowBridge.exposureMask != 0) {
+                    let expose = ExposeEvent(
+                        sequenceNumber: sequenceNumber, window: r.window,
+                        x: 0, y: 0, width: new.width, height: new.height, count: 0
+                    )
+                    outbound.append(expose.encode(byteOrder: byteOrder))
+                }
             }
 
         case .internAtom(let r):

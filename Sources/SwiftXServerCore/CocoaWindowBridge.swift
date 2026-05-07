@@ -20,14 +20,20 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         var pendingTitle: String?
         var window: NSWindow?
         var view: FlippedXView?
+        var delegate: ResizeWindowDelegate?
     }
 
     private var slots: [UInt32: Slot] = [:]
     private let lock = NSLock()
+    private var resizeHandler: (@Sendable (UInt32, UInt16, UInt16) -> Void)?
     private weak var log: ServerLogSink?
 
     public init(log: ServerLogSink? = nil) {
         self.log = log
+    }
+
+    public func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {
+        resizeHandler = handler
     }
 
     // MARK: - WindowBridge
@@ -56,6 +62,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             guard let self = self else { return }
             let view = FlippedXView(frame: NSRect(x: 0, y: 0, width: Int(geometry.width), height: Int(geometry.height)))
             view.resizeBacking(width: Int(geometry.width), height: Int(geometry.height))
+            view.autoresizingMask = [.width, .height]
 
             let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
             let contentRect = NSRect(x: 100, y: 100,
@@ -65,12 +72,17 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             win.contentView = view
             win.title = pendingTitle
             win.isReleasedWhenClosed = false
+
+            let delegate = ResizeWindowDelegate(windowId: id, bridge: self)
+            win.delegate = delegate
+
             win.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
 
             self.lock.lock()
             self.slots[id]?.window = win
             self.slots[id]?.view = view
+            self.slots[id]?.delegate = delegate
             self.lock.unlock()
 
             MockWindowBridge.emitMapSequence(
@@ -212,6 +224,42 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return slots[id]
+    }
+
+    /// Called from the NSWindowDelegate after a user-driven resize. Resizes
+    /// the FlippedXView's backing CGBitmapContext to match the new view size,
+    /// then calls back into the session via `resizeHandler` so it can update
+    /// WindowTable + emit ConfigureNotify.
+    @MainActor
+    fileprivate func handleNSWindowResize(id: UInt32) {
+        let view = slot(id)?.view
+        guard let view = view else { return }
+        let bounds = view.bounds
+        let newWidth = Int(bounds.width)
+        let newHeight = Int(bounds.height)
+        guard newWidth > 0, newHeight > 0 else { return }
+        if newWidth != view.backingWidth || newHeight != view.backingHeight {
+            view.resizeBacking(width: newWidth, height: newHeight)
+            view.setNeedsDisplay(view.bounds)
+        }
+        resizeHandler?(id, UInt16(min(newWidth, 65535)), UInt16(min(newHeight, 65535)))
+    }
+}
+
+/// NSWindowDelegate that catches user-driven resizes and forwards them to
+/// the bridge. Stays @MainActor since NSWindowDelegate is.
+@MainActor
+private final class ResizeWindowDelegate: NSObject, NSWindowDelegate {
+    let windowId: UInt32
+    weak var bridge: CocoaWindowBridge?
+
+    init(windowId: UInt32, bridge: CocoaWindowBridge) {
+        self.windowId = windowId
+        self.bridge = bridge
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        bridge?.handleNSWindowResize(id: windowId)
     }
 }
 

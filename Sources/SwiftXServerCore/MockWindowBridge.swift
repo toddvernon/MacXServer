@@ -27,6 +27,17 @@ public final class MockWindowBridge: WindowBridge, @unchecked Sendable {
 
     public init() {}
 
+    private var resizeHandler: (@Sendable (UInt32, UInt16, UInt16) -> Void)?
+
+    public func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {
+        resizeHandler = handler
+    }
+
+    /// Test helper: pretend the user resized the NSWindow for `id`.
+    public func simulateResize(id: UInt32, width: UInt16, height: UInt16) {
+        resizeHandler?(id, width, height)
+    }
+
     public func registerTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32) {
         registered.append(Registered(id: id, geometry: geometry, eventMask: eventMask))
     }
