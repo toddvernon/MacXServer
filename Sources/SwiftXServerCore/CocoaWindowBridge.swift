@@ -288,6 +288,14 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             ctx.setAllowsFontSubpixelPositioning(false)
             ctx.setShouldSubpixelPositionFonts(false)
 
+            // Our backing context's CTM has y-flipped so X-style top-left
+            // coordinates pass through. Glyphs in CG's default orientation
+            // extend in +y user-space (visually down in our flipped frame),
+            // which would render text upside-down. The text matrix
+            // counter-flips glyph local coords; combined with the flipped
+            // CTM the net y-axis is identity, so glyphs render right-side-up.
+            ctx.textMatrix = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: 0)
+
             let ctFont = ctFont(for: font)
 
             // Decode bytes as Latin-1 → UniChar (each byte is its codepoint).
@@ -305,9 +313,9 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 )
             }
 
-            // CTFontDrawGlyphs respects the current fill color (which we
-            // just set to foreground) and works with our compound CTM
-            // (logical → device pixel scale).
+            // CTFontDrawGlyphs respects the current fill color (foreground),
+            // the CTM (logical→device scale + y-flip), and the textMatrix
+            // (counter-flip set above for upright glyphs).
             CTFontDrawGlyphs(ctFont, &glyphs, &positions, n, ctx)
 
             ctx.restoreGState()

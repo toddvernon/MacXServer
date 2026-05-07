@@ -38,8 +38,18 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | 18 | ChangeProperty | impl | medium | 2026-05-07 | Replace/prepend/append all supported. Per-window dictionary. |
 | 20 | GetProperty | impl (stub-ish) | low | 2026-05-07 | Returns stored prop if present, otherwise empty. xclock's RESOURCE_MANAGER hits empty path. |
 | 43 | GetInputFocus | impl | medium | 2026-05-07 | Always reports focus=None, revertTo=None. |
-| 45 | OpenFont | impl (M1 track-only) | medium | 2026-05-07 | Accepts any name, no real Core Text mapping yet. |
-| 47 | QueryFont | impl (stub) | low | 2026-05-07 | Stub reply with ascent=11 descent=2 char-range 32..126, zero properties/charinfos. xclock doesn't render text so passes. |
+| 45 | OpenFont | impl (Phase 1) | medium | 2026-05-07 | Parses XLFD or alias via FontResolver, stores resolved Mac font + cell metrics on the FontEntry. Cursor font / italic-skew handled at render time. |
+| 47 | QueryFont | impl (Phase 1) | medium | 2026-05-07 | Returns cell-snapped metrics derived from the resolved font. minBounds == maxBounds (monospace), charInfos empty (per-char metrics = minBounds), range 32..126. Phase 4 polish: full Latin-1 range, proportional charInfos. |
+| 49 | ListFonts | impl (Phase 1) | medium | 2026-05-07 | Pattern-matches against Phase-1 synthesized list (~40 entries: cell aliases + substitute families × 5 sizes × medium/bold roman iso10646-1). Phase 4 expands to italic + iso8859-1. |
+| 70 | PolyFillRectangle | impl (Phase 1) | medium | 2026-05-07 | Translates coords to top-level, applies foreground color, fills via CGContext.fill(rects). Used heavily by xterm for cell backgrounds. |
+| 76 | ImageText8 | impl (Phase 1) | medium | 2026-05-07 | Fills bg rect, then renders glyphs via CTFontGetGlyphsForCharacters + CTFontDrawGlyphs at exact cell-snapped positions with subpixel positioning OFF. textMatrix counter-flip handles y-flipped backing context. CTFont cached by name+size. |
+| 84 | AllocColor | impl | medium | 2026-05-07 | Monotonic pixel (start=16), pixel→RGB cached. No real palette. |
+| 91 | QueryColors | impl (Phase 1) | medium | 2026-05-07 | Looks up requested pixels in ColorTable; unknown pixels resolve to black. |
+| 101 | GetKeyboardMapping | impl (Phase 1 stub) | low | 2026-05-07 | Returns 2 keysyms per keycode, all NoSymbol. Xlib accepts; typed input won't translate to characters. Phase 4 polish: real US-ASCII keymap. |
+| 117 | GetPointerMapping | impl (Phase 1) | medium | 2026-05-07 | Returns [1, 2, 3] (left/middle/right buttons). |
+| 119 | GetModifierMapping | impl (Phase 1 stub) | low | 2026-05-07 | 8 modifier groups × 2 slots, all 0. Phase 4: real shift/control/etc. mappings. |
+| 22 | SetSelectionOwner | accepted, no-op | — | 2026-05-07 | Per X11 spec no reply expected. We don't track selection state yet. |
+| 23 | GetSelectionOwner | impl (Phase 1 stub) | low | 2026-05-07 | Returns owner=None. Phase 4 polish: real PRIMARY/CLIPBOARD ↔ NSPasteboard bridge. |
 | 53 | CreatePixmap | impl (M1 track-only) | medium | 2026-05-07 | Records id/depth/dimensions. No backing pixels (M3). |
 | 54 | FreePixmap | impl | medium | 2026-05-07 | Removes from table. |
 | 55 | CreateGC | impl (M1 track-only) | medium | 2026-05-07 | Stores valueMask+valueList. No CG state translation yet (M3). |
