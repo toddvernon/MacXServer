@@ -1,0 +1,193 @@
+import Framer
+
+// Lightweight resource tables for windows, GCs, pixmaps, fonts, and properties.
+// M1 just records what the client created — nothing rendering-related.
+
+public struct WindowEntry: Equatable, Sendable {
+    public var id: UInt32
+    public var parent: UInt32
+    public var depth: UInt8
+    public var x: Int16
+    public var y: Int16
+    public var width: UInt16
+    public var height: UInt16
+    public var borderWidth: UInt16
+    public var windowClass: WindowClass
+    public var visual: UInt32
+    public var valueMask: UInt32
+    public var valueList: [UInt8]
+    public var mapped: Bool
+    public var eventMask: UInt32
+
+    public init(
+        id: UInt32, parent: UInt32, depth: UInt8,
+        x: Int16, y: Int16, width: UInt16, height: UInt16,
+        borderWidth: UInt16, windowClass: WindowClass, visual: UInt32,
+        valueMask: UInt32, valueList: [UInt8],
+        mapped: Bool = false, eventMask: UInt32 = 0
+    ) {
+        self.id = id; self.parent = parent; self.depth = depth
+        self.x = x; self.y = y; self.width = width; self.height = height
+        self.borderWidth = borderWidth; self.windowClass = windowClass
+        self.visual = visual; self.valueMask = valueMask; self.valueList = valueList
+        self.mapped = mapped; self.eventMask = eventMask
+    }
+}
+
+public final class WindowTable {
+    private(set) public var windows: [UInt32: WindowEntry] = [:]
+    public init() {}
+
+    public func insert(_ window: WindowEntry) { windows[window.id] = window }
+    public func remove(_ id: UInt32) { windows.removeValue(forKey: id) }
+    public func get(_ id: UInt32) -> WindowEntry? { windows[id] }
+
+    public func setMapped(_ id: UInt32, _ value: Bool) {
+        guard var w = windows[id] else { return }
+        w.mapped = value
+        windows[id] = w
+    }
+
+    public func setEventMask(_ id: UInt32, _ mask: UInt32) {
+        guard var w = windows[id] else { return }
+        w.eventMask = mask
+        windows[id] = w
+    }
+
+    public func resize(_ id: UInt32, width: UInt16?, height: UInt16?, x: Int16?, y: Int16?) {
+        guard var w = windows[id] else { return }
+        if let width = width   { w.width = width }
+        if let height = height { w.height = height }
+        if let x = x           { w.x = x }
+        if let y = y           { w.y = y }
+        windows[id] = w
+    }
+
+    public var count: Int { windows.count }
+}
+
+public struct GCEntry: Equatable, Sendable {
+    public var id: UInt32
+    public var drawable: UInt32
+    public var valueMask: UInt32
+    public var valueList: [UInt8]
+
+    public init(id: UInt32, drawable: UInt32, valueMask: UInt32, valueList: [UInt8]) {
+        self.id = id; self.drawable = drawable
+        self.valueMask = valueMask; self.valueList = valueList
+    }
+}
+
+public final class GCTable {
+    private(set) public var gcs: [UInt32: GCEntry] = [:]
+    public init() {}
+
+    public func insert(_ gc: GCEntry) { gcs[gc.id] = gc }
+    public func remove(_ id: UInt32) { gcs.removeValue(forKey: id) }
+    public func get(_ id: UInt32) -> GCEntry? { gcs[id] }
+
+    public func change(_ id: UInt32, valueMask: UInt32, valueList: [UInt8]) {
+        guard var entry = gcs[id] else { return }
+        // Replace mask/values for the bits being changed. Per spec ChangeGC's
+        // valueList carries only the bits set in valueMask, not a full snapshot.
+        // For M1 we just append/overwrite a coarse record — finer state merging
+        // arrives when we actually render.
+        entry.valueMask |= valueMask
+        entry.valueList.append(contentsOf: valueList)
+        gcs[id] = entry
+    }
+
+    public var count: Int { gcs.count }
+}
+
+public struct PixmapEntry: Equatable, Sendable {
+    public var id: UInt32
+    public var drawable: UInt32
+    public var depth: UInt8
+    public var width: UInt16
+    public var height: UInt16
+
+    public init(id: UInt32, drawable: UInt32, depth: UInt8, width: UInt16, height: UInt16) {
+        self.id = id; self.drawable = drawable; self.depth = depth
+        self.width = width; self.height = height
+    }
+}
+
+public final class PixmapTable {
+    private(set) public var pixmaps: [UInt32: PixmapEntry] = [:]
+    public init() {}
+
+    public func insert(_ pixmap: PixmapEntry) { pixmaps[pixmap.id] = pixmap }
+    public func remove(_ id: UInt32) { pixmaps.removeValue(forKey: id) }
+    public func get(_ id: UInt32) -> PixmapEntry? { pixmaps[id] }
+
+    public var count: Int { pixmaps.count }
+}
+
+public struct FontEntry: Equatable, Sendable {
+    public var id: UInt32
+    public var name: [UInt8]
+
+    public init(id: UInt32, name: [UInt8]) { self.id = id; self.name = name }
+}
+
+public final class FontTable {
+    private(set) public var fonts: [UInt32: FontEntry] = [:]
+    public init() {}
+
+    public func insert(_ font: FontEntry) { fonts[font.id] = font }
+    public func remove(_ id: UInt32) { fonts.removeValue(forKey: id) }
+    public func get(_ id: UInt32) -> FontEntry? { fonts[id] }
+
+    public var count: Int { fonts.count }
+}
+
+public struct PropertyEntry: Equatable, Sendable {
+    public var window: UInt32
+    public var property: UInt32     // ATOM
+    public var type: UInt32         // ATOM
+    public var format: UInt8        // 8/16/32
+    public var value: [UInt8]
+
+    public init(window: UInt32, property: UInt32, type: UInt32, format: UInt8, value: [UInt8]) {
+        self.window = window; self.property = property
+        self.type = type; self.format = format; self.value = value
+    }
+}
+
+public final class PropertyTable {
+    private(set) public var properties: [UInt32: [UInt32: PropertyEntry]] = [:]
+    public init() {}
+
+    public func change(window: UInt32, property: UInt32, type: UInt32, format: UInt8, mode: UInt8, value: [UInt8]) {
+        var perWindow = properties[window] ?? [:]
+        if mode == 0 || perWindow[property] == nil {
+            perWindow[property] = PropertyEntry(window: window, property: property, type: type, format: format, value: value)
+        } else if mode == 1 {                          // PropModePrepend
+            var existing = perWindow[property]!
+            existing.value = value + existing.value
+            perWindow[property] = existing
+        } else {                                       // PropModeAppend (mode == 2)
+            var existing = perWindow[property]!
+            existing.value.append(contentsOf: value)
+            perWindow[property] = existing
+        }
+        properties[window] = perWindow
+    }
+
+    public func get(window: UInt32, property: UInt32) -> PropertyEntry? {
+        properties[window]?[property]
+    }
+
+    public func delete(window: UInt32, property: UInt32) {
+        properties[window]?.removeValue(forKey: property)
+    }
+
+    public func deleteAll(window: UInt32) {
+        properties.removeValue(forKey: window)
+    }
+
+    public var totalCount: Int {
+        properties.values.reduce(0) { $0 + $1.count }
+    }
+}

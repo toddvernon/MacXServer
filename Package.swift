@@ -9,7 +9,9 @@ let package = Package(
     products: [
         .library(name: "Framer", targets: ["Framer"]),
         .library(name: "SwiftXCaptureCore", targets: ["SwiftXCaptureCore"]),
+        .library(name: "SwiftXServerCore", targets: ["SwiftXServerCore"]),
         .executable(name: "swiftx-capture", targets: ["SwiftXCapture"]),
+        .executable(name: "swiftx-server", targets: ["SwiftXServer"]),
     ],
     targets: [
         .target(name: "Framer"),
@@ -17,9 +19,17 @@ let package = Package(
             name: "SwiftXCaptureCore",
             dependencies: ["Framer"]
         ),
+        .target(
+            name: "SwiftXServerCore",
+            dependencies: ["Framer"]
+        ),
         .executableTarget(
             name: "SwiftXCapture",
             dependencies: ["SwiftXCaptureCore", "Framer"]
+        ),
+        .executableTarget(
+            name: "SwiftXServer",
+            dependencies: ["SwiftXServerCore", "Framer"]
         ),
         .testTarget(
             name: "FramerTests",
@@ -28,6 +38,10 @@ let package = Package(
         .testTarget(
             name: "SwiftXCaptureCoreTests",
             dependencies: ["SwiftXCaptureCore"]
+        ),
+        .testTarget(
+            name: "SwiftXServerCoreTests",
+            dependencies: ["SwiftXServerCore", "Framer", "SwiftXCaptureCore"]
         ),
     ]
 )

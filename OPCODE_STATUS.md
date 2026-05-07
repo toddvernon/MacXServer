@@ -27,28 +27,31 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 
 | Opcode | Name | Status | Confidence | Last reviewed | Notes |
 | --- | --- | --- | --- | --- | --- |
-| (setup) | SetupRequest / SetupAccepted | not impl | — | — | M1 will hardcode SetupAccepted; see SHORTCUTS.md |
-| 1  | CreateWindow | not impl | — | — | M1: track only. M2: create NSWindow for top-level. |
-| 2  | ChangeWindowAttributes | not impl | — | — | M1: store mask+values; ignore BackingStore bit |
-| 8  | MapWindow | not impl | — | — | M1: track only. M2: emit Map/Configure/Reparent/Expose. |
-| 9  | MapSubwindows | not impl | — | — | M1: track only |
-| 12 | ConfigureWindow | not impl | — | — | M3: needed for child resize on parent resize |
-| 18 | ChangeProperty | not impl | — | — | M1: store. WM_NAME → NSWindow title in M2. |
-| 20 | GetProperty | not impl | — | — | M1: stub returns empty for unknown props |
-| 16 | InternAtom | not impl | — | — | M1: monotonic, same name → same ID |
-| 33 | GetInputFocus | not impl | — | — | M1: stub reply |
-| 43 | OpenFont | not impl | — | — | M1: accept any name, return success |
-| 47 | QueryFont | not impl | — | — | M1: stub reply (xclock doesn't render text) |
-| 53 | CreatePixmap | not impl | — | — | M1: track. xclock makes 2 unused 48×48 depth=1 |
-| 55 | CreateGC | not impl | — | — | M1: store mask+values |
-| 56 | ChangeGC | not impl | — | — | M1: update stored values |
-| 60 | FreeGC | not impl | — | — | M1: remove from resource table |
-| 61 | ClearArea | not impl | — | — | M3: render (used for erase-before-redraw) |
-| 65 | PolySegment | not impl | — | — | M3: render (the 60 minute ticks) |
-| 66 | PolyLine | not impl | — | — | M3: render (hand outlines, dial details) |
-| 69 | FillPoly | not impl | — | — | M3: render (hand bodies, convex) |
-| 72 | PutImage | not impl | — | — | M1: accept and store (xclock writes icon bitmaps) |
-| 84 | AllocColor | not impl | — | — | M1: synthetic pixel, cached server-side |
+| (setup) | SetupRequest / SetupAccepted | impl | medium | 2026-05-07 | Hardcoded SetupAccepted (see SHORTCUTS); accepts both byte orders; partial buffering tested |
+| 1  | CreateWindow | impl (M2: NSWindow on top-level) | medium | 2026-05-07 | parent==root → bridge.registerTopLevel; descendants stored in WindowTable only. |
+| 2  | ChangeWindowAttributes | impl (M1 track-only) | medium | 2026-05-07 | Updates eventMask only; other attrs ignored. BackingStore bit silently dropped. |
+| 8  | MapWindow | impl (M2) | medium | 2026-05-07 | Top-level: bridge brings up NSWindow, emits ReparentNotify+ConfigureNotify+MapNotify+Expose. Descendant: bridge emits MapNotify only. |
+| 9  | MapSubwindows | impl (M2) | medium | 2026-05-07 | Marks every direct child mapped + bridge.mapDescendant for each. |
+| 10 | UnmapWindow | impl (M2) | low | 2026-05-07 | Top-level: bridge orderOut + UnmapNotify. Descendant: tracking only. Not exercised by xclock. |
+| 12 | ConfigureWindow | impl (M2 track-only) | low | 2026-05-07 | Width/height/x/y honoured in tracking. NSWindow user-resize → ConfigureNotify+Expose still TODO (M3). |
+| 16 | InternAtom | impl | high | 2026-05-07 | Monotonic ID assignment, name-stable across calls. Tested. |
+| 18 | ChangeProperty | impl | medium | 2026-05-07 | Replace/prepend/append all supported. Per-window dictionary. |
+| 20 | GetProperty | impl (stub-ish) | low | 2026-05-07 | Returns stored prop if present, otherwise empty. xclock's RESOURCE_MANAGER hits empty path. |
+| 43 | GetInputFocus | impl | medium | 2026-05-07 | Always reports focus=None, revertTo=None. |
+| 45 | OpenFont | impl (M1 track-only) | medium | 2026-05-07 | Accepts any name, no real Core Text mapping yet. |
+| 47 | QueryFont | impl (stub) | low | 2026-05-07 | Stub reply with ascent=11 descent=2 char-range 32..126, zero properties/charinfos. xclock doesn't render text so passes. |
+| 53 | CreatePixmap | impl (M1 track-only) | medium | 2026-05-07 | Records id/depth/dimensions. No backing pixels (M3). |
+| 54 | FreePixmap | impl | medium | 2026-05-07 | Removes from table. |
+| 55 | CreateGC | impl (M1 track-only) | medium | 2026-05-07 | Stores valueMask+valueList. No CG state translation yet (M3). |
+| 56 | ChangeGC | impl (M1 track-only) | low | 2026-05-07 | Coarse merge of valueMask+valueList. Will need finer state model in M3. |
+| 60 | FreeGC | impl | medium | 2026-05-07 | Removes from table. |
+| 72 | PutImage | accepted, no-op | low | 2026-05-07 | Bytes are decoded by framer but pixels are dropped. xclock writes icon bitmaps; we don't surface them anywhere yet. |
+| 84 | AllocColor | impl | medium | 2026-05-07 | Monotonic pixel (start=16), pixel→RGB cached. No real palette. |
+| 98 | QueryExtension | impl (stub) | medium | 2026-05-07 | Reports `present=false` for everything. |
+| 65 | PolyLine | impl (M3) | medium | 2026-05-07 | Strokes a connected line strip via CGContext. Origin and Previous coordinate-modes both supported. Line-width from GC (0 → 1px). |
+| 66 | PolySegment | impl (M3) | medium | 2026-05-07 | Strokes independent line segments via CGContext.move+addLine+strokePath. |
+| 69 | FillPoly | impl (M3) | low | 2026-05-07 | Fills with foreground; uses GC fill-rule (default EvenOdd). Convex/Nonconvex/Complex shape attribute not yet specialised. |
+| 61 | ClearArea | impl (M3) | low | 2026-05-07 | Fills rect with window's BackPixel. width=0/height=0 fill-to-edge supported. exposures bit ignored. |
 
 (Add rows as opcodes get encountered.)
 
