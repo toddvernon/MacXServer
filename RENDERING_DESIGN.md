@@ -49,11 +49,13 @@ All rendering work runs on the main thread. CGContext is not thread-safe in gene
 
 Off-main rendering with blit-on-flush is a v2 optimization. Don't do it now.
 
-### 7. Text rendering: Core Text
+### 7. Text rendering: Core Text with cell-snapping
 
-Per `DECISIONS.md` 2026-05-05 (font handling): we use Core Text and "lie" about being a bitmap font. A QueryFont reply has metrics consistent with what Core Text will actually render. PolyText8 / ImageText8 lay out and draw via `CTLine`.
+Per `DECISIONS.md` 2026-05-07 and `SERVER_RESOLUTION_SCALING_AND_FONTS.md`: the server ships **no bitmap fonts**. Every X font request resolves to a scalable Mac font (Monaco / Helvetica Neue / Courier New / Andale Mono / Times New Roman / Symbol / Charter per the substitution table) rendered with Core Text. QueryFont reports integer logical cell metrics; rendering produces glyphs at exact device-pixel positions with subpixel positioning OFF (non-negotiable for cell-aligned rendering).
 
-This isn't exercised by xclock (which doesn't render text), but the commitment is in place. Do not introduce a bitmap-font path even as a temporary fallback.
+This isn't exercised by xclock (which doesn't render text); xterm is where it matters.
+
+See `SERVER_RESOLUTION_SCALING_AND_FONTS.md` for the substitution table, cell-sizing math, italic policy, and xlsfonts synthesis plan. That doc is load-bearing — if you're touching anything text-related, read it first.
 
 ### 8. Coordinate system: NSView is flipped
 
@@ -70,6 +72,18 @@ GC `SetClipRectangles` adds an additional clip from the GC; intersect with the X
 Each drawing request directly writes pixels into the target's backing CGContext. No display lists, no retained scenes, no replay buffers. This matches X11's mental model: a drawing request is a state-changing side effect, not an entry in a scene graph.
 
 The single deferred operation is `setNeedsDisplay(_:)` on the NSView, which coalesces many small draws into one screen flush per refresh cycle. Cocoa handles that for us.
+
+### 11. Display scaling: logical vs device coordinates
+
+Two coordinate systems: **logical** (what the X protocol sees) and **device** (what gets drawn). The boundary is the protocol/render layer — neither system leaks past there.
+
+- Logical-root size and integer scale factor are computed at startup from `NSScreen.main` per the preset table in `SERVER_RESOLUTION_SCALING_AND_FONTS.md`. Immutable for the session in Phase 1; user-overridable in Phase 2; runtime-adjustable in Phase 4 via XRandR.
+- The rendering layer scales logical → device via a `CGAffineTransform` applied to the backing CGContext, so opcodes can pass logical coordinates straight through.
+- Three independent scaling planes per the spec: **geometry** (free fractional, both for window edges and pixmap sizes), **stroke** (snapped to integer device pixels for crisp lines), **font** (snapped to integer point sizes for clean Core Text hinting). Implementation defers to the doc; the commitment here is just that we honor the three-plane decomposition.
+- Mouse events transform device → logical at the input dispatch boundary. The X client never sees device coordinates.
+- Pixmaps (PutImage payloads) are stored at logical resolution. Upscale happens at composite time via `kCGInterpolationHigh` (Lanczos). Storing at device resolution would blow up memory and break GetImage round-trips.
+
+This commitment is what makes the renderer "WAY better than XQuartz" possible. Anywhere we let device coordinates leak into the protocol layer, or vice versa, we've broken the architecture and the rendering quality bar gets compromised.
 
 ## Per-opcode Mac primitive mapping
 

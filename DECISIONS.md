@@ -217,6 +217,33 @@ If at some later point we have a specific need that translation would solve and 
 
 ---
 
+## 2026-05-07: Display scaling and font handling — defer to SERVER_RESOLUTION_SCALING_AND_FONTS.md
+
+**Chosen**: A separate design doc (`SERVER_RESOLUTION_SCALING_AND_FONTS.md`) holds the load-bearing decisions for how the server renders to Retina displays of different sizes and how X font requests resolve to Mac fonts. Headline points:
+
+1. Display-adaptive integer scaling at startup. The server inspects the connected display and picks the highest integer scale (4x / 3x / 2x) and matching logical-root size that fits cleanly. One binary serves Studio Display (1280×900 @ 3x), 4K (1280×720 @ 3x), Pro Display XDR (1280×900 @ 4x), MacBook Pro Retina, etc.
+2. **No bitmap fonts.** Every X font request resolves to a scalable Mac font via Core Text — Monaco, Helvetica Neue, Courier New, Andale Mono, Times New Roman, Symbol, Charter — using a substitution table from XLFD families.
+3. Cell-snapping with **subpixel positioning OFF**. Reported metrics === rendered metrics. Crisp glyphs, predictable cursor positions, no drift.
+4. Three independent scaling planes (geometry / stroke / font), each with its own snapping rules.
+5. Phased rollout: Phase 1 startup-time integer scale + Phase-1 font set, Phase 2 user-overridable, Phase 3 fractional scales, Phase 4 polish (multi-monitor, full xlsfonts, custom cursors).
+
+**Rejected**:
+
+1. **Hardcoded single scale.** Studio-Display-only would leave 4K and MacBook Pro displays sub-optimal. The whole motivation of the project is to look great on Retina; that means all Retina, not one Retina.
+2. **Ship X11 bitmap fonts and serve them faithfully.** Bitmap fonts upscaled to Retina look terrible. Shipping multiple sizes is a maintenance load that perpetuates exactly the cell-aligned-bitmap aesthetic this project is trying to escape.
+3. **Subpixel positioning ON.** Conflicts with cell-snapped layout — glyphs would shift sub-pixel away from the X cell grid, breaking xterm's cursor alignment.
+
+**Why**:
+
+- iTerm2 is the explicit bar for terminal rendering on macOS. We need to clear it. XQuartz's rendering is the failure mode we exist to avoid.
+- The X cell-grid model is fundamentally about predictable column positions; modern Mac fonts hint cleanly at integer sizes; the marriage works as long as we own the metrics.
+- Display-adaptive lets one binary serve every Retina-class display without per-display configuration or shipping multiple binaries.
+- Phased rollout lets us ship something working fast and improve it without churn.
+
+This decision supersedes the "How to handle the initial X core font requirement" open question that previously lived in "Decisions still to make."
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
@@ -225,5 +252,4 @@ These are open questions to resolve as the project progresses. Will become entri
 - Capture file format: custom binary frames, or a sidecar metadata + raw byte log? Leaning toward the latter for simplicity.
 - Whether to support multiple simultaneous client connections in the X server v1 (yes, but worth flagging that the auth and resource ID allocation per connection is a real piece of work).
 - Whether the rendering backend is Core Graphics, Metal, or a switchable abstraction. Leaning Core Graphics first, Metal as optimization.
-- How to handle the initial X core font requirement. Two options: ship actual bitmap font files and serve them faithfully, or do the "render with Core Text, lie about being a bitmap font" approach for font smoothing. The latter is much more interesting but much more work.
-- Whether cursor rendering goes through the X cursor font (boring, easy) or substitutes modern crisp cursors (more interesting, more work).
+- Whether cursor rendering goes through the X cursor font (boring, easy) or substitutes modern crisp cursors (more interesting, more work). `SERVER_RESOLUTION_SCALING_AND_FONTS.md` leans toward NSCursor substitution but that's not yet a hard commitment.

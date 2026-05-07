@@ -44,9 +44,13 @@ In priority order:
 - xterm, twm, mwm, xclock, xeyes, xcalc running from a real SPARCstation against my Swift X server, looking
 	good and behaving correctly
 - A Motif app I wrote runs and is usable
-- Anti-aliased font rendering on Retina, native macOS window chrome (rootless mode)
+- Anti-aliased font rendering on Retina, native macOS window chrome (rootless mode). Specifics in
+	`SERVER_RESOLUTION_SCALING_AND_FONTS.md` — Core Text scalable substitutes, no bitmap fonts, cell-snapped
+	terminal text. Quality bar: clearly beat XQuartz, approach iTerm2 for terminal rendering.
 - Scalable display, since old computers had smaller screens and rendering them at native size on modern
-	boxes makes everything too small
+	boxes makes everything too small. Display-adaptive integer scaling (3x or 4x for Retina, 2x for 1080p)
+	picked at startup from a preset table per `SERVER_RESOLUTION_SCALING_AND_FONTS.md`. Three independent
+	scaling planes (geometry / stroke / font) so lines stay crisp and glyphs stay hinted.
 - Reasonable performance on a LAN; tolerable performance over the internet via CrossFeed
 - Code I'd be willing to publish
 

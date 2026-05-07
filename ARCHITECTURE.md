@@ -24,6 +24,12 @@ The Mac runs the Swift X server. It receives X protocol bytes (whether from a lo
 CrossFeed through a Pi) and renders them using Core Graphics / Core Text / Metal. It uses native macOS
 window chrome (rootless mode) and exposes X selections as NSPasteboard.
 
+Display scaling: the server runs at a logical resolution (1280×900 for Studio Display, smaller for 4K and
+MacBook Retina displays per a preset table) with an integer-scale projection to device pixels. The X
+protocol layer sees logical coordinates; the rendering layer projects to device pixels with the
+three-plane scaling decomposition specified in `SERVER_RESOLUTION_SCALING_AND_FONTS.md`. Coordinates
+cross the boundary at the protocol/render layer and nowhere else.
+
 ## How the four products fit
 
 Each product is its own deliverable, but they share a single repo organized so reusable parts get reused.
@@ -94,7 +100,9 @@ SwiftXServer/
   Transport/           # TCP listener + CrossFeed listener (selectable)
 ```
 
-Single root window, fixed size at startup. One screen. PseudoColor 8-bit and TrueColor 24-bit visuals exposed.
+Single root window, size chosen at startup based on the connected display (preset table in
+`SERVER_RESOLUTION_SCALING_AND_FONTS.md`). One screen. PseudoColor 8-bit and TrueColor 24-bit visuals
+exposed.
 
 ### Product 3: Pi-pair CrossFeed bridge
 

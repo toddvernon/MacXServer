@@ -6,7 +6,7 @@ The main event. A real X server in Swift on macOS that real Sun X clients connec
 
 M1, M2, and M3 all shipped and live-verified against xclock running on u5 (a real SPARCstation 2). Static dial renders correctly; user-driven NSWindow resize triggers a clean re-render at the new dimensions. 249/249 tests green. The PoC is met. Per-milestone notes below.
 
-Next: xterm. See "Beyond M3" at the end of this doc for the priority order.
+Next: Phase 1 of `SERVER_RESOLUTION_SCALING_AND_FONTS.md` — display-adaptive integer scaling + Core Text font substitution. That's the rendering-quality foundation everything visual depends on, and it lands before xterm because xterm needs real fonts. After scaling Phase 1 lands, xterm. See "Beyond M3" at the end for the priority order.
 
 ## Goal for the proof of concept
 
@@ -81,16 +81,17 @@ Send Expose events when:
 
 Out of scope for the PoC, listed in expected priority order:
 
-- xterm as the next target (text rendering, keyboard input, selections)
-- Cursor handling (X cursor font → macOS substitution)
-- Real font handling (Core Text + lie strategy per `DECISIONS.md`)
+- **Phase 1 of `SERVER_RESOLUTION_SCALING_AND_FONTS.md`: display-adaptive integer scaling + scalable font substitution.** This lands before xterm — the rendering quality bar set in that doc is the actual headline goal of Product 2. Implementation cuts: detect main display at startup, pick logical/scale from preset table, wire `CGAffineTransform` into the backing context pipeline, ship Monaco/Helvetica Neue/Courier New/Andale Mono/Times New Roman/Symbol substitutes, implement cell-snapped `OpenFont`/`QueryFont`/`ImageText8`/`PolyText8`.
+- xterm as the next target (depends on the scaling/fonts foundation above): full keyboard mapping, `CopyArea` for scrolling, `GrabPointer`/`GrabKeyboard` for selection, selection bridging
+- Cursor handling (X cursor font → macOS NSCursor substitution per the scaling/fonts doc)
 - Multi-client support (resource ID isolation per connection)
 - Selection bridging (X PRIMARY / CLIPBOARD ↔ NSPasteboard)
 - SHAPE and BIG-REQUESTS extensions
 - Transport selectability for Product 4 (CrossFeed)
 
-Also worth doing before xterm gets serious:
+Also worth doing before xterm gets serious (or while building it, as gaps surface):
 - Real PseudoColor palette (today's `ColorTable` just synthesises monotonic pixels; M3 PoC works because xclock allocates colors via AllocColor and the bridge resolves them)
+- TrueColor 24-bit visual exposed alongside PseudoColor 8-bit (`DECISIONS.md` 2026-05-05 commits to both)
 - XErrors emitted for bad requests / unknown resources (today's server is forgiving — see `SHORTCUTS.md`)
 - Honour CWBackPixmap, CWBorderPixel, and CWBitGravity (today only CWBackPixel is read, for ClearArea)
 - Pointer crossings (EnterNotify / LeaveNotify) — xclock didn't need them; xterm will
