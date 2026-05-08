@@ -19,19 +19,31 @@ public struct WindowEntry: Equatable, Sendable {
     public var valueList: [UInt8]
     public var mapped: Bool
     public var eventMask: UInt32
+    /// Effective CWBackPixel for the window. nil = no explicit background
+    /// (windowBackground() falls back to white). Seeded from CreateWindow's
+    /// valueList; ChangeWindowAttributes updates it.
+    public var backPixel: UInt32?
+    /// Effective CWBorderPixel. nil = no explicit border color (default black
+    /// on real X servers). Drives the 1px-or-N-px ring painted around the
+    /// window's content area.
+    public var borderPixel: UInt32?
 
     public init(
         id: UInt32, parent: UInt32, depth: UInt8,
         x: Int16, y: Int16, width: UInt16, height: UInt16,
         borderWidth: UInt16, windowClass: WindowClass, visual: UInt32,
         valueMask: UInt32, valueList: [UInt8],
-        mapped: Bool = false, eventMask: UInt32 = 0
+        mapped: Bool = false, eventMask: UInt32 = 0,
+        backPixel: UInt32? = nil,
+        borderPixel: UInt32? = nil
     ) {
         self.id = id; self.parent = parent; self.depth = depth
         self.x = x; self.y = y; self.width = width; self.height = height
         self.borderWidth = borderWidth; self.windowClass = windowClass
         self.visual = visual; self.valueMask = valueMask; self.valueList = valueList
         self.mapped = mapped; self.eventMask = eventMask
+        self.backPixel = backPixel
+        self.borderPixel = borderPixel
     }
 }
 
@@ -74,6 +86,20 @@ public final class WindowTable: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
         w.eventMask = mask
+        _windows[id] = w
+    }
+
+    public func setBackPixel(_ id: UInt32, _ pixel: UInt32?) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.backPixel = pixel
+        _windows[id] = w
+    }
+
+    public func setBorderPixel(_ id: UInt32, _ pixel: UInt32?) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.borderPixel = pixel
         _windows[id] = w
     }
 

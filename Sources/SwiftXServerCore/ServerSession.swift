@@ -61,6 +61,11 @@ public final class ServerSession: @unchecked Sendable {
         bridge?.setOnFocus { [weak self] topLevel, gained in
             self?.handleFocusChange(topLevel: topLevel, gained: gained)
         }
+        bridge?.setOnMouse { [weak self] topLevel, x, y, button, isDown in
+            self?.handleMouseEvent(
+                topLevel: topLevel, x: x, y: y, button: button, isDown: isDown
+            )
+        }
     }
 
     /// Called by the bridge from main thread when an NSWindow becomes key
@@ -115,6 +120,68 @@ public final class ServerSession: @unchecked Sendable {
         )
         log?.log("  → \(isDown ? "KeyPress" : "KeyRelease") xKey=0x\(String(xKeycode, radix: 16)) target=0x\(String(target, radix: 16)) state=0x\(String(state, radix: 16))")
         outbound.append(event.encode(code: code, byteOrder: order))
+    }
+
+    /// Mouse-down/up at top-level-local logical coords (x, y). Resolves the
+    /// deepest mapped descendant containing the click whose event mask has
+    /// ButtonPressMask (1<<2) or ButtonReleaseMask (1<<3) set; falls back
+    /// to the top-level. Emits ButtonPress (code 4) or ButtonRelease (code 5).
+    public func handleMouseEvent(
+        topLevel: UInt32, x: Int16, y: Int16, button: UInt8, isDown: Bool
+    ) {
+        guard let order = byteOrder else { return }
+        let mask: UInt32 = isDown ? (1 << 2) : (1 << 3)
+        guard let (target, tx, ty) = mouseTarget(topLevel: topLevel, x: x, y: y, eventMaskBit: mask) else {
+            log?.log("  mouseEvent: no target window with mask 0x\(String(mask, radix: 16)) at (\(x),\(y))")
+            return
+        }
+        let code: UInt8 = isDown ? 4 : 5
+        let event = InputEvent(
+            detail: button,
+            sequenceNumber: sequenceNumber,
+            time: 0,
+            root: config.rootWindowId,
+            event: target, child: 0,
+            rootX: x, rootY: y,
+            eventX: x &- tx, eventY: y &- ty,
+            state: 0,
+            sameScreen: true
+        )
+        log?.log("  → \(isDown ? "ButtonPress" : "ButtonRelease") button=\(button) target=0x\(String(target, radix: 16)) at top=(\(x),\(y)) local=(\(x &- tx),\(y &- ty))")
+        outbound.append(event.encode(code: code, byteOrder: order))
+    }
+
+    /// Find the deepest mapped descendant containing `(x, y)` (top-level
+    /// local logical coords) whose event mask matches `eventMaskBit`. Returns
+    /// `(targetId, targetTopLeftX, targetTopLeftY)` so the caller can compute
+    /// window-local coords for the event.
+    private func mouseTarget(topLevel: UInt32, x: Int16, y: Int16, eventMaskBit: UInt32) -> (UInt32, Int16, Int16)? {
+        // Recurse from top-level. Track the deepest matching window.
+        var deepestId: UInt32 = topLevel
+        var deepestTL: (Int16, Int16) = (0, 0)
+        var deepestDepth = 0
+        if let top = windows.get(topLevel), top.eventMask & eventMaskBit == 0 {
+            // top-level doesn't have the mask — but we'll fall back to it
+            // if no descendant matches, just to keep events flowing.
+        }
+        func walk(id: UInt32, ox: Int16, oy: Int16, depth: Int) {
+            for (cid, w) in windows.windows where w.parent == id && w.mapped {
+                let cx = ox &+ w.x
+                let cy = oy &+ w.y
+                let inside = x >= cx && y >= cy
+                              && x < cx &+ Int16(w.width)
+                              && y < cy &+ Int16(w.height)
+                guard inside else { continue }
+                if w.eventMask & eventMaskBit != 0 && depth + 1 > deepestDepth {
+                    deepestId = cid
+                    deepestTL = (cx, cy)
+                    deepestDepth = depth + 1
+                }
+                walk(id: cid, ox: cx, oy: cy, depth: depth + 1)
+            }
+        }
+        walk(id: topLevel, ox: 0, oy: 0, depth: 0)
+        return (deepestId, deepestTL.0, deepestTL.1)
     }
 
     /// Walk the subtree rooted at `topLevel` looking for a viewable window
@@ -224,6 +291,59 @@ public final class ServerSession: @unchecked Sendable {
         return out
     }
 
+    /// Build the paint list for a newly-mapped top-level: the top-level's own
+    /// background fill plus one rect-pair per already-mapped descendant
+    /// (border ring + interior bg). Order is parent-then-children so
+    /// descendant paints land on top of their parent.
+    private func mappedBackgroundPaints(topLevelId: UInt32, byteOrder: ByteOrder) -> [WindowBackgroundRect] {
+        guard let top = windows.get(topLevelId) else { return [] }
+        var out: [WindowBackgroundRect] = []
+        out.append(contentsOf: paintRectsForWindow(entry: top, dx: 0, dy: 0, byteOrder: byteOrder))
+        // Walk the subtree breadth-first so a child's paint always follows
+        // its parent's. We don't repaint windows without an explicit
+        // backPixel/borderPixel — those keep whatever's already on the
+        // bitmap (X11 default behaviour for ParentRelative bg).
+        var queue: [UInt32] = [topLevelId]
+        while !queue.isEmpty {
+            let id = queue.removeFirst()
+            for (childId, w) in windows.windows where w.parent == id && w.mapped {
+                queue.append(childId)
+                guard w.backPixel != nil || (w.borderPixel != nil && w.borderWidth > 0),
+                      let (_, dx, dy) = topLevelAndOffset(for: childId) else { continue }
+                out.append(contentsOf: paintRectsForWindow(entry: w, dx: dx, dy: dy, byteOrder: byteOrder))
+            }
+        }
+        return out
+    }
+
+    /// Produce the paint rects for a single window. With borderWidth > 0,
+    /// emits an OUTER rect (the border ring; size = w + 2*bw, h + 2*bw) drawn
+    /// in borderPixel, then an INNER rect (the content area) in backPixel.
+    /// The inner-on-top-of-outer ordering leaves only the ring visible. With
+    /// borderWidth == 0, emits the single bg rect.
+    ///
+    /// `(dx, dy)` is the window's content top-left in top-level pixel coords
+    /// (already includes any ancestor offsets).
+    private func paintRectsForWindow(entry: WindowEntry, dx: Int16, dy: Int16, byteOrder: ByteOrder) -> [WindowBackgroundRect] {
+        var out: [WindowBackgroundRect] = []
+        let bw = entry.borderWidth
+        let hasBorder = bw > 0 && entry.borderPixel != nil
+        if hasBorder, let bp = entry.borderPixel {
+            out.append(WindowBackgroundRect(
+                x: dx &- Int16(bw), y: dy &- Int16(bw),
+                width: entry.width &+ 2 * bw, height: entry.height &+ 2 * bw,
+                color: resolveColor(bp)
+            ))
+        }
+        if entry.backPixel != nil {
+            out.append(WindowBackgroundRect(
+                x: dx, y: dy, width: entry.width, height: entry.height,
+                color: windowBackground(entry.id, byteOrder: byteOrder)
+            ))
+        }
+        return out
+    }
+
     /// Build a QueryFontReply that reports the resolved font's cell-snapped
     /// metrics. Monospace path: min/max CharInfo bounds equal, charInfos
     /// empty (means "every char in range has metrics equal to minBounds"
@@ -260,13 +380,15 @@ public final class ServerSession: @unchecked Sendable {
         return GCState.materialise(from: entry, byteOrder: byteOrder)
     }
 
-    /// Pull the BackPixel attribute out of a window's stored CreateWindow
-    /// valueList. Default = white pixel if not set. Used by ClearArea.
+    /// Effective background color for a window. Reads the cached CWBackPixel
+    /// (set at CreateWindow time, optionally overridden by
+    /// ChangeWindowAttributes); falls back to white when no bg pixel was
+    /// configured. Used by ClearArea and by the paint-on-map flow.
     private func windowBackground(_ windowId: UInt32, byteOrder: ByteOrder) -> RGB16 {
         guard let w = windows.get(windowId) else {
             return RGB16(red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF)
         }
-        if let pixel = ValueListReader.read(valueList: w.valueList, mask: w.valueMask, bit: CW.backPixel, byteOrder: byteOrder) {
+        if let pixel = w.backPixel {
             return resolveColor(pixel)
         }
         return RGB16(red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF)
@@ -388,6 +510,25 @@ public final class ServerSession: @unchecked Sendable {
         )
     }
 
+    private func handlePolyText8(_ r: PolyText8, byteOrder: ByteOrder) {
+        guard let bridge = bridge,
+              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        let state = gcState(r.gc, byteOrder: byteOrder)
+        let resolvedFont: ResolvedFont
+        if let entry = fonts.get(state.font) {
+            resolvedFont = entry.resolved
+        } else {
+            resolvedFont = FontResolver.resolve(name: "fixed")
+        }
+        bridge.drawPolyText8(
+            topLevel: top,
+            foreground: resolveColor(state.foreground),
+            font: resolvedFont,
+            x: r.x &+ dx, y: r.y &+ dy,
+            items: r.items
+        )
+    }
+
     private func handleCopyArea(_ r: CopyArea, byteOrder: ByteOrder) {
         guard let bridge = bridge else { return }
         // Phase 1: same-window copies only (xterm's scrolling case). If src
@@ -439,6 +580,18 @@ public final class ServerSession: @unchecked Sendable {
             width: fillW, height: fillH,
             background: bg
         )
+        // X11 spec: if `exposures` is True, the server sends an Expose event
+        // for the cleared region (so the client can redraw on top). xcalc's
+        // LCD update sequence is "ClearArea + wait for Expose + draw digits"
+        // — without this we cleared the LCD but xcalc never redrew.
+        if r.exposures, entry.eventMask & (1 << 15) != 0 {
+            let expose = ExposeEvent(
+                sequenceNumber: sequenceNumber, window: r.window,
+                x: UInt16(bitPattern: r.x), y: UInt16(bitPattern: r.y),
+                width: fillW, height: fillH, count: 0
+            )
+            outbound.append(expose.encode(byteOrder: byteOrder))
+        }
     }
 
     public var byteOrder: ByteOrder? {
@@ -558,16 +711,20 @@ public final class ServerSession: @unchecked Sendable {
         case .createWindow(let r):
             let mask = r.valueMask
             let eventMask = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.eventMask, byteOrder: byteOrder) ?? 0
+            let backPixel = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.backPixel, byteOrder: byteOrder)
+            let borderPixel = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.borderPixel, byteOrder: byteOrder)
             let entry = WindowEntry(
                 id: r.wid, parent: r.parent, depth: r.depth,
                 x: r.x, y: r.y, width: r.width, height: r.height,
                 borderWidth: r.borderWidth, windowClass: r.windowClass, visual: r.visual,
                 valueMask: mask, valueList: r.valueList,
-                mapped: false, eventMask: eventMask
+                mapped: false, eventMask: eventMask,
+                backPixel: backPixel,
+                borderPixel: borderPixel
             )
             windows.insert(entry)
             let isTop = r.parent == config.rootWindowId
-            log?.log("  CreateWindow wid=0x\(String(r.wid, radix: 16)) parent=0x\(String(r.parent, radix: 16)) \(r.width)x\(r.height) at (\(r.x),\(r.y)) eventMask=0x\(String(eventMask, radix: 16)) topLevel=\(isTop)")
+            log?.log("  CreateWindow wid=0x\(String(r.wid, radix: 16)) parent=0x\(String(r.parent, radix: 16)) \(r.width)x\(r.height) at (\(r.x),\(r.y)) bw=\(r.borderWidth) eventMask=0x\(String(eventMask, radix: 16)) topLevel=\(isTop)")
             if isTop {
                 bridge?.registerTopLevel(
                     id: r.wid,
@@ -582,6 +739,24 @@ public final class ServerSession: @unchecked Sendable {
         case .changeWindowAttributes(let r):
             if let newMask = ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: CW.eventMask, byteOrder: byteOrder) {
                 windows.setEventMask(r.window, newMask)
+            }
+            if let newBackPixel = ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: CW.backPixel, byteOrder: byteOrder) {
+                windows.setBackPixel(r.window, newBackPixel)
+            }
+            if let newBorderPixel = ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: CW.borderPixel, byteOrder: byteOrder) {
+                windows.setBorderPixel(r.window, newBorderPixel)
+            }
+            // If the window is already mapped, repaint with whatever combo of
+            // bg / border is now configured. X11 spec is technically silent
+            // on auto-repaint here, but every real server I've seen does it
+            // because clients expect the new pixel to take effect immediately.
+            let bgChanged = (r.valueMask & CW.backPixel) != 0
+            let borderChanged = (r.valueMask & CW.borderPixel) != 0
+            if (bgChanged || borderChanged),
+               let entry = windows.get(r.window), entry.mapped,
+               let (top, dx, dy) = topLevelAndOffset(for: r.window) {
+                let rects = paintRectsForWindow(entry: entry, dx: dx, dy: dy, byteOrder: byteOrder)
+                bridge?.paintWindowRects(topLevel: top, rects: rects)
             }
 
         case .destroyWindow(let r):
@@ -614,14 +789,48 @@ public final class ServerSession: @unchecked Sendable {
                     byteOrder: byteOrder, sequence: sequenceNumber,
                     outbound: outbound
                 )
+                // Paint top-level bg + every mapped descendant's bg. The
+                // bridge dispatches paint to main async; mapTopLevel was
+                // dispatched first so its view-creation block runs before
+                // these paints, and the paints run before any client-driven
+                // drawing (which arrives via the read thread → main FIFO).
+                let paints = mappedBackgroundPaints(topLevelId: r.window, byteOrder: byteOrder)
+                if !paints.isEmpty {
+                    bridge?.paintWindowRects(topLevel: r.window, rects: paints)
+                }
             } else {
+                if let (top, dx, dy) = topLevelAndOffset(for: r.window),
+                   let entry = windows.get(r.window) {
+                    let rects = paintRectsForWindow(entry: entry, dx: dx, dy: dy, byteOrder: byteOrder)
+                    if !rects.isEmpty {
+                        bridge?.paintWindowRects(topLevel: top, rects: rects)
+                    }
+                }
                 bridge?.mapDescendant(
                     id: r.window, byteOrder: byteOrder,
                     sequence: sequenceNumber, outbound: outbound
                 )
+                // Per X11 spec: a window that becomes viewable gets Expose if
+                // its event mask has ExposureMask. xcalc maps individual
+                // digit-toggle subwindows in response to button clicks; if we
+                // don't emit Expose here, those windows never get drawn even
+                // though their bg paint just happened. This is the case
+                // where the parent top-level was already mapped before us.
+                if let entry = windows.get(r.window),
+                   entry.eventMask & (1 << 15) != 0 {
+                    let expose = ExposeEvent(
+                        sequenceNumber: sequenceNumber, window: r.window,
+                        x: 0, y: 0, width: entry.width, height: entry.height, count: 0
+                    )
+                    outbound.append(expose.encode(byteOrder: byteOrder))
+                }
             }
 
         case .mapSubwindows(let r):
+            // MapSubwindows happens before the top-level is mapped (xcalc's
+            // pattern). We just mark the children mapped + emit MapNotify
+            // here; the bg paint and Expose for these children land later
+            // when the top-level itself maps and emitMapSequence walks them.
             for (_, w) in windows.windows where w.parent == r.window {
                 windows.setMapped(w.id, true)
                 bridge?.mapDescendant(
@@ -778,6 +987,29 @@ public final class ServerSession: @unchecked Sendable {
             )
             outbound.append(reply.encode(byteOrder: byteOrder))
 
+        case .allocNamedColor(let r):
+            // Resolve the X color name (or #hex spec) against the embedded
+            // X11R6 rgb.txt database, allocate a pixel, and reply. Unknown
+            // names fall back to black with a warning — we don't emit XErrors
+            // yet (per SHORTCUTS), so this keeps clients moving rather than
+            // hanging on a missing reply.
+            let rgb: RGB16
+            if let resolved = XColorDatabase.lookup(bytes: r.name) {
+                rgb = resolved
+            } else {
+                let nameStr = String(bytes: r.name, encoding: .ascii) ?? "<binary>"
+                log?.log("AllocNamedColor: unknown name \"\(nameStr)\", falling back to black")
+                rgb = RGB16(red: 0, green: 0, blue: 0)
+            }
+            let allocated = colors.allocate(red: rgb.red, green: rgb.green, blue: rgb.blue)
+            let reply = AllocNamedColorReply(
+                sequenceNumber: sequenceNumber,
+                pixel: allocated.pixel,
+                exactRed: rgb.red, exactGreen: rgb.green, exactBlue: rgb.blue,
+                visualRed: rgb.red, visualGreen: rgb.green, visualBlue: rgb.blue
+            )
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
         case .getInputFocus:
             let reply = GetInputFocusReply(
                 sequenceNumber: sequenceNumber,
@@ -811,6 +1043,9 @@ public final class ServerSession: @unchecked Sendable {
         case .imageText8(let r):
             handleImageText8(r, byteOrder: byteOrder)
 
+        case .polyText8(let r):
+            handlePolyText8(r, byteOrder: byteOrder)
+
         case .copyArea(let r):
             handleCopyArea(r, byteOrder: byteOrder)
 
@@ -818,7 +1053,7 @@ public final class ServerSession: @unchecked Sendable {
         // don't yet wire to rendering. Add real handlers as needed.
         case .polyArc, .polyRectangle,
              .polyFillArc,
-             .setClipRectangles, .setDashes, .putImage, .polyText8,
+             .setClipRectangles, .setDashes, .putImage,
              .sendEvent, .reparentWindow, .destroySubwindows,
              .grabPointer, .ungrabPointer, .grabButton, .grabKeyboard,
              .ungrabKeyboard, .grabKey, .allowEvents, .grabServer, .ungrabServer,
@@ -884,7 +1119,7 @@ public final class ServerSession: @unchecked Sendable {
         case .getWindowAttributes, .getGeometry, .queryTree,
              .getAtomName,
              .translateCoordinates, .queryPointer,
-             .lookupColor, .allocNamedColor,
+             .lookupColor,
              .queryBestSize, .listExtensions,
              .queryKeymap:
             log?.log("dispatch: reply for \(opcodeName(request)) not implemented yet")

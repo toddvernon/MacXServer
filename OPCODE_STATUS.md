@@ -28,9 +28,9 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | Opcode | Name | Status | Confidence | Last reviewed | Notes |
 | --- | --- | --- | --- | --- | --- |
 | (setup) | SetupRequest / SetupAccepted | impl | medium | 2026-05-07 | Hardcoded SetupAccepted (see SHORTCUTS); accepts both byte orders; partial buffering tested |
-| 1  | CreateWindow | impl (M2: NSWindow on top-level) | medium | 2026-05-07 | parent==root → bridge.registerTopLevel; descendants stored in WindowTable only. |
-| 2  | ChangeWindowAttributes | impl (M1 track-only) | medium | 2026-05-07 | Updates eventMask only; other attrs ignored. BackingStore bit silently dropped. |
-| 8  | MapWindow | impl (M2) | medium | 2026-05-07 | Top-level: bridge brings up NSWindow, emits ReparentNotify+ConfigureNotify+MapNotify+Expose. Descendant: bridge emits MapNotify only. |
+| 1  | CreateWindow | impl (xcalc) | medium | 2026-05-08 | parent==root → bridge.registerTopLevel; descendants stored in WindowTable only. CWBackPixel + CWBorderPixel extracted from valueList and stored on the WindowEntry; both drive the paint-on-map flow. borderWidth carried from request. |
+| 2  | ChangeWindowAttributes | impl (xcalc) | medium | 2026-05-08 | Honors eventMask, CWBackPixel, CWBorderPixel. If the window is mapped when CWBackPixel/CWBorderPixel changes, repaints immediately via paintWindowRects. BackingStore + Colormap + BitGravity still dropped. |
+| 8  | MapWindow | impl (xcalc) | medium | 2026-05-08 | Top-level: bridge brings up NSWindow, emits ReparentNotify+ConfigureNotify+MapNotify+Expose, then paints top-level + each mapped descendant's bg/border via paintWindowRects. Descendant: paints bg/border, emits MapNotify, emits Expose if ExposureMask set. |
 | 9  | MapSubwindows | impl (M2) | medium | 2026-05-07 | Marks every direct child mapped + bridge.mapDescendant for each. |
 | 10 | UnmapWindow | impl (M2) | low | 2026-05-07 | Top-level: bridge orderOut + UnmapNotify. Descendant: tracking only. Not exercised by xclock. |
 | 12 | ConfigureWindow | impl (M3 part-b) | medium | 2026-05-07 | Width/height/x/y honoured. Size change on a window with ExposureMask emits Expose. NSWindow user-resize → ConfigureNotify on top-level via NSWindowDelegate path; descendants with ExposureMask also receive Expose. Sibling/stack-mode/border-width unhandled. |
@@ -43,8 +43,10 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | 47 | QueryFont | impl (Phase 1) | medium | 2026-05-07 | Returns cell-snapped metrics derived from the resolved font. minBounds == maxBounds (monospace), charInfos empty (per-char metrics = minBounds), range 32..126. Phase 4 polish: full Latin-1 range, proportional charInfos. |
 | 49 | ListFonts | impl (Phase 1) | medium | 2026-05-07 | Pattern-matches against Phase-1 synthesized list (~40 entries: cell aliases + substitute families × 5 sizes × medium/bold roman iso10646-1). Phase 4 expands to italic + iso8859-1. |
 | 70 | PolyFillRectangle | impl (Phase 1) | medium | 2026-05-07 | Translates coords to top-level, applies foreground color, fills via CGContext.fill(rects). Used heavily by xterm for cell backgrounds. |
+| 74 | PolyText8 | impl (xcalc) | medium | 2026-05-08 | Walks TEXTITEM8 stream: 0xFF font-shift sentinel skipped (we use the GC font for the whole request), text-elements drawn via CTFontDrawGlyphs without bg fill. Glyphs positioned by CTFontGetAdvancesForGlyphs (the font's actual horizontal advances) rather than reported cellWidth, so the gap-between-glyphs that surfaces when our heuristic cell width disagrees with Core Text's metrics doesn't show up. Pen advances by signed delta + sum of glyph advances per item. xcalc's only text path. |
 | 76 | ImageText8 | impl (Phase 1) | medium | 2026-05-07 | Fills bg rect, then renders glyphs via CTFontGetGlyphsForCharacters + CTFontDrawGlyphs at exact cell-snapped positions with subpixel positioning OFF. textMatrix counter-flip handles y-flipped backing context. CTFont cached by name+size. |
 | 84 | AllocColor | impl | medium | 2026-05-07 | Monotonic pixel (start=16), pixel→RGB cached. No real palette. |
+| 85 | AllocNamedColor | impl (xcalc) | medium | 2026-05-08 | Resolves name via XColorDatabase (full X11R6 rgb.txt embedded, 752 entries) plus libX11-style hex parsing for #RGB / #RRGGBB / #RRRGGGBBB / #RRRRGGGGBBBB. Allocates via ColorTable. Unknown names log a warning and fall back to black (no XErrors yet). |
 | 91 | QueryColors | impl (Phase 1) | medium | 2026-05-07 | Looks up requested pixels in ColorTable; unknown pixels resolve to black. |
 | 101 | GetKeyboardMapping | impl (Phase 1) | medium | 2026-05-07 | US-ASCII keymap from USKeymap.swift. macOS NSEvent virtual keyCode +8 = X keycode; letters / digits / punctuation / arrows / modifiers covered. Phase 4: international layouts. |
 | 117 | GetPointerMapping | impl (Phase 1) | medium | 2026-05-07 | Returns [1, 2, 3] (left/middle/right buttons). |
@@ -62,7 +64,7 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | 65 | PolyLine | impl (M3) | medium | 2026-05-07 | Strokes a connected line strip via CGContext. Origin and Previous coordinate-modes both supported. Line-width from GC (0 → 1px). |
 | 66 | PolySegment | impl (M3) | medium | 2026-05-07 | Strokes independent line segments via CGContext.move+addLine+strokePath. |
 | 69 | FillPoly | impl (M3) | low | 2026-05-07 | Fills with foreground; uses GC fill-rule (default EvenOdd). Convex/Nonconvex/Complex shape attribute not yet specialised. |
-| 61 | ClearArea | impl (M3) | low | 2026-05-07 | Fills rect with window's BackPixel. width=0/height=0 fill-to-edge supported. exposures bit ignored. |
+| 61 | ClearArea | impl (xcalc) | medium | 2026-05-08 | Fills rect with window's BackPixel. width=0/height=0 fill-to-edge supported. Honors `exposures=true` by emitting an Expose for the cleared region (xcalc's LCD redraw sequence is "ClearArea(exposures=1) → wait for Expose → PolyText8 the new value"; without the Expose the LCD never repainted). |
 
 (Add rows as opcodes get encountered.)
 

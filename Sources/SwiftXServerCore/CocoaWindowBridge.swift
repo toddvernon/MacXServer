@@ -29,6 +29,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private var resizeHandler: (@Sendable (UInt32, UInt16, UInt16) -> Void)?
     private var keyHandler: (@Sendable (UInt32, UInt8, UInt, Bool) -> Void)?
     private var focusHandler: (@Sendable (UInt32, Bool) -> Void)?
+    private var mouseHandler: (@Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void)?
     private weak var log: ServerLogSink?
 
     /// Integer scale factor: 1 X-logical pixel = `scale` device pixels.
@@ -50,6 +51,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
     public func setOnFocus(_ handler: @escaping @Sendable (UInt32, Bool) -> Void) {
         focusHandler = handler
+    }
+
+    public func setOnMouse(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void) {
+        mouseHandler = handler
     }
 
     func handleNSWindowFocusChange(id: UInt32, gained: Bool) {
@@ -110,6 +115,11 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                                event.modifierFlags.rawValue, isDown)
                 }
             }
+            if let mouseHandler = self.mouseHandler {
+                view.mouseHandler = { x, y, button, isDown in
+                    mouseHandler(id, x, y, button, isDown)
+                }
+            }
 
             let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
             let contentRect = NSRect(x: 100, y: 100, width: pointsW, height: pointsH)
@@ -155,6 +165,11 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             overrideRedirect: false
         )
         outbound.append(event.encode(byteOrder: byteOrder))
+        // The session passes ExposureMask + size info via the descendant
+        // entry it just stored; we ask the bridge owner to emit Expose
+        // through the higher-level mapWindow path. mapDescendant by itself
+        // doesn't know event masks. See ServerSession.mapWindow for the
+        // Expose-emit (it now follows mapDescendant for non-top-level maps).
     }
 
     public func unmapTopLevel(id: UInt32, byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {
@@ -432,6 +447,103 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
             CTFontDrawGlyphs(ctFont, &glyphs, &positions, n, ctx)
 
+            ctx.restoreGState()
+            view.setNeedsDisplay(view.bounds)
+        }
+    }
+
+    public func drawPolyText8(
+        topLevel: UInt32,
+        foreground: RGB16,
+        font: ResolvedFont,
+        x: Int16, y: Int16,
+        items: [UInt8]
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
+
+            ctx.saveGState()
+            applyFill(ctx, foreground)
+            ctx.setShouldAntialias(true)
+            ctx.setShouldSmoothFonts(true)
+            ctx.setAllowsFontSubpixelPositioning(false)
+            ctx.setShouldSubpixelPositionFonts(false)
+
+            // Walk TEXTITEM8 items: 0xFF marks a 5-byte font shift we ignore
+            // (we use the GC font for the whole request — Athena widget apps
+            // like xcalc don't issue font shifts). Otherwise each item is
+            // length(1) + delta(1 signed) + length glyph bytes. Pen advances
+            // by delta + sum-of-glyph-advances after each run.
+            //
+            // Position glyphs by the CTFont's actual advances rather than
+            // the resolved-font cellWidth: PolyText8 has no bg fill, so
+            // there's no benefit to cell-snapping, and using true advances
+            // closes the visible gaps that show up when our reported cell
+            // width is wider than the substituted Mac font's glyph box.
+            // (The Phase-1.5 metrics-tightening work in CHATGPT_REVIEW.md
+            // covers the principled fix; this is the local minimum.)
+            let baseX = Int(x)
+            var penX: CGFloat = CGFloat(baseX)
+            let baseY = Int(y)
+
+            let ctFont = ctFont(for: font)
+
+            var i = 0
+            while i < items.count {
+                let b = items[i]
+                if b == 0xFF {
+                    // Font shift sentinel: skip 5 bytes total (sentinel + 4
+                    // bytes of font ID). xcalc never sends these.
+                    i += 5
+                    continue
+                }
+                let n = Int(b)
+                if n == 0 { i += 1; continue }
+                guard i + 2 + n <= items.count else { break }
+                let delta = Int8(bitPattern: items[i + 1])
+                penX += CGFloat(delta)
+
+                var unichars = [UniChar](repeating: 0, count: n)
+                for j in 0..<n { unichars[j] = UniChar(items[i + 2 + j]) }
+                var glyphs = [CGGlyph](repeating: 0, count: n)
+                CTFontGetGlyphsForCharacters(ctFont, &unichars, &glyphs, n)
+
+                var advances = [CGSize](repeating: .zero, count: n)
+                CTFontGetAdvancesForGlyphs(ctFont, .horizontal, &glyphs, &advances, n)
+
+                var positions = [CGPoint](repeating: .zero, count: n)
+                var localX: CGFloat = 0
+                for j in 0..<n {
+                    positions[j] = CGPoint(x: localX, y: 0)
+                    localX += advances[j].width
+                }
+
+                ctx.saveGState()
+                ctx.translateBy(x: penX, y: CGFloat(baseY))
+                ctx.scaleBy(x: 1, y: -1)
+                CTFontDrawGlyphs(ctFont, &glyphs, &positions, n, ctx)
+                ctx.restoreGState()
+
+                penX += localX
+                i += 2 + n
+            }
+
+            ctx.restoreGState()
+            view.setNeedsDisplay(view.bounds)
+        }
+    }
+
+    public func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
+            ctx.saveGState()
+            for r in rects {
+                applyFill(ctx, r.color)
+                ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
+                                width: CGFloat(r.width), height: CGFloat(r.height)))
+            }
             ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }

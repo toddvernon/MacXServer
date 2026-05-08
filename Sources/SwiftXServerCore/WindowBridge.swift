@@ -116,6 +116,14 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// (unfocused). Args: (top-level X window id, gained).
     func setOnFocus(_ handler: @escaping @Sendable (UInt32, Bool) -> Void)
 
+    /// Called by the session at startup. Bridge invokes this on every
+    /// mouseDown / mouseUp inside one of its NSWindows. Args: (top-level X
+    /// window id, X-logical x, X-logical y in top-level coords, X button
+    /// number 1..3, isDown). The session resolves which X subwindow should
+    /// receive the event and emits ButtonPress / ButtonRelease.
+    /// Always invoked on the main thread.
+    func setOnMouse(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void)
+
     // MARK: - Drawing (M3)
     //
     // Coordinates are already translated to the top-level NSWindow's view
@@ -146,6 +154,38 @@ public protocol WindowBridge: AnyObject, Sendable {
         x: Int16, y: Int16,
         string: [UInt8]
     )
+
+    /// PolyText8: draw glyphs without filling the cell background. `items` is
+    /// the raw TEXTITEM8 stream from the X request (font-shift sentinel 0xFF
+    /// followed by 4-byte FontID, OR 1-byte length + 1-byte signed delta +
+    /// `length` glyph bytes). The bridge parses + renders. Used by Athena
+    /// widget apps (xcalc) which never use ImageText8.
+    func drawPolyText8(
+        topLevel: UInt32,
+        foreground: RGB16,
+        font: ResolvedFont,
+        x: Int16, y: Int16,
+        items: [UInt8]
+    )
+
+    /// Paint a list of solid-color rects on the top-level's backing context.
+    /// Used to honor X11 "newly viewable" semantics: when a window is mapped
+    /// or exposed, the server fills its region with the configured background
+    /// pixel BEFORE the client draws on top.
+    func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect])
+}
+
+/// A single window-background paint: an absolute rect in top-level pixel
+/// coordinates plus the resolved RGB16 to fill it with.
+public struct WindowBackgroundRect: Equatable, Sendable {
+    public var x: Int16
+    public var y: Int16
+    public var width: UInt16
+    public var height: UInt16
+    public var color: RGB16
+    public init(x: Int16, y: Int16, width: UInt16, height: UInt16, color: RGB16) {
+        self.x = x; self.y = y; self.width = width; self.height = height; self.color = color
+    }
 }
 
 public extension WindowBridge {
@@ -154,6 +194,7 @@ public extension WindowBridge {
     func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {}
     func setOnKey(_ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {}
     func setOnFocus(_ handler: @escaping @Sendable (UInt32, Bool) -> Void) {}
+    func setOnMouse(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void) {}
     // Default no-ops so unit-test bridges don't have to implement every method.
     func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment]) {}
     func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint]) {}
@@ -173,4 +214,12 @@ public extension WindowBridge {
         x: Int16, y: Int16,
         string: [UInt8]
     ) {}
+    func drawPolyText8(
+        topLevel: UInt32,
+        foreground: RGB16,
+        font: ResolvedFont,
+        x: Int16, y: Int16,
+        items: [UInt8]
+    ) {}
+    func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {}
 }

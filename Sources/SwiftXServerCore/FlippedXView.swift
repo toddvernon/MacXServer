@@ -26,6 +26,14 @@ public final class FlippedXView: NSView {
     /// from keyDown / keyUp. Args: (NSEvent, isDown).
     public var keyHandler: ((NSEvent, Bool) -> Void)?
 
+    /// Mouse event sink. The bridge installs this; FlippedXView calls it
+    /// from mouseDown / mouseUp / rightMouseDown / rightMouseUp /
+    /// otherMouseDown / otherMouseUp. Args: (X-logical x in top-level
+    /// coords, X-logical y, X button number 1..3, isDown). The view
+    /// converts NSEvent coords from view-local points → device px →
+    /// logical px before calling.
+    public var mouseHandler: ((Int16, Int16, UInt8, Bool) -> Void)?
+
     /// CGBitmapContext sized at `logicalWidth * scale × logicalHeight * scale`.
     /// The CGContext has a pre-applied transform so callers can issue draw
     /// commands in logical coordinates — the transform handles the scale-up
@@ -50,12 +58,36 @@ public final class FlippedXView: NSView {
     /// makeKeyAndOrderFront in mapTopLevel.
     public override var acceptsFirstResponder: Bool { true }
 
+    /// Accept the click that ALSO activates the window, so users can press
+    /// a button in a non-key xcalc window without needing two clicks.
+    public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     public override func keyDown(with event: NSEvent) {
         keyHandler?(event, true)
     }
 
     public override func keyUp(with event: NSEvent) {
         keyHandler?(event, false)
+    }
+
+    public override func mouseDown(with event: NSEvent)        { dispatchMouse(event, button: 1, isDown: true) }
+    public override func mouseUp(with event: NSEvent)          { dispatchMouse(event, button: 1, isDown: false) }
+    public override func rightMouseDown(with event: NSEvent)   { dispatchMouse(event, button: 3, isDown: true) }
+    public override func rightMouseUp(with event: NSEvent)     { dispatchMouse(event, button: 3, isDown: false) }
+    public override func otherMouseDown(with event: NSEvent)   { dispatchMouse(event, button: 2, isDown: true) }
+    public override func otherMouseUp(with event: NSEvent)     { dispatchMouse(event, button: 2, isDown: false) }
+
+    private func dispatchMouse(_ event: NSEvent, button: UInt8, isDown: Bool) {
+        guard let handler = mouseHandler else { return }
+        // locationInWindow is in window points (bottom-left origin).
+        // convert(_:from: nil) gives view-local in points; because the view
+        // is isFlipped, the result is top-left origin. We then translate
+        // points → device px (× backingScale) → logical px (÷ scaleFactor).
+        let pointsLocal = convert(event.locationInWindow, from: nil)
+        let backingScale = window?.backingScaleFactor ?? 2.0
+        let logicalX = Int16(clamping: Int((pointsLocal.x * backingScale) / CGFloat(scaleFactor)))
+        let logicalY = Int16(clamping: Int((pointsLocal.y * backingScale) / CGFloat(scaleFactor)))
+        handler(logicalX, logicalY, button, isDown)
     }
 
     /// Allocate (or re-allocate) the backing CGBitmapContext at
