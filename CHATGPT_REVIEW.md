@@ -85,9 +85,17 @@ Text and strokes cannot.
 
 Added 2026-05-07 at Todd's request, after live xterm started showing cursor outline boxes around characters.
 
-## TL;DR
+## Update: cursor outlines turned out to be a focus bug, not a metrics bug
 
-Yes, believe Core Text's metrics. Don't believe our cell-sizing heuristic. The two have to come from the same source or they'll drift, and that drift is what produces the cosmetic artifacts we're seeing now.
+Same day, before doing any of the metrics work below, I read xterm's `charproc.c:2606` / `2653`. The cursor outline is xterm's NO-FOCUS cursor — when `screen->select` is unset (which is xterm's default state until it receives a `FocusIn`), `XDrawLines` paints a hollow outline instead of the filled `XFillRectangle` cursor. We were never emitting `FocusIn`, so xterm always thought it lacked focus, so we always saw the outline.
+
+The fix was wiring `windowDidBecomeKey` / `windowDidResignKey` on the NSWindowDelegate to emit `FocusIn` / `FocusOut`. Once that landed the cursor switched to a filled block when xterm was the key window, hollow when it wasn't. Cosmetic artifact gone; not a metrics issue.
+
+The metrics analysis below is still correct as a piece of hygiene work — our cell metrics ARE derived from a heuristic and that's worth fixing for principled reasons (and to make sub-pixel artifacts impossible by construction). But it's no longer triggered by anything user-visible. Status: keep on the list, lower priority than I claimed when I wrote the rest of this section.
+
+## TL;DR (original analysis, retained for context)
+
+Yes, believe Core Text's metrics. Don't believe our cell-sizing heuristic. The two have to come from the same source or they'll drift. (This drift is real, just not what was producing the cursor outline boxes — see update above.)
 
 ## What we do today
 
@@ -100,11 +108,11 @@ let avgWidth = Int(round(pointSize * 0.6 * 10))
 
 That `1.07` and `0.6` are guesses — close enough to look right for Monaco at common sizes, but they aren't anchored to any specific Mac font's actual metrics. When the client (xterm) reads our `QueryFont` reply, it gets these heuristic numbers. When we then ask Core Text to render glyphs into a cell of `(avgWidth, pixelHeight)` pixels, Core Text positions the glyphs using its OWN advance and ascent — not our heuristic ones. So the rendered glyph and the X-protocol cell drift apart at the sub-pixel level.
 
-## Why the drift produces the cursor outline boxes
+## Why the drift COULD produce visual artifacts (still true; see update above)
 
-xterm draws the cursor as a 1px-stroke `PolyLine` rectangle at the cell boundary it computed from `QueryFont`. Then it does an `ImageText8` to overprint with the actual character. `ImageText8` paints a background fill of size `(width × FontHeight)` where `width` is the sum of glyph advances FROM ITS POV — which ultimately comes from the same `QueryFont` reply, so xterm's two operations (cursor outline and character paint) agree with each other.
+If our reported cell width and Core Text's actual glyph advance disagree, an `ImageText8` bg fill won't exactly cover the area a client expects to be character-cell-sized. For monospace clients that draw decorations at cell boundaries (boxes, underlines, reverse-video runs), pixel-level mismatches between "where the client thinks the cell ends" and "where we render the glyph" can leave 1-pixel artifacts.
 
-But OUR rendering of `ImageText8` uses Core Text's actual advance for glyph placement and Core Text's actual ascent for baseline. If those don't exactly match the `(avgWidth, pixelHeight)` we reported, the bg fill rectangle and the cursor outline rectangle don't line up to the pixel. The outline pokes out past the bg fill on one side. That's the box artifact.
+This was my initial hypothesis for the cursor outline boxes. It turned out to be wrong (the cursor outline was a focus issue), but the principle is still real and other artifact classes will surface it eventually.
 
 ## What "believe Mac font metrics" means concretely
 
