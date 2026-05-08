@@ -21,13 +21,14 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         var pendingTitle: String?
         var window: NSWindow?
         var view: FlippedXView?
-        var delegate: ResizeWindowDelegate?
+        var delegate: XWindowDelegate?
     }
 
     private var slots: [UInt32: Slot] = [:]
     private let lock = NSLock()
     private var resizeHandler: (@Sendable (UInt32, UInt16, UInt16) -> Void)?
     private var keyHandler: (@Sendable (UInt32, UInt8, UInt, Bool) -> Void)?
+    private var focusHandler: (@Sendable (UInt32, Bool) -> Void)?
     private weak var log: ServerLogSink?
 
     /// Integer scale factor: 1 X-logical pixel = `scale` device pixels.
@@ -45,6 +46,14 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
     public func setOnKey(_ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {
         keyHandler = handler
+    }
+
+    public func setOnFocus(_ handler: @escaping @Sendable (UInt32, Bool) -> Void) {
+        focusHandler = handler
+    }
+
+    func handleNSWindowFocusChange(id: UInt32, gained: Bool) {
+        focusHandler?(id, gained)
     }
 
     // MARK: - WindowBridge
@@ -109,14 +118,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             win.title = pendingTitle
             win.isReleasedWhenClosed = false
 
-            let delegate = ResizeWindowDelegate(windowId: id, bridge: self)
+            let delegate = XWindowDelegate(windowId: id, bridge: self)
             win.delegate = delegate
-
-            win.makeKeyAndOrderFront(nil)
-            // Make the FlippedXView the first responder so keyDown / keyUp
-            // route to it. Without this, NSWindow swallows key events.
-            win.makeFirstResponder(view)
-            NSApp.activate(ignoringOtherApps: true)
 
             self.lock.lock()
             self.slots[id]?.window = win
@@ -124,6 +127,12 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             self.slots[id]?.delegate = delegate
             self.lock.unlock()
 
+            // Emit MapNotify and any descendant Expose events BEFORE bringing
+            // the NSWindow to key. makeKeyAndOrderFront fires
+            // windowDidBecomeKey synchronously, which in turn calls our focus
+            // handler and queues a FocusIn. We want MapNotify to land in the
+            // outbound queue before that FocusIn so the X client sees the
+            // natural order: window mapped, then focused.
             MockWindowBridge.emitMapSequence(
                 window: id, geometry: geometry,
                 topLevelEventMask: eventMask,
@@ -131,6 +140,12 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 byteOrder: byteOrder, sequence: sequence,
                 outbound: outbound
             )
+
+            win.makeKeyAndOrderFront(nil)
+            // Make the FlippedXView the first responder so keyDown / keyUp
+            // route to it. Without this, NSWindow swallows key events.
+            win.makeFirstResponder(view)
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 
@@ -495,10 +510,11 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     }
 }
 
-/// NSWindowDelegate that catches user-driven resizes and forwards them to
-/// the bridge. Stays @MainActor since NSWindowDelegate is.
+/// NSWindowDelegate that catches user-driven resizes and key/resign-key focus
+/// transitions and forwards them to the bridge. Stays @MainActor since
+/// NSWindowDelegate is.
 @MainActor
-private final class ResizeWindowDelegate: NSObject, NSWindowDelegate {
+private final class XWindowDelegate: NSObject, NSWindowDelegate {
     let windowId: UInt32
     weak var bridge: CocoaWindowBridge?
 
@@ -513,6 +529,14 @@ private final class ResizeWindowDelegate: NSObject, NSWindowDelegate {
 
     func windowDidEndLiveResize(_ notification: Notification) {
         bridge?.handleNSWindowDidEndLiveResize(id: windowId)
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        bridge?.handleNSWindowFocusChange(id: windowId, gained: true)
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        bridge?.handleNSWindowFocusChange(id: windowId, gained: false)
     }
 }
 

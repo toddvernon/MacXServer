@@ -109,6 +109,13 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// Always invoked on the main thread.
     func setOnKey(_ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void)
 
+    /// Called by the session at startup. The bridge invokes this whenever an
+    /// NSWindow becomes key (gained=true) or resigns key (gained=false). The
+    /// session emits a FocusIn / FocusOut event to the X client. xterm uses
+    /// this to switch its cursor between filled (focused) and hollow outline
+    /// (unfocused). Args: (top-level X window id, gained).
+    func setOnFocus(_ handler: @escaping @Sendable (UInt32, Bool) -> Void)
+
     // MARK: - Drawing (M3)
     //
     // Coordinates are already translated to the top-level NSWindow's view
@@ -146,6 +153,7 @@ public extension WindowBridge {
     func drawingTarget(for drawable: UInt32) -> Any? { nil }
     func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {}
     func setOnKey(_ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {}
+    func setOnFocus(_ handler: @escaping @Sendable (UInt32, Bool) -> Void) {}
     // Default no-ops so unit-test bridges don't have to implement every method.
     func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment]) {}
     func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint]) {}

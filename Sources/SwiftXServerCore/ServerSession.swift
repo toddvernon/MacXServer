@@ -58,6 +58,29 @@ public final class ServerSession: @unchecked Sendable {
                 modifierFlags: modifierFlags, isDown: isDown
             )
         }
+        bridge?.setOnFocus { [weak self] topLevel, gained in
+            self?.handleFocusChange(topLevel: topLevel, gained: gained)
+        }
+    }
+
+    /// Called by the bridge from main thread when an NSWindow becomes key
+    /// (gained=true) or resigns key (gained=false). Emits FocusIn / FocusOut
+    /// to the X client. xterm uses the FocusIn to switch from a hollow
+    /// outline cursor to a filled cursor (charproc.c:2606 / 2653).
+    /// detail=NotifyNonlinear and mode=NotifyNormal match what real Xsun
+    /// emits in our captured xterm trace when the WM grants focus.
+    public func handleFocusChange(topLevel: UInt32, gained: Bool) {
+        guard let order = byteOrder else { return }
+        guard windows.get(topLevel) != nil else { return }
+        let event = FocusEvent(
+            detail: .nonlinear,
+            sequenceNumber: sequenceNumber,
+            event: topLevel,
+            mode: .normal
+        )
+        let code: UInt8 = gained ? 9 : 10        // FocusIn / FocusOut
+        log?.log("  → \(gained ? "FocusIn" : "FocusOut") target=0x\(String(topLevel, radix: 16)) detail=nonlinear mode=normal")
+        outbound.append(event.encode(code: code, byteOrder: order))
     }
 
     /// Called by the bridge from main thread when a keyDown/keyUp NSEvent
