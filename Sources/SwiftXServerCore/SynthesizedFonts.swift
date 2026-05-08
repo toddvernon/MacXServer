@@ -90,9 +90,10 @@ public enum SynthesizedFonts {
         family: FamilySpec, weight: String, slant: String,
         pointTenths: Int, spacing: String
     ) -> String {
-        // pixelHeight ≈ pointSize * 1.07; averageWidth = round(pointSize * 0.6 * 10) for monospace
+        // pixelHeight ≈ pointSize × 1.2 (Monaco-on-macOS line-height ratio);
+        // averageWidth = round(pointSize × 0.6 × 10) for monospace.
         let pointSize = Double(pointTenths) / 10.0
-        let pixelHeight = Int(round(pointSize * 1.07))
+        let pixelHeight = Int(round(pointSize * 1.2))
         let avgWidth = Int(round(pointSize * 0.6 * 10))
         return "-apple-\(family.xlfdFamily)-\(weight)-\(slant)-normal--\(pixelHeight)-\(pointTenths)-90-90-\(spacing)-\(avgWidth)-iso10646-1"
     }

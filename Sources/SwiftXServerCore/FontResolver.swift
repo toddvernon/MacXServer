@@ -81,11 +81,14 @@ public enum FontResolver {
 
         // Cell sizing per the spec, height-driven for arbitrary XLFDs:
         //   pixelHeight = xlfd.pixelSize (or 14 default if 0)
-        //   pointSize   = pixelHeight / 1.07     (Monaco-ish height ratio)
+        //   pointSize   = pixelHeight / 1.2      (Monaco's actual line-height
+        //                                         ratio on macOS — ascent/em
+        //                                         ≈ 0.9, descent/em ≈ 0.21,
+        //                                         lineGap ≈ 0.09; total ~1.2)
         //   cellWidth   = round(pointSize * 0.6)
         //   cellHeight  = pixelHeight
         let pixelHeight = xlfd.pixelSize > 0 ? xlfd.pixelSize : 14
-        let pointSize = Double(pixelHeight) / 1.07
+        let pointSize = Double(pixelHeight) / 1.2
         let cellWidth = max(1, Int(round(pointSize * 0.6)))
         let cellHeight = pixelHeight
         let ascent = Int(ceil(pointSize * 0.85))
@@ -145,10 +148,25 @@ public enum FontResolver {
     }
 
     /// Build a Monaco-based ResolvedFont with a forced cell size. Used for
-    /// aliases like `7x14` and the `fixed` default. Width-driven point size:
-    /// `pointSize = cellWidth / 0.6`.
+    /// aliases like `7x14` and the `fixed` default.
+    ///
+    /// Point size is the largest where Monaco fits in BOTH cell dimensions.
+    /// Monaco's natural ratios on macOS: advance ≈ 0.6 × pointSize, total
+    /// line-height ≈ 1.2 × pointSize (ascent ~0.9·em + descent ~0.21·em +
+    /// small lineGap). Driving pointSize from cellWidth alone (the
+    /// originally shipped behavior) made the glyph natural-height exceed
+    /// cellHeight whenever the alias was wider than tall — `g`/`y`
+    /// descenders bled into the next line and the over-sized glyph filled
+    /// more of the cell, reading as "bold". An interim fix used 1.07 as
+    /// the height ratio; that turned out to underestimate Monaco's actual
+    /// line height, leaving lines still too tight at small cell aliases.
+    /// Taking min(width-derived, height-derived) keeps the glyph entirely
+    /// inside the requested cell; the loose dimension just gets a little
+    /// extra leading/padding.
     private static func defaultMonacoFont(cellWidth: Int, cellHeight: Int, bold: Bool, skewItalic: Bool) -> ResolvedFont {
-        let pointSize = Double(cellWidth) / 0.6
+        let pointFromWidth  = Double(cellWidth)  / 0.6
+        let pointFromHeight = Double(cellHeight) / 1.2
+        let pointSize = min(pointFromWidth, pointFromHeight)
         let ascent = Int(ceil(pointSize * 0.85))
         let descent = max(1, cellHeight - ascent)
         let name = bold ? "Monaco Bold" : "Monaco"

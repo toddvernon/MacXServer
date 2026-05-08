@@ -119,12 +119,14 @@ final class FontResolverTests: XCTestCase {
     // MARK: - Cell sizing math
 
     func testXLFDPixelSize14YieldsExpectedMetrics() {
-        // pixelHeight = 14 → pointSize ≈ 13.08 → cellWidth ≈ round(7.85) = 8
+        // pixelHeight = 14 → pointSize ≈ 11.67 (using Monaco's actual
+        // line-height ratio of 1.2, which fits the glyph in the cell).
+        // cellWidth ≈ round(11.67 × 0.6) = 7.
         let xlfd = XLFD(family: "fixed", pixelSize: 14, spacing: "c")
         let r = FontResolver.resolve(xlfd: xlfd)
         XCTAssertEqual(r.cellHeight, 14)
-        XCTAssertEqual(r.cellWidth, 8)
-        XCTAssertEqual(r.pointSize, 14.0 / 1.07, accuracy: 0.01)
+        XCTAssertEqual(r.cellWidth, 7)
+        XCTAssertEqual(r.pointSize, 14.0 / 1.2, accuracy: 0.01)
     }
 
     func testZeroPixelSizeDefaultsTo14() {
