@@ -28,6 +28,31 @@ public final class ServerSession: @unchecked Sendable {
     public let outbound: OutboundQueue
     public let bridge: WindowBridge?
 
+    /// Live source of cut/paste preferences. Read on every copy round-trip
+    /// so a prefs change applies without restarting the server. Defaults to
+    /// the static defaults (Mac-style on, never auto-fires).
+    public let clipboardPrefs: ClipboardPreferencesProvider
+
+    /// Server-internal pseudo-window used as the requestor in the copy
+    /// roundtrip. Outside any client's resource-id range so it never
+    /// collides with a client-allocated window. The X spec lets the server
+    /// pick any window id for SelectionRequest; the property table accepts
+    /// changes against any id without checking it exists.
+    private let selectionSinkWindow: UInt32 = 0xFFFE_0001
+
+    /// Atom name we ask the selection owner to write the converted text into
+    /// on `selectionSinkWindow`. Interned lazily so we know its atom id when
+    /// the ChangeProperty arrives.
+    private let selectionSinkPropertyName = "SWIFTX_CLIP_FROM_X"
+
+    /// Most recent SetSelectionOwner per selection atom. PRIMARY (atom 1)
+    /// is the only one xterm-on-u5 ever sets; we track all of them anyway.
+    private struct SelectionState {
+        var window: UInt32
+        var time: UInt32
+    }
+    private var selectionOwners: [UInt32: SelectionState] = [:]
+
     private var phase: Phase = .awaitingSetup
     private var inbound: [UInt8] = []
     private var sequenceNumber: UInt16 = 0
@@ -43,11 +68,13 @@ public final class ServerSession: @unchecked Sendable {
         config: ServerConfig = .default,
         bridge: WindowBridge? = nil,
         outbound: OutboundQueue = OutboundQueue(),
+        clipboardPrefs: ClipboardPreferencesProvider = StaticClipboardPreferencesProvider(),
         log: ServerLogSink? = nil
     ) {
         self.config = config
         self.bridge = bridge
         self.outbound = outbound
+        self.clipboardPrefs = clipboardPrefs
         self.log = log
         bridge?.setOnTopLevelResize { [weak self] id, width, height in
             self?.handleTopLevelResize(id: id, width: width, height: height)
@@ -66,9 +93,56 @@ public final class ServerSession: @unchecked Sendable {
                 topLevel: topLevel, x: x, y: y, button: button, isDown: isDown
             )
         }
+        bridge?.setOnMouseDragged { [weak self] topLevel, x, y, button in
+            self?.handleMouseDragged(topLevel: topLevel, x: x, y: y, button: button)
+        }
         bridge?.setOnPaste { [weak self] topLevel, text in
             self?.handlePaste(topLevel: topLevel, text: text)
         }
+        bridge?.setOnCopy { [weak self] topLevel in
+            self?.handleCopy(topLevel: topLevel)
+        }
+    }
+
+    /// User pressed Cmd-C / chose Edit > Copy in the focused X window. If
+    /// clipboard mirroring is enabled in prefs, look up the current PRIMARY
+    /// selection owner and ask it to convert the selection to STRING into
+    /// our `selectionSinkWindow`. The reply lands as a ChangeProperty on
+    /// that window which we intercept and push to NSPasteboard.
+    public func handleCopy(topLevel: UInt32) {
+        let prefs = clipboardPrefs.current
+        guard prefs.enabled else {
+            log?.log("copy: clipboard mirroring disabled in prefs")
+            return
+        }
+        // PRIMARY (atom 1) is xterm's default. We always pull from PRIMARY
+        // regardless of mode — Mac mode just means "wait for Cmd-C", not
+        // "use a different selection".
+        requestSelectionConversion(selectionAtom: 1)
+    }
+
+    /// Emit a SelectionRequest event to the current owner of `selectionAtom`,
+    /// asking for STRING into `selectionSinkPropertyName` on
+    /// `selectionSinkWindow`. No-op if the selection is unowned.
+    private func requestSelectionConversion(selectionAtom: UInt32) {
+        guard let order = byteOrder else { return }
+        guard let state = selectionOwners[selectionAtom] else {
+            log?.log("copy: no owner of selection atom=\(selectionAtom) — nothing to copy")
+            return
+        }
+        let propertyAtom = atoms.intern(selectionSinkPropertyName)
+        let stringAtom: UInt32 = 31      // predefined STRING
+        let event = SelectionRequestEvent(
+            sequenceNumber: sequenceNumber,
+            time: state.time,
+            owner: state.window,
+            requestor: selectionSinkWindow,
+            selection: selectionAtom,
+            target: stringAtom,
+            property: propertyAtom
+        )
+        log?.log("  → SelectionRequest owner=0x\(String(state.window, radix: 16)) sel=\(selectionAtom) target=STRING prop=\(propertyAtom)")
+        outbound.append(event.encode(byteOrder: order))
     }
 
     /// Inject the pasteboard text as if typed: emit a KeyPress / KeyRelease
@@ -164,6 +238,44 @@ public final class ServerSession: @unchecked Sendable {
         )
         log?.log("  → \(isDown ? "KeyPress" : "KeyRelease") xKey=0x\(String(xKeycode, radix: 16)) target=0x\(String(target, radix: 16)) state=0x\(String(state, radix: 16))")
         outbound.append(event.encode(code: code, byteOrder: order))
+    }
+
+    /// Mask matching any motion-event interest: PointerMotionMask (1<<6),
+    /// Button1..5MotionMask (1<<8..1<<12), and ButtonMotionMask (1<<13).
+    /// xterm sets at least ButtonMotionMask so it can render a selection
+    /// drag; passing the combined mask to mouseTarget routes the event to
+    /// any window that opted in to any motion variant.
+    private static let motionEventMask: UInt32 =
+        (1 << 6) | (1 << 8) | (1 << 9) | (1 << 10) | (1 << 11) | (1 << 12) | (1 << 13)
+
+    /// Mouse moved while a button is held. Emits MotionNotify (code 6) to
+    /// the deepest mapped descendant of the top-level whose event mask
+    /// includes any motion bit. xterm needs this to keep updating the
+    /// inverse-video selection highlight as the user drags through the
+    /// terminal grid.
+    public func handleMouseDragged(
+        topLevel: UInt32, x: Int16, y: Int16, button: UInt8
+    ) {
+        guard let order = byteOrder else { return }
+        guard let (target, tx, ty) = mouseTarget(
+            topLevel: topLevel, x: x, y: y,
+            eventMaskBit: Self.motionEventMask
+        ) else { return }
+        // X state field encodes "modifier and button-down bitmask". Button N
+        // contributes (1 << (7 + N)) — Button1=0x100, Button2=0x200, etc.
+        let buttonStateBit: UInt16 = (button >= 1 && button <= 5) ? (UInt16(1) << (7 + button)) : 0
+        let event = InputEvent(
+            detail: 0,                                     // 0 = same-pixel; 1 = hint
+            sequenceNumber: sequenceNumber,
+            time: 0,
+            root: config.rootWindowId,
+            event: target, child: 0,
+            rootX: x, rootY: y,
+            eventX: x &- tx, eventY: y &- ty,
+            state: buttonStateBit,
+            sameScreen: true
+        )
+        outbound.append(event.encode(code: 6, byteOrder: order))
     }
 
     /// Mouse-down/up at top-level-local logical coords (x, y). Resolves the
@@ -985,6 +1097,17 @@ public final class ServerSession: @unchecked Sendable {
                 let title = String(decoding: trimmed, as: UTF8.self)
                 bridge?.setTopLevelTitle(id: r.window, title: title)
             }
+            // Selection roundtrip arrival: the owner just ChangeProperty'd
+            // the converted text into our sink window. Push to NSPasteboard
+            // and clear the property so we don't trip on stale data on the
+            // next copy. X STRING type is ISO-8859-1 (Latin-1).
+            if r.window == selectionSinkWindow,
+               r.property == atoms.lookupOrZero(selectionSinkPropertyName) {
+                let text = String(bytes: r.data, encoding: .isoLatin1) ?? ""
+                log?.log("  copy: received \(r.data.count) bytes from selection owner — writing NSPasteboard")
+                bridge?.writeClipboard(text: text)
+                properties.delete(window: r.window, property: r.property)
+            }
 
         case .deleteProperty(let r):
             properties.delete(window: r.window, property: r.property)
@@ -1186,17 +1309,26 @@ public final class ServerSession: @unchecked Sendable {
             let reply = QueryColorsReply(sequenceNumber: sequenceNumber, colors: entries)
             outbound.append(reply.encode(byteOrder: byteOrder))
 
-        case .getSelectionOwner:
-            // We don't track selection ownership yet — return None so xterm
-            // proceeds (it'll just show "selection unavailable" to itself).
-            // Phase 4 polish wires up real PRIMARY/CLIPBOARD ↔ NSPasteboard.
-            let reply = GetSelectionOwnerReply(sequenceNumber: sequenceNumber, owner: 0)
+        case .getSelectionOwner(let r):
+            let owner = selectionOwners[r.selection]?.window ?? 0
+            let reply = GetSelectionOwnerReply(sequenceNumber: sequenceNumber, owner: owner)
             outbound.append(reply.encode(byteOrder: byteOrder))
 
-        // SetSelectionOwner has no reply per X11 spec — silent no-op for now
-        // since we don't track selection state.
-        case .setSelectionOwner:
-            break
+        // SetSelectionOwner has no reply per X11 spec. Track ownership so we
+        // can run the copy roundtrip later (or right now, in xterm-style
+        // mode). owner=0 clears the selection.
+        case .setSelectionOwner(let r):
+            if r.owner == 0 {
+                selectionOwners.removeValue(forKey: r.selection)
+                log?.log("SetSelectionOwner: cleared selection atom=\(r.selection)")
+            } else {
+                selectionOwners[r.selection] = SelectionState(window: r.owner, time: r.time)
+                log?.log("SetSelectionOwner: selection atom=\(r.selection) owner=0x\(String(r.owner, radix: 16)) time=\(r.time)")
+                let prefs = clipboardPrefs.current
+                if r.selection == 1, prefs.enabled, prefs.mode == .xtermStyle {
+                    requestSelectionConversion(selectionAtom: 1)
+                }
+            }
 
         // Replies we don't yet implement — note them so the live test surfaces
         // what's missing without dropping the connection.

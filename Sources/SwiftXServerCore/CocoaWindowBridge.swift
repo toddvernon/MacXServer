@@ -30,7 +30,9 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private var keyHandler: (@Sendable (UInt32, UInt8, UInt, Bool) -> Void)?
     private var focusHandler: (@Sendable (UInt32, Bool) -> Void)?
     private var mouseHandler: (@Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void)?
+    private var mouseDraggedHandler: (@Sendable (UInt32, Int16, Int16, UInt8) -> Void)?
     private var pasteHandler: (@Sendable (UInt32, String) -> Void)?
+    private var copyHandler: (@Sendable (UInt32) -> Void)?
     private weak var log: ServerLogSink?
 
     /// Integer scale factor: 1 X-logical pixel = `scale` device pixels.
@@ -58,8 +60,26 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         mouseHandler = handler
     }
 
+    public func setOnMouseDragged(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void) {
+        mouseDraggedHandler = handler
+    }
+
     public func setOnPaste(_ handler: @escaping @Sendable (UInt32, String) -> Void) {
         pasteHandler = handler
+    }
+
+    public func setOnCopy(_ handler: @escaping @Sendable (UInt32) -> Void) {
+        copyHandler = handler
+    }
+
+    public func writeClipboard(text: String) {
+        // Pasteboard writes happen on main; we can be called from the read
+        // thread when SelectionNotify lands. Keep it simple and dispatch.
+        DispatchQueue.main.async {
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(text, forType: .string)
+        }
     }
 
     func handleNSWindowFocusChange(id: UInt32, gained: Bool) {
@@ -125,9 +145,19 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                     mouseHandler(id, x, y, button, isDown)
                 }
             }
+            if let mouseDraggedHandler = self.mouseDraggedHandler {
+                view.mouseDraggedHandler = { x, y, button in
+                    mouseDraggedHandler(id, x, y, button)
+                }
+            }
             if let pasteHandler = self.pasteHandler {
                 view.pasteHandler = { text in
                     pasteHandler(id, text)
+                }
+            }
+            if let copyHandler = self.copyHandler {
+                view.copyHandler = {
+                    copyHandler(id)
                 }
             }
 

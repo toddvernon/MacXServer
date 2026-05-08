@@ -124,12 +124,33 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// Always invoked on the main thread.
     func setOnMouse(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void)
 
+    /// Called by the session at startup. Bridge invokes this on every
+    /// mouseDragged event (mouse moved while a button is held). Args:
+    /// (top-level X window id, X-logical x, X-logical y in top-level coords,
+    /// X button number 1..3 of the held button). The session emits
+    /// MotionNotify so clients can track a drag — xterm needs this to
+    /// render the inverse-video selection highlight as the user drags.
+    /// Always invoked on the main thread.
+    func setOnMouseDragged(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void)
+
     /// Called by the session at startup. Bridge invokes this when the user
     /// pastes (Cmd-V or Edit > Paste) into one of its NSWindows. Args:
     /// (top-level X window id, pasteboard text). The session synthesises
     /// a KeyPress/KeyRelease pair per character so the running X client
     /// receives the paste as typed input.
     func setOnPaste(_ handler: @escaping @Sendable (UInt32, String) -> Void)
+
+    /// Called by the session at startup. Bridge invokes this when the user
+    /// asks to copy the X selection into the Mac clipboard (Cmd-C or
+    /// Edit > Copy in one of our NSWindows). Args: (top-level X window id).
+    /// The session looks up the current selection owner and runs the
+    /// ConvertSelection roundtrip, eventually calling writeClipboard with
+    /// the resulting text.
+    func setOnCopy(_ handler: @escaping @Sendable (UInt32) -> Void)
+
+    /// Push text to the Mac clipboard. Called from the session after a
+    /// successful copy roundtrip — the bridge writes it to NSPasteboard.
+    func writeClipboard(text: String)
 
     // MARK: - Drawing (M3)
     //
@@ -211,7 +232,10 @@ public extension WindowBridge {
     func setOnKey(_ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {}
     func setOnFocus(_ handler: @escaping @Sendable (UInt32, Bool) -> Void) {}
     func setOnMouse(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void) {}
+    func setOnMouseDragged(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void) {}
     func setOnPaste(_ handler: @escaping @Sendable (UInt32, String) -> Void) {}
+    func setOnCopy(_ handler: @escaping @Sendable (UInt32) -> Void) {}
+    func writeClipboard(text: String) {}
     // Default no-ops so unit-test bridges don't have to implement every method.
     func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment]) {}
     func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint]) {}

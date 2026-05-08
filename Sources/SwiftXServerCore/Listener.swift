@@ -55,6 +55,7 @@ public final class Listener: @unchecked Sendable {
     public func runOne(
         config: ServerConfig = .default,
         bridge: WindowBridge? = nil,
+        clipboardPrefs: ClipboardPreferencesProvider = StaticClipboardPreferencesProvider(),
         onSession: ((ServerSession) -> Void)? = nil
     ) throws {
         guard fd >= 0 else { throw ListenerError.acceptFailed(errno: 0) }
@@ -64,7 +65,7 @@ public final class Listener: @unchecked Sendable {
         defer { Darwin.close(clientFd) }
         log?.log("client connected")
 
-        let session = ServerSession(config: config, bridge: bridge, log: log)
+        let session = ServerSession(config: config, bridge: bridge, clipboardPrefs: clipboardPrefs, log: log)
         onSession?(session)
 
         let writeThread = Thread { [weak self] in

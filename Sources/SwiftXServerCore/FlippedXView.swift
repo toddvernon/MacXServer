@@ -34,11 +34,23 @@ public final class FlippedXView: NSView {
     /// logical px before calling.
     public var mouseHandler: ((Int16, Int16, UInt8, Bool) -> Void)?
 
+    /// Drag event sink. Fires from mouseDragged / rightMouseDragged /
+    /// otherMouseDragged. Same coord convention as mouseHandler. The held
+    /// button number is forwarded so the session can populate the state
+    /// field of the X MotionNotify event correctly.
+    public var mouseDraggedHandler: ((Int16, Int16, UInt8) -> Void)?
+
     /// Paste sink. The bridge installs this; FlippedXView calls it when the
     /// user invokes paste (Cmd-V) with the NSPasteboard's string content.
     /// The session synthesises a KeyPress/KeyRelease pair per character so
     /// the running X client receives the paste as if it were typed.
     public var pasteHandler: ((String) -> Void)?
+
+    /// Copy sink. The bridge installs this; FlippedXView calls it when the
+    /// user invokes copy (Cmd-C or Edit > Copy). The session looks up the
+    /// current X selection owner, runs the ConvertSelection roundtrip, and
+    /// pushes the result to NSPasteboard.
+    public var copyHandler: (() -> Void)?
 
     /// CGBitmapContext sized at `logicalWidth * scale × logicalHeight * scale`.
     /// The CGContext has a pre-applied transform so callers can issue draw
@@ -90,25 +102,30 @@ public final class FlippedXView: NSView {
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     public override func keyDown(with event: NSEvent) {
-        // Intercept Cmd-V → paste path. We don't pass it to keyHandler
-        // (which would otherwise translate Cmd-V into a Mod4+v X KeyPress and
-        // confuse the running X client). For a real paste the user expects
-        // the clipboard text injected as if typed.
-        if event.modifierFlags.contains(.command),
-           event.charactersIgnoringModifiers?.lowercased() == "v" {
-            handlePaste()
-            return
+        // Intercept Cmd-V → paste path and Cmd-C → copy path. We don't pass
+        // them through to keyHandler (which would otherwise translate them
+        // into Mod4+v / Mod4+c X KeyPresses and confuse the running client).
+        // For real copy/paste the user expects clipboard text moved between
+        // the X selection and NSPasteboard, not raw key events.
+        if event.modifierFlags.contains(.command) {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "v": handlePaste(); return
+            case "c": handleCopy(); return
+            default: break
+            }
         }
         keyHandler?(event, true)
     }
 
     public override func keyUp(with event: NSEvent) {
-        // Mirror the keyDown filter: don't deliver the key-up half of a
-        // Cmd-V either, otherwise the X client sees a stray KeyRelease for
-        // 'v' with no matching KeyPress.
-        if event.modifierFlags.contains(.command),
-           event.charactersIgnoringModifiers?.lowercased() == "v" {
-            return
+        // Mirror the keyDown filter: don't deliver the key-up half of an
+        // intercepted Cmd-V / Cmd-C either, otherwise the X client sees a
+        // stray KeyRelease with no matching KeyPress.
+        if event.modifierFlags.contains(.command) {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "v", "c": return
+            default: break
+            }
         }
         keyHandler?(event, false)
     }
@@ -119,11 +136,14 @@ public final class FlippedXView: NSView {
         pasteHandler?(text)
     }
 
-    // Standard `paste:` action (Edit menu, services, scripted invocations).
-    // Routes to the same handler as Cmd-V keyDown.
-    @objc public func paste(_ sender: Any?) {
-        handlePaste()
+    private func handleCopy() {
+        copyHandler?()
     }
+
+    // Standard `paste:` / `copy:` actions (Edit menu, services, scripted
+    // invocations). Route to the same handlers as Cmd-V / Cmd-C keyDown.
+    @objc public func paste(_ sender: Any?) { handlePaste() }
+    @objc public func copy(_ sender: Any?)  { handleCopy() }
 
     public override func mouseDown(with event: NSEvent)        { dispatchMouse(event, button: 1, isDown: true) }
     public override func mouseUp(with event: NSEvent)          { dispatchMouse(event, button: 1, isDown: false) }
@@ -132,17 +152,33 @@ public final class FlippedXView: NSView {
     public override func otherMouseDown(with event: NSEvent)   { dispatchMouse(event, button: 2, isDown: true) }
     public override func otherMouseUp(with event: NSEvent)     { dispatchMouse(event, button: 2, isDown: false) }
 
+    public override func mouseDragged(with event: NSEvent)      { dispatchDrag(event, button: 1) }
+    public override func rightMouseDragged(with event: NSEvent) { dispatchDrag(event, button: 3) }
+    public override func otherMouseDragged(with event: NSEvent) { dispatchDrag(event, button: 2) }
+
     private func dispatchMouse(_ event: NSEvent, button: UInt8, isDown: Bool) {
         guard let handler = mouseHandler else { return }
-        // locationInWindow is in window points (bottom-left origin).
-        // convert(_:from: nil) gives view-local in points; because the view
-        // is isFlipped, the result is top-left origin. We then translate
-        // points → device px (× backingScale) → logical px (÷ scaleFactor).
+        let (x, y) = logicalLocation(of: event)
+        handler(x, y, button, isDown)
+    }
+
+    private func dispatchDrag(_ event: NSEvent, button: UInt8) {
+        guard let handler = mouseDraggedHandler else { return }
+        let (x, y) = logicalLocation(of: event)
+        handler(x, y, button)
+    }
+
+    /// Convert an NSEvent's locationInWindow (window-points, bottom-left
+    /// origin) to top-level X-logical coordinates (top-left origin). The
+    /// view is `isFlipped`, so view-local points already use top-left;
+    /// we just need points → device px (× backingScale) → logical px
+    /// (÷ scaleFactor).
+    private func logicalLocation(of event: NSEvent) -> (Int16, Int16) {
         let pointsLocal = convert(event.locationInWindow, from: nil)
         let backingScale = window?.backingScaleFactor ?? 2.0
         let logicalX = Int16(clamping: Int((pointsLocal.x * backingScale) / CGFloat(scaleFactor)))
         let logicalY = Int16(clamping: Int((pointsLocal.y * backingScale) / CGFloat(scaleFactor)))
-        handler(logicalX, logicalY, button, isDown)
+        return (logicalX, logicalY)
     }
 
     /// Allocate (or re-allocate) the backing CGBitmapContext at

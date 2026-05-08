@@ -51,8 +51,8 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | 101 | GetKeyboardMapping | impl (Phase 1) | medium | 2026-05-07 | US-ASCII keymap from USKeymap.swift. macOS NSEvent virtual keyCode +8 = X keycode; letters / digits / punctuation / arrows / modifiers covered. Phase 4: international layouts. |
 | 117 | GetPointerMapping | impl (Phase 1) | medium | 2026-05-07 | Returns [1, 2, 3] (left/middle/right buttons). |
 | 119 | GetModifierMapping | impl (Phase 1) | medium | 2026-05-07 | Real Shift / Lock / Control / Mod1 (Option) / Mod4 (Command) → keycode mapping from USKeymap.swift. |
-| 22 | SetSelectionOwner | accepted, no-op | — | 2026-05-07 | Per X11 spec no reply expected. We don't track selection state yet. |
-| 23 | GetSelectionOwner | impl (Phase 1 stub) | low | 2026-05-07 | Returns owner=None. Phase 4 polish: real PRIMARY/CLIPBOARD ↔ NSPasteboard bridge. |
+| 22 | SetSelectionOwner | impl (clipboard mirror) | medium | 2026-05-08 | Tracks per-selection (owner, time) in a session-scoped dict. In xterm-style mode (prefs), owner != 0 on PRIMARY also kicks off the ConvertSelection roundtrip so the new selection mirrors to NSPasteboard automatically. owner == 0 clears the entry. |
+| 23 | GetSelectionOwner | impl | medium | 2026-05-08 | Real lookup against the tracked selection-owner dict. Returns 0 when the requested selection is unowned. |
 | 53 | CreatePixmap | impl (M1 track-only) | medium | 2026-05-07 | Records id/depth/dimensions. No backing pixels (M3). |
 | 54 | FreePixmap | impl | medium | 2026-05-07 | Removes from table. |
 | 55 | CreateGC | impl (color xterm) | medium | 2026-05-08 | Parses valueMask+valueList into a per-bit `[UInt32: UInt32]` dict on the GCEntry. GCState.materialise reads directly from the dict. |
