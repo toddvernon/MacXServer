@@ -321,7 +321,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
             ctx.saveGState()
             applyForeground(ctx, foreground)
-            ctx.setLineWidth(CGFloat(max(lineWidth, 1)))
+            self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
             for s in segments {
                 ctx.move(to: CGPoint(x: CGFloat(s.x1), y: CGFloat(s.y1)))
                 ctx.addLine(to: CGPoint(x: CGFloat(s.x2), y: CGFloat(s.y2)))
@@ -339,7 +339,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                   !points.isEmpty else { return }
             ctx.saveGState()
             applyForeground(ctx, foreground)
-            ctx.setLineWidth(CGFloat(max(lineWidth, 1)))
+            self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
             ctx.beginPath()
             ctx.move(to: CGPoint(x: CGFloat(points[0].x), y: CGFloat(points[0].y)))
             for p in points.dropFirst() {
@@ -349,6 +349,37 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
+    }
+
+    /// X11→CG pixel-address adapter for stroke paths, plus integer line
+    /// width. X11 uses pixel-center addressing: a path at integer (x, y)
+    /// means the center of pixel (x, y), and a thin-line stroke from (x, y)
+    /// to (x+w-1, y) hits w pixels (both endpoints inclusive). CG uses
+    /// grid-line addressing: integer y means the boundary between pixel
+    /// rows y-1 and y, and a stroke centered there straddles two rows.
+    ///
+    /// To bridge: translate the CTM by +0.5 user-pixel so X11 integer
+    /// coordinates land at CG pixel centers. After that, stroking a path
+    /// from (x, y) to (x+w-1, y) at line-width 1 covers exactly the pixels
+    /// X11 would have covered — w device-aligned pixels along the top row,
+    /// regardless of integer scale factor.
+    ///
+    /// This subsumes the doc's "+0.5 device px for odd widths" recipe and
+    /// fixes a subtle case the doc's version missed: at integer scales the
+    /// device-pixel offset gives crisp strokes but lands them half a
+    /// logical pixel off from where xterm expects (cell rows 3y-1..3y+1
+    /// instead of 3y..3y+2 for the cursor outline). Result: half-pixel
+    /// remnants outside the cell that ImageText8 fills couldn't cover —
+    /// the visible "cursor fragments" Todd flagged. The +0.5 user-pixel
+    /// shift puts every X11 pixel-address stroke entirely inside its
+    /// nominal cell rect.
+    ///
+    /// AA stays on; the alignment is enough to get crisp strokes without
+    /// giving up CG's diagonal-line smoothing (xclock's hands).
+    private func applyStrokePlane(_ ctx: CGContext, clientLineWidth: UInt32) {
+        let cw = max(Int(clientLineWidth), 1)
+        ctx.translateBy(x: 0.5, y: 0.5)
+        ctx.setLineWidth(CGFloat(cw))
     }
 
     public func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool) {
