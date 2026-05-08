@@ -124,6 +124,13 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// Always invoked on the main thread.
     func setOnMouse(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void)
 
+    /// Called by the session at startup. Bridge invokes this when the user
+    /// pastes (Cmd-V or Edit > Paste) into one of its NSWindows. Args:
+    /// (top-level X window id, pasteboard text). The session synthesises
+    /// a KeyPress/KeyRelease pair per character so the running X client
+    /// receives the paste as typed input.
+    func setOnPaste(_ handler: @escaping @Sendable (UInt32, String) -> Void)
+
     // MARK: - Drawing (M3)
     //
     // Coordinates are already translated to the top-level NSWindow's view
@@ -195,6 +202,7 @@ public extension WindowBridge {
     func setOnKey(_ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {}
     func setOnFocus(_ handler: @escaping @Sendable (UInt32, Bool) -> Void) {}
     func setOnMouse(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void) {}
+    func setOnPaste(_ handler: @escaping @Sendable (UInt32, String) -> Void) {}
     // Default no-ops so unit-test bridges don't have to implement every method.
     func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment]) {}
     func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint]) {}

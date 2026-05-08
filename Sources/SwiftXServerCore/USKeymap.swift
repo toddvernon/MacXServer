@@ -106,6 +106,46 @@ public enum USKeymap {
         return result
     }
 
+    // MARK: - Reverse lookup (for paste / synthesised keystrokes)
+
+    /// Look up the macOS keyCode + shift requirement that produces the given
+    /// ASCII character. Used by the paste path: each character of the
+    /// pasteboard text gets translated to a synthetic KeyPress / KeyRelease
+    /// event so the running X client receives it just like a typed key.
+    /// Returns nil for characters that have no mapping (most non-ASCII or
+    /// special control codes).
+    public static func macKeyCode(forCharacter ch: Character) -> (mac: UInt8, shift: Bool)? {
+        return charToMac[ch]
+    }
+
+    /// Built once from `mappings`: character → (mac keyCode, needs shift).
+    /// Lowercase letters and non-shifted symbols map without shift; uppercase
+    /// letters and shifted symbols map with shift=true.
+    private static let charToMac: [Character: (mac: UInt8, shift: Bool)] = {
+        var out: [Character: (mac: UInt8, shift: Bool)] = [:]
+        for (mac, syms) in mappings {
+            if syms.lower < 0x7F, let scalar = Unicode.Scalar(syms.lower) {
+                let c = Character(scalar)
+                if out[c] == nil {
+                    out[c] = (UInt8(mac), false)
+                }
+            }
+            if syms.upper < 0x7F, syms.upper != syms.lower,
+               let scalar = Unicode.Scalar(syms.upper) {
+                let c = Character(scalar)
+                if out[c] == nil {
+                    out[c] = (UInt8(mac), true)
+                }
+            }
+        }
+        // Newline arrives as either '\n' or '\r' from NSPasteboard depending
+        // on source; both map to Return.
+        out["\n"] = (0x24, false)
+        out["\r"] = (0x24, false)
+        out["\t"] = (0x30, false)
+        return out
+    }()
+
     // MARK: - Mapping table
 
     private static let mappings: [Int: (lower: UInt32, upper: UInt32)] = {

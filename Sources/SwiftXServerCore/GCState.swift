@@ -38,39 +38,16 @@ public struct GCState: Equatable, Sendable {
 
     public init() {}
 
-    /// Build a GCState by replaying CreateGC + ChangeGC accumulated in a
-    /// GCEntry. The entry's `valueList` is a concatenation of every value
-    /// list ever set on this GC (we just keep appending in ChangeGC). Walk
-    /// from the start; later writes for a given attribute overwrite earlier
-    /// ones because they appear later in the bit-order traversal — which
-    /// is wrong if the same bit was set twice. M3 enough for xclock; refine
-    /// when an app misbehaves.
+    /// Build a GCState from a GCEntry's parsed per-bit values dict. Each bit
+    /// holds its most recent CARD32 (CreateGC + every subsequent ChangeGC),
+    /// so reads are O(1) and there's no bytes-merging trap.
     public static func materialise(from entry: GCEntry, byteOrder: ByteOrder) -> GCState {
         var state = GCState()
-
-        // The valueList's layout is: for each set bit in valueMask in
-        // ascending order, 4 bytes of value. ChangeGC appends; if the same
-        // bit was set in two ChangeGC calls, both 4-byte values appear in
-        // the list. The simplest replay is to scan bit-by-bit using the
-        // accumulated mask, which is what `ValueListReader.read` does for
-        // the *first* occurrence. For M3 with xclock we don't see GC
-        // attributes set twice, so this is fine.
-
-        if let v = ValueListReader.read(valueList: entry.valueList, mask: entry.valueMask, bit: GCBits.foreground, byteOrder: byteOrder) {
-            state.foreground = v
-        }
-        if let v = ValueListReader.read(valueList: entry.valueList, mask: entry.valueMask, bit: GCBits.background, byteOrder: byteOrder) {
-            state.background = v
-        }
-        if let v = ValueListReader.read(valueList: entry.valueList, mask: entry.valueMask, bit: GCBits.lineWidth, byteOrder: byteOrder) {
-            state.lineWidth = v
-        }
-        if let v = ValueListReader.read(valueList: entry.valueList, mask: entry.valueMask, bit: GCBits.fillRule, byteOrder: byteOrder) {
-            state.fillRuleEvenOdd = (v == 0)        // 0 = EvenOdd, 1 = Winding per spec
-        }
-        if let v = ValueListReader.read(valueList: entry.valueList, mask: entry.valueMask, bit: GCBits.font, byteOrder: byteOrder) {
-            state.font = v
-        }
+        if let v = entry.values[GCBits.foreground] { state.foreground = v }
+        if let v = entry.values[GCBits.background] { state.background = v }
+        if let v = entry.values[GCBits.lineWidth]  { state.lineWidth  = v }
+        if let v = entry.values[GCBits.fillRule]   { state.fillRuleEvenOdd = (v == 0) }
+        if let v = entry.values[GCBits.font]       { state.font = v }
         return state
     }
 }

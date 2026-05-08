@@ -34,6 +34,12 @@ public final class FlippedXView: NSView {
     /// logical px before calling.
     public var mouseHandler: ((Int16, Int16, UInt8, Bool) -> Void)?
 
+    /// Paste sink. The bridge installs this; FlippedXView calls it when the
+    /// user invokes paste (Cmd-V) with the NSPasteboard's string content.
+    /// The session synthesises a KeyPress/KeyRelease pair per character so
+    /// the running X client receives the paste as if it were typed.
+    public var pasteHandler: ((String) -> Void)?
+
     /// CGBitmapContext sized at `logicalWidth * scale × logicalHeight * scale`.
     /// The CGContext has a pre-applied transform so callers can issue draw
     /// commands in logical coordinates — the transform handles the scale-up
@@ -63,11 +69,39 @@ public final class FlippedXView: NSView {
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     public override func keyDown(with event: NSEvent) {
+        // Intercept Cmd-V → paste path. We don't pass it to keyHandler
+        // (which would otherwise translate Cmd-V into a Mod4+v X KeyPress and
+        // confuse the running X client). For a real paste the user expects
+        // the clipboard text injected as if typed.
+        if event.modifierFlags.contains(.command),
+           event.charactersIgnoringModifiers?.lowercased() == "v" {
+            handlePaste()
+            return
+        }
         keyHandler?(event, true)
     }
 
     public override func keyUp(with event: NSEvent) {
+        // Mirror the keyDown filter: don't deliver the key-up half of a
+        // Cmd-V either, otherwise the X client sees a stray KeyRelease for
+        // 'v' with no matching KeyPress.
+        if event.modifierFlags.contains(.command),
+           event.charactersIgnoringModifiers?.lowercased() == "v" {
+            return
+        }
         keyHandler?(event, false)
+    }
+
+    private func handlePaste() {
+        let pb = NSPasteboard.general
+        guard let text = pb.string(forType: .string), !text.isEmpty else { return }
+        pasteHandler?(text)
+    }
+
+    // Standard `paste:` action (Edit menu, services, scripted invocations).
+    // Routes to the same handler as Cmd-V keyDown.
+    @objc public func paste(_ sender: Any?) {
+        handlePaste()
     }
 
     public override func mouseDown(with event: NSEvent)        { dispatchMouse(event, button: 1, isDown: true) }

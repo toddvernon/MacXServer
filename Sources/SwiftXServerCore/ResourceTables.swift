@@ -122,12 +122,17 @@ public final class WindowTable: @unchecked Sendable {
 public struct GCEntry: Equatable, Sendable {
     public var id: UInt32
     public var drawable: UInt32
-    public var valueMask: UInt32
-    public var valueList: [UInt8]
+    /// Parsed GC attribute values keyed by bit. Built from CreateGC's
+    /// (valueMask, valueList) and updated incrementally on every ChangeGC.
+    /// Storing parsed values rather than concatenating raw bytes avoids the
+    /// "set foreground twice" trap: xterm sets it in CreateGC, then resets
+    /// it via ChangeGC for every ANSI color switch — a raw-bytes append
+    /// would leave the materialiser reading the original CreateGC value.
+    public var values: [UInt32: UInt32]
 
-    public init(id: UInt32, drawable: UInt32, valueMask: UInt32, valueList: [UInt8]) {
+    public init(id: UInt32, drawable: UInt32, values: [UInt32: UInt32] = [:]) {
         self.id = id; self.drawable = drawable
-        self.valueMask = valueMask; self.valueList = valueList
+        self.values = values
     }
 }
 
@@ -135,22 +140,55 @@ public final class GCTable {
     private(set) public var gcs: [UInt32: GCEntry] = [:]
     public init() {}
 
-    public func insert(_ gc: GCEntry) { gcs[gc.id] = gc }
+    /// Create a GC by parsing the CreateGC (valueMask, valueList) into the
+    /// per-bit values dict. The byte order comes from the session.
+    public func insert(id: UInt32, drawable: UInt32, valueMask: UInt32, valueList: [UInt8], byteOrder: ByteOrder) {
+        var entry = GCEntry(id: id, drawable: drawable)
+        applyValueList(into: &entry.values, mask: valueMask, list: valueList, byteOrder: byteOrder)
+        gcs[id] = entry
+    }
+
     public func remove(_ id: UInt32) { gcs.removeValue(forKey: id) }
     public func get(_ id: UInt32) -> GCEntry? { gcs[id] }
 
-    public func change(_ id: UInt32, valueMask: UInt32, valueList: [UInt8]) {
+    /// Apply a ChangeGC's partial (valueMask, valueList): for each bit set
+    /// in `valueMask`, decode the corresponding 4-byte value at that bit's
+    /// rank within the *change's* mask and store it in the entry's values
+    /// dict, overwriting any previous value for the same bit. Bits not set
+    /// in `valueMask` are left untouched.
+    public func change(_ id: UInt32, valueMask: UInt32, valueList: [UInt8], byteOrder: ByteOrder) {
         guard var entry = gcs[id] else { return }
-        // Replace mask/values for the bits being changed. Per spec ChangeGC's
-        // valueList carries only the bits set in valueMask, not a full snapshot.
-        // For M1 we just append/overwrite a coarse record — finer state merging
-        // arrives when we actually render.
-        entry.valueMask |= valueMask
-        entry.valueList.append(contentsOf: valueList)
+        applyValueList(into: &entry.values, mask: valueMask, list: valueList, byteOrder: byteOrder)
         gcs[id] = entry
     }
 
     public var count: Int { gcs.count }
+
+    /// Walk `mask`'s set bits in ascending order; for each, read the next
+    /// 4-byte CARD32 from `list` and store under that bit. Spec: the value
+    /// list contains exactly one CARD32 per set bit, in mask-bit order.
+    private func applyValueList(into values: inout [UInt32: UInt32], mask: UInt32, list: [UInt8], byteOrder: ByteOrder) {
+        var index = 0
+        var bit: UInt32 = 1
+        while bit != 0 {
+            if mask & bit != 0 {
+                let offset = index * 4
+                guard offset + 4 <= list.count else { return }
+                let a = UInt32(list[offset])
+                let b = UInt32(list[offset + 1])
+                let c = UInt32(list[offset + 2])
+                let d = UInt32(list[offset + 3])
+                let value: UInt32
+                switch byteOrder {
+                case .lsbFirst: value = a | (b << 8) | (c << 16) | (d << 24)
+                case .msbFirst: value = (a << 24) | (b << 16) | (c << 8) | d
+                }
+                values[bit] = value
+                index += 1
+            }
+            bit <<= 1
+        }
+    }
 }
 
 public struct PixmapEntry: Equatable, Sendable {

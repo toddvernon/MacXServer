@@ -30,6 +30,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private var keyHandler: (@Sendable (UInt32, UInt8, UInt, Bool) -> Void)?
     private var focusHandler: (@Sendable (UInt32, Bool) -> Void)?
     private var mouseHandler: (@Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void)?
+    private var pasteHandler: (@Sendable (UInt32, String) -> Void)?
     private weak var log: ServerLogSink?
 
     /// Integer scale factor: 1 X-logical pixel = `scale` device pixels.
@@ -55,6 +56,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
     public func setOnMouse(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void) {
         mouseHandler = handler
+    }
+
+    public func setOnPaste(_ handler: @escaping @Sendable (UInt32, String) -> Void) {
+        pasteHandler = handler
     }
 
     func handleNSWindowFocusChange(id: UInt32, gained: Bool) {
@@ -118,6 +123,11 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             if let mouseHandler = self.mouseHandler {
                 view.mouseHandler = { x, y, button, isDown in
                     mouseHandler(id, x, y, button, isDown)
+                }
+            }
+            if let pasteHandler = self.pasteHandler {
+                view.pasteHandler = { text in
+                    pasteHandler(id, text)
                 }
             }
 

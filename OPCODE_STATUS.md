@@ -55,8 +55,8 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | 23 | GetSelectionOwner | impl (Phase 1 stub) | low | 2026-05-07 | Returns owner=None. Phase 4 polish: real PRIMARY/CLIPBOARD ↔ NSPasteboard bridge. |
 | 53 | CreatePixmap | impl (M1 track-only) | medium | 2026-05-07 | Records id/depth/dimensions. No backing pixels (M3). |
 | 54 | FreePixmap | impl | medium | 2026-05-07 | Removes from table. |
-| 55 | CreateGC | impl (M1 track-only) | medium | 2026-05-07 | Stores valueMask+valueList. No CG state translation yet (M3). |
-| 56 | ChangeGC | impl (M1 track-only) | low | 2026-05-07 | Coarse merge of valueMask+valueList. Will need finer state model in M3. |
+| 55 | CreateGC | impl (color xterm) | medium | 2026-05-08 | Parses valueMask+valueList into a per-bit `[UInt32: UInt32]` dict on the GCEntry. GCState.materialise reads directly from the dict. |
+| 56 | ChangeGC | impl (color xterm) | medium | 2026-05-08 | Re-parses the partial valueList using the change's own mask and merges into the entry's per-bit dict, overwriting prior values. Earlier version concatenated raw bytes onto the existing valueList; the materialiser then kept reading the original CreateGC foreground, so xterm's per-glyph color switches never landed. Fix is needed for ANSI color rendering and any client that ever re-sets a GC attribute. |
 | 60 | FreeGC | impl | medium | 2026-05-07 | Removes from table. |
 | 72 | PutImage | accepted, no-op | low | 2026-05-07 | Bytes are decoded by framer but pixels are dropped. xclock writes icon bitmaps; we don't surface them anywhere yet. |
 | 84 | AllocColor | impl | medium | 2026-05-07 | Monotonic pixel (start=16), pixel→RGB cached. No real palette. |

@@ -66,6 +66,50 @@ public final class ServerSession: @unchecked Sendable {
                 topLevel: topLevel, x: x, y: y, button: button, isDown: isDown
             )
         }
+        bridge?.setOnPaste { [weak self] topLevel, text in
+            self?.handlePaste(topLevel: topLevel, text: text)
+        }
+    }
+
+    /// Inject the pasteboard text as if typed: emit a KeyPress / KeyRelease
+    /// pair per character, with Shift state set when needed. Characters
+    /// without a US-ASCII keymap entry are skipped (better than blasting
+    /// random KeyPress events at the client). Pasted "\r\n" or "\n" both
+    /// resolve to Return.
+    public func handlePaste(topLevel: UInt32, text: String) {
+        guard let order = byteOrder else { return }
+        guard let target = keyTarget(topLevel: topLevel, eventMaskBit: 1 << 0) else {
+            log?.log("paste: no KeyPress target under 0x\(String(topLevel, radix: 16))")
+            return
+        }
+        log?.log("  paste \(text.count) chars → target=0x\(String(target, radix: 16))")
+        let shiftMask: UInt16 = 1 << 0
+        for ch in text {
+            // Treat "\r\n" cleanly — a CR in the pasteboard becomes Return,
+            // skipping a redundant LF if it follows. We just let both map
+            // to Return separately; the X client will get one Return per
+            // line break either way (most line-oriented clients tolerate
+            // back-to-back Returns).
+            guard let entry = USKeymap.macKeyCode(forCharacter: ch) else { continue }
+            let xKey = USKeymap.xKeycode(forMacKeyCode: entry.mac)
+            let state: UInt16 = entry.shift ? shiftMask : 0
+            let press = InputEvent(
+                detail: xKey, sequenceNumber: sequenceNumber,
+                time: 0, root: config.rootWindowId,
+                event: target, child: 0,
+                rootX: 0, rootY: 0, eventX: 0, eventY: 0,
+                state: state, sameScreen: true
+            )
+            outbound.append(press.encode(code: 2, byteOrder: order))
+            let release = InputEvent(
+                detail: xKey, sequenceNumber: sequenceNumber,
+                time: 0, root: config.rootWindowId,
+                event: target, child: 0,
+                rootX: 0, rootY: 0, eventX: 0, eventY: 0,
+                state: state, sameScreen: true
+            )
+            outbound.append(release.encode(code: 3, byteOrder: order))
+        }
     }
 
     /// Called by the bridge from main thread when an NSWindow becomes key
@@ -963,10 +1007,10 @@ public final class ServerSession: @unchecked Sendable {
             pixmaps.remove(r.pixmap)
 
         case .createGC(let r):
-            gcs.insert(GCEntry(id: r.cid, drawable: r.drawable, valueMask: r.valueMask, valueList: r.valueList))
+            gcs.insert(id: r.cid, drawable: r.drawable, valueMask: r.valueMask, valueList: r.valueList, byteOrder: byteOrder)
 
         case .changeGC(let r):
-            gcs.change(r.gc, valueMask: r.valueMask, valueList: r.valueList)
+            gcs.change(r.gc, valueMask: r.valueMask, valueList: r.valueList, byteOrder: byteOrder)
 
         case .freeGC(let r):
             gcs.remove(r.gc)
