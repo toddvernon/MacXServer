@@ -46,6 +46,16 @@ public final class FlippedXView: NSView {
     /// and the y-flip.
     public var backing: CGContext?
 
+    /// Top-level X window's CWBackPixel resolved to RGB. Used to colour the
+    /// view's layer so live-resize fills new region in the right color
+    /// (instead of flashing the default NSView/NSWindow white) before the
+    /// bitmap gets resized + repainted on windowDidEndLiveResize.
+    public var liveResizeBackground: CGColor = .white {
+        didSet {
+            if wantsLayer { layer?.backgroundColor = liveResizeBackground }
+        }
+    }
+
     /// Logical X-protocol dimensions (what the client sees).
     public private(set) var logicalWidth: Int = 0
     public private(set) var logicalHeight: Int = 0
@@ -58,6 +68,17 @@ public final class FlippedXView: NSView {
     public private(set) var scaleFactor: Int = 1
 
     public override var isFlipped: Bool { true }
+
+    public override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        // Layer-backed: AppKit fills the new region with layer.backgroundColor
+        // during a live drag, instead of flashing the default white before
+        // our draw cycle catches up to the new bounds.
+        wantsLayer = true
+        layer?.backgroundColor = liveResizeBackground
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
     /// We accept keyboard focus so the NSWindow can route keyDown / keyUp
     /// events to us. The bridge calls makeFirstResponder(view) right after
@@ -187,6 +208,16 @@ public final class FlippedXView: NSView {
         guard let ctx = backing, let cg = NSGraphicsContext.current?.cgContext else { return }
         guard let img = ctx.makeImage() else { return }
 
+        // Image rect: the native points-size that corresponds to the
+        // bitmap's logical dimensions. During a live resize the view's
+        // bounds grow but the bitmap (and hence imgRect) stays put — drawing
+        // into bounds would stretch the image, so we pin it to top-left at
+        // its native size and let the layer's backgroundColor fill the rest.
+        let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        let imgPointsW = CGFloat(logicalWidth) * CGFloat(scaleFactor) / backingScale
+        let imgPointsH = CGFloat(logicalHeight) * CGFloat(scaleFactor) / backingScale
+        let imgRect = NSRect(x: 0, y: 0, width: imgPointsW, height: imgPointsH)
+
         // [Y-FLIP #2 of 3] Blit y-flip in the NSView's draw context.
         //
         // Why this y-flip is necessary, and not redundant with the backing
@@ -228,7 +259,10 @@ public final class FlippedXView: NSView {
         cg.saveGState()
         cg.translateBy(x: 0, y: bounds.height)
         cg.scaleBy(x: 1, y: -1)
-        cg.draw(img, in: bounds)
+        // Drawing at imgRect (origin 0,0 in transformed coords, native size)
+        // lands at the TOP of the view in flipped screen coords. Anything
+        // outside imgRect in the view's bounds shows the layer's bg color.
+        cg.draw(img, in: imgRect)
         cg.restoreGState()
     }
 }

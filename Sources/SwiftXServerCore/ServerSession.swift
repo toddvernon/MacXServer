@@ -268,6 +268,17 @@ public final class ServerSession: @unchecked Sendable {
         )
         outbound.append(event.encode(byteOrder: order))
 
+        // FlippedXView.resizeBacking allocates a fresh bitmap and fills it
+        // with white as a placeholder. For windows whose CWBackPixel isn't
+        // white (e.g., xterm with `-bg black`), the newly-exposed pixels
+        // around the original content flash white until the client redraws.
+        // Paint the top-level + every mapped descendant's bg now so the
+        // bitmap matches the X-protocol expectation BEFORE we send Expose.
+        let paints = mappedBackgroundPaints(topLevelId: id, byteOrder: order)
+        if !paints.isEmpty {
+            bridge?.paintWindowRects(topLevel: id, rects: paints)
+        }
+
         // The outer's resize means descendants' visible region changed too —
         // for xterm specifically, the inner's drawing area is now bigger
         // (or smaller) and any newly-exposed pixels need redrawing. Real
@@ -786,6 +797,13 @@ public final class ServerSession: @unchecked Sendable {
             }
             if let newBackPixel = ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: CW.backPixel, byteOrder: byteOrder) {
                 windows.setBackPixel(r.window, newBackPixel)
+                // If this is a top-level, push the new bg through to the
+                // NSWindow.backgroundColor so live-resize stays in-color.
+                if isTopLevel(r.window) {
+                    bridge?.setTopLevelWindowBackground(
+                        id: r.window, color: resolveColor(newBackPixel)
+                    )
+                }
             }
             if let newBorderPixel = ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: CW.borderPixel, byteOrder: byteOrder) {
                 windows.setBorderPixel(r.window, newBorderPixel)
@@ -827,6 +845,14 @@ public final class ServerSession: @unchecked Sendable {
                     eventMask: topMask, descendants: descendants,
                     byteOrder: byteOrder, sequence: sequenceNumber,
                     outbound: outbound
+                )
+                // Set the NSWindow.backgroundColor to match the X bg pixel
+                // so live-resize doesn't flash a different color (white by
+                // default) in the newly-exposed region before the next
+                // draw cycle catches up.
+                bridge?.setTopLevelWindowBackground(
+                    id: r.window,
+                    color: windowBackground(r.window, byteOrder: byteOrder)
                 )
                 // Paint top-level bg + every mapped descendant's bg. The
                 // bridge dispatches paint to main async; mapTopLevel was

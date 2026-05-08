@@ -544,6 +544,22 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    public func setTopLevelWindowBackground(id: UInt32, color: RGB16) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let slot = self.slot(id) else { return }
+            // RGB16 stores values in the high byte (e.g., 0xFFFF for max).
+            // NSColor takes 0..1 floats, so divide by 0xFFFF.
+            let r = CGFloat(color.red)   / 65535.0
+            let g = CGFloat(color.green) / 65535.0
+            let b = CGFloat(color.blue)  / 65535.0
+            slot.window?.backgroundColor = NSColor(srgbRed: r, green: g, blue: b, alpha: 1.0)
+            // The view's layer.backgroundColor is what actually shows during
+            // a live-resize drag (since the FlippedXView fully covers the
+            // window's content area, NSWindow.backgroundColor is hidden).
+            slot.view?.liveResizeBackground = CGColor(red: r, green: g, blue: b, alpha: 1.0)
+        }
+    }
+
     public func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
@@ -600,35 +616,48 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         let newLogicalH = Int((bounds.height * backingScale / CGFloat(scaleFactor)).rounded())
         log?.log("  windowDidResize id=0x\(String(id, radix: 16)) bounds=\(bounds.width)x\(bounds.height)pt → logical \(newLogicalW)x\(newLogicalH) (was \(view.logicalWidth)x\(view.logicalHeight)) liveResize=\(view.inLiveResize)")
         guard newLogicalW > 0, newLogicalH > 0 else { return }
+        guard newLogicalW != view.logicalWidth || newLogicalH != view.logicalHeight else {
+            // No actual size change — don't notify the session (would cause
+            // xterm to react to a zero-delta resize).
+            return
+        }
+        // During a live drag we keep the OLD bitmap. Reallocating it here
+        // would fire on every pixel of mouse movement and white-flash the
+        // window (FlippedXView.resizeBacking allocates a fresh white-filled
+        // CGBitmapContext). The layer's backgroundColor (set in
+        // setTopLevelWindowBackground) fills the newly-uncovered region in
+        // the right colour while the user is dragging. The actual bitmap
+        // resize + ConfigureNotify happen once when the drag ends, in
+        // handleNSWindowDidEndLiveResize.
+        guard !view.inLiveResize else { return }
+        view.resizeBacking(logicalWidth: newLogicalW,
+                           logicalHeight: newLogicalH,
+                           scale: scaleFactor)
+        view.setNeedsDisplay(view.bounds)
+        resizeHandler?(id, UInt16(min(newLogicalW, 65535)), UInt16(min(newLogicalH, 65535)))
+    }
+
+    /// Called by the NSWindowDelegate when a live-resize gesture ends. We
+    /// deferred BOTH the bitmap resize and the ConfigureNotify until now;
+    /// catch up here using the view's current bounds.
+    @MainActor
+    fileprivate func handleNSWindowDidEndLiveResize(id: UInt32) {
+        guard let view = slot(id)?.view else { return }
+        let backingScale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        let bounds = view.bounds
+        let newLogicalW = Int((bounds.width * backingScale / CGFloat(scaleFactor)).rounded())
+        let newLogicalH = Int((bounds.height * backingScale / CGFloat(scaleFactor)).rounded())
+        log?.log("  windowDidEndLiveResize id=0x\(String(id, radix: 16)) final bounds=\(bounds.width)x\(bounds.height)pt → logical \(newLogicalW)x\(newLogicalH)")
+        guard newLogicalW > 0, newLogicalH > 0 else { return }
         if newLogicalW != view.logicalWidth || newLogicalH != view.logicalHeight {
             view.resizeBacking(logicalWidth: newLogicalW,
                                logicalHeight: newLogicalH,
                                scale: scaleFactor)
             view.setNeedsDisplay(view.bounds)
-        } else {
-            // No actual size change — don't notify the session (would cause
-            // xterm to react to a zero-delta resize).
-            return
         }
-        // During a live resize (user dragging the window corner), AppKit fires
-        // windowDidResize on every pixel of mouse movement. Emitting a
-        // ConfigureNotify per fire floods the X client (xterm reallocates its
-        // grid on every event and falls behind). Defer the protocol-level
-        // notification until the user releases the drag — see
-        // `windowDidEndLiveResize` on ResizeWindowDelegate.
-        guard !view.inLiveResize else { return }
-        resizeHandler?(id, UInt16(min(newLogicalW, 65535)), UInt16(min(newLogicalH, 65535)))
-    }
-
-    /// Called by the NSWindowDelegate when a live-resize gesture ends. Emit
-    /// the deferred ConfigureNotify with the final dimensions.
-    @MainActor
-    fileprivate func handleNSWindowDidEndLiveResize(id: UInt32) {
-        guard let view = slot(id)?.view else { return }
-        log?.log("  windowDidEndLiveResize id=0x\(String(id, radix: 16)) final logical=\(view.logicalWidth)x\(view.logicalHeight)")
         resizeHandler?(id,
-                       UInt16(min(view.logicalWidth, 65535)),
-                       UInt16(min(view.logicalHeight, 65535)))
+                       UInt16(min(newLogicalW, 65535)),
+                       UInt16(min(newLogicalH, 65535)))
     }
 }
 

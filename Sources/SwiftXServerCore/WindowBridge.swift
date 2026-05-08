@@ -180,6 +180,15 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// or exposed, the server fills its region with the configured background
     /// pixel BEFORE the client draws on top.
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect])
+
+    /// Set the AppKit NSWindow's `backgroundColor` for a top-level X window.
+    /// This is distinct from the X bg pixel (which paints into the backing
+    /// bitmap): NSWindow.backgroundColor shows during live-resize before our
+    /// next draw cycle runs, so without this an `xterm -bg black` flashes
+    /// white as the user drags the window corner. Called at top-level map
+    /// time and whenever ChangeWindowAttributes flips CWBackPixel on a
+    /// top-level.
+    func setTopLevelWindowBackground(id: UInt32, color: RGB16)
 }
 
 /// A single window-background paint: an absolute rect in top-level pixel
@@ -230,4 +239,5 @@ public extension WindowBridge {
         items: [UInt8]
     ) {}
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {}
+    func setTopLevelWindowBackground(id: UInt32, color: RGB16) {}
 }
