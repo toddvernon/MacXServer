@@ -34,7 +34,7 @@ Running list of places we hardcoded, stubbed, or otherwise corner-cut to make so
 - **NoExpose always emitted after CopyArea.** We don't track GC `graphics-exposures`, so we send NoExpose unconditionally. Spec says only emit if graphics-exposures=True; defaults to True so most clients are fine. A client that explicitly sets it False and ignores NoExpose would see spurious events.
 - **GetSelectionOwner always returns None.** `case .getSelectionOwner` returns owner=0 because we don't track selection state. Phase 4 polish wires up real PRIMARY/CLIPBOARD ↔ NSPasteboard.
 - **Synthesized xlsfonts is the Phase 1 set, not the full ~100.** `SynthesizedFonts.phase1Names` ships ~40 entries (cell aliases + substitute families × 5 sizes × medium/bold roman iso10646-1). Phase 4 expands to italic + iso8859-1 cross product.
-- **Replies still missing for some opcodes.** GetWindowAttributes, GetGeometry, QueryTree, GetAtomName, TranslateCoordinates, QueryPointer, LookupColor, QueryBestSize, ListExtensions, QueryKeymap. Captured xterm doesn't use these; live xterm or Xt apps may. Add as live testing surfaces them.
+- **Replies still missing for some opcodes.** QueryTree, GetAtomName, TranslateCoordinates, QueryPointer, QueryBestSize, ListExtensions, QueryKeymap. Captured xterm doesn't use these; live xterm or Xt apps may. Add as live testing surfaces them.
 
 ## Closed
 

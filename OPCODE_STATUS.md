@@ -29,7 +29,7 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | --- | --- | --- | --- | --- | --- |
 | (setup) | SetupRequest / SetupAccepted | impl | medium | 2026-05-07 | Hardcoded SetupAccepted (see SHORTCUTS); accepts both byte orders; partial buffering tested |
 | 1  | CreateWindow | impl (xcalc) | medium | 2026-05-08 | parent==root → bridge.registerTopLevel; descendants stored in WindowTable only. CWBackPixel + CWBorderPixel extracted from valueList and stored on the WindowEntry; both drive the paint-on-map flow. borderWidth carried from request. |
-| 2  | ChangeWindowAttributes | impl (xcalc) | medium | 2026-05-08 | Honors eventMask, CWBackPixel, CWBorderPixel. If the window is mapped when CWBackPixel/CWBorderPixel changes, repaints immediately via paintWindowRects. BackingStore + Colormap + BitGravity still dropped. |
+| 2  | ChangeWindowAttributes | impl (xcalc, xterm) | medium | 2026-05-08 | Honors eventMask, CWBackPixel, CWBorderPixel. Stores the new pixels but does NOT auto-repaint — per spec, the new bg/border takes effect on the next ClearArea / Expose. (Earlier version DID auto-repaint, which broke xterm's scroll pattern: xterm flips bg temporarily around a 1-line ClearArea and the auto-repaint wiped scrolled content.) BackingStore + Colormap + BitGravity still dropped. |
 | 8  | MapWindow | impl (xcalc) | medium | 2026-05-08 | Top-level: bridge brings up NSWindow, emits ReparentNotify+ConfigureNotify+MapNotify+Expose, then paints top-level + each mapped descendant's bg/border via paintWindowRects. Descendant: paints bg/border, emits MapNotify, emits Expose if ExposureMask set. |
 | 9  | MapSubwindows | impl (M2) | medium | 2026-05-07 | Marks every direct child mapped + bridge.mapDescendant for each. |
 | 10 | UnmapWindow | impl (M2) | low | 2026-05-07 | Top-level: bridge orderOut + UnmapNotify. Descendant: tracking only. Not exercised by xclock. |
@@ -64,7 +64,10 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | 65 | PolyLine | impl (M3) | medium | 2026-05-07 | Strokes a connected line strip via CGContext. Origin and Previous coordinate-modes both supported. Line-width from GC (0 → 1px). |
 | 66 | PolySegment | impl (M3) | medium | 2026-05-07 | Strokes independent line segments via CGContext.move+addLine+strokePath. |
 | 69 | FillPoly | impl (M3) | low | 2026-05-07 | Fills with foreground; uses GC fill-rule (default EvenOdd). Convex/Nonconvex/Complex shape attribute not yet specialised. |
+| 3  | GetWindowAttributes | impl (color xterm) | medium | 2026-05-08 | Synthesises a 44-byte reply from the WindowEntry: visualID = root visual, class from windowClass, mapState = Viewable/Unmapped depending on entry.mapped, your-event-mask + all-event-masks from entry.eventMask, colormap = default. Other fields are sensible defaults (bitGravity=0, winGravity=0, backingStore=NotUseful). |
+| 14 | GetGeometry | impl (color xterm) | medium | 2026-05-08 | 32-byte reply. Answers for windows from WindowEntry (depth, x, y, width, height, borderWidth) and for pixmaps from PixmapEntry. Unknown drawables log and produce no reply (will hang the client; XErrors not yet emitted). |
 | 61 | ClearArea | impl (xcalc) | medium | 2026-05-08 | Fills rect with window's BackPixel. width=0/height=0 fill-to-edge supported. Honors `exposures=true` by emitting an Expose for the cleared region (xcalc's LCD redraw sequence is "ClearArea(exposures=1) → wait for Expose → PolyText8 the new value"; without the Expose the LCD never repainted). |
+| 92 | LookupColor | impl (color xterm) | medium | 2026-05-08 | Resolves the X color name (or #hex spec) against XColorDatabase and returns the RGB without allocating a pixel. xterm uses this for `-fg <name>` when it intends to do its own AllocColor on the resolved RGB. Same fallback-to-black-on-unknown semantics as AllocNamedColor. |
 
 (Add rows as opcodes get encountered.)
 

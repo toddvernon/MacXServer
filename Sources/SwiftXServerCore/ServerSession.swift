@@ -746,18 +746,13 @@ public final class ServerSession: @unchecked Sendable {
             if let newBorderPixel = ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: CW.borderPixel, byteOrder: byteOrder) {
                 windows.setBorderPixel(r.window, newBorderPixel)
             }
-            // If the window is already mapped, repaint with whatever combo of
-            // bg / border is now configured. X11 spec is technically silent
-            // on auto-repaint here, but every real server I've seen does it
-            // because clients expect the new pixel to take effect immediately.
-            let bgChanged = (r.valueMask & CW.backPixel) != 0
-            let borderChanged = (r.valueMask & CW.borderPixel) != 0
-            if (bgChanged || borderChanged),
-               let entry = windows.get(r.window), entry.mapped,
-               let (top, dx, dy) = topLevelAndOffset(for: r.window) {
-                let rects = paintRectsForWindow(entry: entry, dx: dx, dy: dy, byteOrder: byteOrder)
-                bridge?.paintWindowRects(topLevel: top, rects: rects)
-            }
+            // Per X11 spec: changing CWBackPixel / CWBorderPixel does NOT
+            // trigger an automatic repaint. The new pixel takes effect on the
+            // next ClearArea / Expose-driven repaint. An earlier version of
+            // this handler repainted the whole window on every change; that
+            // broke xterm's scroll pattern (xterm flips the bg pixel
+            // temporarily around a 1-line ClearArea, and we'd repaint the
+            // ENTIRE window each flip, wiping all scrolled content).
 
         case .destroyWindow(let r):
             let wasTopLevel = isTopLevel(r.window)
@@ -1010,6 +1005,25 @@ public final class ServerSession: @unchecked Sendable {
             )
             outbound.append(reply.encode(byteOrder: byteOrder))
 
+        case .lookupColor(let r):
+            // Same name resolution as AllocNamedColor but doesn't allocate a
+            // pixel. xterm uses this for `-fg <name>` when it intends to do
+            // its own AllocColor on the resolved RGB.
+            let rgb: RGB16
+            if let resolved = XColorDatabase.lookup(bytes: r.name) {
+                rgb = resolved
+            } else {
+                let nameStr = String(bytes: r.name, encoding: .ascii) ?? "<binary>"
+                log?.log("LookupColor: unknown name \"\(nameStr)\", falling back to black")
+                rgb = RGB16(red: 0, green: 0, blue: 0)
+            }
+            let reply = LookupColorReply(
+                sequenceNumber: sequenceNumber,
+                exactRed: rgb.red, exactGreen: rgb.green, exactBlue: rgb.blue,
+                visualRed: rgb.red, visualGreen: rgb.green, visualBlue: rgb.blue
+            )
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
         case .getInputFocus:
             let reply = GetInputFocusReply(
                 sequenceNumber: sequenceNumber,
@@ -1116,10 +1130,54 @@ public final class ServerSession: @unchecked Sendable {
 
         // Replies we don't yet implement — note them so the live test surfaces
         // what's missing without dropping the connection.
-        case .getWindowAttributes, .getGeometry, .queryTree,
+        case .getWindowAttributes(let r):
+            // Synthesise a reply from the WindowEntry. Most fields are
+            // sensible defaults; the live ones xterm cares about are class,
+            // mapState, your-event-mask, and colormap.
+            let entry = windows.get(r.window)
+            let mapState: UInt8 = (entry?.mapped == true) ? 2 : 0   // Viewable / Unmapped
+            let visualId = config.rootVisualId
+            let cls: UInt16 = entry?.windowClass == .inputOnly ? 2 : 1
+            let reply = GetWindowAttributesReply(
+                sequenceNumber: sequenceNumber,
+                visualId: visualId,
+                windowClass: cls,
+                mapState: mapState,
+                colormap: config.defaultColormapId,
+                allEventMasks: entry?.eventMask ?? 0,
+                yourEventMask: entry?.eventMask ?? 0
+            )
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        case .getGeometry(let r):
+            // Drawable can be a window or pixmap. We answer for windows
+            // (most common case xterm cares about); for pixmaps return
+            // tracked dimensions with depth from the pixmap entry.
+            if let w = windows.get(r.drawable) {
+                let reply = GetGeometryReply(
+                    sequenceNumber: sequenceNumber,
+                    depth: w.depth == 0 ? 8 : w.depth,
+                    root: config.rootWindowId,
+                    x: w.x, y: w.y,
+                    width: w.width, height: w.height,
+                    borderWidth: w.borderWidth
+                )
+                outbound.append(reply.encode(byteOrder: byteOrder))
+            } else if let p = pixmaps.get(r.drawable) {
+                let reply = GetGeometryReply(
+                    sequenceNumber: sequenceNumber,
+                    depth: p.depth, root: config.rootWindowId,
+                    x: 0, y: 0,
+                    width: p.width, height: p.height, borderWidth: 0
+                )
+                outbound.append(reply.encode(byteOrder: byteOrder))
+            } else {
+                log?.log("GetGeometry: unknown drawable 0x\(String(r.drawable, radix: 16))")
+            }
+
+        case .queryTree,
              .getAtomName,
              .translateCoordinates, .queryPointer,
-             .lookupColor,
              .queryBestSize, .listExtensions,
              .queryKeymap:
             log?.log("dispatch: reply for \(opcodeName(request)) not implemented yet")
