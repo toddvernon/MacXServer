@@ -17,7 +17,17 @@ public final class ServerSession: @unchecked Sendable {
 
     public let config: ServerConfig
 
-    public let atoms = AtomTable()
+    /// Cross-session shared state (atoms, selection ownership, ID ranges).
+    /// In single-client mode this is a freshly-constructed coordinator the
+    /// session owns alone; in multi-client mode the listener hands the same
+    /// coordinator to every session so they share atoms + selections.
+    public let coordinator: ServerCoordinator
+
+    /// Atoms — delegated to coordinator so atom IDs stay consistent across
+    /// sessions. Kept as a property so call sites read `self.atoms.intern(…)`
+    /// the same way they always did.
+    public var atoms: AtomTable { coordinator.atoms }
+
     public let colors = ColorTable()
     public let windows = WindowTable()
     public let gcs = GCTable()
@@ -45,13 +55,17 @@ public final class ServerSession: @unchecked Sendable {
     /// the ChangeProperty arrives.
     private let selectionSinkPropertyName = "SWIFTX_CLIP_FROM_X"
 
-    /// Most recent SetSelectionOwner per selection atom. PRIMARY (atom 1)
-    /// is the only one xterm-on-u5 ever sets; we track all of them anyway.
-    private struct SelectionState {
-        var window: UInt32
-        var time: UInt32
-    }
-    private var selectionOwners: [UInt32: SelectionState] = [:]
+    /// `WM_CLASS` instance (the first of the two null-terminated strings,
+    /// e.g. "xterm" / "xcalc") once the client has set the property. nil
+    /// before that arrives. Updated from the changeProperty handler. Used
+    /// to rename the per-session log file and to prefix the NSWindow title.
+    public private(set) var wmInstance: String?
+    public private(set) var wmClass: String?
+
+    /// Fired once when WM_CLASS first becomes known on this session. The
+    /// listener wires this up to the FileLogSink (rename) and the bridge
+    /// (title prefix). Called from the read thread.
+    public var onIdentified: (@Sendable (String, String) -> Void)?
 
     private var phase: Phase = .awaitingSetup
     private var inbound: [UInt8] = []
@@ -68,12 +82,14 @@ public final class ServerSession: @unchecked Sendable {
         config: ServerConfig = .default,
         bridge: WindowBridge? = nil,
         outbound: OutboundQueue = OutboundQueue(),
+        coordinator: ServerCoordinator = ServerCoordinator(),
         clipboardPrefs: ClipboardPreferencesProvider = StaticClipboardPreferencesProvider(),
         log: ServerLogSink? = nil
     ) {
         self.config = config
         self.bridge = bridge
         self.outbound = outbound
+        self.coordinator = coordinator
         self.clipboardPrefs = clipboardPrefs
         self.log = log
         bridge?.setOnTopLevelResize { [weak self] id, width, height in
@@ -102,6 +118,42 @@ public final class ServerSession: @unchecked Sendable {
         bridge?.setOnCopy { [weak self] topLevel in
             self?.handleCopy(topLevel: topLevel)
         }
+        bridge?.setOnCloseRequest { [weak self] topLevel in
+            self?.handleCloseRequest(topLevel: topLevel)
+        }
+    }
+
+    /// User asked to close one of our NSWindows (red traffic-light button,
+    /// Window > Close, or ⌘W). Send the X client a polite ICCCM
+    /// WM_DELETE_WINDOW message — well-behaved clients (xterm, xcalc,
+    /// xclock, xeyes, every Athena/Motif app of the era) treat that as
+    /// "shut down cleanly". The NSWindow is closed by AppKit independently
+    /// so the user sees the window vanish immediately; the client process
+    /// follows on its own a moment later.
+    public func handleCloseRequest(topLevel: UInt32) {
+        guard let order = byteOrder else { return }
+        guard windows.get(topLevel) != nil else { return }    // not our window
+        let wmProtocols = atoms.intern("WM_PROTOCOLS")
+        let wmDeleteWindow = atoms.intern("WM_DELETE_WINDOW")
+        // ClientMessage data field is exactly 20 bytes. For a 32-bit format
+        // ICCCM message we encode 5 UInt32s in connection byte order:
+        // [protocol-atom, time, 0, 0, 0]. CurrentTime (0) is fine here —
+        // ICCCM doesn't require a real timestamp on this message.
+        var w = ByteWriter(byteOrder: order)
+        w.writeUInt32(wmDeleteWindow)
+        w.writeUInt32(0)
+        w.writeUInt32(0)
+        w.writeUInt32(0)
+        w.writeUInt32(0)
+        let event = ClientMessageEvent(
+            sequenceNumber: sequenceNumber,
+            format: .format32,
+            window: topLevel,
+            type: wmProtocols,
+            data: w.bytes
+        )
+        log?.log("  → ClientMessage(WM_PROTOCOLS, WM_DELETE_WINDOW) target=0x\(String(topLevel, radix: 16))")
+        outbound.append(event.encode(byteOrder: order))
     }
 
     /// User pressed Cmd-C / chose Edit > Copy in the focused X window. If
@@ -126,7 +178,7 @@ public final class ServerSession: @unchecked Sendable {
     /// `selectionSinkWindow`. No-op if the selection is unowned.
     private func requestSelectionConversion(selectionAtom: UInt32) {
         guard let order = byteOrder else { return }
-        guard let state = selectionOwners[selectionAtom] else {
+        guard let state = coordinator.selectionOwner(selectionAtom) else {
             log?.log("copy: no owner of selection atom=\(selectionAtom) — nothing to copy")
             return
         }
@@ -766,6 +818,39 @@ public final class ServerSession: @unchecked Sendable {
         return nil
     }
 
+    /// Decorate a raw WM_NAME-derived title with the wmInstance prefix when
+    /// known. Result like "[xterm] $ ls" — prefix elided before WM_CLASS
+    /// arrives so we don't end up with "[] foo".
+    private func titleForDisplay(_ raw: String) -> String {
+        guard let inst = wmInstance, !inst.isEmpty else { return raw }
+        return "[\(inst)] \(raw)"
+    }
+
+    /// Parse a WM_CLASS property's bytes (two null-terminated strings:
+    /// instance, class). Returns nil for the instance if the data is
+    /// truncated or empty.
+    private func parseWMClass(_ data: [UInt8]) -> (instance: String?, cls: String?) {
+        var parts: [String] = []
+        var current: [UInt8] = []
+        for byte in data {
+            if byte == 0 {
+                parts.append(String(decoding: current, as: UTF8.self))
+                current = []
+                if parts.count == 2 { break }
+            } else {
+                current.append(byte)
+            }
+        }
+        // If only one terminator was present, treat the trailing run as the
+        // second field.
+        if !current.isEmpty, parts.count < 2 {
+            parts.append(String(decoding: current, as: UTF8.self))
+        }
+        let instance = parts.first?.isEmpty == false ? parts.first : nil
+        let cls = parts.count >= 2 ? parts[1] : nil
+        return (instance, cls)
+    }
+
     /// Append client bytes; return any bytes the server should send back.
     /// May process multiple requests in one call if they all arrived in the
     /// same chunk. May process zero requests if the chunk is partial (e.g.
@@ -1092,10 +1177,33 @@ public final class ServerSession: @unchecked Sendable {
             // WM_NAME or WM_ICON_NAME (39 / 37) → push to NSWindow title.
             // Strip trailing nulls — real Xlib clients sometimes include the
             // C string terminator in the property data, sometimes not.
+            // When wmInstance is known, prefix it ([xterm], [xcalc], …) so
+            // the user can tell at a glance which X client owns the window.
             if r.property == 39 || r.property == 37 {
                 let trimmed = r.data.prefix(while: { $0 != 0 })
                 let title = String(decoding: trimmed, as: UTF8.self)
-                bridge?.setTopLevelTitle(id: r.window, title: title)
+                bridge?.setTopLevelTitle(id: r.window, title: titleForDisplay(title))
+            }
+            // WM_CLASS lands as two null-terminated strings: instance + class.
+            // First sighting identifies the client — rename the per-session
+            // log file (via onIdentified) and re-emit the window title with
+            // the new prefix so a window mapped before WM_CLASS still gets
+            // updated.
+            if r.property == atoms.lookupOrZero("WM_CLASS"), wmInstance == nil {
+                let parts = parseWMClass(r.data)
+                if let inst = parts.instance {
+                    wmInstance = inst
+                    wmClass = parts.cls
+                    log?.log("WM_CLASS: instance=\"\(inst)\" class=\"\(parts.cls ?? "")\"")
+                    onIdentified?(inst, parts.cls ?? "")
+                    // Re-emit the title for this window if it already has
+                    // a WM_NAME stored — apply the new [instance] prefix.
+                    if let nameEntry = properties.get(window: r.window, property: 39) {
+                        let trimmed = nameEntry.value.prefix(while: { $0 != 0 })
+                        let title = String(decoding: trimmed, as: UTF8.self)
+                        bridge?.setTopLevelTitle(id: r.window, title: titleForDisplay(title))
+                    }
+                }
             }
             // Selection roundtrip arrival: the owner just ChangeProperty'd
             // the converted text into our sink window. Push to NSPasteboard
@@ -1310,7 +1418,7 @@ public final class ServerSession: @unchecked Sendable {
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .getSelectionOwner(let r):
-            let owner = selectionOwners[r.selection]?.window ?? 0
+            let owner = coordinator.selectionOwner(r.selection)?.window ?? 0
             let reply = GetSelectionOwnerReply(sequenceNumber: sequenceNumber, owner: owner)
             outbound.append(reply.encode(byteOrder: byteOrder))
 
@@ -1319,10 +1427,10 @@ public final class ServerSession: @unchecked Sendable {
         // mode). owner=0 clears the selection.
         case .setSelectionOwner(let r):
             if r.owner == 0 {
-                selectionOwners.removeValue(forKey: r.selection)
+                coordinator.clearSelectionOwner(r.selection)
                 log?.log("SetSelectionOwner: cleared selection atom=\(r.selection)")
             } else {
-                selectionOwners[r.selection] = SelectionState(window: r.owner, time: r.time)
+                coordinator.setSelectionOwner(r.selection, window: r.owner, time: r.time)
                 log?.log("SetSelectionOwner: selection atom=\(r.selection) owner=0x\(String(r.owner, radix: 16)) time=\(r.time)")
                 let prefs = clipboardPrefs.current
                 if r.selection == 1, prefs.enabled, prefs.mode == .xtermStyle {

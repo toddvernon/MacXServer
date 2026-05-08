@@ -124,7 +124,10 @@ final class WindowBridgeTests: XCTestCase {
         XCTAssertEqual(bridge.registered[0].id, 0x440000A)
         XCTAssertEqual(bridge.mapped, [0x440000A])
         XCTAssertEqual(bridge.descendantsMapped.contains(0x440000B), true)
-        XCTAssertEqual(bridge.titles[0x440000A], "xclock")
+        // After WM_CLASS lands, ServerSession prepends `[<wmInstance>] ` to
+        // any subsequent WM_NAME so the user can tell which X client owns
+        // the NSWindow at a glance. xclock's WM_NAME is just "xclock".
+        XCTAssertEqual(bridge.titles[0x440000A], "[xclock] xclock")
     }
 
     // MARK: - Helpers

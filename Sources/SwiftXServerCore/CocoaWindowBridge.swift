@@ -26,13 +26,23 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
     private var slots: [UInt32: Slot] = [:]
     private let lock = NSLock()
-    private var resizeHandler: (@Sendable (UInt32, UInt16, UInt16) -> Void)?
-    private var keyHandler: (@Sendable (UInt32, UInt8, UInt, Bool) -> Void)?
-    private var focusHandler: (@Sendable (UInt32, Bool) -> Void)?
-    private var mouseHandler: (@Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void)?
-    private var mouseDraggedHandler: (@Sendable (UInt32, Int16, Int16, UInt8) -> Void)?
-    private var pasteHandler: (@Sendable (UInt32, String) -> Void)?
-    private var copyHandler: (@Sendable (UInt32) -> Void)?
+    // Multi-client: every connected session registers its own handlers via
+    // setOnX. We store them as lists, not single closures, so a newly
+    // accepted xcalc session doesn't replace the already-running xterm
+    // session's handlers. Events fire all registered handlers; each
+    // session's handler filters by `windows.get(topLevel) != nil` and
+    // no-ops for windows it doesn't own. Mutations of the lists happen on
+    // the listener accept thread; reads happen on the main thread —
+    // `handlerLock` covers both.
+    private let handlerLock = NSLock()
+    private var resizeHandlers: [@Sendable (UInt32, UInt16, UInt16) -> Void] = []
+    private var keyHandlers: [@Sendable (UInt32, UInt8, UInt, Bool) -> Void] = []
+    private var focusHandlers: [@Sendable (UInt32, Bool) -> Void] = []
+    private var mouseHandlers: [@Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void] = []
+    private var mouseDraggedHandlers: [@Sendable (UInt32, Int16, Int16, UInt8) -> Void] = []
+    private var pasteHandlers: [@Sendable (UInt32, String) -> Void] = []
+    private var copyHandlers: [@Sendable (UInt32) -> Void] = []
+    private var closeHandlers: [@Sendable (UInt32) -> Void] = []
     private weak var log: ServerLogSink?
 
     /// Integer scale factor: 1 X-logical pixel = `scale` device pixels.
@@ -45,31 +55,80 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     }
 
     public func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {
-        resizeHandler = handler
+        handlerLock.lock(); resizeHandlers.append(handler); handlerLock.unlock()
     }
 
     public func setOnKey(_ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {
-        keyHandler = handler
+        handlerLock.lock(); keyHandlers.append(handler); handlerLock.unlock()
     }
 
     public func setOnFocus(_ handler: @escaping @Sendable (UInt32, Bool) -> Void) {
-        focusHandler = handler
+        handlerLock.lock(); focusHandlers.append(handler); handlerLock.unlock()
     }
 
     public func setOnMouse(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void) {
-        mouseHandler = handler
+        handlerLock.lock(); mouseHandlers.append(handler); handlerLock.unlock()
     }
 
     public func setOnMouseDragged(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void) {
-        mouseDraggedHandler = handler
+        handlerLock.lock(); mouseDraggedHandlers.append(handler); handlerLock.unlock()
     }
 
     public func setOnPaste(_ handler: @escaping @Sendable (UInt32, String) -> Void) {
-        pasteHandler = handler
+        handlerLock.lock(); pasteHandlers.append(handler); handlerLock.unlock()
     }
 
     public func setOnCopy(_ handler: @escaping @Sendable (UInt32) -> Void) {
-        copyHandler = handler
+        handlerLock.lock(); copyHandlers.append(handler); handlerLock.unlock()
+    }
+
+    public func setOnCloseRequest(_ handler: @escaping @Sendable (UInt32) -> Void) {
+        handlerLock.lock(); closeHandlers.append(handler); handlerLock.unlock()
+    }
+
+    // MARK: - Handler fan-out
+
+    /// Snapshot the named handler list under the lock and fire each in turn.
+    /// Snapshotting (rather than holding the lock through the fan-out) so
+    /// a handler can safely append/register new handlers without deadlocking.
+    private func fireResize(id: UInt32, w: UInt16, h: UInt16) {
+        handlerLock.lock(); let snap = resizeHandlers; handlerLock.unlock()
+        for handler in snap { handler(id, w, h) }
+    }
+    private func fireKey(id: UInt32, code: UInt8, mods: UInt, isDown: Bool) {
+        handlerLock.lock(); let snap = keyHandlers; handlerLock.unlock()
+        for h in snap { h(id, code, mods, isDown) }
+    }
+    private func fireFocus(id: UInt32, gained: Bool) {
+        handlerLock.lock(); let snap = focusHandlers; handlerLock.unlock()
+        for h in snap { h(id, gained) }
+    }
+    private func fireMouse(id: UInt32, x: Int16, y: Int16, button: UInt8, isDown: Bool) {
+        handlerLock.lock(); let snap = mouseHandlers; handlerLock.unlock()
+        for h in snap { h(id, x, y, button, isDown) }
+    }
+    private func fireMouseDragged(id: UInt32, x: Int16, y: Int16, button: UInt8) {
+        handlerLock.lock(); let snap = mouseDraggedHandlers; handlerLock.unlock()
+        for h in snap { h(id, x, y, button) }
+    }
+    private func firePaste(id: UInt32, text: String) {
+        handlerLock.lock(); let snap = pasteHandlers; handlerLock.unlock()
+        for h in snap { h(id, text) }
+    }
+    private func fireCopy(id: UInt32) {
+        handlerLock.lock(); let snap = copyHandlers; handlerLock.unlock()
+        for h in snap { h(id) }
+    }
+    private func fireCloseRequest(id: UInt32) {
+        handlerLock.lock(); let snap = closeHandlers; handlerLock.unlock()
+        for h in snap { h(id) }
+    }
+
+    /// Called by the NSWindowDelegate when the user clicks the red close
+    /// button or invokes Window > Close / ⌘W. Fans out to every registered
+    /// session — non-owners see the unknown id and no-op.
+    func handleNSWindowCloseRequest(id: UInt32) {
+        fireCloseRequest(id: id)
     }
 
     public func writeClipboard(text: String) {
@@ -83,7 +142,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     }
 
     func handleNSWindowFocusChange(id: UInt32, gained: Bool) {
-        focusHandler?(id, gained)
+        fireFocus(id: id, gained: gained)
     }
 
     // MARK: - WindowBridge
@@ -134,31 +193,27 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // The view captures a snapshot of the closure; on each keystroke
             // it invokes with (topLevelXWindowId, macOS keyCode, modifierFlags
             // raw value, isDown).
-            if let keyHandler = self.keyHandler {
-                view.keyHandler = { event, isDown in
-                    keyHandler(id, UInt8(event.keyCode & 0xFF),
-                               event.modifierFlags.rawValue, isDown)
-                }
+            // The view's installed closures fan out to every registered
+            // session via fireX(...), which snapshots the bridge's handler
+            // list at fire time. That way a session that registers AFTER
+            // this top-level was mapped still receives events for it.
+            view.keyHandler = { [weak self] event, isDown in
+                self?.fireKey(
+                    id: id, code: UInt8(event.keyCode & 0xFF),
+                    mods: event.modifierFlags.rawValue, isDown: isDown
+                )
             }
-            if let mouseHandler = self.mouseHandler {
-                view.mouseHandler = { x, y, button, isDown in
-                    mouseHandler(id, x, y, button, isDown)
-                }
+            view.mouseHandler = { [weak self] x, y, button, isDown in
+                self?.fireMouse(id: id, x: x, y: y, button: button, isDown: isDown)
             }
-            if let mouseDraggedHandler = self.mouseDraggedHandler {
-                view.mouseDraggedHandler = { x, y, button in
-                    mouseDraggedHandler(id, x, y, button)
-                }
+            view.mouseDraggedHandler = { [weak self] x, y, button in
+                self?.fireMouseDragged(id: id, x: x, y: y, button: button)
             }
-            if let pasteHandler = self.pasteHandler {
-                view.pasteHandler = { text in
-                    pasteHandler(id, text)
-                }
+            view.pasteHandler = { [weak self] text in
+                self?.firePaste(id: id, text: text)
             }
-            if let copyHandler = self.copyHandler {
-                view.copyHandler = {
-                    copyHandler(id)
-                }
+            view.copyHandler = { [weak self] in
+                self?.fireCopy(id: id)
             }
 
             let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -664,7 +719,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                            logicalHeight: newLogicalH,
                            scale: scaleFactor)
         view.setNeedsDisplay(view.bounds)
-        resizeHandler?(id, UInt16(min(newLogicalW, 65535)), UInt16(min(newLogicalH, 65535)))
+        fireResize(id: id, w: UInt16(min(newLogicalW, 65535)), h: UInt16(min(newLogicalH, 65535)))
     }
 
     /// Called by the NSWindowDelegate when a live-resize gesture ends. We
@@ -685,9 +740,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                                scale: scaleFactor)
             view.setNeedsDisplay(view.bounds)
         }
-        resizeHandler?(id,
-                       UInt16(min(newLogicalW, 65535)),
-                       UInt16(min(newLogicalH, 65535)))
+        fireResize(id: id, w: UInt16(min(newLogicalW, 65535)), h: UInt16(min(newLogicalH, 65535)))
     }
 }
 
@@ -718,6 +771,16 @@ private final class XWindowDelegate: NSObject, NSWindowDelegate {
 
     func windowDidResignKey(_ notification: Notification) {
         bridge?.handleNSWindowFocusChange(id: windowId, gained: false)
+    }
+
+    /// Red close button / Window > Close / ⌘W. Tell the session to send the
+    /// X client a polite WM_DELETE_WINDOW so the client (xterm/xcalc/etc.)
+    /// exits gracefully, then return true so AppKit closes the NSWindow
+    /// immediately for snappy visual feedback. The client's natural exit
+    /// drops the connection a moment later.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        bridge?.handleNSWindowCloseRequest(id: windowId)
+        return true
     }
 }
 

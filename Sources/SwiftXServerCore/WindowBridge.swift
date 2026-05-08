@@ -152,6 +152,15 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// successful copy roundtrip — the bridge writes it to NSPasteboard.
     func writeClipboard(text: String)
 
+    /// Called by the session at startup. The bridge invokes this when the
+    /// user asks to close one of its NSWindows (red traffic-light button,
+    /// Window > Close, ⌘W). The session sends the X client a polite
+    /// `WM_DELETE_WINDOW` ClientMessage; well-behaved clients (xterm,
+    /// xcalc, xclock, …) take that as their cue to exit. The NSWindow is
+    /// closed by AppKit independently, so the visual feedback is immediate.
+    /// Args: (top-level X window id).
+    func setOnCloseRequest(_ handler: @escaping @Sendable (UInt32) -> Void)
+
     // MARK: - Drawing (M3)
     //
     // Coordinates are already translated to the top-level NSWindow's view
@@ -236,6 +245,7 @@ public extension WindowBridge {
     func setOnPaste(_ handler: @escaping @Sendable (UInt32, String) -> Void) {}
     func setOnCopy(_ handler: @escaping @Sendable (UInt32) -> Void) {}
     func writeClipboard(text: String) {}
+    func setOnCloseRequest(_ handler: @escaping @Sendable (UInt32) -> Void) {}
     // Default no-ops so unit-test bridges don't have to implement every method.
     func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment]) {}
     func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint]) {}

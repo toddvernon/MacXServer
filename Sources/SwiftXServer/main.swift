@@ -118,21 +118,40 @@ do {
 }
 
 // Capture the prefs reference via a nonisolated accessor on AppDelegate so
-// the listener thread can pass it to runOne. The provider type is Sendable.
+// the listener thread can pass it to runAccepting. The provider type is Sendable.
 let prefsProvider: ClipboardPreferencesProvider = appDelegate.sharedPreferences
 
+// Coordinator is shared across every session this listener spins up — it
+// owns the global atom table and selection-owner state, and hands out
+// non-overlapping resource-id ranges per accepted client.
+let coordinator = ServerCoordinator()
+
 // Run the listener on a background thread so the main thread can drive AppKit.
-// We deliberately DO NOT terminate NSApp on disconnect — this keeps any
-// windows the client created visible after it exits, so we can inspect what
-// rendered. Quit via Cmd-Q (or `pkill swiftx-server`).
+// runAccepting loops accepting connections; each accept spawns a dedicated
+// read+write thread pair. Quit via Cmd-Q (or `pkill swiftx-server`).
 DispatchQueue.global(qos: .userInitiated).async {
-    do {
-        try listener.runOne(config: serverConfig, bridge: bridge,
-                            clipboardPrefs: prefsProvider)
-    } catch {
-        writeStderr("listener error: \(error)\n")
-    }
-    writeStderr("client gone; windows retained for inspection (Cmd-Q to quit).\n")
+    listener.runAccepting(
+        template: serverConfig,
+        bridge: bridge,
+        coordinator: coordinator,
+        clipboardPrefs: prefsProvider,
+        sessionLogFactory: { clientNumber in
+            // One file per connection in ~/Library/Logs/swiftx-server/.
+            // Renamed to <wmInstance>-<timestamp>.log when WM_CLASS arrives.
+            FileLogSink(sessionNumber: clientNumber)
+        },
+        sessionDidStart: { session, clientNumber, sessionLog in
+            // When the client identifies itself via WM_CLASS, retitle the
+            // log file from session-N-<ts>.log to <instance>-<ts>.log so
+            // we can tell at a glance which app produced which trace.
+            session.onIdentified = { instance, _ in
+                if let fileSink = sessionLog as? FileLogSink {
+                    fileSink.rename(toIdentified: instance)
+                }
+            }
+        }
+    )
+    writeStderr("listener stopped.\n")
 }
 
 app.run()
