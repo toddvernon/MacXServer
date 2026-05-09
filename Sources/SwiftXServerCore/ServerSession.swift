@@ -198,6 +198,43 @@ public final class ServerSession: @unchecked Sendable {
         bridge?.setOnCloseRequest { [weak self] topLevel in
             self?.handleCloseRequest(topLevel: topLevel)
         }
+
+        // Pre-set _MOTIF_DRAG_WINDOW on the root window. Sun-era Motif on
+        // SS2 reads this property during XmDisplay init; if it returns
+        // None, Motif tries to BECOME the drag-coordinator itself and the
+        // older code path SIGSEGVs (verified 2026-05-09 — quickplot
+        // crashes right after our reply to GetProperty(_MOTIF_DRAG_WINDOW)
+        // when no value exists). On a real Sun X server, some other Motif
+        // app already created a drag-coordinator window and set this
+        // property; subsequent apps just read it. Pretending the root
+        // window is the coordinator is enough to dodge the crash —
+        // Motif will then read _MOTIF_DRAG_ATOM_PAIRS from the root
+        // (we return None / empty, which it handles gracefully) and
+        // proceed without trying to become coordinator itself.
+        let dragWindowAtom = atoms.intern("_MOTIF_DRAG_WINDOW")
+        let xaWindowAtom: UInt32 = 33   // predefined XA_WINDOW
+        let rootBytes: [UInt8] = {
+            let id = config.rootWindowId
+            // _MOTIF_DRAG_WINDOW is format=32 (one WINDOW), msbFirst on Sun
+            // and lsbFirst on Linux. Use msbFirst here since we mostly
+            // serve Sun clients; this is a property — Motif endian-decodes
+            // based on its own byteOrder against the property byte order
+            // (which is always image-byte-order — same as the server's).
+            // Setup tells Sun the server is msbFirst (it's the client
+            // byteOrder we mirror), so Motif reads MSB-first. Match.
+            return [
+                UInt8((id >> 24) & 0xFF), UInt8((id >> 16) & 0xFF),
+                UInt8((id >> 8) & 0xFF),  UInt8(id & 0xFF)
+            ]
+        }()
+        properties.change(
+            window: config.rootWindowId,
+            property: dragWindowAtom,
+            type: xaWindowAtom,
+            format: 32,
+            mode: 0,             // PropModeReplace
+            value: rootBytes
+        )
     }
 
     /// User asked to close one of our NSWindows (red traffic-light button,
