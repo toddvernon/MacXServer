@@ -96,7 +96,11 @@ public enum USKeymap {
         for i in 0..<Int(count) {
             let xKeycode = Int(firstKeycode) + i
             let macKeycode = xKeycode - 8
-            if macKeycode < 0 || macKeycode > 127 {
+            // X keycode space is 8..255 → mac slot 0..247. Within that we
+            // populate from the real-key table (mac 0..0x7F) plus synthetic
+            // keysym slots at 0x80+ where keysyms-needed-by-Xt-and-Motif
+            // live so XKeysymToKeycode lookups succeed.
+            if macKeycode < 0 || macKeycode > 247 {
                 result.append(0); result.append(0)
             } else {
                 let (lower, upper) = keysyms(forMacKeyCode: UInt8(macKeycode))
@@ -280,6 +284,37 @@ public enum USKeymap {
         m[0x4E] = (0xFFAD, 0xFFAD)  // KP_Subtract
         m[0x51] = (0xFFBD, 0xFFBD)  // KP_Equal
         m[0x47] = (0xFF7F, 0xFF7F)  // Num_Lock (Mac keypad-Clear repurposed)
+
+        // Synthetic keysyms at mac keyCodes 0x80+ (X keycodes 0x88+). The
+        // Mac keyboard doesn't have these physical keys, but Motif's
+        // virtual-binding registration on Solaris 2.6 looks up keysyms
+        // for Sun's L1–L10 column (F13–F20) and other "extended" keys
+        // when wiring up its osf* actions. If XKeysymToKeycode fails for
+        // any of them, the binding registration aborts, XmDisplay can't
+        // initialize, and the app SIGSEGVs. Putting the keysyms in
+        // unused-keycode slots makes the lookup succeed without
+        // affecting actual key dispatch (no user can press these).
+        m[0x80] = (0xFF63, 0)       // XK_Insert
+        m[0x81] = (0xFF60, 0)       // XK_Select
+        m[0x82] = (0xFF6A, 0)       // XK_Help
+        m[0x83] = (0xFF67, 0)       // XK_Menu
+        m[0x84] = (0xFE20, 0)       // XK_ISO_Left_Tab (Shift-Tab)
+        // F13..F35 (XK_F13 = 0xFFCA, XK_F14 = 0xFFCB, ... XK_F35 = 0xFFE0)
+        for i in 0..<23 {
+            m[0x85 + i] = (UInt32(0xFFCA + i), 0)
+        }
+        // Sun's L-key keysyms — historically the L1..L10 column on Sun
+        // Type 4/5 keyboards (Stop, Again, Props, Undo, Front, Copy,
+        // Open, Paste, Find, Cut). Motif on SunOS binds these as
+        // osfClear/osfUndo/osfPaste etc. via virtual bindings.
+        // These are Sun-specific keysyms outside the standard X keysymdef
+        // but defined in /usr/openwin/include/X11/Sunkeysym.h.
+        m[0xA0] = (0x1005FF60, 0)   // SunProps    (L3)
+        m[0xA1] = (0x1005FF70, 0)   // SunFront    (L5)
+        m[0xA2] = (0x1005FF71, 0)   // SunCopy     (L6)
+        m[0xA3] = (0x1005FF72, 0)   // SunOpen     (L7)
+        m[0xA4] = (0x1005FF73, 0)   // SunPaste    (L8)
+        m[0xA5] = (0x1005FF74, 0)   // SunCut      (L10)
 
         return m
     }()
