@@ -76,8 +76,11 @@ public final class FlippedXView: NSView {
     public private(set) var backingWidth: Int = 0
     public private(set) var backingHeight: Int = 0
 
-    /// Integer scale factor: 1 logical pixel = `scale` device pixels.
-    public private(set) var scaleFactor: Int = 1
+    /// Scale factor: 1 logical pixel = `scaleFactor` device pixels.
+    /// Integer values (1, 2, 3) are the Phase-1 happy path with clean
+    /// N×N device-pixel blocks. Fractional (e.g. 2.5) supported with AA
+    /// at cell boundaries — see SERVER_RESOLUTION_SCALING_AND_FONTS.md.
+    public private(set) var scaleFactor: Double = 1
 
     public override var isFlipped: Bool { true }
 
@@ -186,10 +189,10 @@ public final class FlippedXView: NSView {
     /// install the logical-to-device transform. Old backing contents are
     /// discarded — caller is responsible for issuing Expose so the client
     /// repaints.
-    public func resizeBacking(logicalWidth: Int, logicalHeight: Int, scale: Int) {
+    public func resizeBacking(logicalWidth: Int, logicalHeight: Int, scale: Double) {
         guard logicalWidth > 0, logicalHeight > 0, scale > 0 else { return }
-        let deviceWidth = logicalWidth * scale
-        let deviceHeight = logicalHeight * scale
+        let deviceWidth = Int((Double(logicalWidth) * scale).rounded())
+        let deviceHeight = Int((Double(logicalHeight) * scale).rounded())
 
         let cs = CGColorSpaceCreateDeviceRGB()
         let bytesPerRow = deviceWidth * 4

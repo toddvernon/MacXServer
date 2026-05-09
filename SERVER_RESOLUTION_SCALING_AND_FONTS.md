@@ -156,18 +156,41 @@ For named cell aliases (`7x14`, `9x15`, etc.), use this table directly. Width-de
 | `10x20` | 10×20 | 16.67 | 30×60 |
 | `12x24` | 12×24 | 20.0 | 36×72 |
 
-For named aliases like `7x14`, **force the cell to exactly 7×14 logical** even if Monaco's natural metrics would suggest otherwise. Pad height below the descender (invisible — no glyph there). Width matches naturally because `7 / 0.6 = 11.67` and `11.67 × 0.6 = 7.0` exactly.
+For named aliases like `7x14`, **report Monaco's natural cell at the closest integer pointSize**, not the cell the alias names. iTerm2's lesson: fit the cell to the font, not the font to the cell. The alias becomes a hint of intended size; the renderer reports what Monaco actually produces.
+
+```swift
+// 7x14 alias on macOS Monaco (advance ratio ~0.6, lineHeight ratio ~1.34)
+let pointFromW = 7.0 / 0.6   = 11.67
+let pointFromH = 14.0 / 1.34 = 10.45
+let pointSize  = round(min(pointFromW, pointFromH))   // 10
+let cellWidth  = round(10 × 0.6)  = 6
+let cellHeight = round(10 × 1.34) = 13
+```
+
+Result: `7x14` reports as 6×13. Empirical alias map (real macOS Monaco):
+
+| Alias | Reported cell | pointSize |
+|---|---|---|
+| `5x7` | 3×7 | 5 |
+| `6x10` | 4x9 | 7 |
+| `6x13` / `7x13` / `7x14` / `8x13` / `fixed` | 6×13 | 10 |
+| `7x15` / `9x15` | 7×15 | 11 |
+| `8x16` | 7×16 | 12 |
+| `10x20` | 9×20 | 15 |
+| `12x24` | 11×24 | 18 |
+
+**Why this matters:** xterm sizes its window from QueryFont's metrics. Reporting Monaco's truth means glyphs fit cells exactly, no asymmetric AA fringe (the "feels bold" residue), no descender bleed. Integer pointSize hits Core Text's hinter sweet spot. Trade: the user's named-cell dimensions become approximate. `xterm -fn 7x14` produces a slightly smaller window than the named dimensions suggest, but renders Monaco crisply.
 
 ### For arbitrary XLFDs
 
-If the XLFD specifies pixel size but not cell width:
-
-```c
-int pixelHeight = xlfd.pixelSize;       // or 14 default if 0
-double pointSize = pixelHeight / 1.07;  // Monaco height ratio
-int cellWidth = (int)round(pointSize * 0.6);
-int cellHeight = pixelHeight;
+```swift
+let pixelHeight = xlfd.pixelSize > 0 ? xlfd.pixelSize : 14
+let pointSize  = round(Double(pixelHeight) / probe.lineHeightRatio)  // integer
+let cellWidth  = round(pointSize × probe.advanceRatio)               // from CTFont
+let cellHeight = round(pointSize × probe.lineHeightRatio)            // from CTFont
 ```
+
+`pixelHeight` becomes a hint to pick the integer pointSize; reported cellHeight is what Monaco actually produces (so `pixelSize=14` reports `cellHeight=13`).
 
 ---
 
@@ -342,11 +365,6 @@ Honest expectation: pixmaps will be softer at fractional scales than integer. Th
 
 - `CHATGPT_REVIEW.md` (2026-05-07) — independent review affirming the design direction. Key affirmation: the "logical root independent from Retina device pixels" decision and the three-plane scaling model are the right abstraction boundary. The review's framing of the contract — "old UNIX/X11 clients believe they are rendering to a classic ~90 DPI workstation display while the Mac secretly renders everything sharply" — is the load-bearing illusion this whole spec exists to deliver.
 
-## Future refinements (not yet binding decisions, just things to revisit)
-
-- **Tighten the report-vs-render contract for font metrics.** Today's implementation reports cell metrics derived from `pointSize = cellWidth / 0.6` and `ascent = ceil(pointSize × 0.85)`, then renders glyphs with `CTFontCreateWithName(font.macFontName, pointSize)`. Core Text's actual ascent/descent for Monaco at any given point size is not exactly our formula — there's drift. The spec's invariant (line 296) is "Reported metrics === rendered metrics." A stricter implementation would: (a) snap point size to nearest device-integer per the doc, (b) instantiate the CTFont, (c) query Core Text for its actual ascent/descent/advance, (d) report THOSE numbers in QueryFont. We accept the drift today because it isn't visibly bad; revisit when we hit a client whose layout sensitivity exposes the gap (likely Motif or a programmatically-precise client).
-- **Snapped point sizes.** Per spec (line 80-86) the render pipeline should `snappedSize = round(naturalRenderSize)` then derive cell metrics from the snapped value. Current code uses raw `cellWidth / 0.6` which happens to land on integers for many of our cell aliases at integer scale (5x7, 6x10, 9x15, 12x24 all clean) but not all (7x13, 7x14, 7x15, 8x13 produce 11.667 / 13.333 etc). Revisit when we move beyond Phase 1.
-
 ## Open questions for later
 
 - RENDER extension support? (Modern clients send pre-rasterized alpha masks; bypasses XLFD entirely. Not needed for R5/R6 target but easy to add later.)
@@ -358,19 +376,23 @@ Honest expectation: pixmaps will be softer at fractional scales than integer. Th
 
 ## Reference: cell-snapping math summary
 
-For Monaco at any scale:
+Per the 2026-05-09 cell-fits-font decision (`DECISIONS.md`):
 
+```swift
+// Probe Monaco once via Core Text:
+let probe = ctMetrics(fontName: "Monaco")  // advanceRatio, lineHeightRatio
+
+// Pick integer pointSize that fits the request in both dims:
+let pointFromW = Double(requestedW) / probe.advanceRatio
+let pointFromH = Double(requestedH) / probe.lineHeightRatio
+let pointSize  = round(min(pointFromW, pointFromH))
+
+// Cell is what Monaco actually produces at that integer pointSize:
+let cellWidth  = round(pointSize * probe.advanceRatio)
+let cellHeight = round(pointSize * probe.lineHeightRatio)
+
+// Render with the SAME CTFont:
+let font = CTFontCreateWithName("Monaco", pointSize, nil)
 ```
-pointSize = cellWidthLogical / 0.6
-cellHeightLogical = ceil(pointSize * 1.07)   // or honored from XLFD if specified
-fontAscentLogical = ceil(pointSize * 0.85)
 
-// At render time:
-renderPointSize = round(pointSize * scaleFactor)
-cellWidthDevice = round(cellWidthLogical * scaleFactor)
-cellHeightDevice = round(cellHeightLogical * scaleFactor)
-```
-
-Width matches exactly (when cellWidthLogical is integer and scale is integer).
-Height has 0–5 device pixels of bottom padding below descender — invisible.
-No horizontal stretch, no glyph distortion, full Core Text hinting preserved.
+Reported metrics === rendered metrics by construction (both come from the same `font`). Integer pointSize is non-negotiable for Core Text hint quality. The XLFD's named cell becomes a hint of intended size, not a contract — see `XTERM_FONT_QUALITY.md` for the empirical alias map.

@@ -5,42 +5,69 @@ final class FontResolverTests: XCTestCase {
 
     // MARK: - Aliases
 
-    func testFixedAliasResolvesToMonaco7x13() {
+    func testFixedAliasResolvesToMonacoNaturalCell() {
         let r = FontResolver.resolve(name: "fixed")
         XCTAssertEqual(r.macFontName, "Monaco")
-        XCTAssertEqual(r.cellWidth, 7)
+        // Empirical: real macOS Monaco at integer pointSize 10 produces
+        // a 6x13 cell. The 7x13 named alias asks for slightly wider; we
+        // report what Monaco actually gives.
+        XCTAssertEqual(r.cellWidth, 6)
         XCTAssertEqual(r.cellHeight, 13)
+        XCTAssertEqual(r.pointSize, 10)
         XCTAssertTrue(r.isMonospace)
         XCTAssertFalse(r.bold)
         XCTAssertFalse(r.skewItalic)
     }
 
-    func testCellAlias9x15() {
+    func testCellAlias9x15DriftsToMonacoNaturalCell() {
+        // Empirical: 9x15 → pointSize 11 → 7×15. Width drifts down to
+        // Monaco's natural advance at 11pt; height matches the alias.
         let r = FontResolver.resolve(name: "9x15")
         XCTAssertEqual(r.macFontName, "Monaco")
-        XCTAssertEqual(r.cellWidth, 9)
+        XCTAssertEqual(r.pointSize, 11)
+        XCTAssertEqual(r.cellWidth, 7)
         XCTAssertEqual(r.cellHeight, 15)
     }
 
     func testCellAlias12x24() {
+        // Empirical: 12x24 → pointSize 18 → 11×24. Height matches; width
+        // drifts down by 1 because Monaco at 18pt produces a 10.8 logical
+        // advance (rounds to 11). Closest integer-pointSize fit.
         let r = FontResolver.resolve(name: "12x24")
-        XCTAssertEqual(r.cellWidth, 12)
+        XCTAssertEqual(r.cellWidth, 11)
         XCTAssertEqual(r.cellHeight, 24)
-        // pointSize = 12 / 0.6 = 20.0 exactly
-        XCTAssertEqual(r.pointSize, 20.0, accuracy: 0.01)
+        XCTAssertEqual(r.pointSize, 18)
     }
 
-    func testCellAliasPointSizeMath() {
-        // 7x14: pointSize = 7 / 0.6 = 11.666...
+    func testCellAlias7x14() {
+        // Empirical: 7x14 → pointSize 10 → 6×13. Both dims drift down
+        // by 1. Same Monaco-natural cell as 6x13, 7x13, 8x13, "fixed" —
+        // the small-cell aliases collapse onto one rendering.
         let r = FontResolver.resolve(name: "7x14")
-        XCTAssertEqual(r.pointSize, 11.666, accuracy: 0.01)
+        XCTAssertEqual(r.cellWidth, 6)
+        XCTAssertEqual(r.cellHeight, 13)
+        XCTAssertEqual(r.pointSize, 10)
+    }
+
+    func testCellAliasAlwaysIntegerPointSize() {
+        // The "iTerm2 lesson" property: pointSize is always an integer
+        // for any alias, so Core Text's hinter lands on its sweet spot.
+        for (w, h) in [(5, 7), (6, 10), (7, 13), (7, 14), (8, 13),
+                       (8, 16), (9, 15), (10, 20), (12, 24)] {
+            let r = FontResolver.resolve(name: "\(w)x\(h)")
+            XCTAssertEqual(r.pointSize.rounded(), r.pointSize,
+                           "pointSize for \(w)x\(h) must be integer, got \(r.pointSize)")
+            XCTAssertGreaterThan(r.pointSize, 0)
+        }
     }
 
     func testUnknownAliasFallsBackToMonacoDefault() {
+        // Default falls back to a 7x14 request, which through the actual
+        // Monaco metrics produces a 6x13 cell (same as the 7x14 alias).
         let r = FontResolver.resolve(name: "totally-not-a-font")
         XCTAssertEqual(r.macFontName, "Monaco")
-        XCTAssertEqual(r.cellWidth, 7)
-        XCTAssertEqual(r.cellHeight, 14)
+        XCTAssertEqual(r.cellWidth, 6)
+        XCTAssertEqual(r.cellHeight, 13)
     }
 
     // MARK: - Family substitution
@@ -118,21 +145,24 @@ final class FontResolverTests: XCTestCase {
 
     // MARK: - Cell sizing math
 
-    func testXLFDPixelSize14YieldsExpectedMetrics() {
-        // pixelHeight = 14 → pointSize ≈ 11.67 (using Monaco's actual
-        // line-height ratio of 1.2, which fits the glyph in the cell).
-        // cellWidth ≈ round(11.67 × 0.6) = 7.
+    func testXLFDPixelSize14YieldsConsistentMetrics() {
+        // Empirical: pixelSize=14 → pointSize 10 → cellHeight=13. xterm
+        // builds its window from this reported cellHeight, not from the
+        // requested 14 — that's the honest contract: report what we render.
         let xlfd = XLFD(family: "fixed", pixelSize: 14, spacing: "c")
         let r = FontResolver.resolve(xlfd: xlfd)
-        XCTAssertEqual(r.cellHeight, 14)
-        XCTAssertEqual(r.cellWidth, 7)
-        XCTAssertEqual(r.pointSize, 14.0 / 1.2, accuracy: 0.01)
+        XCTAssertEqual(r.cellHeight, 13)
+        XCTAssertEqual(r.pointSize, 10)
+        XCTAssertGreaterThan(r.cellWidth, 0)
+        XCTAssertLessThan(r.cellWidth, r.cellHeight)   // monospace narrower than tall
     }
 
     func testZeroPixelSizeDefaultsTo14() {
+        // Empty pixelSize defaults to 14 internally, then maps through
+        // the Monaco-natural-cell path. Same result as pixelSize=14.
         let xlfd = XLFD(family: "fixed", pixelSize: 0, spacing: "c")
         let r = FontResolver.resolve(xlfd: xlfd)
-        XCTAssertEqual(r.cellHeight, 14)
+        XCTAssertEqual(r.cellHeight, 13)
     }
 
     func testAscentPlusDescentEqualsCellHeight() {
@@ -146,16 +176,18 @@ final class FontResolverTests: XCTestCase {
 
     // MARK: - Critical invariant: reported metrics === rendered metrics
 
-    func testReportedMetricsMatchAcrossResolutionPaths() {
-        // The `9x15` alias and an XLFD that asks for 15-pixel-high Monaco
-        // should both produce reasonable metrics (cellHeight=15).
-        let viaAlias = FontResolver.resolve(name: "9x15")
-        let viaXLFD = FontResolver.resolve(xlfd: XLFD(family: "fixed", pixelSize: 15, spacing: "c"))
-        XCTAssertEqual(viaAlias.cellHeight, 15)
-        XCTAssertEqual(viaXLFD.cellHeight, 15)
-        // Cell widths differ by which path computed them: alias forces 9,
-        // XLFD computes from pointSize. That's fine — it just means clients
-        // get to choose explicit cell sizing via the alias path.
-        XCTAssertEqual(viaAlias.cellWidth, 9)
+    func testReportedMetricsAreSelfConsistent() {
+        // Every resolver path produces metrics that hang together: cellWidth,
+        // cellHeight, ascent, descent all derived from the same CTFont at
+        // the same pointSize. xterm reads QueryFont and sizes its window
+        // grid from these numbers; renderer uses the same numbers; what
+        // xterm believes is what we draw.
+        for name in ["fixed", "9x15", "7x14", "12x24", "10x20"] {
+            let r = FontResolver.resolve(name: name)
+            XCTAssertEqual(r.ascent + r.descent, r.cellHeight,
+                           "ascent+descent invariant broken for \(name)")
+            XCTAssertEqual(r.pointSize.rounded(), r.pointSize,
+                           "pointSize for \(name) must be integer, got \(r.pointSize)")
+        }
     }
 }

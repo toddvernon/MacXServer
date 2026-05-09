@@ -1,11 +1,18 @@
 import Foundation
 import AppKit
 
-// Picks a logical-root size + integer scale factor that fits the connected
+// Picks a logical-root size + scale factor that fits the connected
 // display per `SERVER_RESOLUTION_SCALING_AND_FONTS.md`. Goal: highest
 // scale (preferring 3x) with logical width in 960..1280 that fits without
 // overflowing native pixel dimensions. ~90 DPI reported regardless, so
 // Sun-era Xt/Motif font auto-sizing stays sane.
+//
+// As of 2026-05-08 the picker still hands back integer scales, but the
+// type is `Double` so callers can override with a fractional scale (e.g.
+// 2.5x) when they want the iTerm2-weight stroke at 3x physical size.
+// Phase 1's invariant of clean N×N device-pixel blocks is relaxed for
+// fractional scales — cell boundaries pick up AA edges between cells —
+// see SERVER_RESOLUTION_SCALING_AND_FONTS.md "Plane 1: Geometry".
 //
 // Algorithm is pure data in/out so it's testable without a display.
 
@@ -13,8 +20,10 @@ public struct DisplayConfig: Equatable, Sendable {
     /// X-protocol "screen size" in logical pixels. This is what clients see.
     public let logicalWidth: Int
     public let logicalHeight: Int
-    /// Integer multiplier from logical pixels to device (physical) pixels.
-    public let scale: Int
+    /// Multiplier from logical pixels to device (physical) pixels. Integer
+    /// is preferred (clean N×N blocks); fractional values like 2.5 are
+    /// accepted for callers that want a non-preset scale.
+    public let scale: Double
     /// Native pixel dimensions of the display we picked for. Stored so the
     /// caller can sanity-check. Not sent to clients.
     public let nativePixelWidth: Int
@@ -26,12 +35,15 @@ public struct DisplayConfig: Equatable, Sendable {
     public let widthMm: Int
     public let heightMm: Int
 
-    /// Backing-store dimensions: how many device pixels we allocate.
-    public var deviceWidth: Int { logicalWidth * scale }
-    public var deviceHeight: Int { logicalHeight * scale }
+    /// Backing-store dimensions: how many device pixels we allocate. Round
+    /// to integer because CGBitmapContext takes Int dimensions; at integer
+    /// scale this is exact, at fractional scale we lose at most 0.5 device
+    /// pixel of canvas, which is invisible.
+    public var deviceWidth: Int { Int((Double(logicalWidth) * scale).rounded()) }
+    public var deviceHeight: Int { Int((Double(logicalHeight) * scale).rounded()) }
 
     public init(
-        logicalWidth: Int, logicalHeight: Int, scale: Int,
+        logicalWidth: Int, logicalHeight: Int, scale: Double,
         nativePixelWidth: Int, nativePixelHeight: Int
     ) {
         self.logicalWidth = logicalWidth
@@ -64,7 +76,7 @@ public struct DisplayConfig: Equatable, Sendable {
     /// triggered by the algorithm because it never strictly fits where 3×
     /// doesn't (subset relationship), but Phase 2 may add explicit 4× as
     /// a user override on Pro Display XDR.
-    private static let scaleCandidates: [Int] = [3, 2]
+    private static let scaleCandidates: [Double] = [3, 2]
 
     /// Pick the best (logical, scale) for a display of `nativeWidth × nativeHeight`
     /// pixels. First (scale, logical) combination whose device dimensions
@@ -73,7 +85,9 @@ public struct DisplayConfig: Equatable, Sendable {
     public static func pick(nativeWidth: Int, nativeHeight: Int) -> DisplayConfig {
         for scale in scaleCandidates {
             for c in logicalCandidates {
-                if c.width * scale <= nativeWidth && c.height * scale <= nativeHeight {
+                let dw = Int((Double(c.width) * scale).rounded())
+                let dh = Int((Double(c.height) * scale).rounded())
+                if dw <= nativeWidth && dh <= nativeHeight {
                     return DisplayConfig(
                         logicalWidth: c.width,
                         logicalHeight: c.height,

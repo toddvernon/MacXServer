@@ -26,9 +26,12 @@ public struct ServerConfig: Sendable {
     public var heightInMillimeters: UInt16
     public var vendor: [UInt8]
     public var releaseNumber: UInt32
-    /// Integer multiplier from logical pixels to device pixels. The X
-    /// protocol layer never sees this; the rendering layer uses it.
-    public var scaleFactor: Int
+    /// Multiplier from logical pixels to device pixels. The X protocol
+    /// layer never sees this; the rendering layer uses it. Integer values
+    /// (1, 2, 3) are the Phase-1 happy path with clean N×N device-pixel
+    /// blocks per logical pixel; fractional values like 2.5 are accepted
+    /// at the cost of AA edges between cells.
+    public var scaleFactor: Double
 
     /// Studio Display preset. Used as fallback when no real display info
     /// is available (e.g., test environment where the session is driven
@@ -47,7 +50,7 @@ public struct ServerConfig: Sendable {
         heightInMillimeters: UInt16,
         vendor: [UInt8],
         releaseNumber: UInt32,
-        scaleFactor: Int = 1
+        scaleFactor: Double = 1
     ) {
         self.rootWindowId = rootWindowId
         self.defaultColormapId = defaultColormapId

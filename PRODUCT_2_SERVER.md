@@ -2,27 +2,21 @@
 
 The main event. A real X server in Swift on macOS that real Sun X clients connect to and display correctly, with rendering quality that's a clear step up from XQuartz.
 
-## Status as of 2026-05-07
+## Status as of 2026-05-09
 
-M1, M2, M3 all shipped and live-verified against xclock running on u5 (a real SPARCstation 2). Static dial renders correctly; user-driven NSWindow resize triggers a clean re-render at the new dimensions.
+**M1–M3 shipped 2026-05-07**, live-verified against xclock on u5 (real SPARCstation 2). 296/296 tests green.
 
-**Phase 1 of `SERVER_RESOLUTION_SCALING_AND_FONTS.md` shipped same day** (2026-05-07): display-adaptive integer scaling at startup, Core Text scalable font substitution with cell-snapping, ImageText8 + PolyFillRectangle rendering, plus the Xlib-startup replies xterm needs (ListFonts, GetKeyboardMapping, GetModifierMapping, GetPointerMapping, QueryColors, GetSelectionOwner). Captured xterm session (752 requests) replays cleanly through the session.
+**Live xterm and xcalc from u5 working** (2026-05-07 / 2026-05-08). Full keyboard via US-ASCII keymap, scrollback via CopyArea, resize, ANSI colors. xcalc renders panels and labels via PolyText8, mouse clicks update the LCD. Required filling in: AllocNamedColor with embedded X11R6 rgb.txt, window-bg + border painting on map, CWBackPixel/CWBorderPixel, ButtonPress/Release plumbing, Expose-on-ClearArea(exposures=1) and Expose-on-mapDescendant.
 
-295/295 tests green. The xclock PoC is fully met; the xterm rendering foundation is in place.
+**Cut/paste both directions** (2026-05-08). PRIMARY selection roundtrips: xterm SetSelectionOwner → on Cmd-C the session SelectionRequests STRING into a server pseudo-window, intercepts the ChangeProperty, pushes to NSPasteboard. Two trigger modes in Preferences (Mac behavior, Xterm behavior). Limits: PRIMARY only, STRING only, no INCR.
 
-**Live xterm from u5 working as of 2026-05-07.** xterm renders, prompt appears, keys echo (US-ASCII keymap via `USKeymap.swift`), output scrolls when it fills the window (CopyArea + NoExpose follow-up), resize repaints correctly (ConfigureNotify + Expose on descendants, live-resize bracketed via windowDidEndLiveResize). Known cosmetic issue: cursor outline boxes around characters left behind by the cursor PolyLine — not visually-blocking, deferred per the metrics-tightening discussion in `CHATGPT_REVIEW.md`.
+**Real Mac app shell** (2026-05-08). `setActivationPolicy(.regular)` for top menu bar; status item shows the resolved IP for `xterm -display`; tabbed Preferences window persisting via UserDefaults.
 
-**Live xcalc from u5 working as of 2026-05-08.** xcalc connects, renders the calculator panel with button outlines (window borders) and labels (PolyText8), responds to mouse clicks (ButtonPress / ButtonRelease), and the LCD updates with computed values. The arc surfaced and closed: AllocNamedColor (xcalc looks up colors by name; we now embed the full X11R6 rgb.txt and parse hex specs per `libX11/src/ParseCol.c`), PolyText8 (xcalc's only text path), window background + border painting on map (was missing entirely; xcalc's panel + button shapes are stacked colored sub-windows that depend on the X server's "newly viewable" bg fill), ChangeWindowAttributes honoring CWBackPixel + CWBorderPixel, mouse plumbing through FlippedXView → bridge → ServerSession.handleMouseEvent, and Expose emission for ClearArea(exposures=true) and for non-top-level MapWindow (xcalc maps individual digit-toggle subwindows after each click and waits for Expose to draw them). Cosmetic: libX11 prints `Missing charsets in String to FontSet conversion` warnings because we ship `iso10646-1` font variants only — xcalc still renders fine because it falls back to its core font path.
+**Multi-client server** (2026-05-08). Per-connection read+write thread pair via `Listener.runAccepting`. `ServerCoordinator` owns the cross-session AtomTable + selection-owner table; per-session state (windows/GCs/props/fonts/pixmaps/colors) stays per-session. Bridge's setOnX handlers fan out to every registered session.
 
-**Cut/paste both directions wired up as of 2026-05-08.** Paste already worked (Cmd-V → NSPasteboard string injected as synthetic KeyPress/KeyRelease pairs through the US keymap). Copy is now in too: when the user selects text in xterm, xterm calls `SetSelectionOwner(PRIMARY, owner=xterm_window, time)`. ServerSession tracks ownership; on Cmd-C / Edit > Copy in our NSWindow, the session emits a SelectionRequest event back to the owner asking for STRING into a server-internal pseudo-window's `SWIFTX_CLIP_FROM_X` property. xterm responds with ChangeProperty into that pseudo-window; the dispatcher intercepts the property write, decodes the bytes as ISO-8859-1, and pushes to NSPasteboard via the bridge. Two trigger modes exposed in Preferences: "Mac behavior" (default — wait for Cmd-C) and "Xterm behavior" (auto-fire the roundtrip the moment xterm becomes PRIMARY owner). Limitations: PRIMARY only (no CLIPBOARD), STRING only (no INCR for big selections), and incoming ConvertSelection from clients still falls into `.unknown` so middle-click-paste in xterm itself doesn't route. See `SHORTCUTS.md` for the up-to-date list.
+**Per-session log files + WM_CLASS** (2026-05-08). One `FileLogSink` per connection writing to `~/Library/Logs/swiftx-server/`, renamed to `<instance>-<timestamp>.log` once WM_CLASS arrives. WM_CLASS instance also prepended to the NSWindow title.
 
-**Server is now a real Mac app with menu bar + status item as of 2026-05-08.** `setActivationPolicy(.regular)` — the traditional Mac menu bar (App / Edit / Window) is always present at the top of the screen so Edit > Copy / Paste and ⌘, route through the responder chain to FlippedXView, and Preferences\u{2026} opens our prefs window. A menu-bar status item shows the resolved listening address (e.g. "Listening on 192.168.7.207:6000 — X display :0"); the IP is deduced via `getifaddrs` from the primary `en*` interface so the user can paste it straight into `xterm -display`. Status item dropdown also has Preferences\u{2026} and Quit. Preferences window is tabbed (Cut/Paste populated; Display + Network are placeholder tabs for later) and lives in `Sources/SwiftXServer/PreferencesWindowController.swift`. Settings persist via `UserDefaults` and are read live by the session through `ClipboardPreferencesProvider` so toggling the prefs takes effect on the next copy.
-
-**Mouse drag tracking working as of 2026-05-08.** `mouseDragged` / `rightMouseDragged` / `otherMouseDragged` now route through `WindowBridge.setOnMouseDragged` to `ServerSession.handleMouseDragged`, which emits MotionNotify (event code 6) with the held button bit set in the state field. Without this, xterm's selection highlight didn't update during a drag because xterm couldn't see where the pointer was going — it only knew about ButtonPress and ButtonRelease. With it, drag-selecting in xterm now paints the inverse-video range in real time and the resulting PRIMARY selection feeds straight into the Cmd-C copy roundtrip.
-
-**Multi-client server as of 2026-05-08.** The listener now runs `runAccepting`, looping `accept()` and spawning a dedicated read+write thread pair per connection. xterm and xcalc (and anything else) can be open simultaneously. New `ServerCoordinator` owns the cross-session shared state X11 spec requires: the global `AtomTable` (clients see consistent atom IDs across sessions) and selection-owner table (PRIMARY/CLIPBOARD are server-global). Per accept, the coordinator hands out a non-overlapping `resourceIdBase` so clients' window/GC IDs don't collide. Per-session state (windows, GCs, properties, fonts, pixmaps, colors) stays where it always was. The `CocoaWindowBridge`'s setOnX handler storage moved from one closure per event type to a list — events fan out to every registered session; each session filters by `windows.get(topLevel) != nil` and no-ops for windows it doesn't own. (Without that fix, the second-connecting session's handlers replaced the first session's, breaking xterm focus and resize once xcalc connected.)
-
-**Per-session log files + WM_CLASS identification as of 2026-05-08.** Each accepted connection gets its own `FileLogSink` writing to `~/Library/Logs/swiftx-server/`. Initial filename is `session-<n>-<timestamp>.log`; when WM_CLASS arrives (parsed in `ChangeProperty` — two null-terminated strings, instance + class) the file is renamed to `<instance>-<timestamp>.log` (e.g. `xterm-2026-05-08-13-58-22.log`). The same WM_CLASS instance is also prepended to the NSWindow title — a window with WM_NAME `"$ ls"` shows as `[xterm] $ ls`. So when a problem reproduces in a particular client, the title tells you which app and the directory has the matching log file ready to grep. Console.app auto-discovers the directory.
+**Phase 1 of `SERVER_RESOLUTION_SCALING_AND_FONTS.md`** (2026-05-07) and the **font-fit fix** (2026-05-09). Display-adaptive integer scaling, scalable Mac font substitution. Final cell-sizing rule per `DECISIONS.md` 2026-05-09: integer pointSize, CTFont-derived metrics, cell follows font (XLFD's named cell becomes a hint). xterm and xcalc render crisply with no "feels bold" residue. See `XTERM_FONT_QUALITY.md` for the empirical alias map.
 
 ## Goal for the proof of concept
 
@@ -95,22 +89,18 @@ Send Expose events when:
 
 ### Beyond M3
 
-Out of scope for the PoC, listed in expected priority order:
+Things still on the list (most of Beyond-M3 from earlier drafts has shipped — see status above):
 
-- **Phase 1 of `SERVER_RESOLUTION_SCALING_AND_FONTS.md`: display-adaptive integer scaling + scalable font substitution.** This lands before xterm — the rendering quality bar set in that doc is the actual headline goal of Product 2. Implementation cuts: detect main display at startup, pick logical/scale from preset table, wire `CGAffineTransform` into the backing context pipeline, ship Monaco/Helvetica Neue/Courier New/Andale Mono/Times New Roman/Symbol substitutes, implement cell-snapped `OpenFont`/`QueryFont`/`ImageText8`/`PolyText8`.
-- xterm as the next target (depends on the scaling/fonts foundation above): full keyboard mapping, `CopyArea` for scrolling, `GrabPointer`/`GrabKeyboard` for selection, selection bridging
+- Real PseudoColor palette (today's `ColorTable` synthesises monotonic pixels)
+- TrueColor 24-bit visual alongside PseudoColor 8-bit (`DECISIONS.md` 2026-05-05)
+- XErrors for bad requests / unknown resources (today's server is forgiving — see `SHORTCUTS.md`)
+- Honour CWBackPixmap and CWBitGravity (today only CWBackPixel and CWBorderPixel are read)
+- Pointer crossings (EnterNotify / LeaveNotify)
 - Cursor handling (X cursor font → macOS NSCursor substitution per the scaling/fonts doc)
-- Multi-client support (resource ID isolation per connection)
-- Selection bridging (X PRIMARY / CLIPBOARD ↔ NSPasteboard)
 - SHAPE and BIG-REQUESTS extensions
 - Transport selectability for Product 4 (CrossFeed)
-
-Also worth doing before xterm gets serious (or while building it, as gaps surface):
-- Real PseudoColor palette (today's `ColorTable` just synthesises monotonic pixels; M3 PoC works because xclock allocates colors via AllocColor and the bridge resolves them)
-- TrueColor 24-bit visual exposed alongside PseudoColor 8-bit (`DECISIONS.md` 2026-05-05 commits to both)
-- XErrors emitted for bad requests / unknown resources (today's server is forgiving — see `SHORTCUTS.md`)
-- Honour CWBackPixmap, CWBorderPixel, and CWBitGravity (today only CWBackPixel is read, for ClearArea)
-- Pointer crossings (EnterNotify / LeaveNotify) — xclock didn't need them; xterm will
+- CLIPBOARD selection (today only PRIMARY is wired)
+- INCR transfer for selections larger than the request-size limit
 
 ## Resource design (as shipped)
 
@@ -127,9 +117,9 @@ These are the X11 resource types the server models. All six required for the PoC
 
 Decisions that hold (per `DECISIONS.md`):
 
-- Single NSView per top-level X window. The X window subtree is internal to the server, with drawing clipped against subwindow geometry.
+- Single NSView per top-level X window. The X subtree is internal to the server, with drawing clipped against subwindow geometry.
 - Synthetic monotonic pixel allocation for AllocColor in PseudoColor mode. A real palette implementation is post-PoC.
-- Core Text + lie for font handling, deferred until xterm. xclock works with stub QueryFont because it never draws text.
+- Core Text scalable substitutes for fonts, with cell-fits-font (2026-05-09): integer pointSize, CTFont-derived metrics, named XLFD cells become hints not contracts.
 - Cursor substitution via macOS standard cursors, deferred until any app actually changes cursors.
 
 ## Package layout (as shipped)
@@ -163,6 +153,3 @@ The reason replay-as-test makes sense here when it didn't make sense for testing
 
 Caveat: replayed CreateGC requests reference pixel values the *original* Sun's AllocColor returned (those bytes are baked into the capture). Our `ColorTable` doesn't know those pixels, so it falls back to black. Replay rendering is therefore monochrome by design. Live clients see our AllocColor reply and use our pixel values, so they render in correct colors.
 
-## What this isn't
-
-PRODUCT_1's `replay` subcommand is not the testing tool for Product 2. Replay is a framer smoke test. Product 2 testing is done with live Sun clients (M1-M3 verification) and with replay-into-the-server-library for unit tests (where the server is what's under test, not the framer).

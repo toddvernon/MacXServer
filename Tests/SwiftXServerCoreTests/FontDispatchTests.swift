@@ -63,7 +63,9 @@ final class FontDispatchTests: XCTestCase {
         let entry = session.fonts.get(0x4400005)
         XCTAssertNotNil(entry)
         XCTAssertEqual(entry?.resolved.macFontName, "Monaco")
-        XCTAssertEqual(entry?.resolved.cellWidth, 9)
+        // 9x15 alias → Monaco's natural cell at integer pointSize 11
+        // (advance ratio ~0.6, lineHeight ratio ~1.34): 7×15.
+        XCTAssertEqual(entry?.resolved.cellWidth, 7)
         XCTAssertEqual(entry?.resolved.cellHeight, 15)
     }
 
@@ -79,9 +81,12 @@ final class FontDispatchTests: XCTestCase {
             .encode(byteOrder: .lsbFirst))
 
         let reply = try QueryFontReply.decode(from: bytes, byteOrder: .lsbFirst)
-        XCTAssertEqual(reply.minBounds.characterWidth, 7)
-        XCTAssertEqual(reply.maxBounds.characterWidth, 7)
-        XCTAssertEqual(reply.fontAscent + reply.fontDescent, 14)
+        // 7x14 alias drifts to Monaco's natural cell at pointSize 10 (6x13).
+        // QueryFont reports the truth so xterm sizes its window from real
+        // metrics that match what we render.
+        XCTAssertEqual(reply.minBounds.characterWidth, 6)
+        XCTAssertEqual(reply.maxBounds.characterWidth, 6)
+        XCTAssertEqual(reply.fontAscent + reply.fontDescent, 13)
         XCTAssertTrue(reply.allCharsExist)
         XCTAssertEqual(reply.minCharOrByte2, 32)
         XCTAssertEqual(reply.maxCharOrByte2, 126)
@@ -132,7 +137,8 @@ final class FontDispatchTests: XCTestCase {
         let call = bridge.imageText8Calls[0]
         XCTAssertEqual(call.topLevel, 0xA0001)
         XCTAssertEqual(call.fontName, "Monaco")
-        XCTAssertEqual(call.cellWidth, 9)
+        // 9x15 alias → Monaco-natural 7x15 at pointSize 11.
+        XCTAssertEqual(call.cellWidth, 7)
         XCTAssertEqual(call.cellHeight, 15)
         XCTAssertEqual(call.foreground, RGB16(red: 0xFFFF, green: 0, blue: 0))
         XCTAssertEqual(call.background, RGB16(red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF))

@@ -45,11 +45,13 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private var closeHandlers: [@Sendable (UInt32) -> Void] = []
     private weak var log: ServerLogSink?
 
-    /// Integer scale factor: 1 X-logical pixel = `scale` device pixels.
-    /// Pulled from `DisplayConfig.scale` at startup.
-    public let scaleFactor: Int
+    /// Scale factor: 1 X-logical pixel = `scaleFactor` device pixels.
+    /// Pulled from `DisplayConfig.scale` at startup. Integer values are
+    /// the Phase-1 happy path; fractional values (e.g. 2.5) are supported
+    /// with AA edges at cell boundaries.
+    public let scaleFactor: Double
 
-    public init(scaleFactor: Int = 1, log: ServerLogSink? = nil) {
+    public init(scaleFactor: Double = 1, log: ServerLogSink? = nil) {
         self.scaleFactor = scaleFactor
         self.log = log
     }
@@ -426,20 +428,22 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                   let dataPtr = ctx.data else { return }
 
             // Logical X-coords (y-down) translate to memory pixel coords
-            // (top-down) via `mem = logical * scale`. Memory is row-major
-            // with byte 0 = top-left pixel.
+            // (top-down) via `mem = round(logical * scale)`. Memory is
+            // row-major with byte 0 = top-left pixel. At fractional scale
+            // we lose at most 0.5 device pixel of source/dest position;
+            // for terminal scrolling that's invisible.
             let scale = view.scaleFactor
             let bpr = ctx.bytesPerRow
             let bmpW = ctx.width
             let bmpH = ctx.height
             let bytesPerPixel = 4
 
-            let srcMemX = Int(srcX) * scale
-            let srcMemY = Int(srcY) * scale
-            let dstMemX = Int(dstX) * scale
-            let dstMemY = Int(dstY) * scale
-            let copyW = Int(width) * scale
-            let copyH = Int(height) * scale
+            let srcMemX = Int((Double(srcX) * scale).rounded())
+            let srcMemY = Int((Double(srcY) * scale).rounded())
+            let dstMemX = Int((Double(dstX) * scale).rounded())
+            let dstMemY = Int((Double(dstY) * scale).rounded())
+            let copyW = Int((Double(width) * scale).rounded())
+            let copyH = Int((Double(height) * scale).rounded())
 
             // Bounds-check both rects. CopyArea outside the bitmap is a
             // silent no-op rather than a crash.
@@ -527,7 +531,17 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
             applyFill(ctx, foreground)
             ctx.setShouldAntialias(true)
-            ctx.setShouldSmoothFonts(true)
+            // Font smoothing OFF. macOS smoothing adds a half-step of stem
+            // weight to compensate for sub-pixel LCD rendering — useful for
+            // reading prose at 1× backing scale, but in our 3× X-server
+            // bitmap it just makes Monaco look "bolder than it is" to the
+            // user. Disabling gets us the geometric font without the
+            // LCD-compensation fattening. AA stays on so diagonals stay
+            // smooth. (See Todd's "feels bold" feedback 2026-05-08; we
+            // explored Core Text weight traits but Monaco has no lighter
+            // face for CT to substitute, so this is the lever that
+            // actually moves the needle.)
+            ctx.setShouldSmoothFonts(false)
             ctx.setAllowsFontSubpixelPositioning(false)
             ctx.setShouldSubpixelPositionFonts(false)
 
@@ -592,7 +606,17 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             ctx.saveGState()
             applyFill(ctx, foreground)
             ctx.setShouldAntialias(true)
-            ctx.setShouldSmoothFonts(true)
+            // Font smoothing OFF. macOS smoothing adds a half-step of stem
+            // weight to compensate for sub-pixel LCD rendering — useful for
+            // reading prose at 1× backing scale, but in our 3× X-server
+            // bitmap it just makes Monaco look "bolder than it is" to the
+            // user. Disabling gets us the geometric font without the
+            // LCD-compensation fattening. AA stays on so diagonals stay
+            // smooth. (See Todd's "feels bold" feedback 2026-05-08; we
+            // explored Core Text weight traits but Monaco has no lighter
+            // face for CT to substitute, so this is the lever that
+            // actually moves the needle.)
+            ctx.setShouldSmoothFonts(false)
             ctx.setAllowsFontSubpixelPositioning(false)
             ctx.setShouldSubpixelPositionFonts(false)
 

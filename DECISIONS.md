@@ -244,6 +244,28 @@ This decision supersedes the "How to handle the initial X core font requirement"
 
 ---
 
+## 2026-05-09: Cell-fits-font, not font-fits-cell — iTerm2's playbook
+
+**Chosen**: When a client opens a font (XLFD or named alias like `7x14`), pick the integer pointSize where Monaco's natural cell is closest to the request, then report Monaco's *actual* cell metrics in QueryFont. The named-alias dimensions become a hint, not a contract.
+
+**Rejected**:
+- **Force the requested cell exactly** (the previous rule). Required driving Monaco at fractional pointSizes to fit, which lost the Core Text hinter's sweet spot. Glyphs rendered "too bold" at 3× — asymmetric AA fringe from the mismatch between hinted advance and forced cell width. Even with `setShouldSmoothFonts(false)` and the metrics-tightening fix from 2026-05-08, the residue persisted.
+- **Asymmetric font-matrix stretch** to fit Monaco into the named cell. Distorts stems anisotropically; the cure is worse than the disease at any visible stretch.
+- **Per-alias substitution** (Monaco for some aliases, SF Mono for others). Font identity drift across cell sizes is visible and corrosive — programmers get mad when the font changes out from under them.
+- **Smart-stretch** via CGPath stem-correcting transforms. Real engineering work; algorithmic stretch from one master is always inferior to picking a master that already fits. iTerm2 demonstrates we don't need to invent stretching when Apple already ships fonts that hint clean at integer pointSize.
+
+**Why**:
+- iTerm2's central architectural insight: it never tries to fit a font into a cell. It picks the user's font + integer pointSize, asks Core Text for the natural cell, and that becomes the cell. We do the same: alias names a target, integer pointSize picks the closest Monaco-natural cell, the cell follows.
+- Integer pointSize is where CT's hinter does its best work. Fractional pointSizes lose stem crispness in ways that read as "weight noise" — different glyphs end up subtly heavier than others.
+- Reported metrics === rendered metrics is preserved because both come from the same `CTFontCreateWithName(font, integer-pointSize, nil)` call.
+- Monaco identity is preserved because Monaco is the only substitute on the monospace path.
+
+**Concrete consequence**: Some named aliases drift from their literal dimensions. `7x14` reports as 6×13 (Monaco at 10pt). `9x15` reports as 7×15 (Monaco at 11pt). `12x24` reports as 11×24 (Monaco at 18pt). The user's `xterm -fn 7x14` window is therefore slightly smaller than the named dimensions suggest — but renders Monaco crisply, which is what they actually wanted.
+
+See `FontResolver.swift` and the empirical alias map in `SERVER_RESOLUTION_SCALING_AND_FONTS.md`.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

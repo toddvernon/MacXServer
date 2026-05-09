@@ -86,7 +86,7 @@ The full project context lives in markdown at the repo root:
 - `ARCHITECTURE.md` — how the components fit together
 - `DECISIONS.md` — architectural choices with reasoning, append-only
 - `PRODUCT_1_CAPTURE.md` — scope and order-of-work for the capture tool
-- `ARTICLE_BRIEF.md` — briefing for writing up Phase 1 publicly
+- `PRODUCT_2_SERVER.md` — scope and milestones for the X server
 - `CLAUDE.md` — instructions for collaborator agents
 
 ## Status
