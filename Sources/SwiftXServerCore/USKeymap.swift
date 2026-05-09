@@ -235,6 +235,52 @@ public enum USKeymap {
         m[0x79] = (0xFF56, 0xFF56)  // PageDown              XK_Page_Down
         m[0x75] = (0xFFFF, 0xFFFF)  // ForwardDelete         XK_Delete
 
+        // Function keys F1–F12. Real Mac keyCodes from HIToolbox/Events.h.
+        // X keysyms XK_F1 (0xFFBE) through XK_F12 (0xFFC9). Adding them
+        // matters even on Macs without obvious F-keys, because Motif
+        // looks up F-key keysyms during translation-table compilation
+        // (menu accelerators, default bindings) and silently breaks when
+        // the lookup fails.
+        m[0x7A] = (0xFFBE, 0xFFBE)  // F1
+        m[0x78] = (0xFFBF, 0xFFBF)  // F2
+        m[0x63] = (0xFFC0, 0xFFC0)  // F3
+        m[0x76] = (0xFFC1, 0xFFC1)  // F4
+        m[0x60] = (0xFFC2, 0xFFC2)  // F5
+        m[0x61] = (0xFFC3, 0xFFC3)  // F6
+        m[0x62] = (0xFFC4, 0xFFC4)  // F7
+        m[0x64] = (0xFFC5, 0xFFC5)  // F8
+        m[0x65] = (0xFFC6, 0xFFC6)  // F9
+        m[0x6D] = (0xFFC7, 0xFFC7)  // F10
+        m[0x67] = (0xFFC8, 0xFFC8)  // F11
+        m[0x6F] = (0xFFC9, 0xFFC9)  // F12
+
+        // Numeric keypad — both digit keysyms (XK_KP_0..9) and the
+        // dual-purpose movement keysyms (XK_KP_Insert / KP_Home / KP_End
+        // / KP_Up / etc.) that the same physical keys produce when
+        // NumLock is off. Motif's virtual-binding system specifically
+        // looks up "<Key>KP_Insert" during init; without it,
+        // XmInitializeVirtualBindings fails and XmDisplay won't open
+        // (verified live 2026-05-09 from SS2's quickplot core dump).
+        // X spec convention: digit in lower slot, alternate in upper.
+        m[0x52] = (0xFFB0, 0xFF9E)  // KP_0      / KP_Insert
+        m[0x53] = (0xFFB1, 0xFF9C)  // KP_1      / KP_End
+        m[0x54] = (0xFFB2, 0xFF99)  // KP_2      / KP_Down
+        m[0x55] = (0xFFB3, 0xFF9B)  // KP_3      / KP_Next (PageDown)
+        m[0x56] = (0xFFB4, 0xFF96)  // KP_4      / KP_Left
+        m[0x57] = (0xFFB5, 0xFF9D)  // KP_5      / KP_Begin
+        m[0x58] = (0xFFB6, 0xFF98)  // KP_6      / KP_Right
+        m[0x59] = (0xFFB7, 0xFF95)  // KP_7      / KP_Home
+        m[0x5B] = (0xFFB8, 0xFF97)  // KP_8      / KP_Up
+        m[0x5C] = (0xFFB9, 0xFF9A)  // KP_9      / KP_Prior (PageUp)
+        m[0x41] = (0xFFAE, 0xFF9F)  // KP_Decimal / KP_Delete
+        m[0x43] = (0xFFAA, 0xFFAA)  // KP_Multiply
+        m[0x45] = (0xFFAB, 0xFFAB)  // KP_Add
+        m[0x4B] = (0xFFAF, 0xFFAF)  // KP_Divide
+        m[0x4C] = (0xFF8D, 0xFF8D)  // KP_Enter
+        m[0x4E] = (0xFFAD, 0xFFAD)  // KP_Subtract
+        m[0x51] = (0xFFBD, 0xFFBD)  // KP_Equal
+        m[0x47] = (0xFF7F, 0xFF7F)  // Num_Lock (Mac keypad-Clear repurposed)
+
         return m
     }()
 }
