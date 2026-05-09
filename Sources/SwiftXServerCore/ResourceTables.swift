@@ -27,6 +27,11 @@ public struct WindowEntry: Equatable, Sendable {
     /// on real X servers). Drives the 1px-or-N-px ring painted around the
     /// window's content area.
     public var borderPixel: UInt32?
+    /// CWCursor: cursor resource id this window declares. nil (or cid=0 /
+    /// "None") means inherit from parent. The cursor table maps the id to
+    /// an X cursor-font glyph, which we substitute with an NSCursor at
+    /// pointer-crossing time.
+    public var cursor: UInt32?
 
     public init(
         id: UInt32, parent: UInt32, depth: UInt8,
@@ -35,7 +40,8 @@ public struct WindowEntry: Equatable, Sendable {
         valueMask: UInt32, valueList: [UInt8],
         mapped: Bool = false, eventMask: UInt32 = 0,
         backPixel: UInt32? = nil,
-        borderPixel: UInt32? = nil
+        borderPixel: UInt32? = nil,
+        cursor: UInt32? = nil
     ) {
         self.id = id; self.parent = parent; self.depth = depth
         self.x = x; self.y = y; self.width = width; self.height = height
@@ -44,6 +50,7 @@ public struct WindowEntry: Equatable, Sendable {
         self.mapped = mapped; self.eventMask = eventMask
         self.backPixel = backPixel
         self.borderPixel = borderPixel
+        self.cursor = cursor
     }
 }
 
@@ -100,6 +107,13 @@ public final class WindowTable: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
         w.borderPixel = pixel
+        _windows[id] = w
+    }
+
+    public func setCursor(_ id: UInt32, _ cursor: UInt32?) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.cursor = cursor
         _windows[id] = w
     }
 
@@ -237,6 +251,30 @@ public final class FontTable {
     public func get(_ id: UInt32) -> FontEntry? { fonts[id] }
 
     public var count: Int { fonts.count }
+}
+
+/// Tracks cursor resources created by the client. Maps the X cursor id to
+/// the source-glyph index from the X "cursor" font (XC_xterm = 152, etc.) —
+/// fg/bg colors and mask glyphs are ignored because we substitute NSCursor
+/// system cursors at render time. The substitution happens on the bridge
+/// side; this table just remembers the glyph for each id.
+public struct CursorEntry: Equatable, Sendable {
+    public var id: UInt32
+    public var sourceGlyph: UInt16
+    public init(id: UInt32, sourceGlyph: UInt16) {
+        self.id = id; self.sourceGlyph = sourceGlyph
+    }
+}
+
+public final class CursorTable {
+    private(set) public var cursors: [UInt32: CursorEntry] = [:]
+    public init() {}
+
+    public func insert(_ cursor: CursorEntry) { cursors[cursor.id] = cursor }
+    public func remove(_ id: UInt32) { cursors.removeValue(forKey: id) }
+    public func glyph(_ id: UInt32) -> UInt16? { cursors[id]?.sourceGlyph }
+
+    public var count: Int { cursors.count }
 }
 
 public struct PropertyEntry: Equatable, Sendable {

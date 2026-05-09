@@ -240,6 +240,14 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// pixel BEFORE the client draws on top.
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect])
 
+    /// Push a cursor to display when the pointer is inside the given
+    /// top-level NSWindow's content area. `glyph` is the X cursor-font
+    /// source-char index (XC_xterm = 152, XC_left_ptr = 68, etc.) — the
+    /// bridge maps it to an `NSCursor` per the substitution table. nil
+    /// means "use the default" (macOS arrow). Called from the session on
+    /// every pointer-window transition.
+    func setCursor(topLevel: UInt32, glyph: UInt16?)
+
     /// Set the AppKit NSWindow's `backgroundColor` for a top-level X window.
     /// This is distinct from the X bg pixel (which paints into the backing
     /// bitmap): NSWindow.backgroundColor shows during live-resize before our
@@ -306,5 +314,6 @@ public extension WindowBridge {
         items: [UInt8]
     ) {}
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {}
+    func setCursor(topLevel: UInt32, glyph: UInt16?) {}
     func setTopLevelWindowBackground(id: UInt32, color: RGB16) {}
 }

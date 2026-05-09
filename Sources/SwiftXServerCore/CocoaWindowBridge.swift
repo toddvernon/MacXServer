@@ -744,6 +744,13 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    public func setCursor(topLevel: UInt32, glyph: UInt16?) {
+        DispatchQueue.main.async { [weak self] in
+            guard let view = self?.slot(topLevel)?.view else { return }
+            view.currentCursor = nsCursor(forXCursorGlyph: glyph)
+        }
+    }
+
     public func setTopLevelWindowBackground(id: UInt32, color: RGB16) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self, let slot = self.slot(id) else { return }
@@ -896,6 +903,28 @@ private final class XWindowDelegate: NSObject, NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         bridge?.handleNSWindowCloseRequest(id: windowId)
         return true
+    }
+}
+
+/// Map an X cursor-font source-glyph index to an NSCursor. The X "cursor"
+/// font has ~75 named glyphs (XC_xterm = 152, XC_left_ptr = 68, etc.); we
+/// substitute the closest macOS system cursor. Unmapped glyphs fall back
+/// to NSCursor.arrow. nil glyph (no cursor declared on any ancestor)
+/// also falls back to arrow — matches the X root window's default.
+private func nsCursor(forXCursorGlyph glyph: UInt16?) -> NSCursor {
+    // Constants from <X11/cursorfont.h>. Comments name the X glyph.
+    switch glyph {
+    case 152: return .iBeam                    // XC_xterm
+    case 34, 30, 32, 90, 130, 36:              // crosshair / cross / cross_reverse / plus / tcross / diamond_cross
+        return .crosshair
+    case 58, 60: return .pointingHand          // XC_hand1 / XC_hand2
+    case 52: return .openHand                  // XC_fleur (move)
+    case 70, 96, 108, 110, 112:                // left_side / right_side / sb_h_double_arrow / sb_left_arrow / sb_right_arrow
+        return .resizeLeftRight
+    case 16, 138, 114, 106, 116:               // bottom_side / top_side / sb_up_arrow / sb_down_arrow / sb_v_double_arrow
+        return .resizeUpDown
+    case 88, 0: return .operationNotAllowed    // XC_pirate / XC_X_cursor
+    default: return .arrow                     // XC_left_ptr (68), XC_arrow (2), XC_top_left_arrow (132), and everything we don't map
     }
 }
 

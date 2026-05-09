@@ -33,6 +33,7 @@ public final class ServerSession: @unchecked Sendable {
     public let gcs = GCTable()
     public let pixmaps = PixmapTable()
     public let fonts = FontTable()
+    public let cursors = CursorTable()
     public let properties = PropertyTable()
 
     public let outbound: OutboundQueue
@@ -388,6 +389,7 @@ public final class ServerSession: @unchecked Sendable {
         if from == target { return }
         currentPointerWindow[topLevel] = target
         emitCrossings(topLevel: topLevel, from: from, to: target, rootX: x, rootY: y)
+        refreshCursor(topLevel: topLevel)
     }
 
     /// Pointer entered the NSView's content area (came from outside our X
@@ -400,6 +402,7 @@ public final class ServerSession: @unchecked Sendable {
         let target = deepestMappedWindow(topLevel: topLevel, x: x, y: y)
         currentPointerWindow[topLevel] = target
         emitCrossings(topLevel: topLevel, from: nil, to: target, rootX: x, rootY: y)
+        refreshCursor(topLevel: topLevel)
     }
 
     /// Pointer left the NSView's content area. Emit LeaveNotify chain for
@@ -576,6 +579,65 @@ public final class ServerSession: @unchecked Sendable {
             )
             log?.log("  → EnterNotify target=0x\(String(window, radix: 16)) detail=\(detail) at top=(\(rootX),\(rootY))")
             outbound.append(event.encode(code: 7, byteOrder: order))
+        }
+    }
+
+    /// Walk up the parent chain from `window` until we find a window with
+    /// a non-None cursor attribute, and return the cursor's source glyph.
+    /// Returns nil if no window in the chain declares a cursor — bridge
+    /// falls back to the default arrow.
+    private func resolveCursorGlyph(for window: UInt32) -> UInt16? {
+        var cur: UInt32? = window
+        while let id = cur, let entry = windows.get(id) {
+            if let cursorId = entry.cursor, let glyph = cursors.glyph(cursorId) {
+                return glyph
+            }
+            if entry.parent == config.rootWindowId || entry.parent == 0 { break }
+            cur = entry.parent
+        }
+        return nil
+    }
+
+    /// Find the top-level ancestor of `window` (or `window` itself if it's
+    /// a top-level). Returns nil if the chain doesn't reach root.
+    private func topLevelAncestor(of window: UInt32) -> UInt32? {
+        var cur: UInt32? = window
+        while let id = cur, let entry = windows.get(id) {
+            if entry.parent == config.rootWindowId { return id }
+            if entry.parent == 0 { return nil }
+            cur = entry.parent
+        }
+        return nil
+    }
+
+    /// Push the effective cursor for `currentPointerWindow[topLevel]` to the
+    /// bridge. Called whenever the pointer's containing window changes (in
+    /// emitCrossings) and whenever a window's cursor attribute changes (in
+    /// ChangeWindowAttributes).
+    private func refreshCursor(topLevel: UInt32) {
+        let glyph = currentPointerWindow[topLevel].flatMap(resolveCursorGlyph(for:))
+        bridge?.setCursor(topLevel: topLevel, glyph: glyph)
+    }
+
+    /// If a ChangeWindowAttributes touched window `w`'s cursor and the
+    /// pointer is currently in `w` or any descendant inheriting from it,
+    /// the on-screen cursor needs refreshing without waiting for a move.
+    /// Cheap conservative version: refresh if `w` is on the current
+    /// pointer-window's ancestor chain. (False positives are harmless —
+    /// re-pushing the same cursor is a no-op on the bridge side.)
+    private func refreshCursorIfPointerAffected(by w: UInt32) {
+        guard let topLevel = topLevelAncestor(of: w),
+              let pointerWin = currentPointerWindow[topLevel] else { return }
+        // Walk pointer-window's chain; if w is on it, the effective cursor
+        // could have changed.
+        var cur: UInt32? = pointerWin
+        while let id = cur, let entry = windows.get(id) {
+            if id == w {
+                refreshCursor(topLevel: topLevel)
+                return
+            }
+            if entry.parent == config.rootWindowId || entry.parent == 0 { break }
+            cur = entry.parent
         }
     }
 
@@ -1232,6 +1294,7 @@ public final class ServerSession: @unchecked Sendable {
             let eventMask = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.eventMask, byteOrder: byteOrder) ?? 0
             let backPixel = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.backPixel, byteOrder: byteOrder)
             let borderPixel = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.borderPixel, byteOrder: byteOrder)
+            let cursor = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.cursor, byteOrder: byteOrder)
             let entry = WindowEntry(
                 id: r.wid, parent: r.parent, depth: r.depth,
                 x: r.x, y: r.y, width: r.width, height: r.height,
@@ -1239,7 +1302,8 @@ public final class ServerSession: @unchecked Sendable {
                 valueMask: mask, valueList: r.valueList,
                 mapped: false, eventMask: eventMask,
                 backPixel: backPixel,
-                borderPixel: borderPixel
+                borderPixel: borderPixel,
+                cursor: (cursor == 0) ? nil : cursor
             )
             windows.insert(entry)
             let isTop = r.parent == config.rootWindowId
@@ -1271,6 +1335,15 @@ public final class ServerSession: @unchecked Sendable {
             }
             if let newBorderPixel = ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: CW.borderPixel, byteOrder: byteOrder) {
                 windows.setBorderPixel(r.window, newBorderPixel)
+            }
+            if let newCursor = ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: CW.cursor, byteOrder: byteOrder) {
+                windows.setCursor(r.window, (newCursor == 0) ? nil : newCursor)
+                // If the pointer is currently in a window whose effective
+                // cursor just changed (this window or a descendant that
+                // inherits from it), refresh the on-screen cursor without
+                // waiting for the next pointer move. xterm flips its
+                // top-level cursor mid-session via this path.
+                refreshCursorIfPointerAffected(by: r.window)
             }
             // Per X11 spec: changing CWBackPixel / CWBorderPixel does NOT
             // trigger an automatic repaint. The new pixel takes effect on the
@@ -1636,13 +1709,22 @@ public final class ServerSession: @unchecked Sendable {
 
         // Silent no-ops: requests xclock or other apps may issue that we
         // don't yet wire to rendering. Add real handlers as needed.
+        case .createGlyphCursor(let r):
+            // Only the source-glyph index matters — we substitute NSCursor at
+            // crossing time, ignoring the source/mask fonts and fg/bg colors.
+            cursors.insert(CursorEntry(id: r.cid, sourceGlyph: r.sourceChar))
+            log?.log("  CreateGlyphCursor cid=0x\(String(r.cid, radix: 16)) sourceChar=\(r.sourceChar)")
+
+        case .freeCursor(let r):
+            cursors.remove(r.cursor)
+
         case .polyArc,
              .polyFillArc,
              .setClipRectangles, .setDashes, .putImage,
              .sendEvent, .reparentWindow, .destroySubwindows,
              .grabPointer, .ungrabPointer, .grabButton, .grabKeyboard,
              .ungrabKeyboard, .grabKey, .allowEvents, .grabServer, .ungrabServer,
-             .warpPointer, .setInputFocus, .createGlyphCursor, .freeCursor,
+             .warpPointer, .setInputFocus,
              .recolorCursor, .bell, .unmapSubwindows:
             break
 

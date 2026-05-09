@@ -54,6 +54,25 @@ public final class FlippedXView: NSView {
     /// LeaveNotify chain for whichever X window the pointer was last in.
     public var mouseExitedHandler: (() -> Void)?
 
+    /// Cursor to display while the pointer is over this view. Bridge sets
+    /// this from `setCursor(topLevel:glyph:)` in response to crossing
+    /// events. AppKit picks it up via `resetCursorRects`.
+    public var currentCursor: NSCursor = .arrow {
+        didSet {
+            // Cheapest way to make AppKit reread the cursor rects.
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
+    public override func resetCursorRects() {
+        // One rect spanning the whole view; cursor changes drive via
+        // `currentCursor` setter triggering invalidateCursorRects.
+        // Per-X-subwindow cursor rects would be more efficient (cursor
+        // would update without crossing-event traffic) but for the
+        // current pointer-driven model this is enough.
+        addCursorRect(bounds, cursor: currentCursor)
+    }
+
     /// Paste sink. The bridge installs this; FlippedXView calls it when the
     /// user invokes paste (Cmd-V) with the NSPasteboard's string content.
     /// The session synthesises a KeyPress/KeyRelease pair per character so

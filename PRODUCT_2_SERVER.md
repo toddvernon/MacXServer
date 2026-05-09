@@ -95,7 +95,6 @@ Things still on the list (most of Beyond-M3 from earlier drafts has shipped — 
 - TrueColor 24-bit visual alongside PseudoColor 8-bit (`DECISIONS.md` 2026-05-05)
 - XErrors for bad requests / unknown resources (today's server is forgiving — see `SHORTCUTS.md`)
 - Honour CWBackPixmap and CWBitGravity (today only CWBackPixel and CWBorderPixel are read)
-- Cursor handling (X cursor font → macOS NSCursor substitution per the scaling/fonts doc)
 - SHAPE and BIG-REQUESTS extensions
 - Transport selectability for Product 4 (CrossFeed)
 - CLIPBOARD selection (today only PRIMARY is wired)
