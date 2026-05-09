@@ -198,6 +198,22 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         let pendingTitle = slots[id]?.pendingTitle ?? "swift-x"
         lock.unlock()
 
+        // Emit ReparentNotify / ConfigureNotify / MapNotify / Expose
+        // synchronously from the caller's thread (the read thread). Doing
+        // this on the read thread keeps outbound order monotonic with the
+        // sequence counter — if we hopped to main first, subsequent inline
+        // replies on the read thread would race past these events and
+        // Xlib would see "sequence lost" as the wire goes backwards.
+        // (Motif's quickplot tripped this, reply type 0x15 = ReparentNotify.)
+        // The actual NSWindow creation still happens on main below.
+        MockWindowBridge.emitMapSequence(
+            window: id, geometry: geometry,
+            topLevelEventMask: eventMask,
+            descendants: descendants,
+            byteOrder: byteOrder, sequence: sequence,
+            outbound: outbound
+        )
+
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.log?.log("  bridge: bringing up NSWindow for 0x\(String(id, radix: 16)) \(geometry.width)x\(geometry.height) (logical)")
@@ -275,20 +291,12 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             self.slots[id]?.delegate = delegate
             self.lock.unlock()
 
-            // Emit MapNotify and any descendant Expose events BEFORE bringing
-            // the NSWindow to key. makeKeyAndOrderFront fires
-            // windowDidBecomeKey synchronously, which in turn calls our focus
-            // handler and queues a FocusIn. We want MapNotify to land in the
-            // outbound queue before that FocusIn so the X client sees the
-            // natural order: window mapped, then focused.
-            MockWindowBridge.emitMapSequence(
-                window: id, geometry: geometry,
-                topLevelEventMask: eventMask,
-                descendants: descendants,
-                byteOrder: byteOrder, sequence: sequence,
-                outbound: outbound
-            )
-
+            // Map-sequence events were already emitted synchronously above
+            // on the read thread to keep wire order monotonic. Here we just
+            // bring the NSWindow on screen. The natural ordering — MapNotify
+            // before FocusIn — still holds because makeKeyAndOrderFront
+            // triggers windowDidBecomeKey → focus handler → FocusIn AFTER
+            // the map events have already landed in outbound.
             win.makeKeyAndOrderFront(nil)
             // Make the FlippedXView the first responder so keyDown / keyUp
             // route to it. Without this, NSWindow swallows key events.

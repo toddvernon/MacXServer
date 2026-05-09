@@ -79,6 +79,32 @@ public final class ServerSession: @unchecked Sendable {
     /// NSWindow's content area.
     private var currentPointerWindow: [UInt32: UInt32] = [:]
 
+    /// Active pointer grab state, or nil if not grabbed. Set by GrabPointer,
+    /// cleared by UngrabPointer. While set, button / motion events route to
+    /// `grabWindow` instead of the deepest-containing-window — this is what
+    /// makes Motif menus work (a click outside the menu but inside the
+    /// NSWindow goes to the menu so it can dismiss itself).
+    ///
+    /// Rootless caveat: clicks ENTIRELY outside the NSWindow are macOS's, so
+    /// the X grab can't see them. Real X11 would; we can't (without
+    /// app-level event monitoring). For Motif menus posted as children of a
+    /// parent NSWindow this is sufficient — clicks "outside the menu but
+    /// inside the parent" still flow.
+    private struct PointerGrab {
+        let window: UInt32
+        let eventMask: UInt16
+        let ownerEvents: Bool
+        let cursor: UInt32     // 0 = no cursor override
+    }
+    private var pointerGrab: PointerGrab?
+
+    /// Active keyboard grab. While set, key events route to `grabWindow`.
+    private struct KeyboardGrab {
+        let window: UInt32
+        let ownerEvents: Bool
+    }
+    private var keyboardGrab: KeyboardGrab?
+
     public private(set) var setupAcceptedSent: Bool = false
     public private(set) var requestsProcessed: Int = 0
     public private(set) var unknownOpcodes: [UInt8] = []
@@ -285,7 +311,14 @@ public final class ServerSession: @unchecked Sendable {
     ) {
         guard let order = byteOrder else { return }
         let mask: UInt32 = isDown ? (1 << 0) : (1 << 1)        // KeyPress / KeyRelease
-        guard let target = keyTarget(topLevel: topLevel, eventMaskBit: mask) else {
+        // Keyboard grab redirect: if grabbed and ownerEvents=false, route
+        // to the grab window. ownerEvents=true keeps natural routing.
+        let target: UInt32
+        if let kg = keyboardGrab, !kg.ownerEvents {
+            target = kg.window
+        } else if let natural = keyTarget(topLevel: topLevel, eventMaskBit: mask) {
+            target = natural
+        } else {
             log?.log("  keyEvent: no target window with mask 0x\(String(mask, radix: 16)) under 0x\(String(topLevel, radix: 16))")
             return
         }
@@ -326,10 +359,16 @@ public final class ServerSession: @unchecked Sendable {
         topLevel: UInt32, x: Int16, y: Int16, button: UInt8
     ) {
         guard let order = byteOrder else { return }
-        guard let (target, tx, ty) = mouseTarget(
-            topLevel: topLevel, x: x, y: y,
-            eventMaskBit: Self.motionEventMask
-        ) else { return }
+        // Motion under grab: redirect to grab window if grab eventMask has
+        // PointerMotionMask (1<<6) or one of the ButtonNMotion bits.
+        let resolved: (UInt32, Int16, Int16)?
+        let motionBit16: UInt16 = UInt16(Self.motionEventMask & 0xFFFF)
+        if let redirect = grabRedirect(topLevel: topLevel, eventMaskBit16: motionBit16) {
+            resolved = redirect
+        } else {
+            resolved = mouseTarget(topLevel: topLevel, x: x, y: y, eventMaskBit: Self.motionEventMask)
+        }
+        guard let (target, tx, ty) = resolved else { return }
         // X state field encodes "modifier and button-down bitmask". Button N
         // contributes (1 << (7 + N)) — Button1=0x100, Button2=0x200, etc.
         let buttonStateBit: UInt16 = (button >= 1 && button <= 5) ? (UInt16(1) << (7 + button)) : 0
@@ -356,7 +395,19 @@ public final class ServerSession: @unchecked Sendable {
     ) {
         guard let order = byteOrder else { return }
         let mask: UInt32 = isDown ? (1 << 2) : (1 << 3)
-        guard let (target, tx, ty) = mouseTarget(topLevel: topLevel, x: x, y: y, eventMaskBit: mask) else {
+        let mask16: UInt16 = UInt16(mask)
+        let resolved: (UInt32, Int16, Int16)?
+        if let redirect = grabRedirect(topLevel: topLevel, eventMaskBit16: mask16) {
+            resolved = redirect
+        } else if pointerGrab != nil {
+            // Grab active with ownerEvents=true. Deliver to natural target
+            // since we're single-client (the client owns every window in
+            // this session); ownerEvents=true means "no redirect."
+            resolved = mouseTarget(topLevel: topLevel, x: x, y: y, eventMaskBit: mask)
+        } else {
+            resolved = mouseTarget(topLevel: topLevel, x: x, y: y, eventMaskBit: mask)
+        }
+        guard let (target, tx, ty) = resolved else {
             log?.log("  mouseEvent: no target window with mask 0x\(String(mask, radix: 16)) at (\(x),\(y))")
             return
         }
@@ -668,6 +719,68 @@ public final class ServerSession: @unchecked Sendable {
             cur = entry.parent
         }
         return (x, y)
+    }
+
+    // MARK: - Grabs
+
+    private func handleGrabPointer(_ r: GrabPointer, byteOrder: ByteOrder) {
+        // We always succeed. Real X servers can return AlreadyGrabbed when
+        // a different client holds the pointer grab, but our session is
+        // single-client per definition (one X connection = one session
+        // = one client view of the pointer). NotViewable / Frozen aren't
+        // produced because we don't enforce window-viewable preconditions.
+        pointerGrab = PointerGrab(
+            window: r.grabWindow,
+            eventMask: r.eventMask,
+            ownerEvents: r.ownerEvents,
+            cursor: r.cursor
+        )
+        log?.log("  GrabPointer window=0x\(String(r.grabWindow, radix: 16)) mask=0x\(String(r.eventMask, radix: 16)) ownerEvents=\(r.ownerEvents) cursor=0x\(String(r.cursor, radix: 16))")
+        // Push the grab cursor immediately; restored on Ungrab via refreshCursor.
+        if r.cursor != 0, let topLevel = topLevelAncestor(of: r.grabWindow) {
+            bridge?.setCursor(topLevel: topLevel, glyph: cursors.glyph(r.cursor))
+        }
+        let reply = GrabReply(sequenceNumber: sequenceNumber, status: .success)
+        outbound.append(reply.encode(byteOrder: byteOrder))
+    }
+
+    private func handleUngrabPointer() {
+        guard let grab = pointerGrab else { return }
+        pointerGrab = nil
+        log?.log("  UngrabPointer (was on 0x\(String(grab.window, radix: 16)))")
+        // Restore cursor based on the window currently under the pointer.
+        if grab.cursor != 0, let topLevel = topLevelAncestor(of: grab.window) {
+            refreshCursor(topLevel: topLevel)
+        }
+    }
+
+    private func handleGrabKeyboard(_ r: GrabKeyboard, byteOrder: ByteOrder) {
+        keyboardGrab = KeyboardGrab(window: r.grabWindow, ownerEvents: r.ownerEvents)
+        log?.log("  GrabKeyboard window=0x\(String(r.grabWindow, radix: 16)) ownerEvents=\(r.ownerEvents)")
+        let reply = GrabReply(sequenceNumber: sequenceNumber, status: .success)
+        outbound.append(reply.encode(byteOrder: byteOrder))
+    }
+
+    private func handleUngrabKeyboard() {
+        keyboardGrab = nil
+    }
+
+    /// If a pointer grab is active and ownerEvents=false, route pointer
+    /// events to the grab window instead of the natural target. Returns
+    /// `nil` when the grab's eventMask doesn't include the requested bit
+    /// (the event is dropped per spec). Returns `(grabWindow, originX,
+    /// originY)` when the grab redirects.
+    ///
+    /// `eventMaskBit16` is the 16-bit pointer-event mask (matches GrabPointer
+    /// `eventMask` field, not the 32-bit window event_mask). Bit positions
+    /// align: ButtonPress=1<<2, ButtonRelease=1<<3, etc.
+    private func grabRedirect(topLevel: UInt32, eventMaskBit16: UInt16) -> (UInt32, Int16, Int16)? {
+        guard let grab = pointerGrab, !grab.ownerEvents else { return nil }
+        // Per spec, the grab's eventMask filters which events get delivered.
+        // If the bit isn't in the grab mask, drop the event.
+        guard grab.eventMask & eventMaskBit16 != 0 else { return nil }
+        let (gx, gy) = absoluteOrigin(of: grab.window, topLevel: topLevel)
+        return (grab.window, gx, gy)
     }
 
     /// Find the deepest mapped descendant containing `(x, y)` (top-level
@@ -1365,6 +1478,14 @@ public final class ServerSession: @unchecked Sendable {
             }
 
         case .mapWindow(let r):
+            // Per X11 spec section 10.5: "If the window is already mapped,
+            // this request has no effect." Some Motif/Xt apps (quickplot
+            // observed 2026-05-09) issue MapWindow twice during init; we
+            // were creating a second NSWindow each time, hence the
+            // duplicate-window-on-screen bug. Early-out if already mapped.
+            if windows.get(r.window)?.mapped == true {
+                break
+            }
             windows.setMapped(r.window, true)
             let isTop = isTopLevel(r.window)
             log?.log("  MapWindow window=0x\(String(r.window, radix: 16)) topLevel=\(isTop)")
@@ -1718,12 +1839,24 @@ public final class ServerSession: @unchecked Sendable {
         case .freeCursor(let r):
             cursors.remove(r.cursor)
 
+        case .grabPointer(let r):
+            handleGrabPointer(r, byteOrder: byteOrder)
+
+        case .ungrabPointer:
+            handleUngrabPointer()
+
+        case .grabKeyboard(let r):
+            handleGrabKeyboard(r, byteOrder: byteOrder)
+
+        case .ungrabKeyboard:
+            handleUngrabKeyboard()
+
         case .polyArc,
              .polyFillArc,
              .setClipRectangles, .setDashes, .putImage,
              .sendEvent, .reparentWindow, .destroySubwindows,
-             .grabPointer, .ungrabPointer, .grabButton, .grabKeyboard,
-             .ungrabKeyboard, .grabKey, .allowEvents, .grabServer, .ungrabServer,
+             .grabButton, .grabKey, .allowEvents,
+             .grabServer, .ungrabServer,
              .warpPointer, .setInputFocus,
              .recolorCursor, .bell, .unmapSubwindows:
             break
@@ -1837,10 +1970,25 @@ public final class ServerSession: @unchecked Sendable {
                 log?.log("GetGeometry: unknown drawable 0x\(String(r.drawable, radix: 16))")
             }
 
+        case .queryBestSize(let r):
+            // Pragmatic reply. For Cursor class, return 16×16 — the canonical
+            // X cursor size; doesn't matter much because we substitute NSCursor.
+            // For Tile / Stipple, echo the requested dimensions back so the
+            // client doesn't have to renegotiate sizes. (Real servers use this
+            // to advertise hardware-optimal pixmap sizes; we have no such
+            // optimization, so any sane number works.)
+            let (w, h): (UInt16, UInt16)
+            switch r.sizeClass {
+            case .cursor: (w, h) = (16, 16)
+            case .tile, .stipple: (w, h) = (r.width, r.height)
+            }
+            let reply = QueryBestSizeReply(sequenceNumber: sequenceNumber, width: w, height: h)
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
         case .queryTree,
              .getAtomName,
              .translateCoordinates, .queryPointer,
-             .queryBestSize, .listExtensions,
+             .listExtensions,
              .queryKeymap:
             log?.log("dispatch: reply for \(opcodeName(request)) not implemented yet")
 
