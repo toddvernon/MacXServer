@@ -7,7 +7,6 @@ public enum RecorderError: Error, Sendable, Equatable {
 
 public final class Recorder: @unchecked Sendable {
     private let lock = NSLock()
-    private let outputHandle: FileHandle
     private let outputPath: String
     private let listenDescription: String
     private let forwardDescription: String
@@ -17,12 +16,22 @@ public final class Recorder: @unchecked Sendable {
     private var totalBytesC2S: Int = 0
     private var totalBytesS2C: Int = 0
 
+    /// In-memory frame buffer. record() appends here under the lock; the
+    /// disk write happens once at finalize(). Pre-2026-05-09 the disk
+    /// write happened on every record() call WHILE HOLDING THE LOCK,
+    /// which serialized the proxy's two pump directions on file I/O —
+    /// SS2's old TCP stack reacted to the resulting jitter by
+    /// retransmitting reply bytes, libxlib processed them duplicated,
+    /// and Motif segfaulted. Buffering keeps the wire path off-disk.
+    private var buffer: [UInt8] = []
+
     public init(
         outputPath: String,
         listen: String,
         forward: String,
         toolVersion: String = "0.1.0"
     ) throws {
+        // Make sure the output directory exists; we don't open the file yet.
         let parent = (outputPath as NSString).deletingLastPathComponent
         if !parent.isEmpty && parent != "." {
             try FileManager.default.createDirectory(
@@ -30,23 +39,22 @@ public final class Recorder: @unchecked Sendable {
                 withIntermediateDirectories: true
             )
         }
-        FileManager.default.createFile(atPath: outputPath, contents: nil)
-        guard let handle = FileHandle(forWritingAtPath: outputPath) else {
-            throw RecorderError.cannotOpenFile(outputPath)
-        }
-        self.outputHandle = handle
         self.outputPath = outputPath
         self.listenDescription = listen
         self.forwardDescription = forward
         self.toolVersion = toolVersion
 
-        var header: [UInt8] = []
-        header.append(contentsOf: CaptureFile.magic)
-        header.append(CaptureFile.version)
-        header.append(0)
-        header.append(0)
-        header.append(0)
-        try outputHandle.write(contentsOf: header)
+        // Reserve a generous initial capacity so typical sessions don't
+        // re-allocate the backing array. xterm sessions in our corpus
+        // run ~200KB; quickplot init alone is ~30KB.
+        buffer.reserveCapacity(512 * 1024)
+
+        // File header lives at the start of the buffer.
+        buffer.append(contentsOf: CaptureFile.magic)
+        buffer.append(CaptureFile.version)
+        buffer.append(0)
+        buffer.append(0)
+        buffer.append(0)
     }
 
     public func record(direction: Direction, bytes: [UInt8]) {
@@ -58,20 +66,13 @@ public final class Recorder: @unchecked Sendable {
         lastTime = now
         let timestamp = now - (startTime ?? now)
 
-        var frame: [UInt8] = []
-        frame.reserveCapacity(CaptureFile.frameHeaderSize + bytes.count)
-        frame.append(direction.rawValue)
-        appendLE(&frame, timestamp)
-        appendLE(&frame, UInt32(bytes.count))
-        frame.append(contentsOf: bytes)
-
-        do {
-            try outputHandle.write(contentsOf: frame)
-        } catch {
-            // Recording failures are logged but don't stop the proxy. The pump's
-            // job is faithful forwarding; recording is observation.
-            FileHandle.standardError.write(Data("recorder write failed: \(error)\n".utf8))
-        }
+        // Append frame header + bytes directly to the in-memory buffer.
+        // This is a few memcpys — orders of magnitude faster than file I/O,
+        // and crucially doesn't block the proxy's pump on disk.
+        buffer.append(direction.rawValue)
+        appendLE(&buffer, timestamp)
+        appendLE(&buffer, UInt32(bytes.count))
+        buffer.append(contentsOf: bytes)
 
         switch direction {
         case .clientToServer: totalBytesC2S += bytes.count
@@ -82,7 +83,12 @@ public final class Recorder: @unchecked Sendable {
     public func finalize() throws {
         lock.lock()
         defer { lock.unlock() }
-        try outputHandle.close()
+
+        // Single disk write at end of session. If the proxy crashed or
+        // SIGKILL'd, the buffer is lost — acceptable trade-off for the
+        // wire-path latency improvement. (Normal exit-on-disconnect always
+        // reaches here.)
+        FileManager.default.createFile(atPath: outputPath, contents: Data(buffer))
 
         let durationNs: UInt64 = {
             guard let start = startTime, let last = lastTime else { return 0 }

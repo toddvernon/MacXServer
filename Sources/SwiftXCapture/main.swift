@@ -66,7 +66,9 @@ do {
     let listenDescription = "\(parsed.listenHost):\(parsed.listenPort)"
     let forwardDescription = "\(parsed.forwardHost):\(parsed.forwardPort)"
 
-    let recorder = try Recorder(
+    // /dev/null = pure proxy mode, no recording. Lets us test whether the
+    // recorder's synchronous file-I/O-under-lock is impacting the wire path.
+    let recorder: Recorder? = (parsed.outputPath == "/dev/null") ? nil : try Recorder(
         outputPath: parsed.outputPath,
         listen: listenDescription,
         forward: forwardDescription
@@ -106,7 +108,7 @@ do {
     writeStderr(StartupHint.displayHint(forListenPort: actualPort, interfaces: hintInterfaces) + "\n\n")
 
     try proxy.run()
-    try recorder.finalize()
+    try recorder?.finalize()
     writeStderr("capture complete\n")
 } catch let error as CLIError {
     writeStderr("\(error)\n\n\(CLI.usage)\n")
