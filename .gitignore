@@ -15,3 +15,8 @@ xcuserdata/
 # External X11 reference material — synced via Dropbox, not via git.
 # Re-fetchable with reference/fetch.sh.
 reference/
+
+# Per-user Claude Code memory. Lives in Dropbox so both machines share it,
+# kept out of git because it's user-specific working state. Symlinked from
+# ~/.claude/projects/-Users-toddvernon-Dropbox-dev-X/memory on each machine.
+.claude-memory/
