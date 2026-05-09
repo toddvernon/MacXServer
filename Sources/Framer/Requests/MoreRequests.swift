@@ -40,6 +40,53 @@ public struct ReparentWindow: Equatable, Sendable {
     }
 }
 
+public struct ConvertSelection: Equatable, Sendable {
+    public static let opcode: UInt8 = 24
+    public var requestor: UInt32
+    public var selection: UInt32
+    public var target: UInt32
+    public var property: UInt32             // 0 = None
+    public var time: UInt32                  // 0 = CurrentTime
+
+    public init(requestor: UInt32, selection: UInt32, target: UInt32, property: UInt32, time: UInt32 = 0) {
+        self.requestor = requestor
+        self.selection = selection
+        self.target = target
+        self.property = property
+        self.time = time
+    }
+
+    public func encode(byteOrder: ByteOrder) -> [UInt8] {
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(Self.opcode)
+        w.writeUInt8(0)
+        w.writeUInt16(6)
+        w.writeUInt32(requestor)
+        w.writeUInt32(selection)
+        w.writeUInt32(target)
+        w.writeUInt32(property)
+        w.writeUInt32(time)
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> ConvertSelection {
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        let op = try r.readUInt8()
+        guard op == Self.opcode else { throw FramerError.invalidOpcode(expected: Self.opcode, got: op) }
+        _ = try r.readUInt8()
+        _ = try r.readUInt16()
+        let requestor = try r.readUInt32()
+        let selection = try r.readUInt32()
+        let target = try r.readUInt32()
+        let property = try r.readUInt32()
+        let time = try r.readUInt32()
+        return ConvertSelection(
+            requestor: requestor, selection: selection,
+            target: target, property: property, time: time
+        )
+    }
+}
+
 public struct SetSelectionOwner: Equatable, Sendable {
     public static let opcode: UInt8 = 22
     public var owner: UInt32              // 0 = None

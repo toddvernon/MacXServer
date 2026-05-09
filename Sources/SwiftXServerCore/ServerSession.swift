@@ -2042,6 +2042,42 @@ public final class ServerSession: @unchecked Sendable {
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         // SetSelectionOwner has no reply per X11 spec. Track ownership so we
+        // ConvertSelection: a client wants the contents of a selection
+        // converted to a target type and stored on a property of its
+        // requestor window. If we know the owner, forward as a
+        // SelectionRequest event so the owner can fulfil. If no owner,
+        // the spec says we MUST reply with SelectionNotify(property=None)
+        // — otherwise the client hangs waiting for the conversion.
+        // dtcalc tripped this during init, hanging at request 85 because
+        // we silent-dropped opcode 24.
+        case .convertSelection(let r):
+            log?.log("  ConvertSelection requestor=0x\(String(r.requestor, radix: 16)) sel=\(r.selection) target=\(r.target) prop=\(r.property)")
+            if let ownerState = coordinator.selectionOwner(r.selection) {
+                let event = SelectionRequestEvent(
+                    sequenceNumber: sequenceNumber,
+                    time: r.time == 0 ? serverTime : r.time,
+                    owner: ownerState.window,
+                    requestor: r.requestor,
+                    selection: r.selection,
+                    target: r.target,
+                    property: r.property
+                )
+                outbound.append(event.encode(byteOrder: byteOrder))
+                log?.log("  → forwarded SelectionRequest to owner=0x\(String(ownerState.window, radix: 16))")
+            } else {
+                // No owner — reply directly to requestor with property=None.
+                let event = SelectionNotifyEvent(
+                    sequenceNumber: sequenceNumber,
+                    time: r.time == 0 ? serverTime : r.time,
+                    requestor: r.requestor,
+                    selection: r.selection,
+                    target: r.target,
+                    property: 0
+                )
+                outbound.append(event.encode(byteOrder: byteOrder))
+                log?.log("  → SelectionNotify property=None (no owner for sel=\(r.selection))")
+            }
+
         // can run the copy roundtrip later (or right now, in xterm-style
         // mode). owner=0 clears the selection.
         case .setSelectionOwner(let r):
@@ -2158,6 +2194,7 @@ private func opcodeName(_ request: Request) -> String {
     case .getProperty: return "GetProperty"
     case .setSelectionOwner: return "SetSelectionOwner"
     case .getSelectionOwner: return "GetSelectionOwner"
+    case .convertSelection: return "ConvertSelection"
     case .sendEvent: return "SendEvent"
     case .grabPointer: return "GrabPointer"
     case .ungrabPointer: return "UngrabPointer"

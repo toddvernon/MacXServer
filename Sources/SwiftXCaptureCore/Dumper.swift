@@ -318,6 +318,7 @@ public enum Dumper {
         case .getProperty:               return GetProperty.opcode
         case .setSelectionOwner:         return SetSelectionOwner.opcode
         case .getSelectionOwner:         return GetSelectionOwner.opcode
+        case .convertSelection:          return ConvertSelection.opcode
         case .sendEvent:                 return SendEvent.opcode
         case .grabPointer:               return GrabPointer.opcode
         case .ungrabPointer:             return UngrabPointer.opcode

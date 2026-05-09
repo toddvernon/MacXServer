@@ -19,6 +19,7 @@ public enum Request: Equatable, Sendable {
     case getProperty(GetProperty)
     case setSelectionOwner(SetSelectionOwner)
     case getSelectionOwner(GetSelectionOwner)
+    case convertSelection(ConvertSelection)
     case sendEvent(SendEvent)
     case grabPointer(GrabPointer)
     case ungrabPointer(UngrabPointer)
@@ -99,6 +100,7 @@ public enum Request: Equatable, Sendable {
         case .getProperty(let r):               return r.encode(byteOrder: byteOrder)
         case .setSelectionOwner(let r):         return r.encode(byteOrder: byteOrder)
         case .getSelectionOwner(let r):         return r.encode(byteOrder: byteOrder)
+        case .convertSelection(let r):          return r.encode(byteOrder: byteOrder)
         case .sendEvent(let r):                 return r.encode(byteOrder: byteOrder)
         case .grabPointer(let r):               return r.encode(byteOrder: byteOrder)
         case .ungrabPointer(let r):             return r.encode(byteOrder: byteOrder)
@@ -212,6 +214,8 @@ public enum Request: Equatable, Sendable {
             return .setSelectionOwner(try SetSelectionOwner.decode(from: bytes, byteOrder: byteOrder))
         case GetSelectionOwner.opcode:
             return .getSelectionOwner(try GetSelectionOwner.decode(from: bytes, byteOrder: byteOrder))
+        case ConvertSelection.opcode:
+            return .convertSelection(try ConvertSelection.decode(from: bytes, byteOrder: byteOrder))
         case SendEvent.opcode:
             return .sendEvent(try SendEvent.decode(from: bytes, byteOrder: byteOrder))
         case GrabPointer.opcode:

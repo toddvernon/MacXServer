@@ -261,6 +261,8 @@ private func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext) -> S
         body = "SetSelectionOwner        selection=\(atomDisplay(r.selection, ctx: ctx)) owner=\(windowDisplay(r.owner))"
     case .getSelectionOwner(let r):
         body = "GetSelectionOwner        selection=\(atomDisplay(r.selection, ctx: ctx))"
+    case .convertSelection(let r):
+        body = "ConvertSelection         selection=\(atomDisplay(r.selection, ctx: ctx)) target=\(atomDisplay(r.target, ctx: ctx)) prop=\(atomDisplay(r.property, ctx: ctx)) requestor=\(windowDisplay(r.requestor))"
     case .sendEvent(let r):
         body = "SendEvent                dest=\(windowDisplay(r.destination)) propagate=\(r.propagate)"
     case .grabPointer:
@@ -477,6 +479,7 @@ private func opcodeOf(_ req: Request) -> UInt8 {
     case .getProperty:               return GetProperty.opcode
     case .setSelectionOwner:         return SetSelectionOwner.opcode
     case .getSelectionOwner:         return GetSelectionOwner.opcode
+    case .convertSelection:          return ConvertSelection.opcode
     case .sendEvent:                 return SendEvent.opcode
     case .grabPointer:               return GrabPointer.opcode
     case .ungrabPointer:             return UngrabPointer.opcode
