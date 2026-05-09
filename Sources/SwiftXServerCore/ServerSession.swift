@@ -1,3 +1,4 @@
+import Foundation
 import Framer
 
 // Per-connection state machine. Bytes flow in via `feed(_:)`; reply/event bytes
@@ -104,6 +105,39 @@ public final class ServerSession: @unchecked Sendable {
         let ownerEvents: Bool
     }
     private var keyboardGrab: KeyboardGrab?
+
+    /// Pointer buttons currently held. Used to manage the X11 implicit
+    /// pointer grab that activates on the first ButtonPress and ends when
+    /// all buttons are released. `implicitGrab` flag distinguishes our
+    /// auto-installed grab from a client-issued one — we only auto-clear
+    /// the implicit kind.
+    private var heldButtons: Set<UInt8> = []
+    private var implicitGrab: Bool = false
+
+    /// Current X keyboard focus window, set via SetInputFocus. nil = no
+    /// explicit focus (KeyPress falls back to keyTarget — the shallowest
+    /// descendant with KeyPressMask, then the top-level). Motif sets focus
+    /// when the user clicks an XmText / XmTextField widget; without
+    /// honoring that, key events go to the wrong window and the text
+    /// widget never sees them.
+    private var focusWindow: UInt32?
+
+    /// Monotonic server time in milliseconds since the connection started.
+    /// X events carry this in the `time` field; clients use it for double-
+    /// click detection, drag thresholds, and "is this event newer than
+    /// what I last processed?" tracking. Sending 0 across all events
+    /// (which we did before) causes some Xt-based clients to treat events
+    /// as duplicates and drop them.
+    private let connectionStart = Date()
+    private var serverTime: UInt32 {
+        UInt32(truncatingIfNeeded: Int(Date().timeIntervalSince(connectionStart) * 1000))
+    }
+
+    /// Modifier state bits derived from the most recent key event's
+    /// modifierFlags. Persisted between events so ButtonPress/Release
+    /// carry the right modifier bits even though they don't carry their
+    /// own modifier info from the bridge.
+    private var currentModifierState: UInt16 = 0
 
     public private(set) var setupAcceptedSent: Bool = false
     public private(set) var requestsProcessed: Int = 0
@@ -311,11 +345,18 @@ public final class ServerSession: @unchecked Sendable {
     ) {
         guard let order = byteOrder else { return }
         let mask: UInt32 = isDown ? (1 << 0) : (1 << 1)        // KeyPress / KeyRelease
-        // Keyboard grab redirect: if grabbed and ownerEvents=false, route
-        // to the grab window. ownerEvents=true keeps natural routing.
+        // Routing precedence (highest → lowest):
+        //   1. Active keyboard grab with ownerEvents=false → grab window.
+        //   2. Explicit focus window (set via SetInputFocus) — Motif relies
+        //      on this for XmText/XmTextField input. Without it, our keys
+        //      go to whatever shallow descendant has KeyPressMask, which
+        //      isn't necessarily the focused widget.
+        //   3. keyTarget fallback (BFS for KeyPressMask in the subtree).
         let target: UInt32
         if let kg = keyboardGrab, !kg.ownerEvents {
             target = kg.window
+        } else if let focus = focusWindow, windows.get(focus) != nil {
+            target = focus
         } else if let natural = keyTarget(topLevel: topLevel, eventMaskBit: mask) {
             target = natural
         } else {
@@ -324,13 +365,14 @@ public final class ServerSession: @unchecked Sendable {
         }
         let xKeycode = USKeymap.xKeycode(forMacKeyCode: macKeyCode)
         let state = USKeymap.translateModifiers(modifierFlags)
+        currentModifierState = state
         // X11 InputEvent shape covers KeyPress / KeyRelease / button / motion.
         // code: 2 = KeyPress, 3 = KeyRelease.
         let code: UInt8 = isDown ? 2 : 3
         let event = InputEvent(
             detail: xKeycode,
             sequenceNumber: sequenceNumber,
-            time: 0,                                          // server time; xterm doesn't care
+            time: serverTime,
             root: config.rootWindowId,
             event: target,
             child: 0,
@@ -375,12 +417,12 @@ public final class ServerSession: @unchecked Sendable {
         let event = InputEvent(
             detail: 0,                                     // 0 = same-pixel; 1 = hint
             sequenceNumber: sequenceNumber,
-            time: 0,
+            time: serverTime,
             root: config.rootWindowId,
             event: target, child: 0,
             rootX: x, rootY: y,
             eventX: x &- tx, eventY: y &- ty,
-            state: buttonStateBit,
+            state: currentModifierState | buttonStateBit,
             sameScreen: true
         )
         outbound.append(event.encode(code: 6, byteOrder: order))
@@ -396,6 +438,10 @@ public final class ServerSession: @unchecked Sendable {
         guard let order = byteOrder else { return }
         let mask: UInt32 = isDown ? (1 << 2) : (1 << 3)
         let mask16: UInt16 = UInt16(mask)
+        // Update held-button bookkeeping first; resolve target second; then
+        // (after delivery) install or tear down the implicit grab.
+        if isDown { heldButtons.insert(button) } else { heldButtons.remove(button) }
+
         let resolved: (UInt32, Int16, Int16)?
         if let redirect = grabRedirect(topLevel: topLevel, eventMaskBit16: mask16) {
             resolved = redirect
@@ -412,19 +458,68 @@ public final class ServerSession: @unchecked Sendable {
             return
         }
         let code: UInt8 = isDown ? 4 : 5
+        // State bits per X spec: modifier keys + buttons held BEFORE this
+        // event. For a press, the new button is NOT in state (0 buttons
+        // before press). For a release, the released button IS in state
+        // (it was held before the release). Button N occupies bit (7+N).
+        var state: UInt16 = currentModifierState
+        // heldButtons was just updated; for press, exclude the just-pressed
+        // button (state should reflect "before"); for release, include the
+        // about-to-release button.
+        let buttonStateMask: UInt16 = {
+            var m: UInt16 = 0
+            if isDown {
+                for b in heldButtons where b != button {
+                    if b >= 1 && b <= 5 { m |= UInt16(1) << (7 + b) }
+                }
+            } else {
+                // heldButtons no longer contains the just-released button;
+                // re-add it because state reflects the moment BEFORE release.
+                for b in heldButtons.union([button]) {
+                    if b >= 1 && b <= 5 { m |= UInt16(1) << (7 + b) }
+                }
+            }
+            return m
+        }()
+        state |= buttonStateMask
         let event = InputEvent(
             detail: button,
             sequenceNumber: sequenceNumber,
-            time: 0,
+            time: serverTime,
             root: config.rootWindowId,
             event: target, child: 0,
             rootX: x, rootY: y,
             eventX: x &- tx, eventY: y &- ty,
-            state: 0,
+            state: state,
             sameScreen: true
         )
-        log?.log("  → \(isDown ? "ButtonPress" : "ButtonRelease") button=\(button) target=0x\(String(target, radix: 16)) at top=(\(x),\(y)) local=(\(x &- tx),\(y &- ty))")
+        log?.log("  → \(isDown ? "ButtonPress" : "ButtonRelease") button=\(button) target=0x\(String(target, radix: 16)) at top=(\(x),\(y)) local=(\(x &- tx),\(y &- ty)) state=0x\(String(state, radix: 16))")
         outbound.append(event.encode(code: code, byteOrder: order))
+
+        // X11 implicit pointer grab. On the first ButtonPress with no other
+        // grab active, install a synthetic grab on the press's target so
+        // subsequent motion + the matching release route to the same
+        // window. Without this, Motif (and most Xt-based) widgets register
+        // ButtonPressMask but not ButtonReleaseMask — releases fall up to
+        // the top-level via mouseTarget's mask filter, the click never
+        // resolves as a Press+Release pair on one widget, and input is
+        // dead. Spec section 9.5 / Xlib programming reference.
+        if isDown && heldButtons.count == 1 && pointerGrab == nil {
+            pointerGrab = PointerGrab(
+                window: target,
+                eventMask: 0xFFFF,    // permissive — deliver all pointer events while grabbed
+                ownerEvents: false,
+                cursor: 0
+            )
+            implicitGrab = true
+        }
+        // End the implicit grab when all buttons are released. Client-issued
+        // grabs (implicitGrab=false) are NOT auto-cleared; only UngrabPointer
+        // ends those.
+        if !isDown && heldButtons.isEmpty && implicitGrab {
+            pointerGrab = nil
+            implicitGrab = false
+        }
     }
 
     /// Pointer moved with no button held. Resolve the deepest mapped
@@ -1408,6 +1503,8 @@ public final class ServerSession: @unchecked Sendable {
             let backPixel = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.backPixel, byteOrder: byteOrder)
             let borderPixel = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.borderPixel, byteOrder: byteOrder)
             let cursor = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.cursor, byteOrder: byteOrder)
+            let overrideRedirect =
+                (ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.overrideRedirect, byteOrder: byteOrder) ?? 0) != 0
             let entry = WindowEntry(
                 id: r.wid, parent: r.parent, depth: r.depth,
                 x: r.x, y: r.y, width: r.width, height: r.height,
@@ -1416,12 +1513,20 @@ public final class ServerSession: @unchecked Sendable {
                 mapped: false, eventMask: eventMask,
                 backPixel: backPixel,
                 borderPixel: borderPixel,
-                cursor: (cursor == 0) ? nil : cursor
+                cursor: (cursor == 0) ? nil : cursor,
+                overrideRedirect: overrideRedirect
             )
             windows.insert(entry)
             let isTop = r.parent == config.rootWindowId
-            log?.log("  CreateWindow wid=0x\(String(r.wid, radix: 16)) parent=0x\(String(r.parent, radix: 16)) \(r.width)x\(r.height) at (\(r.x),\(r.y)) bw=\(r.borderWidth) eventMask=0x\(String(eventMask, radix: 16)) topLevel=\(isTop)")
-            if isTop {
+            log?.log("  CreateWindow wid=0x\(String(r.wid, radix: 16)) parent=0x\(String(r.parent, radix: 16)) \(r.width)x\(r.height) at (\(r.x),\(r.y)) bw=\(r.borderWidth) eventMask=0x\(String(eventMask, radix: 16)) topLevel=\(isTop) override=\(overrideRedirect)")
+            // Only register decoratable top-levels with the bridge.
+            // override-redirect = "WM should ignore this" — toolkit helpers,
+            // popup menus, tooltips. In rootless mode that means no NSWindow
+            // chrome. The window still exists in the X tree (we keep the
+            // entry above) so client requests against it work; we just don't
+            // create a Mac chrome for it. Without this, quickplot's tiny
+            // (1x1 / 5x5 / 10x10) helper windows appeared as visible boxes.
+            if isTop && !overrideRedirect {
                 bridge?.registerTopLevel(
                     id: r.wid,
                     geometry: TopLevelGeometry(
@@ -1488,10 +1593,28 @@ public final class ServerSession: @unchecked Sendable {
             }
             windows.setMapped(r.window, true)
             let isTop = isTopLevel(r.window)
-            log?.log("  MapWindow window=0x\(String(r.window, radix: 16)) topLevel=\(isTop)")
+            let entry = windows.get(r.window)
+            let isOverrideRedirect = entry?.overrideRedirect ?? false
+            log?.log("  MapWindow window=0x\(String(r.window, radix: 16)) topLevel=\(isTop) override=\(isOverrideRedirect)")
+            // override-redirect top-levels skip the bridge entirely — no
+            // NSWindow comes up. We still need to satisfy the X protocol so
+            // the client thinks the map happened: emit a synthetic
+            // MapNotify on the window itself if it has StructureNotifyMask.
+            // Real X servers also emit MapRequest to the WM client, but we
+            // ARE the WM and we choose not to surface this window.
+            if isTop && isOverrideRedirect {
+                if (entry?.eventMask ?? 0) & (1 << 17) != 0 {        // StructureNotifyMask
+                    let mapNotify = MapNotifyEvent(
+                        sequenceNumber: sequenceNumber,
+                        event: r.window, window: r.window,
+                        overrideRedirect: true
+                    )
+                    outbound.append(mapNotify.encode(byteOrder: byteOrder))
+                }
+                break
+            }
             if isTop {
                 let descendants = mappedDescendantSnapshots(of: r.window)
-                let entry = windows.get(r.window)
                 let topMask = entry?.eventMask ?? 0
                 let currentGeom = entry.map { TopLevelGeometry(
                     x: $0.x, y: $0.y,
@@ -1839,6 +1962,17 @@ public final class ServerSession: @unchecked Sendable {
         case .freeCursor(let r):
             cursors.remove(r.cursor)
 
+        case .setInputFocus(let r):
+            // Track the requested focus window. KeyPress / KeyRelease will
+            // route here on next event. We don't synthesize FocusIn /
+            // FocusOut on the X-protocol-level focus chain — that's a
+            // Phase-4 polish item — but routing keys to the focus window
+            // is what Motif actually needs to make text input work.
+            // r.focus = 0 (None) or 1 (PointerRoot) → fall back to
+            // pointer-position routing.
+            focusWindow = (r.focus == 0 || r.focus == 1) ? nil : r.focus
+            log?.log("  SetInputFocus focus=0x\(String(r.focus, radix: 16))")
+
         case .grabPointer(let r):
             handleGrabPointer(r, byteOrder: byteOrder)
 
@@ -1857,7 +1991,7 @@ public final class ServerSession: @unchecked Sendable {
              .sendEvent, .reparentWindow, .destroySubwindows,
              .grabButton, .grabKey, .allowEvents,
              .grabServer, .ungrabServer,
-             .warpPointer, .setInputFocus,
+             .warpPointer,
              .recolorCursor, .bell, .unmapSubwindows:
             break
 

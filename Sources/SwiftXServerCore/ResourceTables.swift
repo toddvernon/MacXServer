@@ -32,6 +32,12 @@ public struct WindowEntry: Equatable, Sendable {
     /// an X cursor-font glyph, which we substitute with an NSCursor at
     /// pointer-crossing time.
     public var cursor: UInt32?
+    /// CWOverrideRedirect bit. true = "window manager should not decorate
+    /// this window." In rootless mode that means: don't create an NSWindow
+    /// for it. Used by toolkits for helper windows (selection management,
+    /// atom registration, IPC) and for popup elements (menus, tooltips).
+    /// Default false.
+    public var overrideRedirect: Bool
 
     public init(
         id: UInt32, parent: UInt32, depth: UInt8,
@@ -41,7 +47,8 @@ public struct WindowEntry: Equatable, Sendable {
         mapped: Bool = false, eventMask: UInt32 = 0,
         backPixel: UInt32? = nil,
         borderPixel: UInt32? = nil,
-        cursor: UInt32? = nil
+        cursor: UInt32? = nil,
+        overrideRedirect: Bool = false
     ) {
         self.id = id; self.parent = parent; self.depth = depth
         self.x = x; self.y = y; self.width = width; self.height = height
@@ -51,6 +58,7 @@ public struct WindowEntry: Equatable, Sendable {
         self.backPixel = backPixel
         self.borderPixel = borderPixel
         self.cursor = cursor
+        self.overrideRedirect = overrideRedirect
     }
 }
 
