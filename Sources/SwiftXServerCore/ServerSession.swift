@@ -71,6 +71,13 @@ public final class ServerSession: @unchecked Sendable {
     private var inbound: [UInt8] = []
     private var sequenceNumber: UInt16 = 0
 
+    /// Which X subwindow currently contains the pointer, per top-level
+    /// NSWindow. Updated on every pointer-moved event; consulted to decide
+    /// when a crossing-event chain (LeaveNotify on old window, EnterNotify
+    /// on new) is needed. Absent key = pointer not currently over the
+    /// NSWindow's content area.
+    private var currentPointerWindow: [UInt32: UInt32] = [:]
+
     public private(set) var setupAcceptedSent: Bool = false
     public private(set) var requestsProcessed: Int = 0
     public private(set) var unknownOpcodes: [UInt8] = []
@@ -111,6 +118,15 @@ public final class ServerSession: @unchecked Sendable {
         }
         bridge?.setOnMouseDragged { [weak self] topLevel, x, y, button in
             self?.handleMouseDragged(topLevel: topLevel, x: x, y: y, button: button)
+        }
+        bridge?.setOnPointerMoved { [weak self] topLevel, x, y in
+            self?.handlePointerMoved(topLevel: topLevel, x: x, y: y)
+        }
+        bridge?.setOnPointerEnteredView { [weak self] topLevel, x, y in
+            self?.handlePointerEnteredView(topLevel: topLevel, x: x, y: y)
+        }
+        bridge?.setOnPointerExitedView { [weak self] topLevel in
+            self?.handlePointerExitedView(topLevel: topLevel)
         }
         bridge?.setOnPaste { [weak self] topLevel, text in
             self?.handlePaste(topLevel: topLevel, text: text)
@@ -357,6 +373,239 @@ public final class ServerSession: @unchecked Sendable {
         )
         log?.log("  → \(isDown ? "ButtonPress" : "ButtonRelease") button=\(button) target=0x\(String(target, radix: 16)) at top=(\(x),\(y)) local=(\(x &- tx),\(y &- ty))")
         outbound.append(event.encode(code: code, byteOrder: order))
+    }
+
+    /// Pointer moved with no button held. Resolve the deepest mapped
+    /// descendant containing the pointer (regardless of event mask — we
+    /// want the actual position-window, not the nearest-subscribed-window),
+    /// compare to the previously-tracked pointer window for this top-level,
+    /// and emit the EnterNotify / LeaveNotify chain if it changed.
+    public func handlePointerMoved(topLevel: UInt32, x: Int16, y: Int16) {
+        guard byteOrder != nil else { return }
+        guard windows.get(topLevel) != nil else { return }
+        let target = deepestMappedWindow(topLevel: topLevel, x: x, y: y)
+        let from = currentPointerWindow[topLevel]
+        if from == target { return }
+        currentPointerWindow[topLevel] = target
+        emitCrossings(topLevel: topLevel, from: from, to: target, rootX: x, rootY: y)
+    }
+
+    /// Pointer entered the NSView's content area (came from outside our X
+    /// subtree — another macOS window, off-screen, etc.). Treated as a
+    /// Nonlinear crossing: the synthetic "from" is no X window at all, so
+    /// we only emit the EnterNotify chain.
+    public func handlePointerEnteredView(topLevel: UInt32, x: Int16, y: Int16) {
+        guard byteOrder != nil else { return }
+        guard windows.get(topLevel) != nil else { return }
+        let target = deepestMappedWindow(topLevel: topLevel, x: x, y: y)
+        currentPointerWindow[topLevel] = target
+        emitCrossings(topLevel: topLevel, from: nil, to: target, rootX: x, rootY: y)
+    }
+
+    /// Pointer left the NSView's content area. Emit LeaveNotify chain for
+    /// whichever X window the pointer was last in, then clear the tracker.
+    public func handlePointerExitedView(topLevel: UInt32) {
+        guard byteOrder != nil else { return }
+        guard let from = currentPointerWindow[topLevel] else { return }
+        currentPointerWindow[topLevel] = nil
+        emitCrossings(topLevel: topLevel, from: from, to: nil, rootX: 0, rootY: 0)
+    }
+
+    /// Walk the mapped X subtree under `topLevel` and return the deepest
+    /// window whose absolute rect contains `(x, y)`. Falls back to the
+    /// top-level itself. Distinct from `mouseTarget` (which filters by
+    /// event-mask interest) — for crossing events we need the actual
+    /// containing window so we know when to fire the chain.
+    private func deepestMappedWindow(topLevel: UInt32, x: Int16, y: Int16) -> UInt32 {
+        var deepestId: UInt32 = topLevel
+        var deepestDepth = 0
+        func walk(id: UInt32, ox: Int16, oy: Int16, depth: Int) {
+            for (cid, w) in windows.windows where w.parent == id && w.mapped {
+                let cx = ox &+ w.x
+                let cy = oy &+ w.y
+                let inside = x >= cx && y >= cy
+                              && x < cx &+ Int16(w.width)
+                              && y < cy &+ Int16(w.height)
+                guard inside else { continue }
+                if depth + 1 > deepestDepth {
+                    deepestId = cid
+                    deepestDepth = depth + 1
+                }
+                walk(id: cid, ox: cx, oy: cy, depth: depth + 1)
+            }
+        }
+        walk(id: topLevel, ox: 0, oy: 0, depth: 0)
+        return deepestId
+    }
+
+    /// Emit the EnterNotify / LeaveNotify chain for a pointer crossing
+    /// from `from` to `to` (either side may be nil if the pointer was
+    /// outside the X subtree). Implements the X11 spec algorithm for the
+    /// detail field:
+    ///
+    ///   - `from` is ancestor of `to` → Leave on from with detail=Inferior;
+    ///     Enter on intermediate windows with detail=Virtual; Enter on to
+    ///     with detail=Ancestor.
+    ///   - `to` is ancestor of `from` → Leave on from with detail=Ancestor;
+    ///     Leave on intermediate windows with detail=Virtual; Enter on to
+    ///     with detail=Inferior.
+    ///   - Otherwise (Nonlinear) → Leave on from with detail=Nonlinear;
+    ///     Leave on the from→LCA path with detail=NonlinearVirtual; Enter
+    ///     on the LCA→to path with detail=NonlinearVirtual; Enter on to
+    ///     with detail=Nonlinear.
+    ///   - `from` nil → emit only the Enter chain (Nonlinear / NonlinearVirtual).
+    ///   - `to` nil → emit only the Leave chain (Nonlinear / NonlinearVirtual).
+    ///
+    /// Each event is delivered only if the recipient window's eventMask
+    /// has EnterWindowMask (1<<4) for Enter, LeaveWindowMask (1<<5) for
+    /// Leave.
+    private func emitCrossings(topLevel: UInt32, from: UInt32?, to: UInt32?, rootX: Int16, rootY: Int16) {
+        guard let order = byteOrder else { return }
+        let fromPath = from.map(ancestorPathToTopLevel) ?? []
+        let toPath = to.map(ancestorPathToTopLevel) ?? []
+        // ancestorPathToTopLevel returns leaf-first list (leaf, parent, ..., topLevel).
+
+        // Find LCA: highest window appearing in both paths.
+        let toSet = Set(toPath)
+        let lca = fromPath.first(where: { toSet.contains($0) })
+
+        // Classify the relationship.
+        let fromIsAncestorOfTo = (from != nil && to != nil) && toPath.contains(from!) && from != to
+        let toIsAncestorOfFrom = (from != nil && to != nil) && fromPath.contains(to!) && from != to
+
+        // Build leave list (leaf-first) and enter list (root-first toward leaf).
+        var leaves: [(UInt32, CrossingDetail)] = []
+        var enters: [(UInt32, CrossingDetail)] = []
+
+        if let from = from, let to = to, from == to { return }
+
+        if let from = from {
+            if fromIsAncestorOfTo {
+                // Leaving an ancestor; "to" is below "from".
+                leaves.append((from, .inferior))
+            } else if toIsAncestorOfFrom {
+                // Leaving a descendant; "to" is an ancestor.
+                leaves.append((from, .ancestor))
+                // Walk from's ancestors up to (but not including) to: Leave detail=Virtual.
+                for w in fromPath.dropFirst() {
+                    if w == to { break }
+                    leaves.append((w, .virtual))
+                }
+            } else {
+                // Nonlinear (or to is nil → treat as Nonlinear).
+                leaves.append((from, .nonlinear))
+                if let lca = lca {
+                    for w in fromPath.dropFirst() {
+                        if w == lca { break }
+                        leaves.append((w, .nonlinearVirtual))
+                    }
+                } else {
+                    // No LCA (to is nil or unrelated tree): walk up to root of fromPath.
+                    for w in fromPath.dropFirst() {
+                        leaves.append((w, .nonlinearVirtual))
+                    }
+                }
+            }
+        }
+
+        if let to = to {
+            if fromIsAncestorOfTo, let from = from {
+                // Walk from down to to (exclusive of from, exclusive of to): Enter Virtual.
+                // toPath is leaf-first, so reverse-iterate from `from`'s child down to to's parent.
+                let virtualWindows = toPath.prefix(while: { $0 != from }).dropFirst()
+                for w in virtualWindows.reversed() {
+                    enters.append((w, .virtual))
+                }
+                enters.append((to, .ancestor))
+            } else if toIsAncestorOfFrom {
+                enters.append((to, .inferior))
+            } else {
+                // Nonlinear (or from is nil → treat as Nonlinear).
+                let lcaForChain: UInt32? = lca
+                if let lca = lcaForChain {
+                    let virtualWindows = toPath.prefix(while: { $0 != lca }).dropFirst()
+                    for w in virtualWindows.reversed() {
+                        enters.append((w, .nonlinearVirtual))
+                    }
+                } else {
+                    // No LCA: from is nil (entered from outside) — walk full toPath
+                    // ancestors above the leaf.
+                    for w in toPath.dropFirst().reversed() {
+                        enters.append((w, .nonlinearVirtual))
+                    }
+                }
+                enters.append((to, .nonlinear))
+            }
+        }
+
+        // Emit. Code 7 = EnterNotify, 8 = LeaveNotify.
+        let enterMask: UInt32 = 1 << 4
+        let leaveMask: UInt32 = 1 << 5
+
+        for (window, detail) in leaves {
+            guard let entry = windows.get(window), entry.eventMask & leaveMask != 0 else { continue }
+            let (tlX, tlY) = absoluteOrigin(of: window, topLevel: topLevel)
+            let event = CrossingEvent(
+                detail: detail,
+                sequenceNumber: sequenceNumber,
+                time: 0,
+                root: config.rootWindowId,
+                event: window, child: 0,
+                rootX: rootX, rootY: rootY,
+                eventX: rootX &- tlX, eventY: rootY &- tlY,
+                state: 0, mode: .normal,
+                sameScreen: true, focus: false
+            )
+            log?.log("  → LeaveNotify target=0x\(String(window, radix: 16)) detail=\(detail) at top=(\(rootX),\(rootY))")
+            outbound.append(event.encode(code: 8, byteOrder: order))
+        }
+
+        for (window, detail) in enters {
+            guard let entry = windows.get(window), entry.eventMask & enterMask != 0 else { continue }
+            let (tlX, tlY) = absoluteOrigin(of: window, topLevel: topLevel)
+            let event = CrossingEvent(
+                detail: detail,
+                sequenceNumber: sequenceNumber,
+                time: 0,
+                root: config.rootWindowId,
+                event: window, child: 0,
+                rootX: rootX, rootY: rootY,
+                eventX: rootX &- tlX, eventY: rootY &- tlY,
+                state: 0, mode: .normal,
+                sameScreen: true, focus: false
+            )
+            log?.log("  → EnterNotify target=0x\(String(window, radix: 16)) detail=\(detail) at top=(\(rootX),\(rootY))")
+            outbound.append(event.encode(code: 7, byteOrder: order))
+        }
+    }
+
+    /// Ancestor path from `window` (leaf-first) up to and including the
+    /// top-level. Stops when reaching a window with no parent or one that
+    /// isn't in the table.
+    private func ancestorPathToTopLevel(_ window: UInt32) -> [UInt32] {
+        var path: [UInt32] = []
+        var cur: UInt32? = window
+        while let id = cur, let entry = windows.get(id) {
+            path.append(id)
+            // parent==root means we've reached a top-level; stop here.
+            if entry.parent == config.rootWindowId || entry.parent == 0 { break }
+            cur = entry.parent
+        }
+        return path
+    }
+
+    /// Absolute (top-level-local) origin of a window by walking up parents.
+    /// Returns (x, y) suitable for computing eventX/eventY = rootX - origin.
+    private func absoluteOrigin(of window: UInt32, topLevel: UInt32) -> (Int16, Int16) {
+        var x: Int16 = 0
+        var y: Int16 = 0
+        var cur: UInt32? = window
+        while let id = cur, id != topLevel, let entry = windows.get(id) {
+            x = x &+ entry.x
+            y = y &+ entry.y
+            cur = entry.parent
+        }
+        return (x, y)
     }
 
     /// Find the deepest mapped descendant containing `(x, y)` (top-level
@@ -704,6 +953,24 @@ public final class ServerSession: @unchecked Sendable {
         bridge.drawPolyFillRectangle(
             topLevel: top,
             foreground: resolveColor(state.foreground),
+            rectangles: translated
+        )
+    }
+
+    private func handlePolyRectangle(_ r: PolyRectangle, byteOrder: ByteOrder) {
+        guard let bridge = bridge,
+              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        let state = gcState(r.gc, byteOrder: byteOrder)
+        let translated = r.rectangles.map {
+            Rectangle(
+                x: $0.x &+ dx, y: $0.y &+ dy,
+                width: $0.width, height: $0.height
+            )
+        }
+        bridge.drawPolyRectangle(
+            topLevel: top,
+            foreground: resolveColor(state.foreground),
+            lineWidth: state.lineWidth,
             rectangles: translated
         )
     }
@@ -1355,6 +1622,9 @@ public final class ServerSession: @unchecked Sendable {
         case .polyFillRectangle(let r):
             handlePolyFillRectangle(r, byteOrder: byteOrder)
 
+        case .polyRectangle(let r):
+            handlePolyRectangle(r, byteOrder: byteOrder)
+
         case .imageText8(let r):
             handleImageText8(r, byteOrder: byteOrder)
 
@@ -1366,7 +1636,7 @@ public final class ServerSession: @unchecked Sendable {
 
         // Silent no-ops: requests xclock or other apps may issue that we
         // don't yet wire to rendering. Add real handlers as needed.
-        case .polyArc, .polyRectangle,
+        case .polyArc,
              .polyFillArc,
              .setClipRectangles, .setDashes, .putImage,
              .sendEvent, .reparentWindow, .destroySubwindows,

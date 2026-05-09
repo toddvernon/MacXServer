@@ -40,6 +40,20 @@ public final class FlippedXView: NSView {
     /// field of the X MotionNotify event correctly.
     public var mouseDraggedHandler: ((Int16, Int16, UInt8) -> Void)?
 
+    /// Pointer-moved event sink (no button held). Fires from `mouseMoved`
+    /// when the tracking area is active. Args: (X-logical x, y in
+    /// top-level coords). The session uses this to track which X subwindow
+    /// currently contains the pointer and emit EnterNotify / LeaveNotify.
+    public var mouseMovedHandler: ((Int16, Int16) -> Void)?
+
+    /// Pointer entered the NSView's content area (from outside the window).
+    /// Args: (X-logical x, y). The session emits the EnterNotify chain.
+    public var mouseEnteredHandler: ((Int16, Int16) -> Void)?
+
+    /// Pointer left the NSView's content area. The session emits the
+    /// LeaveNotify chain for whichever X window the pointer was last in.
+    public var mouseExitedHandler: (() -> Void)?
+
     /// Paste sink. The bridge installs this; FlippedXView calls it when the
     /// user invokes paste (Cmd-V) with the NSPasteboard's string content.
     /// The session synthesises a KeyPress/KeyRelease pair per character so
@@ -158,6 +172,47 @@ public final class FlippedXView: NSView {
     public override func mouseDragged(with event: NSEvent)      { dispatchDrag(event, button: 1) }
     public override func rightMouseDragged(with event: NSEvent) { dispatchDrag(event, button: 3) }
     public override func otherMouseDragged(with event: NSEvent) { dispatchDrag(event, button: 2) }
+
+    public override func mouseMoved(with event: NSEvent) {
+        guard let handler = mouseMovedHandler else { return }
+        let (x, y) = logicalLocation(of: event)
+        handler(x, y)
+    }
+
+    public override func mouseEntered(with event: NSEvent) {
+        guard let handler = mouseEnteredHandler else { return }
+        let (x, y) = logicalLocation(of: event)
+        handler(x, y)
+    }
+
+    public override func mouseExited(with event: NSEvent) {
+        mouseExitedHandler?()
+    }
+
+    /// AppKit calls this whenever the view's frame changes (initial layout,
+    /// live resize, etc.) and asks us to install / replace tracking areas.
+    /// We want one tracking area covering the whole view that delivers
+    /// mouseMoved + mouseEntered + mouseExited even when the NSWindow
+    /// isn't key — `.activeAlways` is the right option for an X server
+    /// (the X client wants Crossing events regardless of macOS focus).
+    /// `.inVisibleRect` lets AppKit auto-update bounds on resize.
+    public override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        let options: NSTrackingArea.Options = [
+            .mouseEnteredAndExited,
+            .mouseMoved,
+            .activeAlways,
+            .inVisibleRect
+        ]
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: options,
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+    }
 
     private func dispatchMouse(_ event: NSEvent, button: UInt8, isDown: Bool) {
         guard let handler = mouseHandler else { return }

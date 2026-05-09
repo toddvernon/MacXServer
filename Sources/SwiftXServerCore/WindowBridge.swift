@@ -133,6 +133,31 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// Always invoked on the main thread.
     func setOnMouseDragged(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void)
 
+    /// Called by the session at startup. Bridge invokes this on every
+    /// mouseMoved (pointer moved with NO button held). Args: (top-level X
+    /// window id, X-logical x, X-logical y in top-level coords). The
+    /// session tracks which X subwindow currently contains the pointer and
+    /// emits EnterNotify / LeaveNotify when the containing window changes.
+    /// Always invoked on the main thread. Mouse-with-button-held is
+    /// `setOnMouseDragged` — the protocol distinguishes the two.
+    func setOnPointerMoved(_ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void)
+
+    /// Called by the session at startup. Bridge invokes this when the
+    /// pointer crosses INTO an NSWindow's content area (from outside our
+    /// X subtree entirely — e.g. mouse moves over the window from another
+    /// app or from off-screen). Args: (top-level X window id, X-logical x,
+    /// y in top-level coords). The session emits the EnterNotify chain
+    /// from top-level down to the deepest window currently under the
+    /// pointer.
+    func setOnPointerEnteredView(_ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void)
+
+    /// Called by the session at startup. Bridge invokes this when the
+    /// pointer leaves an NSWindow's content area (mouse moves off the
+    /// window edge or to another app). Args: (top-level X window id). The
+    /// session emits the LeaveNotify chain from the current pointer
+    /// window up to the top-level.
+    func setOnPointerExitedView(_ handler: @escaping @Sendable (UInt32) -> Void)
+
     /// Called by the session at startup. Bridge invokes this when the user
     /// pastes (Cmd-V or Edit > Paste) into one of its NSWindows. Args:
     /// (top-level X window id, pasteboard text). The session synthesises
@@ -170,6 +195,10 @@ public protocol WindowBridge: AnyObject, Sendable {
     func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint])
     func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool)
     func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, rectangles: [Rectangle])
+    /// PolyRectangle: stroke the perimeter of each rect (vs PolyFillRectangle
+    /// which fills). Used by Athena Command for the highlight border that
+    /// appears when the pointer enters the widget.
+    func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Rectangle])
     func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16)
     /// In-window CopyArea: copies a rectangular region of pixels from
     /// (srcX, srcY, w, h) to (dstX, dstY, w, h) within the same top-level
@@ -242,6 +271,9 @@ public extension WindowBridge {
     func setOnFocus(_ handler: @escaping @Sendable (UInt32, Bool) -> Void) {}
     func setOnMouse(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void) {}
     func setOnMouseDragged(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void) {}
+    func setOnPointerMoved(_ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {}
+    func setOnPointerEnteredView(_ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {}
+    func setOnPointerExitedView(_ handler: @escaping @Sendable (UInt32) -> Void) {}
     func setOnPaste(_ handler: @escaping @Sendable (UInt32, String) -> Void) {}
     func setOnCopy(_ handler: @escaping @Sendable (UInt32) -> Void) {}
     func writeClipboard(text: String) {}
@@ -251,6 +283,7 @@ public extension WindowBridge {
     func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint]) {}
     func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool) {}
     func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, rectangles: [Rectangle]) {}
+    func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Rectangle]) {}
     func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16) {}
     func copyArea(
         topLevel: UInt32,

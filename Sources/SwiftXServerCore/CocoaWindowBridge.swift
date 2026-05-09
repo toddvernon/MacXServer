@@ -40,6 +40,9 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private var focusHandlers: [@Sendable (UInt32, Bool) -> Void] = []
     private var mouseHandlers: [@Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void] = []
     private var mouseDraggedHandlers: [@Sendable (UInt32, Int16, Int16, UInt8) -> Void] = []
+    private var pointerMovedHandlers: [@Sendable (UInt32, Int16, Int16) -> Void] = []
+    private var pointerEnteredViewHandlers: [@Sendable (UInt32, Int16, Int16) -> Void] = []
+    private var pointerExitedViewHandlers: [@Sendable (UInt32) -> Void] = []
     private var pasteHandlers: [@Sendable (UInt32, String) -> Void] = []
     private var copyHandlers: [@Sendable (UInt32) -> Void] = []
     private var closeHandlers: [@Sendable (UInt32) -> Void] = []
@@ -74,6 +77,18 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
     public func setOnMouseDragged(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void) {
         handlerLock.lock(); mouseDraggedHandlers.append(handler); handlerLock.unlock()
+    }
+
+    public func setOnPointerMoved(_ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {
+        handlerLock.lock(); pointerMovedHandlers.append(handler); handlerLock.unlock()
+    }
+
+    public func setOnPointerEnteredView(_ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {
+        handlerLock.lock(); pointerEnteredViewHandlers.append(handler); handlerLock.unlock()
+    }
+
+    public func setOnPointerExitedView(_ handler: @escaping @Sendable (UInt32) -> Void) {
+        handlerLock.lock(); pointerExitedViewHandlers.append(handler); handlerLock.unlock()
     }
 
     public func setOnPaste(_ handler: @escaping @Sendable (UInt32, String) -> Void) {
@@ -112,6 +127,18 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private func fireMouseDragged(id: UInt32, x: Int16, y: Int16, button: UInt8) {
         handlerLock.lock(); let snap = mouseDraggedHandlers; handlerLock.unlock()
         for h in snap { h(id, x, y, button) }
+    }
+    private func firePointerMoved(id: UInt32, x: Int16, y: Int16) {
+        handlerLock.lock(); let snap = pointerMovedHandlers; handlerLock.unlock()
+        for h in snap { h(id, x, y) }
+    }
+    private func firePointerEnteredView(id: UInt32, x: Int16, y: Int16) {
+        handlerLock.lock(); let snap = pointerEnteredViewHandlers; handlerLock.unlock()
+        for h in snap { h(id, x, y) }
+    }
+    private func firePointerExitedView(id: UInt32) {
+        handlerLock.lock(); let snap = pointerExitedViewHandlers; handlerLock.unlock()
+        for h in snap { h(id) }
     }
     private func firePaste(id: UInt32, text: String) {
         handlerLock.lock(); let snap = pasteHandlers; handlerLock.unlock()
@@ -211,6 +238,15 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             view.mouseDraggedHandler = { [weak self] x, y, button in
                 self?.fireMouseDragged(id: id, x: x, y: y, button: button)
             }
+            view.mouseMovedHandler = { [weak self] x, y in
+                self?.firePointerMoved(id: id, x: x, y: y)
+            }
+            view.mouseEnteredHandler = { [weak self] x, y in
+                self?.firePointerEnteredView(id: id, x: x, y: y)
+            }
+            view.mouseExitedHandler = { [weak self] in
+                self?.firePointerExitedView(id: id)
+            }
             view.pasteHandler = { [weak self] text in
                 self?.firePaste(id: id, text: text)
             }
@@ -224,6 +260,11 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             win.contentView = view
             win.title = pendingTitle
             win.isReleasedWhenClosed = false
+            // Tracking-area-driven mouseMoved is reliable on its own, but this
+            // is the legacy switch the Cocoa docs still call out — set it true
+            // so the path is the most-permissive even if Apple ever changes
+            // the tracking-area defaults.
+            win.acceptsMouseMovedEvents = true
 
             let delegate = XWindowDelegate(windowId: id, bridge: self)
             win.delegate = delegate
@@ -479,6 +520,25 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 }
             }
 
+            view.setNeedsDisplay(view.bounds)
+        }
+    }
+
+    public func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Framer.Rectangle]) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
+            ctx.saveGState()
+            applyForeground(ctx, foreground)
+            self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
+            // CGContext.stroke(rect) draws a 1-line-width-wide outline of the
+            // rect using the current stroke color + line width. PolyRectangle
+            // batches multiple rects in one request; iterate and stroke each.
+            for r in rectangles {
+                ctx.stroke(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
+                                  width: CGFloat(r.width), height: CGFloat(r.height)))
+            }
+            ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
     }
