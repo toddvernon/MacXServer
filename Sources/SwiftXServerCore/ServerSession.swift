@@ -322,6 +322,141 @@ public final class ServerSession: @unchecked Sendable {
             mode: 0,             // PropModeReplace
             value: rootBytes
         )
+
+        // Advertise a Motif window manager via _MOTIF_WM_INFO on root.
+        // libXm calls XmIsMotifWMRunning during shell init, which reads this
+        // property and then verifies that its wmWindow field is a child of
+        // root. CDE dt apps (dtcalc/dtterm/etc.) gate code paths on the
+        // result. The X spec says apps should still work without an MWM, but
+        // in practice older CDE Motif apps render-blank when no MWM is
+        // advertised. Format per OpenMotif MwmUtil.h: two CARD32s
+        // {flags, wmWindow}; type atom = _MOTIF_WM_INFO itself.
+        //
+        // We register a server-internal stub window as a real child of root
+        // so the XmIsMotifWMRunning child-of-root check passes. The window
+        // is InputOnly + unmapped — it never appears on screen, it just
+        // exists for property/QueryTree purposes.
+        let mwmStubWindow: UInt32 = 0xFFFE_0002
+        windows.insert(WindowEntry(
+            id: mwmStubWindow,
+            parent: config.rootWindowId,
+            depth: 0,
+            x: -1, y: -1, width: 1, height: 1,
+            borderWidth: 0,
+            windowClass: .inputOnly,
+            visual: 0,
+            valueMask: 0,
+            valueList: [],
+            mapped: false,
+            eventMask: 0
+        ))
+        let motifWmInfoAtom = atoms.intern("_MOTIF_WM_INFO")
+        let mwmInfoBytes: [UInt8] = {
+            // MWM_INFO_STARTUP_STANDARD = 1
+            let flags: UInt32 = 1
+            let wmWin: UInt32 = mwmStubWindow
+            var b: [UInt8] = []
+            b.append(UInt8((flags >> 24) & 0xFF))
+            b.append(UInt8((flags >> 16) & 0xFF))
+            b.append(UInt8((flags >> 8)  & 0xFF))
+            b.append(UInt8( flags        & 0xFF))
+            b.append(UInt8((wmWin >> 24) & 0xFF))
+            b.append(UInt8((wmWin >> 16) & 0xFF))
+            b.append(UInt8((wmWin >> 8)  & 0xFF))
+            b.append(UInt8( wmWin        & 0xFF))
+            return b
+        }()
+        properties.change(
+            window: config.rootWindowId,
+            property: motifWmInfoAtom,
+            type: motifWmInfoAtom,   // type is the same atom by convention
+            format: 32,
+            mode: 0,
+            value: mwmInfoBytes
+        )
+
+        // Minimal RESOURCE_MANAGER on root. In a real CDE session, xrdb
+        // merges user + system Xresources here, and Xt-based apps consult it
+        // before falling back to app-defaults. We have nothing real to put
+        // here, but a CDE-aware *customization: -color line tells Xt to look
+        // for the -color flavored app-defaults files (e.g. Dtterm-color),
+        // which is what dt apps expect under a colour CDE session. Empty
+        // RESOURCE_MANAGER means apps load the plain-monochrome variants.
+        let resourceManagerAtom: UInt32 = 23   // predefined RESOURCE_MANAGER
+        let stringAtom: UInt32 = 31            // predefined STRING
+        let resourceManagerText = "*customization:\t-color\n"
+        properties.change(
+            window: config.rootWindowId,
+            property: resourceManagerAtom,
+            type: stringAtom,
+            format: 8,
+            mode: 0,
+            value: Array(resourceManagerText.utf8)
+        )
+
+        // Impersonate the CDE customization daemon for the "Customize Data:N"
+        // selection. dtcalc / dtterm / probably all dt-apps probe this
+        // selection at init: gold shows GetSelectionOwner returning a daemon
+        // window, then a direct GetProperty(SDT Pixel Set) on that window.
+        // When the selection has no owner (our prior behaviour), dt apps fall
+        // back to a formal ConvertSelection that we answered with
+        // property=None per spec — Xt then wedges indefinitely (verified by
+        // capture+wait 2 minutes 2026-05-10). The "no daemon" fallback in
+        // Solaris Xt is apparently untested in real installs (dtsession is
+        // always running under CDE), so its timeout-or-fall-through path
+        // doesn't actually fire.
+        //
+        // Fix: pretend a daemon is here. Register a stub window as owner of
+        // Customize Data:0; the ConvertSelection handler below short-circuits
+        // any selection owned by a stub window — writes empty bytes to the
+        // requestor's property and replies SelectionNotify(property=p) to
+        // signal "successfully converted to empty data". dt apps then fall
+        // back to compiled defaults for colours and proceed to MapWindow.
+        let cdeDaemonWindow: UInt32 = 0xFFFE_0003
+        windows.insert(WindowEntry(
+            id: cdeDaemonWindow,
+            parent: config.rootWindowId,
+            depth: 0,
+            x: -1, y: -1, width: 1, height: 1,
+            borderWidth: 0,
+            windowClass: .inputOnly,
+            visual: 0,
+            valueMask: 0,
+            valueList: [],
+            mapped: false,
+            eventMask: 0
+        ))
+        let customizeAtom = atoms.intern("Customize Data:0")
+        coordinator.setSelectionOwner(customizeAtom, window: cdeDaemonWindow, time: 0)
+
+        // Publish the "SDT Pixel Set" property on the fake daemon. CDE dt-apps
+        // (dtcalc, dtterm, dthelpview, dticon — verified 2026-05-10) read this
+        // BEFORE doing the formal ConvertSelection, via:
+        //   InternAtom("SDT Pixel Set", only-if-exists)
+        //   GetProperty(daemonWindow, SDT Pixel Set)
+        // If the atom doesn't exist server-side, dtcalc skips the direct read
+        // and falls through to ConvertSelection, where it gets empty bytes
+        // (our short-circuit) and renders in its monochrome compiled fallback
+        // palette (black background, white text). Providing the actual gold
+        // CDE-daemon bytes here lets dt-apps take the colour palette path.
+        //
+        // Bytes captured 2026-05-10 from u5's real CDE customization daemon
+        // via dtcalc-sun.xtap seq=29 GetProperty reply. The contents are an
+        // ASCII string of underscore-separated colormap pixel indices in hex
+        // — the daemon's per-screen palette manifest. dt-apps parse this then
+        // run their own AllocColor sequence to get back consistent pixels.
+        let sdtPixelSetAtom = atoms.intern("SDT Pixel Set")
+        let sdtPixelSetBytes = Array(
+            "2_4_8_6_7_5_9_d_b_c_a_e_12_10_11_f_13_17_15_16_14_9_d_b_c_a_9_d_b_c_a_e_12_10_11_f_9_d_b_c_a_1".utf8
+        )
+        properties.change(
+            window: cdeDaemonWindow,
+            property: sdtPixelSetAtom,
+            type: stringAtom,                  // STRING (predefined atom 31)
+            format: 8,
+            mode: 0,
+            value: sdtPixelSetBytes
+        )
     }
 
     /// User asked to close one of our NSWindows (red traffic-light button,
@@ -2114,16 +2249,48 @@ public final class ServerSession: @unchecked Sendable {
             }
 
         case .mapSubwindows(let r):
-            // MapSubwindows happens before the top-level is mapped (xcalc's
-            // pattern). We just mark the children mapped + emit MapNotify
-            // here; the bg paint and Expose for these children land later
-            // when the top-level itself maps and emitMapSequence walks them.
-            for (_, w) in windows.windows where w.parent == r.window {
+            // Per X11 spec 10.5: "MapSubwindows performs a MapWindow request
+            // on all unmapped children of the window, in top-to-bottom
+            // stacking order." Two cases matter for paint-on-map:
+            //
+            // 1. Called BEFORE the top-level is mapped (xcalc's pattern):
+            //    just mark + MapNotify. The bg paint + Expose land when the
+            //    top-level itself maps and emitMapSequence walks descendants.
+            //
+            // 2. Called AFTER the top-level is mapped (dt-Motif's pattern —
+            //    dtcalc / dtterm map their entire deep widget hierarchy this
+            //    way via repeated MapSubwindows once the calculator panel is
+            //    already on screen): we must do the bg paint + Expose right
+            //    here, because there's no future top-level map to catch them.
+            //    Without that, Motif PushButton/Gadget code never gets the
+            //    Expose signal to draw shadow lines or button labels and
+            //    every button stays invisible — verified 2026-05-10 against
+            //    dtcalc rendering as a flat grey panel with only the LCD
+            //    visible.
+            let parentEntry = windows.get(r.window)
+            let parentIsMapped = parentEntry?.mapped ?? false
+            let topInfo = topLevelAndOffset(for: r.window)
+            for (_, w) in windows.windows where w.parent == r.window && !w.mapped {
                 windows.setMapped(w.id, true)
                 bridge?.mapDescendant(
                     id: w.id, byteOrder: byteOrder,
                     sequence: sequenceNumber, outbound: outbound
                 )
+                guard parentIsMapped, let (top, _, _) = topInfo else { continue }
+                if let entry = windows.get(w.id) {
+                    let (_, dx, dy) = topLevelAndOffset(for: w.id) ?? (top, 0, 0)
+                    let rects = paintRectsForWindow(entry: entry, dx: dx, dy: dy, byteOrder: byteOrder)
+                    if !rects.isEmpty {
+                        bridge?.paintWindowRects(topLevel: top, rects: rects)
+                    }
+                    if entry.eventMask & (1 << 15) != 0 {
+                        let expose = ExposeEvent(
+                            sequenceNumber: sequenceNumber, window: w.id,
+                            x: 0, y: 0, width: entry.width, height: entry.height, count: 0
+                        )
+                        outbound.append(expose.encode(byteOrder: byteOrder))
+                    }
+                }
             }
 
         case .unmapWindow(let r):
@@ -2699,22 +2866,66 @@ public final class ServerSession: @unchecked Sendable {
         case .convertSelection(let r):
             log?.log("  ConvertSelection requestor=0x\(String(r.requestor, radix: 16)) sel=\(r.selection) target=\(r.target) prop=\(r.property)")
             if let ownerState = coordinator.selectionOwner(r.selection) {
-                let event = SelectionRequestEvent(
-                    sequenceNumber: sequenceNumber,
-                    time: r.time == 0 ? serverTime : r.time,
-                    owner: ownerState.window,
-                    requestor: r.requestor,
-                    selection: r.selection,
-                    target: r.target,
-                    property: r.property
-                )
-                outbound.append(event.encode(byteOrder: byteOrder))
-                log?.log("  → forwarded SelectionRequest to owner=0x\(String(ownerState.window, radix: 16))")
+                // Owner-id range 0xFFFE_0000+ is our server-internal stubs
+                // (e.g. the fake CDE customization daemon at 0xFFFE_0003).
+                // No real client is listening for SelectionRequest events
+                // on that window, so we'd wedge the requestor if we just
+                // forwarded. Short-circuit: write empty bytes to the
+                // requestor's property and emit SelectionNotify(property=p)
+                // to signal "converted successfully to empty data". dt apps
+                // get an empty SDT-Pixel-Set-equivalent, fall back to
+                // compiled colour defaults, and proceed to MapWindow.
+                if ownerState.window >= 0xFFFE_0000 {
+                    properties.change(
+                        window: r.requestor,
+                        property: r.property,
+                        type: r.target,
+                        format: 8,
+                        mode: 0,
+                        value: []
+                    )
+                    // CRITICAL: the time field on SelectionNotify MUST be the
+                    // exact time Xt put in the ConvertSelection request. Xt's
+                    // HandleSelectionReplies in X11R6 Selection.c uses
+                    // MATCH_SELECT, which checks `event->time == info->time`
+                    // and silently drops the event if they differ. We used to
+                    // substitute serverTime when r.time was 0 (CurrentTime) —
+                    // that substitution is correct for server-generated events
+                    // like ButtonPress where time=0 confuses clients, but it's
+                    // wrong for selection events where the time round-trips
+                    // verbatim per spec. Bug verified 2026-05-10: dtcalc/Xt
+                    // wedged indefinitely on Customize Data:0 conversion
+                    // because Xt was discarding our reply via MATCH_SELECT.
+                    let event = SelectionNotifyEvent(
+                        sequenceNumber: sequenceNumber,
+                        time: r.time,
+                        requestor: r.requestor,
+                        selection: r.selection,
+                        target: r.target,
+                        property: r.property
+                    )
+                    outbound.append(event.encode(byteOrder: byteOrder))
+                    log?.log("  → stub-daemon SelectionNotify(empty) for sel=\(r.selection) prop=\(r.property) time=\(r.time)")
+                } else {
+                    let event = SelectionRequestEvent(
+                        sequenceNumber: sequenceNumber,
+                        time: r.time,
+                        owner: ownerState.window,
+                        requestor: r.requestor,
+                        selection: r.selection,
+                        target: r.target,
+                        property: r.property
+                    )
+                    outbound.append(event.encode(byteOrder: byteOrder))
+                    log?.log("  → forwarded SelectionRequest to owner=0x\(String(ownerState.window, radix: 16))")
+                }
             } else {
                 // No owner — reply directly to requestor with property=None.
+                // Time MUST be the same as the ConvertSelection (see comment
+                // above on Xt's MATCH_SELECT check). Do not substitute.
                 let event = SelectionNotifyEvent(
                     sequenceNumber: sequenceNumber,
-                    time: r.time == 0 ? serverTime : r.time,
+                    time: r.time,
                     requestor: r.requestor,
                     selection: r.selection,
                     target: r.target,

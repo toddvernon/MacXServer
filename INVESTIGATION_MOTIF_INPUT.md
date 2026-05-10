@@ -1,89 +1,94 @@
-# Motif input dispatch — open investigation
+# Motif / dt-app investigation — current status
 
-Last touched 2026-05-09. Dropped here so the next session can pick up cold.
+Last touched 2026-05-10. dt-Motif apps now run; widget chrome redraw is parked.
 
-## Headline
+## Headline (2026-05-10)
 
-quickplot from SS2 (and probably any older Motif app) renders correctly on swift-x but **clicks don't fire callbacks**. The X protocol path is verified clean — events reach the right widget, byte format matches what xev / a real Sun X server expect. The failure is somewhere inside Motif's translation manager.
+**CDE dt-apps boot, accept input, and render their primary widgets.** dtcalc, dtterm, dthelpview, dticon all launch from a u5 CDE session and display under swift-x. The LCD/text-display areas render correctly with the right colours. **Button rendering inside Motif panels is the remaining visual gap** — buttons exist as X resources, have correct geometry, and the panel bg paints correctly, but Motif's PushButton class doesn't fire its draw method (shadows + label) in response to our Expose flood. dt-apps are functional-but-cosmetically-incomplete.
 
-## What's verified working
+dtpad doesn't launch — `no valid tooltalk client` from u5's CDE side, not our problem (needs `ttsession` running on the Sun).
 
-- xev tested: ButtonPress/Release/KeyPress format is textbook correct (state, time, button, keycode, keysym → XLookupString → "a"). Same wire bytes Motif sees.
-- xcalc (Athena widgets) is fully functional — clicks, button highlights, math operations all work.
-- xterm renders, scrolls, resizes, accepts keyboard input, ANSI colors, Cmd-C/V copy roundtrip.
-- xclock, xeyes (less SHAPE-eyes themselves), xfontsel — all render or work as expected.
-- quickplot renders all top-levels, mouse hover triggers EnterNotify/LeaveNotify chain correctly per X spec, focus events fire on top-level activation.
-- Capture proxy (post-2026-05-09 fix) is now transparent; no longer a confounder.
+**quickplot now works** as of 2026-05-10 (same evening). User confirmed widget callbacks fire, menus post, dialogs open, buttons respond, xlib plotting renders. The unlock was the same `MATCH_SELECT` time-preservation fix that got dt-apps booting — Xt's selection event match was silently dropping our SelectionNotify mid-dispatch any time the client used `CurrentTime`. Worth a fresh capture (u5→swiftx) + diff against gold as the first thing in any next round on Motif work, to confirm exactly which fixes mattered and lock the baseline. See `.claude-memory/project_motif_quickplot_status.md` for open cosmetic issues observed (menu placement, text spacing, idle poll loop, clip-rect animations).
 
-## What's broken
+## What was fixed today
 
-- quickplot: every widget click delivers Press+Release to the correct window (verified in capture trace) but quickplot issues **zero subsequent X protocol requests** in response. Compare to gold (Sun→Sun via proxy) where the same click triggers `GrabKeyboard` + focus shuffle + drawing requests immediately.
-- dtcalc, dtterm, dtmail, dtfile (CDE Motif): some don't even render, presumed CDE resource-file dependencies missing on local Solaris install.
-- dtpad never displays (against u5 gold either — install issue, not our problem).
+Two bugs in series got dt-apps booting:
 
-## What's special about the failure
+**1. CDE customization daemon impersonation.** Every CDE dt-app probes `Customize Data:N` at init. On a real Solaris install, `dtsession` owns this selection and publishes an `SDT Pixel Set` property containing the colour-palette pixel-index manifest. Without an owner, dt-apps fall to a formal `ConvertSelection` then wait for the conversion response. Our prior `SelectionNotify(property=None)` reply *should* have signalled "no data" per spec, but Solaris-Xt's "no daemon" path is apparently never tested in real installs (CDE always has dtsession running), so it wedges indefinitely after the None reply.
 
-- Motif IS alive after the click — Enter/Leave events keep firing for hover, the app remains responsive to mouse position.
-- Motif just doesn't trigger any *action* on Btn1Down/Btn1Up.
-- This means the dispatch reaches Motif's `XtDispatchEvent` but the translation table either has no matching entry or the matched action no-ops.
-- It's NOT a focus-stealing issue — focus is on the right top-level at click time per the capture.
+Fix: register a server-internal stub window (`0xFFFE_0003`) as owner of `Customize Data:0`, pre-publish the `SDT Pixel Set` property with byte-for-byte content captured from u5's real daemon, and short-circuit `ConvertSelection` requests on stub-owned selections by writing empty bytes to the requestor's property and emitting `SelectionNotify(property=success)`. See `DECISIONS.md` 2026-05-10 and `SHORTCUTS.md`.
 
-## Strongest hypotheses, ranked
+**2. `SelectionNotify` time field preservation.** Even with the daemon impersonation in place, dt-apps still wedged after our SelectionNotify. Tracked to `reference/X11R6/xc/lib/Xt/SelectionI.h:165` `MATCH_SELECT` macro, which requires `event->time == info->time` — the SelectionNotify's `time` must equal the value Xt put in the corresponding `ConvertSelection` request. We were substituting `serverTime` when `r.time == 0` (correct for server-generated ButtonPress/KeyPress, wrong for ICCCM selection events). Xt's `HandleSelectionReplies` silently dropped our reply, so dtcalc never issued the followup GetProperty and waited forever.
 
-1. **Pre-click focus bounce** — at app startup we emit FocusIn(0x4400118) → FocusOut(0x4400118) → FocusIn(0x4400053) within ~40ms because macOS activates the second NSWindow then the first as both come up. Gold has just one FocusIn(0x4400053). Motif may have a state machine that gets confused by the bounce and never re-arms its dispatcher even though focus settles correctly.
-   - **Test:** debounce focus events at the bridge level — only emit FocusIn/Out for the *final* state if multiple key/resign-key events fire within e.g. 100ms.
+Fix: pass `r.time` verbatim through both the no-owner and stub-owner SelectionNotify paths. General lesson: any X-protocol event generated *in response to* a client request must round-trip every echoed field unchanged.
 
-2. **Missing focus-chain emission per X spec** — when X-protocol focus moves to a window with the pointer inside, the spec says emit `FocusOut` + `FocusIn` events with `detail=pointer` along the pointer-to-focus path. We only emit a single `nonlinear` event on the top-level. Xt's internal focus dispatcher may be waiting for the chain.
-   - **Test:** add the "pointer detail" focus chain emission in `handleFocusChange`. Match what gold's server emits when activating a window.
+**3. CDE-palette pre-seeding in ColorTable.** dt-apps use the SDT Pixel Set as a manifest of "already-allocated colormap pixels you can reference directly." With nothing seeded, `resolveColor` falls back to black for any reference to pixel 9 (panel bg), pixel 14 (LCD bg), etc. Result before fix: entire calculator paints black. ColorTable's init now seeds pixels 1..23 with a hardcoded approximation of the CDE "Default" colour scheme. Hardcoded values; no runtime palette switching.
 
-3. **Missing `XQueryPointer` reply** — Motif's `XmManagerGadgetArm()` and similar dispatch functions may call XQueryPointer to refine which gadget the click hit (gadgets share the parent's window so the X server can't dispatch to them directly). We silent-drop XQueryPointer.
-   - **Test:** implement a basic XQueryPointer reply that returns the current pointer position + the pointer-window. Likely small, ~30 lines.
+## What's still broken — Motif widget chrome
 
-4. **`ManagerGadgetArm` translation needs an XAutomatic field** — Sun-era Motif may have action procs that depend on Xt's `event_handler` chain, which depends on XSendEvent or similar we don't fully wire.
+dt-apps render their containers, LCD area, and any window with explicit non-bg `BackPixel`. The deep button hierarchy renders as flat panels with no button shadows or labels visible.
 
-5. **Translation-table compilation silent failure** — even after our keysym work, some specific keysym / virtual binding lookup might still fail and reject part of the table. Hard to verify without Xt-side tracing.
+Gold-vs-swiftx trace diff (2026-05-10):
 
-## Captures available for diffing
-
-`captures/` has clean (post-recorder-fix) pairs for several apps:
-
-| App | Gold (Sun→Sun) | Swift-x | Status |
+| event/op | gold | swiftx | ratio |
 |---|---|---|---|
-| quickplot | `quickplot-sun.xtap` | `quickplot-swiftx.xtap` | Renders, no input |
-| dtcalc | `dtcalc-sun.xtap` | (need new capture, old one broken) | TBD |
-| dtterm | `dtterm-sun.xtap` | (need new capture) | TBD |
-| dthelpview | `dthelpview-sun.xtap` | (need new capture) | TBD |
-| xfontsel | `xfontsel-sun.xtap` | (need new capture) | TBD |
-| xeyes | `xeyes-sun.xtap` | `xeyes-swiftx.xtap` | Window appears, eyes don't (SHAPE missing) |
+| Expose events s2c | 7 | 451 | gold sparse, ours floods |
+| PolyText8 c2s | 86 | 0 | gold draws labels, we get none |
+| PolyFillRectangle c2s | 311 | 20 | gold fills shadows, we get none |
+| PolySegment c2s | 367 | 211 | partial |
+| CopyArea c2s | 75 | 9 | gold uses backing pixmaps |
 
-**Re-capture the swift-x side for any app you want to diff** — the older `*-swiftx.xtap` files were taken before the recorder I/O fix and contain artifacts from that bug.
+dtcalc receives our flood of Expose events on the button hierarchy but emits zero drawing requests in response. Drawing only happens for windows dtcalc itself drives via `XClearArea(exposures=true)` — Motif's button redraw isn't firing on the Map-induced Exposes we synthesize.
 
-## Tools
+### Leading hypothesis (not verified)
 
-- `.build/release/swiftx-capture dump <path>` — chronological per-message dump
-- `.build/release/swiftx-capture summary <path>` — aggregate counts
-- `.build/release/swiftx-capture replay <path>` — fire C2S bytes at a target server (could replay broken sequence to a fresh swift-x to reproduce deterministically)
-- `./run-all.sh` — builds + runs swift-x + capture proxy in front
-- `./run-server.sh` — server-only, no capture (for direct connection testing)
+Real Sun X servers track per-window visibility regions. When MapWindow makes a subtree viewable, the server only emits Expose for the *truly visible* regions — child windows that fully cover their parent leave the parent's covered area without an Expose. Our X server has no visibility tracking; we emit Expose for every mapped descendant on `mappedDescendantSnapshots`. Motif's PushButton redraw, tuned against the sparse gold Expose pattern, treats our flood as spurious and skips drawing.
 
-## Known good debugging method
+Alternative possibility: Motif gates the redraw on a different event we never emit — `VisibilityNotify` (gold=2, ours=0) is the most plausible candidate. Worth checking before doing real visibility tracking.
 
-For any new failure mode:
-1. Capture the broken pair (Sun→swiftx).
-2. Find the gold (Sun→Sun) capture of the same app.
-3. `dump` both, find the first protocol divergence.
-4. Look for either: a server reply we got wrong, or a request we silent-drop.
+### Fix not pursued this round
 
-The capture+diff method has now found and fixed several bugs this session. It's the right tool.
+Two paths:
 
-## Useful prior-session clues
+1. **Real visibility tracking.** Walk window tree, compute per-window visible regions (intersection of parent's visible region minus higher-stacked siblings minus children's covered regions), emit Expose only for the visible parts. Adds region arithmetic + stacking-order tracking. Substantial work.
 
-- "Cannot convert string `<Key>KP_Insert` to type VirtualBinding" stderr was the smoking gun for the keymap fix. Applying that pattern: any keysym-related stderr from a Motif app is worth following.
-- SS2 (older Motif) is *more strict* about protocol than SS5 (newer Motif). Use SS2 as the witness whenever possible.
-- Recorder I/O can confound results — verify the capture proxy isn't lying by re-running with `output: "/dev/null"` (skips recording entirely) if a hang or crash seems proxy-related.
+2. **Test the VisibilityNotify hypothesis.** Emit `VisibilityNotify(unobscured)` for each newly-viewable top-level + descendants with VisibilityChangeMask. ~30 lines. May or may not satisfy Motif's redraw gate.
 
-## What to NOT do
+Path 2 is the cheap experiment to try first if revisiting.
 
-- Don't try to implement full Motif drag-and-drop coordination unless something specifically depends on it. The pre-set `_MOTIF_DRAG_WINDOW` workaround is enough to dodge the SS2 init segfault.
-- Don't add keysyms speculatively unless a specific stderr warning identifies one.
-- Don't rebuild the proxy / capture format. The on-disk `.xtap` format is stable.
+## Per-app scorecard (verified 2026-05-10 from u5 CDE session)
+
+| App | Renders | Buttons visible | Input | Notes |
+|---|---|---|---|---|
+| dtcalc | yes | no | mouse hover registers | LCD shows "0.00" |
+| dtterm | yes | no | not tested | flat panel |
+| dthelpview | yes | no | not tested | flat panel |
+| dticon | yes | no | not tested | flat panel |
+| dtpad | no | — | — | u5-side: missing ttsession (ToolTalk daemon) |
+| dtmail | not tested | | | likely same as others |
+| dtfile | not tested | | | likely same as others |
+| quickplot (SS2) | yes | yes | **clicks fire, menus post, dialogs open** (2026-05-10) | menu-placement bug, text spacing odd, idle poll loop, see memory note |
+
+## What didn't help
+
+- `_MOTIF_WM_INFO` root property advertising a fake MWM (libXm reads this for `XmIsMotifWMRunning`). Set but apparently dt-apps don't gate on it.
+- `RESOURCE_MANAGER` root property with `*customization: -color`. Set but no observable effect.
+- Pre-setting SDT Pixel Set with empty bytes (dtcalc fell through to ConvertSelection regardless because the only-if-exists InternAtom returned None).
+
+These changes are still in place — harmless, and might matter for dt-apps we haven't tested yet.
+
+## Tools / methodology
+
+- `./run-all.sh` builds swiftx-server + capture proxy, listens on `:6000`, forwards to `:6001`. Edit `connection.json` to change the capture filename.
+- `.build/release/swiftx-capture dump <path>` chronological message dump
+- `.build/release/swiftx-capture summary <path>` aggregate counts
+- Python parser for extracting specific reply bytes from `.xtap`: little-endian frame header (`<Q` ts, `<I` length), big-endian X reply bodies (Sun is MSB-first). See conversation 2026-05-10 for example snippets.
+- gold/swiftx pair captures in `captures/`: `dtcalc-sun.xtap` is gold, `dtcalc-swiftx.xtap` is ours.
+
+The capture-and-diff method continues to be the right tool for any new Motif failure. Gold captures pre-2026-05-09 are pre-recorder-I/O-fix and contain artifacts; retake before diffing.
+
+## Useful prior clues (still relevant)
+
+- "Cannot convert string `<Key>...` to type VirtualBinding" stderr was the smoking gun for the SS2 keymap fix. Any keysym-related stderr from a Motif app is worth following.
+- SS2 (older OpenWindow libXm) is more strict about protocol than SS5 (newer libXm). Use SS2 as the witness whenever possible.
+- Don't try to implement full Motif drag-and-drop coordination. The pre-set `_MOTIF_DRAG_WINDOW` workaround is enough to dodge the SS2 init crash.

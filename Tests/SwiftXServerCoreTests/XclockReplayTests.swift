@@ -87,8 +87,13 @@ final class XclockReplayTests: XCTestCase {
         //   - 1 font opened
         //   - At least 4 atoms interned (WM_CONFIGURE_DENIED, WM_MOVED,
         //     WM_DELETE_WINDOW, WM_PROTOCOLS) on top of the 68 predefined.
+        // Plus 2 server-internal stub windows we register at session init:
+        //   - _MOTIF_WM_INFO's wmWindow target (XmIsMotifWMRunning check)
+        //   - The CDE customization daemon stub (Customize Data:N selection
+        //     owner — dt apps probe it before drawing)
+        // Hence 2 client windows + 2 stubs = 4.
 
-        XCTAssertEqual(session.windows.count, 2)
+        XCTAssertEqual(session.windows.count, 4)
         XCTAssertGreaterThanOrEqual(session.colors.count, 4) // 2 + the 2 pre-seeded (black, white)
         XCTAssertEqual(session.pixmaps.count, 2)
         XCTAssertEqual(session.fonts.count, 1)

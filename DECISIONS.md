@@ -280,6 +280,34 @@ Plus a sweep of opcode coverage on the path to making this work: TranslateCoordi
 
 Validated end-to-end against xfontsel font-menu drag-and-select on a real SS2 over the LAN; same machinery applies to Motif (quickplot) menus.
 
+## 2026-05-10 — Impersonate the CDE customization daemon
+
+**Chosen**: ServerSession registers a server-internal stub window (id `0xFFFE_0003`) as a child of root, claims selection ownership of `Customize Data:0`, and pre-publishes a hardcoded `SDT Pixel Set` property containing the exact byte string captured from u5's real CDE daemon. ConvertSelection requests for stub-owned selections short-circuit (write empty bytes + emit success).
+
+**Rejected**:
+- Returning `owner=None` for `Customize Data:N` and letting dt-apps take the fallback path — Solaris Xt's "no daemon" code path is apparently untested in real installs (CDE always runs `dtsession`) and dt-apps wedge indefinitely after our `SelectionNotify(property=None)`.
+- Running a real CDE customization daemon in-process — way more code; serves only to drive the same outcome.
+- Synthesizing a *minimal* SDT Pixel Set string — without knowing the format precisely, the captured-from-gold bytes are the safe choice.
+
+**Why**:
+- dt-apps (dtcalc, dtterm, dthelpview, dticon) are real-world clients we want to support. They wouldn't even render before this change.
+- The customization daemon is a CDE-specific dependency that exists nowhere in the X11 protocol; impersonating it is a clean way to satisfy the contract without inheriting CDE's ToolTalk + dtsession + dtwm machinery.
+- Hardcoded palette bytes are documented in `SHORTCUTS.md` so a later refactor can swap them for a runtime-configurable scheme.
+
+**Concurrent fix that unblocked this**: `SelectionNotify`'s `time` field must be the verbatim value from the `ConvertSelection` request. Earlier we substituted `serverTime` when `r.time == 0` (correct for ButtonPress/KeyPress which the server generates from physical input), which broke `Xt`'s selection-event match. See `reference/X11R6/xc/lib/Xt/SelectionI.h:165` `MATCH_SELECT` macro: `event->time == info->time` is required for HandleSelectionReplies to fire. Any future X-protocol event generated *in response to* a client request should round-trip every reflected field.
+
+## 2026-05-10 — Park dt-Motif widget chrome redraw
+
+**Decision**: dt-apps render their main panels + the LCD-style readout widget + any window with non-default `BackPixel`, but the deep button hierarchy renders as flat unpainted grey with no visible button labels or shadows. We are not going to fix this in this round.
+
+**Background**: per gold-vs-swiftx trace diff, gold emits **7 Expose events** during the whole dtcalc boot (sparse, targeted at LCD widgets); we emit **451** (one per mapped descendant). Gold's dtcalc fires 86 `PolyText8` (button labels) + 311 `PolyFillRectangle` (button fills); ours fires 0 + 20. dtcalc receives our flood of Expose events and doesn't redraw on any of them.
+
+**Likely root cause**: real Sun X server does proper visibility tracking — it suppresses Expose for window regions about to be covered by child windows. Our X server emits Expose for every newly-mapped descendant without checking what covers what. Motif's PushButton redraw method, tuned for the sparse gold Expose pattern, treats our flood as spurious and doesn't fire.
+
+**Fix is non-trivial**: implementing visibility tracking properly requires walking the window tree, computing per-window visible regions (the intersection of parent's visible region minus higher-stacked siblings minus children's covered regions), and emitting Expose only for the truly visible parts. Region arithmetic + stacking-order tracking adds real complexity. Logged in `SHORTCUTS.md`.
+
+**Net status**: dt-apps run, accept input, have correct geometry, and pass through every protocol-level checkpoint. The visual gap is button-shadow + button-label drawing. Acceptable parking point given dt-apps are a stretch goal beyond the core PRODUCT_2_SERVER.md scope.
+
 ---
 
 ## Decisions still to make
