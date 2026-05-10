@@ -40,6 +40,22 @@ public final class ServerSession: @unchecked Sendable {
     public let outbound: OutboundQueue
     public let bridge: WindowBridge?
 
+    /// Serial queue that owns all session-state mutation. AppKit-side
+    /// callbacks (mouse, key, focus) hop onto this queue before touching
+    /// session state, so the read thread + the AppKit main thread never
+    /// race on `sequenceNumber`, grab state, focus, etc. Mirrors the
+    /// XQuartz pattern of a dedicated server thread separate from the
+    /// AppKit runloop (see `reference/xquartz-xserver/hw/xquartz/quartzStartup.c`).
+    /// See SERVER_CONCURRENCY.md for the full rationale.
+    public let protocolQueue: DispatchQueue
+
+    /// Installed by the Listener once a client socket is set up. Called from
+    /// `flushOutbound` whenever the session has bytes to send. Always invoked
+    /// on `protocolQueue`, so the callback is the single writer to the
+    /// socket — no lock needed. Tests that drive `feed` directly leave this
+    /// nil and read bytes via `outbound.drain()` instead.
+    public var writeCallback: (@Sendable ([UInt8]) -> Void)?
+
     /// Live source of cut/paste preferences. Read on every copy round-trip
     /// so a prefs change applies without restarting the server. Defaults to
     /// the static defaults (Mac-style on, never auto-fires).
@@ -80,6 +96,12 @@ public final class ServerSession: @unchecked Sendable {
     /// NSWindow's content area.
     private var currentPointerWindow: [UInt32: UInt32] = [:]
 
+    /// Last reported pointer position in top-level coords + which top-level
+    /// it was last seen in. Used by `QueryPointer` to answer the client. nil
+    /// before the first pointer event arrives.
+    private var lastPointerTopLevel: UInt32?
+    private var lastPointerXY: (Int16, Int16)?
+
     /// Active pointer grab state, or nil if not grabbed. Set by GrabPointer,
     /// cleared by UngrabPointer. While set, button / motion events route to
     /// `grabWindow` instead of the deepest-containing-window — this is what
@@ -105,6 +127,27 @@ public final class ServerSession: @unchecked Sendable {
         let ownerEvents: Bool
     }
     private var keyboardGrab: KeyboardGrab?
+
+    /// Passive button grabs registered via GrabButton. Stored but not yet
+    /// honored on event delivery (see OPCODE_STATUS).
+    private struct PassiveButtonGrab {
+        let grabWindow: UInt32
+        let button: UInt8
+        let modifiers: UInt16
+        let eventMask: UInt16
+        let ownerEvents: Bool
+    }
+    private var passiveButtonGrabs: [PassiveButtonGrab] = []
+
+    /// Passive key grabs registered via GrabKey. Same caveat: tracked,
+    /// not yet honored.
+    private struct PassiveKeyGrab {
+        let grabWindow: UInt32
+        let key: UInt8
+        let modifiers: UInt16
+        let ownerEvents: Bool
+    }
+    private var passiveKeyGrabs: [PassiveKeyGrab] = []
 
     /// Pointer buttons currently held. Used to manage the X11 implicit
     /// pointer grab that activates on the first ButtonPress and ends when
@@ -160,43 +203,87 @@ public final class ServerSession: @unchecked Sendable {
         self.coordinator = coordinator
         self.clipboardPrefs = clipboardPrefs
         self.log = log
+        // Serial, target = global userInitiated. Identifier carries the
+        // resource-id base so multi-client logs can tell sessions apart.
+        self.protocolQueue = DispatchQueue(
+            label: "swiftx.session.protocol.\(String(config.resourceIdBase, radix: 16))",
+            qos: .userInitiated,
+            target: DispatchQueue.global(qos: .userInitiated)
+        )
+        // All AppKit-side callbacks hop onto protocolQueue, run the handler,
+        // and flush any bytes the handler appended to outbound. Since
+        // protocolQueue is the only writer, no lock is needed at the socket.
+        let queue = self.protocolQueue
         bridge?.setOnTopLevelResize { [weak self] id, width, height in
-            self?.handleTopLevelResize(id: id, width: width, height: height)
+            queue.async {
+                self?.handleTopLevelResize(id: id, width: width, height: height)
+                self?.flushOutbound()
+            }
         }
         bridge?.setOnKey { [weak self] topLevel, macKeyCode, modifierFlags, isDown in
-            self?.handleKeyEvent(
-                topLevel: topLevel, macKeyCode: macKeyCode,
-                modifierFlags: modifierFlags, isDown: isDown
-            )
+            queue.async {
+                self?.handleKeyEvent(
+                    topLevel: topLevel, macKeyCode: macKeyCode,
+                    modifierFlags: modifierFlags, isDown: isDown
+                )
+                self?.flushOutbound()
+            }
         }
         bridge?.setOnFocus { [weak self] topLevel, gained in
-            self?.handleFocusChange(topLevel: topLevel, gained: gained)
+            queue.async {
+                self?.handleFocusChange(topLevel: topLevel, gained: gained)
+                self?.flushOutbound()
+            }
         }
         bridge?.setOnMouse { [weak self] topLevel, x, y, button, isDown in
-            self?.handleMouseEvent(
-                topLevel: topLevel, x: x, y: y, button: button, isDown: isDown
-            )
+            queue.async {
+                self?.handleMouseEvent(
+                    topLevel: topLevel, x: x, y: y, button: button, isDown: isDown
+                )
+                self?.flushOutbound()
+            }
         }
         bridge?.setOnMouseDragged { [weak self] topLevel, x, y, button in
-            self?.handleMouseDragged(topLevel: topLevel, x: x, y: y, button: button)
+            queue.async {
+                self?.handleMouseDragged(topLevel: topLevel, x: x, y: y, button: button)
+                self?.flushOutbound()
+            }
         }
         bridge?.setOnPointerMoved { [weak self] topLevel, x, y in
-            self?.handlePointerMoved(topLevel: topLevel, x: x, y: y)
+            queue.async {
+                self?.handlePointerMoved(topLevel: topLevel, x: x, y: y)
+                self?.flushOutbound()
+            }
         }
         bridge?.setOnPointerEnteredView { [weak self] topLevel, x, y in
-            self?.handlePointerEnteredView(topLevel: topLevel, x: x, y: y)
+            queue.async {
+                self?.handlePointerEnteredView(topLevel: topLevel, x: x, y: y)
+                self?.flushOutbound()
+            }
         }
         bridge?.setOnPointerExitedView { [weak self] topLevel in
-            self?.handlePointerExitedView(topLevel: topLevel)
+            queue.async {
+                self?.handlePointerExitedView(topLevel: topLevel)
+                self?.flushOutbound()
+            }
         }
         bridge?.setOnPaste { [weak self] topLevel, text in
-            self?.handlePaste(topLevel: topLevel, text: text)
+            queue.async {
+                self?.handlePaste(topLevel: topLevel, text: text)
+                self?.flushOutbound()
+            }
         }
         bridge?.setOnCopy { [weak self] topLevel in
-            self?.handleCopy(topLevel: topLevel)
+            queue.async {
+                self?.handleCopy(topLevel: topLevel)
+                self?.flushOutbound()
+            }
         }
         bridge?.setOnCloseRequest { [weak self] topLevel in
-            self?.handleCloseRequest(topLevel: topLevel)
+            queue.async {
+                self?.handleCloseRequest(topLevel: topLevel)
+                self?.flushOutbound()
+            }
         }
 
         // Pre-set _MOTIF_DRAG_WINDOW on the root window. Sun-era Motif on
@@ -333,9 +420,10 @@ public final class ServerSession: @unchecked Sendable {
             guard let entry = USKeymap.macKeyCode(forCharacter: ch) else { continue }
             let xKey = USKeymap.xKeycode(forMacKeyCode: entry.mac)
             let state: UInt16 = entry.shift ? shiftMask : 0
+            let pressTime = serverTime
             let press = InputEvent(
                 detail: xKey, sequenceNumber: sequenceNumber,
-                time: 0, root: config.rootWindowId,
+                time: pressTime, root: config.rootWindowId,
                 event: target, child: 0,
                 rootX: 0, rootY: 0, eventX: 0, eventY: 0,
                 state: state, sameScreen: true
@@ -343,7 +431,7 @@ public final class ServerSession: @unchecked Sendable {
             outbound.append(press.encode(code: 2, byteOrder: order))
             let release = InputEvent(
                 detail: xKey, sequenceNumber: sequenceNumber,
-                time: 0, root: config.rootWindowId,
+                time: serverTime, root: config.rootWindowId,
                 event: target, child: 0,
                 rootX: 0, rootY: 0, eventX: 0, eventY: 0,
                 state: state, sameScreen: true
@@ -438,6 +526,22 @@ public final class ServerSession: @unchecked Sendable {
         topLevel: UInt32, x: Int16, y: Int16, button: UInt8
     ) {
         guard let order = byteOrder else { return }
+        guard windows.get(topLevel) != nil else { return }
+        // Update last-known pointer position (used by QueryPointer reply)
+        // and detect subwindow-boundary crossings during drag. X spec
+        // says crossing events fire regardless of button state — without
+        // this, menu items don't see EnterNotify when the user drags
+        // through them and so they don't highlight (Athena SimpleMenu's
+        // SmeBSB items use `<EnterWindow>: highlight()`).
+        lastPointerTopLevel = topLevel
+        lastPointerXY = (x, y)
+        let pointerWindow = deepestMappedWindow(topLevel: topLevel, x: x, y: y)
+        let from = currentPointerWindow[topLevel]
+        if from != pointerWindow {
+            currentPointerWindow[topLevel] = pointerWindow
+            emitCrossings(topLevel: topLevel, from: from, to: pointerWindow, rootX: x, rootY: y)
+            refreshCursor(topLevel: topLevel)
+        }
         // Motion under grab: redirect to grab window if grab eventMask has
         // PointerMotionMask (1<<6) or one of the ButtonNMotion bits.
         let resolved: (UInt32, Int16, Int16)?
@@ -479,6 +583,11 @@ public final class ServerSession: @unchecked Sendable {
         // (after delivery) install or tear down the implicit grab.
         if isDown { heldButtons.insert(button) } else { heldButtons.remove(button) }
 
+        // Compute current modifier state up-front so passive-grab matching
+        // can see it. This is the modifier portion only (low 8 bits); the
+        // full state including button bits is built later for the event.
+        let stateMods: UInt16 = currentModifierState
+
         let resolved: (UInt32, Int16, Int16)?
         if let redirect = grabRedirect(topLevel: topLevel, eventMaskBit16: mask16) {
             resolved = redirect
@@ -487,6 +596,42 @@ public final class ServerSession: @unchecked Sendable {
             // since we're single-client (the client owns every window in
             // this session); ownerEvents=true means "no redirect."
             resolved = mouseTarget(topLevel: topLevel, x: x, y: y, eventMaskBit: mask)
+        } else if isDown,
+                  let natural = mouseTarget(topLevel: topLevel, x: x, y: y, eventMaskBit: mask),
+                  let grab = findActivatablePassiveGrab(
+                      button: button, modifiers: stateMods, naturalTarget: natural.0
+                  ) {
+            // Passive button grab activates: per X spec, the matching button
+            // press auto-installs an active pointer grab on the grab-window,
+            // and the event is delivered to the grab-window (with eventX/eventY
+            // re-computed relative to it). Without this, Motif/Xaw menu posts
+            // never fire — XmCascadeButton + XawMenuButton both register
+            // GrabButton(Btn1) on the menu title widget so a click anywhere
+            // in its subtree posts the menu. Verified 2026-05-10 against
+            // xfontsel font-menu (14 GrabButton calls during init); same
+            // mechanism unblocks Motif menu posts in quickplot.
+            pointerGrab = PointerGrab(
+                window: grab.grabWindow,
+                eventMask: grab.eventMask == 0 ? 0xFFFF : grab.eventMask,
+                ownerEvents: grab.ownerEvents,
+                cursor: 0
+            )
+            implicitGrab = true
+            bridge?.startCrossWindowDragTracking()
+            let (gx, gy) = absoluteOrigin(of: grab.grabWindow, topLevel: topLevel)
+            resolved = (grab.grabWindow, gx, gy)
+            log?.log("  passive grab activated: window=0x\(String(grab.grabWindow, radix: 16)) button=\(button) (natural target was 0x\(String(natural.0, radix: 16)))")
+            // Per X spec § 11.4 + R6 dix/events.c:761 (ActivatePointerGrab),
+            // a grab activation MUST emit a crossing-event chain with
+            // mode=Grab from the current pointer window to the grab window.
+            // Without this, Xt's menu state machine concludes "I'm not
+            // actually grabbed" and dismisses the menu it just posted.
+            emitCrossings(
+                topLevel: topLevel,
+                from: currentPointerWindow[topLevel],
+                to: grab.grabWindow,
+                rootX: x, rootY: y, mode: .grab
+            )
         } else {
             resolved = mouseTarget(topLevel: topLevel, x: x, y: y, eventMaskBit: mask)
         }
@@ -549,13 +694,35 @@ public final class ServerSession: @unchecked Sendable {
                 cursor: 0
             )
             implicitGrab = true
+            bridge?.startCrossWindowDragTracking()
+            // Crossing chain on implicit grab (mode=Grab). Per R6
+            // dix/events.c:1194 ActivateGrab calls DoEnterLeaveEvents
+            // even for implicit grabs.
+            emitCrossings(
+                topLevel: topLevel,
+                from: currentPointerWindow[topLevel],
+                to: target,
+                rootX: x, rootY: y, mode: .grab
+            )
         }
         // End the implicit grab when all buttons are released. Client-issued
         // grabs (implicitGrab=false) are NOT auto-cleared; only UngrabPointer
         // ends those.
         if !isDown && heldButtons.isEmpty && implicitGrab {
+            let grabWin = pointerGrab?.window
             pointerGrab = nil
             implicitGrab = false
+            bridge?.stopCrossWindowDragTracking()
+            // Crossing chain on grab release (mode=Ungrab). Per R6
+            // dix/events.c:793 DeactivatePointerGrab.
+            if let grabWin = grabWin {
+                emitCrossings(
+                    topLevel: topLevel,
+                    from: grabWin,
+                    to: currentPointerWindow[topLevel],
+                    rootX: x, rootY: y, mode: .ungrab
+                )
+            }
         }
     }
 
@@ -565,14 +732,51 @@ public final class ServerSession: @unchecked Sendable {
     /// compare to the previously-tracked pointer window for this top-level,
     /// and emit the EnterNotify / LeaveNotify chain if it changed.
     public func handlePointerMoved(topLevel: UInt32, x: Int16, y: Int16) {
-        guard byteOrder != nil else { return }
+        guard let order = byteOrder else { return }
         guard windows.get(topLevel) != nil else { return }
+        lastPointerTopLevel = topLevel
+        lastPointerXY = (x, y)
         let target = deepestMappedWindow(topLevel: topLevel, x: x, y: y)
         let from = currentPointerWindow[topLevel]
-        if from == target { return }
-        currentPointerWindow[topLevel] = target
-        emitCrossings(topLevel: topLevel, from: from, to: target, rootX: x, rootY: y)
-        refreshCursor(topLevel: topLevel)
+        if from != target {
+            currentPointerWindow[topLevel] = target
+            emitCrossings(topLevel: topLevel, from: from, to: target, rootX: x, rootY: y)
+            refreshCursor(topLevel: topLevel)
+        }
+        // Per X spec, MotionNotify fires on every pointer movement (subject
+        // to mask), not only on subwindow change. Walk from `target` up to
+        // top-level looking for the first ancestor with PointerMotionMask
+        // set; if found, deliver there. Without this, Motif clients (e.g.
+        // quickplot from SS2) don't see hover motion and their translation
+        // engine never knows the pointer is over a widget when ButtonPress
+        // arrives. Verified 2026-05-09 against gold (Sun→Sun) capture which
+        // shows MotionNotify with state=0x0 (no button held) preceding
+        // every ButtonPress.
+        let pointerMotionMask: UInt32 = 1 << 6
+        var motionTarget: UInt32?
+        var cur: UInt32? = target
+        while let id = cur {
+            if let w = windows.get(id), w.eventMask & pointerMotionMask != 0 {
+                motionTarget = id
+                break
+            }
+            if id == topLevel { break }
+            cur = windows.get(id)?.parent
+        }
+        guard let mTarget = motionTarget else { return }
+        let (tx, ty) = absoluteOrigin(of: mTarget, topLevel: topLevel)
+        let event = InputEvent(
+            detail: 0,                                  // 0 = no button (hover); 1 = hint
+            sequenceNumber: sequenceNumber,
+            time: serverTime,
+            root: config.rootWindowId,
+            event: mTarget, child: 0,
+            rootX: x, rootY: y,
+            eventX: x &- tx, eventY: y &- ty,
+            state: currentModifierState,
+            sameScreen: true
+        )
+        outbound.append(event.encode(code: 6, byteOrder: order))   // 6 = MotionNotify
     }
 
     /// Pointer entered the NSView's content area (came from outside our X
@@ -645,7 +849,7 @@ public final class ServerSession: @unchecked Sendable {
     /// Each event is delivered only if the recipient window's eventMask
     /// has EnterWindowMask (1<<4) for Enter, LeaveWindowMask (1<<5) for
     /// Leave.
-    private func emitCrossings(topLevel: UInt32, from: UInt32?, to: UInt32?, rootX: Int16, rootY: Int16) {
+    private func emitCrossings(topLevel: UInt32, from: UInt32?, to: UInt32?, rootX: Int16, rootY: Int16, mode: CrossingMode = .normal) {
         guard let order = byteOrder else { return }
         let fromPath = from.map(ancestorPathToTopLevel) ?? []
         let toPath = to.map(ancestorPathToTopLevel) ?? []
@@ -728,18 +932,23 @@ public final class ServerSession: @unchecked Sendable {
         let enterMask: UInt32 = 1 << 4
         let leaveMask: UInt32 = 1 << 5
 
+        // Read serverTime once per crossing pass so paired Leave/Enter
+        // events share a timestamp, matching what a real X server does
+        // when the pointer crosses a boundary atomically.
+        let crossingTime = serverTime
+
         for (window, detail) in leaves {
             guard let entry = windows.get(window), entry.eventMask & leaveMask != 0 else { continue }
             let (tlX, tlY) = absoluteOrigin(of: window, topLevel: topLevel)
             let event = CrossingEvent(
                 detail: detail,
                 sequenceNumber: sequenceNumber,
-                time: 0,
+                time: crossingTime,
                 root: config.rootWindowId,
                 event: window, child: 0,
                 rootX: rootX, rootY: rootY,
                 eventX: rootX &- tlX, eventY: rootY &- tlY,
-                state: 0, mode: .normal,
+                state: 0, mode: mode,
                 sameScreen: true, focus: false
             )
             log?.log("  → LeaveNotify target=0x\(String(window, radix: 16)) detail=\(detail) at top=(\(rootX),\(rootY))")
@@ -752,12 +961,12 @@ public final class ServerSession: @unchecked Sendable {
             let event = CrossingEvent(
                 detail: detail,
                 sequenceNumber: sequenceNumber,
-                time: 0,
+                time: crossingTime,
                 root: config.rootWindowId,
                 event: window, child: 0,
                 rootX: rootX, rootY: rootY,
                 eventX: rootX &- tlX, eventY: rootY &- tlY,
-                state: 0, mode: .normal,
+                state: 0, mode: mode,
                 sameScreen: true, focus: false
             )
             log?.log("  → EnterNotify target=0x\(String(window, radix: 16)) detail=\(detail) at top=(\(rootX),\(rootY))")
@@ -841,6 +1050,59 @@ public final class ServerSession: @unchecked Sendable {
 
     /// Absolute (top-level-local) origin of a window by walking up parents.
     /// Returns (x, y) suitable for computing eventX/eventY = rootX - origin.
+    /// Find a passive button grab that should activate for this press.
+    /// Matches per X11 spec section 12.5 (PassiveButtonGrab):
+    /// - grab.button matches the pressed button (or AnyButton = 0)
+    /// - grab.modifiers matches the current modifier state (or AnyModifier = 0x8000)
+    /// - grab.grabWindow is on the ancestor chain from the natural target up
+    ///   to the top-level (so a click anywhere in the grab-window's subtree
+    ///   activates the grab).
+    /// Returns the matching grab, or nil if no match.
+    private func findActivatablePassiveGrab(
+        button: UInt8, modifiers: UInt16, naturalTarget: UInt32
+    ) -> PassiveButtonGrab? {
+        let activeMods = modifiers & 0xFF      // bits 0..7 = real modifier mask
+        let anyButton: UInt8 = 0               // 0 = AnyButton per X spec
+        let anyModifier: UInt16 = 0x8000       // per X spec
+        for grab in passiveButtonGrabs {
+            // button match
+            guard grab.button == anyButton || grab.button == button else { continue }
+            // modifier match — exact, with AnyModifier wildcard
+            let modsMatch = grab.modifiers == anyModifier
+                || (grab.modifiers & 0xFF) == activeMods
+            guard modsMatch else { continue }
+            // grabWindow must be on the ancestor chain (or be) the natural target
+            var cur: UInt32? = naturalTarget
+            var found = false
+            var hops = 0
+            while let id = cur, hops < 32 {
+                if id == grab.grabWindow { found = true; break }
+                cur = windows.get(id)?.parent
+                hops += 1
+            }
+            if found { return grab }
+        }
+        return nil
+    }
+
+    /// Destroy every descendant of `parent` (recursively). When
+    /// `includeRoot` is true, also remove the parent itself. Used by
+    /// DestroyWindow (with includeRoot=true) and DestroySubwindows
+    /// (with includeRoot=false).
+    private func destroySubtree(parentOf parent: UInt32, includeRoot: Bool) {
+        // Collect IDs first so we don't mutate during iteration.
+        var toRemove: [UInt32] = []
+        func walk(_ p: UInt32) {
+            for (id, w) in windows.windows where w.parent == p {
+                walk(id)
+                toRemove.append(id)
+            }
+        }
+        walk(parent)
+        for id in toRemove { windows.remove(id) }
+        if includeRoot { windows.remove(parent) }
+    }
+
     private func absoluteOrigin(of window: UInt32, topLevel: UInt32) -> (Int16, Int16) {
         var x: Int16 = 0
         var y: Int16 = 0
@@ -861,16 +1123,30 @@ public final class ServerSession: @unchecked Sendable {
         // single-client per definition (one X connection = one session
         // = one client view of the pointer). NotViewable / Frozen aren't
         // produced because we don't enforce window-viewable preconditions.
+        let alreadyGrabbed = (pointerGrab != nil)
         pointerGrab = PointerGrab(
             window: r.grabWindow,
             eventMask: r.eventMask,
             ownerEvents: r.ownerEvents,
             cursor: r.cursor
         )
+        if !alreadyGrabbed { bridge?.startCrossWindowDragTracking() }
         log?.log("  GrabPointer window=0x\(String(r.grabWindow, radix: 16)) mask=0x\(String(r.eventMask, radix: 16)) ownerEvents=\(r.ownerEvents) cursor=0x\(String(r.cursor, radix: 16))")
         // Push the grab cursor immediately; restored on Ungrab via refreshCursor.
         if r.cursor != 0, let topLevel = topLevelAncestor(of: r.grabWindow) {
             bridge?.setCursor(topLevel: topLevel, glyph: cursors.glyph(r.cursor))
+        }
+        // Per X spec § 11.4 + R6 dix/events.c:761 (ActivatePointerGrab),
+        // emit crossing chain with mode=Grab from current pointer window
+        // to grab window. Xt/Motif rely on this to know "grab is on me."
+        if let topLevel = topLevelAncestor(of: r.grabWindow) {
+            let (px, py) = lastPointerXY ?? (0, 0)
+            emitCrossings(
+                topLevel: topLevel,
+                from: currentPointerWindow[topLevel],
+                to: r.grabWindow,
+                rootX: px, rootY: py, mode: .grab
+            )
         }
         let reply = GrabReply(sequenceNumber: sequenceNumber, status: .success)
         outbound.append(reply.encode(byteOrder: byteOrder))
@@ -879,22 +1155,80 @@ public final class ServerSession: @unchecked Sendable {
     private func handleUngrabPointer() {
         guard let grab = pointerGrab else { return }
         pointerGrab = nil
+        bridge?.stopCrossWindowDragTracking()
         log?.log("  UngrabPointer (was on 0x\(String(grab.window, radix: 16)))")
         // Restore cursor based on the window currently under the pointer.
         if grab.cursor != 0, let topLevel = topLevelAncestor(of: grab.window) {
             refreshCursor(topLevel: topLevel)
         }
+        // Per X spec + R6 dix/events.c:793 (DeactivatePointerGrab), emit
+        // crossing chain with mode=Ungrab from grab window back to the
+        // current pointer window.
+        if let topLevel = topLevelAncestor(of: grab.window) {
+            let (px, py) = lastPointerXY ?? (0, 0)
+            emitCrossings(
+                topLevel: topLevel,
+                from: grab.window,
+                to: currentPointerWindow[topLevel],
+                rootX: px, rootY: py, mode: .ungrab
+            )
+        }
     }
 
     private func handleGrabKeyboard(_ r: GrabKeyboard, byteOrder: ByteOrder) {
+        let oldFocus = focusWindow
         keyboardGrab = KeyboardGrab(window: r.grabWindow, ownerEvents: r.ownerEvents)
         log?.log("  GrabKeyboard window=0x\(String(r.grabWindow, radix: 16)) ownerEvents=\(r.ownerEvents)")
+        // Per X spec + R6 dix/events.c:821 (ActivateKeyboardGrab), emit
+        // FocusOut on old focus + FocusIn on grab window with mode=Grab.
+        // Without these, Xt's keyboard-focus state machine doesn't notice
+        // the grab and behaves as if focus stayed where it was.
+        emitFocusEventPair(
+            from: oldFocus, to: r.grabWindow,
+            mode: .grab, byteOrder: byteOrder
+        )
         let reply = GrabReply(sequenceNumber: sequenceNumber, status: .success)
         outbound.append(reply.encode(byteOrder: byteOrder))
     }
 
     private func handleUngrabKeyboard() {
+        guard let grab = keyboardGrab else { return }
         keyboardGrab = nil
+        // Per X spec + R6 dix/events.c:854 (DeactivateKeyboardGrab),
+        // emit FocusOut on grab window + FocusIn on the post-grab focus
+        // (the explicit focus window if set, else None) with mode=Ungrab.
+        if let bo = byteOrder {
+            emitFocusEventPair(
+                from: grab.window, to: focusWindow,
+                mode: .ungrab, byteOrder: bo
+            )
+        }
+    }
+
+    /// Emit a paired FocusOut(from, mode) + FocusIn(to, mode). Both events
+    /// use detail=Nonlinear which is the simplest defensible choice; per
+    /// spec the detail depends on the relationship between from/to/pointer
+    /// — refining is a separate cleanup once the basic mode=Grab/Ungrab
+    /// signals are in place.
+    private func emitFocusEventPair(from: UInt32?, to: UInt32?, mode: FocusMode, byteOrder: ByteOrder) {
+        let codeFocusOut: UInt8 = 10
+        let codeFocusIn: UInt8 = 9
+        if let from = from, from != 0, from != 1 {
+            let ev = FocusEvent(
+                detail: .nonlinear, sequenceNumber: sequenceNumber,
+                event: from, mode: mode
+            )
+            log?.log("  → FocusOut target=0x\(String(from, radix: 16)) detail=nonlinear mode=\(mode)")
+            outbound.append(ev.encode(code: codeFocusOut, byteOrder: byteOrder))
+        }
+        if let to = to, to != 0, to != 1 {
+            let ev = FocusEvent(
+                detail: .nonlinear, sequenceNumber: sequenceNumber,
+                event: to, mode: mode
+            )
+            log?.log("  → FocusIn target=0x\(String(to, radix: 16)) detail=nonlinear mode=\(mode)")
+            outbound.append(ev.encode(code: codeFocusIn, byteOrder: byteOrder))
+        }
     }
 
     /// If a pointer grab is active and ownerEvents=false, route pointer
@@ -1260,6 +1594,7 @@ public final class ServerSession: @unchecked Sendable {
         bridge.drawPolyFillRectangle(
             topLevel: top,
             foreground: resolveColor(state.foreground),
+            function: state.function,
             rectangles: translated
         )
     }
@@ -1279,6 +1614,43 @@ public final class ServerSession: @unchecked Sendable {
             foreground: resolveColor(state.foreground),
             lineWidth: state.lineWidth,
             rectangles: translated
+        )
+    }
+
+    private func handlePolyArc(_ r: PolyArc, byteOrder: ByteOrder) {
+        guard let bridge = bridge,
+              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        let state = gcState(r.gc, byteOrder: byteOrder)
+        let translated = r.arcs.map {
+            Arc(
+                x: $0.x &+ dx, y: $0.y &+ dy,
+                width: $0.width, height: $0.height,
+                angle1: $0.angle1, angle2: $0.angle2
+            )
+        }
+        bridge.drawPolyArc(
+            topLevel: top,
+            foreground: resolveColor(state.foreground),
+            lineWidth: state.lineWidth,
+            arcs: translated
+        )
+    }
+
+    private func handlePolyFillArc(_ r: PolyFillArc, byteOrder: ByteOrder) {
+        guard let bridge = bridge,
+              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        let state = gcState(r.gc, byteOrder: byteOrder)
+        let translated = r.arcs.map {
+            Arc(
+                x: $0.x &+ dx, y: $0.y &+ dy,
+                width: $0.width, height: $0.height,
+                angle1: $0.angle1, angle2: $0.angle2
+            )
+        }
+        bridge.drawPolyFillArc(
+            topLevel: top,
+            foreground: resolveColor(state.foreground),
+            arcs: translated
         )
     }
 
@@ -1390,6 +1762,42 @@ public final class ServerSession: @unchecked Sendable {
     public var byteOrder: ByteOrder? {
         if case .running(let bo) = phase { return bo }
         return nil
+    }
+
+    /// Tear down all of this client's resources on disconnect, per X11 spec
+    /// close-down behavior (default mode = DestroyAll). The most visible
+    /// effect: every top-level NSWindow the client mapped should close, so
+    /// when xfontsel issues quit, its main window doesn't linger on screen.
+    /// We don't explicitly handle SetCloseDownMode (RetainPermanent /
+    /// RetainTemporary) — we always treat as DestroyAll. MUST be called on
+    /// `protocolQueue` so the bridge's destroyTopLevel runs in the same
+    /// thread context as session-state mutation.
+    public func cleanupOnDisconnect() {
+        guard let bridge = bridge, let bo = byteOrder else { return }
+        // Snapshot top-level ids first (mutating windows during walk would
+        // be a bug). Top-levels = direct children of the root window.
+        let topLevels = windows.windows
+            .filter { $0.value.parent == config.rootWindowId }
+            .map { $0.key }
+        log?.log("disconnect: destroying \(topLevels.count) top-level window(s)")
+        for id in topLevels {
+            bridge.destroyTopLevel(
+                id: id, byteOrder: bo,
+                sequence: sequenceNumber, outbound: outbound
+            )
+            windows.remove(id)
+        }
+    }
+
+    /// Drain any pending outbound bytes onto the wire via writeCallback.
+    /// No-op in tests (writeCallback nil) — tests inspect bytes via
+    /// `outbound.drain()` directly. MUST be called on `protocolQueue`.
+    public func flushOutbound() {
+        guard let callback = writeCallback else { return }
+        let bytes = outbound.drain()
+        if !bytes.isEmpty {
+            callback(bytes)
+        }
     }
 
     /// Decorate a raw WM_NAME-derived title with the wmInstance prefix when
@@ -1556,14 +1964,18 @@ public final class ServerSession: @unchecked Sendable {
             windows.insert(entry)
             let isTop = r.parent == config.rootWindowId
             log?.log("  CreateWindow wid=0x\(String(r.wid, radix: 16)) parent=0x\(String(r.parent, radix: 16)) \(r.width)x\(r.height) at (\(r.x),\(r.y)) bw=\(r.borderWidth) eventMask=0x\(String(eventMask, radix: 16)) topLevel=\(isTop) override=\(overrideRedirect)")
-            // Only register decoratable top-levels with the bridge.
-            // override-redirect = "WM should ignore this" — toolkit helpers,
-            // popup menus, tooltips. In rootless mode that means no NSWindow
-            // chrome. The window still exists in the X tree (we keep the
-            // entry above) so client requests against it work; we just don't
-            // create a Mac chrome for it. Without this, quickplot's tiny
-            // (1x1 / 5x5 / 10x10) helper windows appeared as visible boxes.
-            if isTop && !overrideRedirect {
+            // Register top-levels with the bridge. Both regular and
+            // override-redirect get a slot — the override-redirect path
+            // skips NSWindow chrome but the bridge still needs the slot
+            // to (a) attach a backing context and view, (b) honor unmap
+            // / orderOut later, (c) route drawing requests targeting the
+            // popup's drawable id. Skipping registerTopLevel for
+            // override-redirect previously meant slot(id) returned nil
+            // and the popup never received drawings or its unmap.
+            // Quickplot helper windows (1x1 / 5x5) are excluded by their
+            // small size / non-mapping path; popups (real menus) come
+            // up via MapWindow with override=true and DO need a slot.
+            if isTop {
                 bridge?.registerTopLevel(
                     id: r.wid,
                     geometry: TopLevelGeometry(
@@ -1633,23 +2045,14 @@ public final class ServerSession: @unchecked Sendable {
             let entry = windows.get(r.window)
             let isOverrideRedirect = entry?.overrideRedirect ?? false
             log?.log("  MapWindow window=0x\(String(r.window, radix: 16)) topLevel=\(isTop) override=\(isOverrideRedirect)")
-            // override-redirect top-levels skip the bridge entirely — no
-            // NSWindow comes up. We still need to satisfy the X protocol so
-            // the client thinks the map happened: emit a synthetic
-            // MapNotify on the window itself if it has StructureNotifyMask.
-            // Real X servers also emit MapRequest to the WM client, but we
-            // ARE the WM and we choose not to surface this window.
-            if isTop && isOverrideRedirect {
-                if (entry?.eventMask ?? 0) & (1 << 17) != 0 {        // StructureNotifyMask
-                    let mapNotify = MapNotifyEvent(
-                        sequenceNumber: sequenceNumber,
-                        event: r.window, window: r.window,
-                        overrideRedirect: true
-                    )
-                    outbound.append(mapNotify.encode(byteOrder: byteOrder))
-                }
-                break
-            }
+            // override-redirect top-levels are popups (menus, tooltips,
+            // drag indicators). They need a real NSWindow to be visible
+            // and clickable — we just bring them up borderless +
+            // non-activating + at popup-menu level so they float above
+            // the main window without stealing focus and without WM
+            // chrome. Skipping NSWindow creation entirely (the previous
+            // behavior) made every Athena/Motif menu invisible: client
+            // thinks it posted, server says yes, nothing on screen.
             if isTop {
                 let descendants = mappedDescendantSnapshots(of: r.window)
                 let topMask = entry?.eventMask ?? 0
@@ -1661,6 +2064,7 @@ public final class ServerSession: @unchecked Sendable {
                 bridge?.mapTopLevel(
                     id: r.window, geometry: currentGeom,
                     eventMask: topMask, descendants: descendants,
+                    overrideRedirect: isOverrideRedirect,
                     byteOrder: byteOrder, sequence: sequenceNumber,
                     outbound: outbound
                 )
@@ -1724,6 +2128,7 @@ public final class ServerSession: @unchecked Sendable {
 
         case .unmapWindow(let r):
             windows.setMapped(r.window, false)
+            log?.log("  UnmapWindow window=0x\(String(r.window, radix: 16)) topLevel=\(isTopLevel(r.window))")
             if isTopLevel(r.window) {
                 bridge?.unmapTopLevel(
                     id: r.window, byteOrder: byteOrder,
@@ -1947,10 +2352,20 @@ public final class ServerSession: @unchecked Sendable {
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .getInputFocus:
+            // Default focus on a fresh X connection is PointerRoot (1), not
+            // None (0). Returning None made Motif's translation engine treat
+            // the client as un-focused and silently refuse to dispatch widget
+            // callbacks (verified 2026-05-09 against quickplot from SS2 — the
+            // app rendered, click events landed at the right widget, but no
+            // callbacks fired and no follow-up X requests came back). If a
+            // SetInputFocus has explicitly set a focus window, return that;
+            // otherwise PointerRoot, with revert-to=Parent matching what real
+            // Xsun returns by default.
+            let focusValue: UInt32 = focusWindow ?? 1   // 1 == PointerRoot
             let reply = GetInputFocusReply(
                 sequenceNumber: sequenceNumber,
-                revertTo: .none,
-                focus: 0
+                revertTo: .parent,
+                focus: focusValue
             )
             outbound.append(reply.encode(byteOrder: byteOrder))
 
@@ -2016,21 +2431,215 @@ public final class ServerSession: @unchecked Sendable {
         case .ungrabPointer:
             handleUngrabPointer()
 
+        case .changeActivePointerGrab(let r):
+            // Change cursor + event mask on the existing active pointer
+            // grab without releasing it. Used by Xt's XtPopupSpringLoaded
+            // (menu post path) to transfer the press-time grab from the
+            // menu title widget to the menu window once the menu maps. If
+            // we silent-drop this, the menu maps then immediately unmaps
+            // because the active grab still targets the menu title and
+            // the release is interpreted as "click-without-selection →
+            // cancel." Verified 2026-05-10 against xfontsel font-menu
+            // post; same path applies to Motif menu posting.
+            if var grab = pointerGrab {
+                grab = PointerGrab(
+                    window: grab.window,
+                    eventMask: r.eventMask,
+                    ownerEvents: grab.ownerEvents,
+                    cursor: r.cursor
+                )
+                pointerGrab = grab
+                if r.cursor != 0, let topLevel = topLevelAncestor(of: grab.window) {
+                    bridge?.setCursor(topLevel: topLevel, glyph: cursors.glyph(r.cursor))
+                }
+                log?.log("  ChangeActivePointerGrab: cursor=0x\(String(r.cursor, radix: 16)) eventMask=0x\(String(r.eventMask, radix: 16))")
+            } else {
+                log?.log("  ChangeActivePointerGrab: no active grab — ignoring")
+            }
+
         case .grabKeyboard(let r):
             handleGrabKeyboard(r, byteOrder: byteOrder)
 
         case .ungrabKeyboard:
             handleUngrabKeyboard()
 
-        case .polyArc,
-             .polyFillArc,
-             .setClipRectangles, .setDashes, .putImage,
-             .sendEvent, .reparentWindow, .destroySubwindows,
-             .grabButton, .grabKey, .allowEvents,
-             .grabServer, .ungrabServer,
-             .warpPointer,
-             .recolorCursor, .bell, .unmapSubwindows:
+        case .polyArc(let r):
+            handlePolyArc(r, byteOrder: byteOrder)
+
+        case .polyFillArc(let r):
+            handlePolyFillArc(r, byteOrder: byteOrder)
+
+        case .setClipRectangles(let r):
+            // Update the GC's clip rectangles + clip origin. The rendering
+            // pipeline does NOT yet honor these (would require threading
+            // clip through every draw bridge method); the data is tracked
+            // on the GCEntry so a future targeted draw-method sweep can
+            // pick it up without losing client-set clip state. See
+            // OPCODE_STATUS for the limitation.
+            gcs.setClip(
+                r.gc, rectangles: r.rectangles,
+                xOrigin: r.clipXOrigin, yOrigin: r.clipYOrigin
+            )
+
+        case .setDashes(let r):
+            // Update the GC's dash pattern + offset. Same caveat as
+            // SetClipRectangles: data is tracked on the GCEntry, but the
+            // stroke methods don't yet apply dashes via CGContext.
+            // setLineDash. Tracked separately so `solid` lines are still
+            // correct for the common case (no SetDashes ever issued).
+            gcs.setDashes(r.gc, dashes: r.dashes, offset: r.dashOffset)
+
+        case .putImage:
+            // PutImage needs depth/format-aware decoding (Bitmap / XYPixmap
+            // / ZPixmap) and a pixel-storage model on PixmapEntry that we
+            // don't have yet — pixmaps are tracked id/depth/dims-only. So
+            // for now this is a documented no-op; clients that PutImage to
+            // a pixmap, then CopyArea from it to a window, will see no
+            // contents. Logged in OPCODE_STATUS / SHORTCUTS so we don't
+            // forget. xeyes eyeball texture lands here; cosmetic only,
+            // doesn't break event flow.
             break
+
+        case .reparentWindow(let r):
+            // Update the window's parent + position. We don't move the
+            // backing NSWindow (rootless: only top-levels have NSWindows
+            // and reparenting a top-level is rare); only intra-NSWindow
+            // descendant reparenting updates state. Per X spec the server
+            // is supposed to emit ReparentNotify on the moved window if
+            // its parent has SubstructureNotifyMask; we emit it
+            // unconditionally on the moved window itself (matches what
+            // most WMs expect to round-trip).
+            if var entry = windows.get(r.window) {
+                let oldParent = entry.parent
+                entry.parent = r.parent
+                entry.x = r.x
+                entry.y = r.y
+                windows.insert(entry)
+                let ev = ReparentNotifyEvent(
+                    sequenceNumber: sequenceNumber,
+                    event: r.window, window: r.window,
+                    parent: r.parent, x: r.x, y: r.y,
+                    overrideRedirect: false
+                )
+                outbound.append(ev.encode(byteOrder: byteOrder))
+                log?.log("  ReparentWindow window=0x\(String(r.window, radix: 16)) old-parent=0x\(String(oldParent, radix: 16)) new-parent=0x\(String(r.parent, radix: 16)) at (\(r.x),\(r.y))")
+            }
+
+        case .destroySubwindows(let r):
+            // Per spec, destroy each child of the requested window in
+            // bottom-to-top order. We don't track stacking; iterate the
+            // table. Recursive: each child's subwindows go too.
+            destroySubtree(parentOf: r.window, includeRoot: false)
+
+        case .unmapSubwindows(let r):
+            // Set mapped=false on every direct child of the requested
+            // window. Real X also emits UnmapNotify on each (with
+            // SubstructureNotifyMask check on parent) and triggers
+            // GraphicsExposure on regions that become uncovered; we skip
+            // those for now — log so it's visible.
+            for (id, w) in windows.windows where w.parent == r.window && w.mapped {
+                if var e = windows.get(id) { e.mapped = false; windows.insert(e) }
+            }
+            log?.log("  UnmapSubwindows parent=0x\(String(r.window, radix: 16))")
+
+        case .grabButton(let r):
+            // Passive button grab: when the matching button-press happens
+            // on the grab-window or any descendant, the server is supposed
+            // to auto-install an active pointer grab on grab-window. We
+            // record the entry but don't yet honor it in the ButtonPress
+            // delivery path — Motif/Athena's primary click flow doesn't
+            // need passive button grabs (they install via the "implicit
+            // pointer grab" we already handle in handleMouseEvent). Some
+            // menu-popup paths in Motif do use this. Tracked for a future
+            // sweep; documented in OPCODE_STATUS.
+            passiveButtonGrabs.append(PassiveButtonGrab(
+                grabWindow: r.grabWindow,
+                button: r.button,
+                modifiers: r.modifiers,
+                eventMask: r.eventMask,
+                ownerEvents: r.ownerEvents
+            ))
+            log?.log("  GrabButton window=0x\(String(r.grabWindow, radix: 16)) button=\(r.button) mods=0x\(String(r.modifiers, radix: 16))")
+
+        case .grabKey(let r):
+            // Passive key grab. Same pattern as GrabButton: record the
+            // entry, deliver via the natural KeyPress path until we wire
+            // active-on-match here. Quickplot registers ~5 of these for
+            // accelerator keys.
+            passiveKeyGrabs.append(PassiveKeyGrab(
+                grabWindow: r.grabWindow,
+                key: r.key,
+                modifiers: r.modifiers,
+                ownerEvents: r.ownerEvents
+            ))
+            log?.log("  GrabKey window=0x\(String(r.grabWindow, radix: 16)) key=\(r.key) mods=0x\(String(r.modifiers, radix: 16))")
+
+        case .allowEvents:
+            // Releases events queued behind a frozen grab. We don't
+            // implement frozen grabs (every grab we install is in
+            // GrabModeAsync state), so there's nothing queued to release —
+            // safe no-op.
+            break
+
+        case .warpPointer(let r):
+            // Programmatic pointer move. In rootless mode warping the macOS
+            // pointer feels jarring (the user's physical pointer would
+            // jump). We update our last-known logical position so QueryPointer
+            // returns the warped value, but do not call CGWarpMouseCursorPosition
+            // — clients that depend on the visible cursor jumping will see
+            // a discrepancy. Documented in OPCODE_STATUS as low-confidence.
+            if let stl = topLevelAncestor(of: r.dstWindow) {
+                let (dx, dy) = absoluteOrigin(of: r.dstWindow, topLevel: stl)
+                lastPointerTopLevel = stl
+                lastPointerXY = (dx &+ r.dstX, dy &+ r.dstY)
+            }
+
+        case .sendEvent(let r):
+            // Deliver the synthetic 32-byte event the client supplied to
+            // the destination window. Per X11 spec the server rewrites
+            // bytes 0 and 2..3:
+            //   - byte 0: set high bit (0x80) to mark as synthetic
+            //   - bytes 2..3: replace with the server's current sequence
+            //     number (NOT whatever the client put there)
+            // Skipping the seq rewrite means the event lands on the wire
+            // with whatever bogus seq the client supplied (often 0). Xlib's
+            // wrap-detection then treats the dip as a wrap, expands to
+            // 65536+, and prints "sequence lost in reply type 0x..!" —
+            // verified 2026-05-10 against quickplot SendEvent flow during
+            // menu posting. Propagation up the ancestor chain (when
+            // propagate=true) is NOT honored; predefined destinations
+            // (PointerWindow=0, InputFocus=1) deliver to the supplied id.
+            var bytes = r.event
+            bytes[0] |= 0x80
+            switch byteOrder {
+            case .lsbFirst:
+                bytes[2] = UInt8(truncatingIfNeeded: sequenceNumber)
+                bytes[3] = UInt8(truncatingIfNeeded: sequenceNumber >> 8)
+            case .msbFirst:
+                bytes[2] = UInt8(truncatingIfNeeded: sequenceNumber >> 8)
+                bytes[3] = UInt8(truncatingIfNeeded: sequenceNumber)
+            }
+            outbound.append(bytes)
+            log?.log("  SendEvent dest=0x\(String(r.destination, radix: 16)) propagate=\(r.propagate) eventCode=\(bytes[0] & 0x7F)")
+
+        case .grabServer, .ungrabServer:
+            // Single-client server: GrabServer's "block all other clients"
+            // semantic has no effect. We accept the request to keep the
+            // wire conversation flowing; client expects no reply.
+            break
+
+        case .recolorCursor:
+            // We substitute NSCursor glyphs and don't honor the X-protocol
+            // fg/bg colors. Cosmetic; safe no-op.
+            break
+
+        case .bell(let r):
+            // Audible alert. Map to NSBeep — the X spec lets us scale by
+            // the percent value (-100..100) but macOS NSBeep has no volume
+            // control, so we just beep on any non-zero positive request
+            // and stay silent on zero/negative (per spec the latter
+            // requests a softer/silenced bell).
+            if r.percent > 0 { bridge?.bell() }
 
         case .listFonts(let r):
             // Pattern-match against the synthesized Phase-1 font list.
@@ -2192,12 +2801,149 @@ public final class ServerSession: @unchecked Sendable {
             let reply = QueryBestSizeReply(sequenceNumber: sequenceNumber, width: w, height: h)
             outbound.append(reply.encode(byteOrder: byteOrder))
 
-        case .queryTree,
-             .getAtomName,
-             .translateCoordinates, .queryPointer,
-             .listExtensions,
-             .queryKeymap:
-            log?.log("dispatch: reply for \(opcodeName(request)) not implemented yet")
+        case .translateCoordinates(let r):
+            // Translate (srcX, srcY) from srcWindow's coordinate system to
+            // dstWindow's. If both share a top-level, walk each window's
+            // origin chain to top-level coords, do the subtraction, return
+            // same-screen=true. If they're in different top-levels (rare;
+            // we don't track inter-NSWindow root positions meaningfully)
+            // we return same-screen=false and zero coords — clients that
+            // need cross-screen translation are exotic and we'll cross
+            // that bridge if it ever matters.
+            //
+            // Without this reply Motif blocks forever in `_XReply` waiting
+            // on it. Quickplot from SS2 stopped dispatching widget callbacks
+            // after issuing one TranslateCoordinates we silent-dropped
+            // (verified 2026-05-09). The "Motif click dispatch dead-end" was
+            // never about Motif refusing to dispatch — Xlib was just stuck
+            // mid-reply, and clicks couldn't propagate through a blocked
+            // socket reader. Implementing this reply unblocks the client.
+            // Coordinate convention: each top-level X window is treated as
+            // sitting at (0,0) in root coordinates. That matches how we
+            // already stamp `rootX`/`rootY` on input events (using top-level
+            // local coords). So translating between any two windows in the
+            // same top-level subtree is straight subtraction; translating
+            // between a top-level descendant and the root window is the
+            // descendant's absolute origin within its top-level (since the
+            // top-level itself is at (0,0) in root). All windows share the
+            // single X screen → sameScreen=true.
+            let srcTopLevel = topLevelAncestor(of: r.srcWindow)
+            let dstTopLevel = topLevelAncestor(of: r.dstWindow)
+            let isRoot: (UInt32) -> Bool = { $0 == self.config.rootWindowId }
+            let srcRoot: (Int16, Int16) = {
+                if isRoot(r.srcWindow) { return (r.srcX, r.srcY) }
+                guard let stl = srcTopLevel else { return (r.srcX, r.srcY) }
+                let (sx, sy) = self.absoluteOrigin(of: r.srcWindow, topLevel: stl)
+                return (sx &+ r.srcX, sy &+ r.srcY)
+            }()
+            let dstOriginInRoot: (Int16, Int16) = {
+                if isRoot(r.dstWindow) { return (0, 0) }
+                guard let dtl = dstTopLevel else { return (0, 0) }
+                return self.absoluteOrigin(of: r.dstWindow, topLevel: dtl)
+            }()
+            let outX: Int16 = srcRoot.0 &- dstOriginInRoot.0
+            let outY: Int16 = srcRoot.1 &- dstOriginInRoot.1
+            let reply = TranslateCoordinatesReply(
+                sequenceNumber: sequenceNumber, sameScreen: true,
+                child: 0, dstX: outX, dstY: outY
+            )
+            log?.log("  TranslateCoordinates src=0x\(String(r.srcWindow, radix: 16)) dst=0x\(String(r.dstWindow, radix: 16)) (\(r.srcX),\(r.srcY)) → (\(reply.dstX),\(reply.dstY)) sameScreen=\(reply.sameScreen)")
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        case .queryTree(let r):
+            // Walk our window table for direct children of the requested
+            // window. Per X11 spec the children list is in bottom-to-top
+            // stacking order; we don't actually track stacking, so we
+            // return them in our table-iteration order — works fine for
+            // every Xt/Motif use we've seen, which only consumes the LIST
+            // (e.g. to enumerate children for property propagation), not
+            // its order. Parent is None (0) for the root window.
+            let children = windows.windows.compactMap { (id, w) in
+                w.parent == r.window ? id : nil
+            }
+            let parent: UInt32 = r.window == config.rootWindowId
+                ? 0
+                : (windows.get(r.window)?.parent ?? 0)
+            let reply = QueryTreeReply(
+                sequenceNumber: sequenceNumber,
+                root: config.rootWindowId,
+                parent: parent,
+                children: children
+            )
+            log?.log("  QueryTree window=0x\(String(r.window, radix: 16)) → parent=0x\(String(parent, radix: 16)) children=\(children.count)")
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        case .getAtomName(let r):
+            // Return the interned name for this atom id, or empty if
+            // unknown. Spec says BadAtom for unknown; we don't emit
+            // XErrors yet (tracked in OPCODE_STATUS), so empty-name is
+            // the closest defensible fallback — Xlib treats it as a
+            // zero-length string rather than a protocol error.
+            let nameStr = atoms.name(for: r.atom) ?? ""
+            let reply = GetAtomNameReply(
+                sequenceNumber: sequenceNumber,
+                name: Array(nameStr.utf8)
+            )
+            log?.log("  GetAtomName atom=\(r.atom) → \"\(nameStr)\"")
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        case .queryPointer(let r):
+            // Best-effort answer: report the last known pointer position
+            // in root coords (top-level local under our (0,0)-per-top-level
+            // convention), the deepest mapped descendant of the queried
+            // window that contains the pointer (or None), and the current
+            // mod+button mask. winX/winY are relative to the queried
+            // window. Per X spec same-screen=true unless the pointer is
+            // on a different screen — single-screen for us.
+            let (px, py) = lastPointerXY ?? (0, 0)
+            var winX: Int16 = px
+            var winY: Int16 = py
+            var child: UInt32 = 0
+            if let topLevel = lastPointerTopLevel {
+                if let stl = topLevelAncestor(of: r.window), stl == topLevel {
+                    let (qx, qy) = absoluteOrigin(of: r.window, topLevel: stl)
+                    winX = px &- qx
+                    winY = py &- qy
+                }
+                child = currentPointerWindow[topLevel] ?? 0
+                if child == r.window { child = 0 }
+            }
+            var mask: UInt16 = currentModifierState
+            for b in heldButtons where b >= 1 && b <= 5 {
+                mask |= UInt16(1) << (7 + b)
+            }
+            let reply = QueryPointerReply(
+                sequenceNumber: sequenceNumber,
+                sameScreen: true,
+                root: config.rootWindowId,
+                child: child,
+                rootX: px, rootY: py,
+                winX: winX, winY: winY,
+                mask: mask
+            )
+            log?.log("  QueryPointer window=0x\(String(r.window, radix: 16)) → child=0x\(String(child, radix: 16)) root=(\(px),\(py)) win=(\(winX),\(winY)) mask=0x\(String(mask, radix: 16))")
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        case .listExtensions:
+            // Empty list — we don't implement any X extensions (no XKB,
+            // no SHAPE, no MIT-SHM, etc.). Clients that ListExtensions get
+            // back nothing and proceed without extension features.
+            let reply = ListExtensionsReply(sequenceNumber: sequenceNumber, names: [])
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        case .queryKeymap:
+            // We don't track held-key state across the connection (only
+            // modifier state during translation). Returning all-zeros is a
+            // defensible best-effort: it tells the client "no keys are
+            // currently held," which is true for the common idle case.
+            // Phase 4: track per-keycode press state on key events and
+            // mirror it here. Updated to honest-low confidence in
+            // OPCODE_STATUS until that lands.
+            let reply = QueryKeymapReply(
+                sequenceNumber: sequenceNumber,
+                keys: [UInt8](repeating: 0, count: 32)
+            )
+            outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .unknown(let op, _):
             unknownOpcodes.append(op)
@@ -2236,6 +2982,7 @@ private func opcodeName(_ request: Request) -> String {
     case .grabPointer: return "GrabPointer"
     case .ungrabPointer: return "UngrabPointer"
     case .grabButton: return "GrabButton"
+    case .changeActivePointerGrab: return "ChangeActivePointerGrab"
     case .grabKeyboard: return "GrabKeyboard"
     case .ungrabKeyboard: return "UngrabKeyboard"
     case .grabKey: return "GrabKey"

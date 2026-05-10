@@ -80,6 +80,7 @@ while i < args.count {
 }
 
 let log = StderrLogSink()
+WireTrace.installFromEnvironment()
 let listener = Listener(host: host, port: port, log: log)
 
 // Detect the connected display and pick a logical-root + integer-scale

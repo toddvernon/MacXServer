@@ -271,6 +271,8 @@ private func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext) -> S
         body = "UngrabPointer"
     case .grabButton(let r):
         body = "GrabButton               window=\(windowDisplay(r.grabWindow)) button=\(r.button) modifiers=0x\(String(r.modifiers, radix: 16))"
+    case .changeActivePointerGrab(let r):
+        body = "ChangeActivePointerGrab  cursor=0x\(String(r.cursor, radix: 16)) eventMask=0x\(String(r.eventMask, radix: 16))"
     case .grabKeyboard(let r):
         body = "GrabKeyboard             window=\(windowDisplay(r.grabWindow))"
     case .ungrabKeyboard:
@@ -484,6 +486,7 @@ private func opcodeOf(_ req: Request) -> UInt8 {
     case .grabPointer:               return GrabPointer.opcode
     case .ungrabPointer:             return UngrabPointer.opcode
     case .grabButton:                return GrabButton.opcode
+    case .changeActivePointerGrab:   return ChangeActivePointerGrab.opcode
     case .grabKeyboard:              return GrabKeyboard.opcode
     case .ungrabKeyboard:            return UngrabKeyboard.opcode
     case .grabKey:                   return GrabKey.opcode

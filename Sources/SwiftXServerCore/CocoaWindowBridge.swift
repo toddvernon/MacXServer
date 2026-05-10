@@ -26,6 +26,12 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
     private var slots: [UInt32: Slot] = [:]
     private let lock = NSLock()
+
+    /// Cross-NSWindow drag tracking state. See startCrossWindowDragTracking
+    /// for the rationale; all access on main thread.
+    var dragMonitor: Any?
+    var dragGrabDepth: Int = 0
+    var dragLastWindowId: UInt32?
     // Multi-client: every connected session registers its own handlers via
     // setOnX. We store them as lists, not single closures, so a newly
     // accepted xcalc session doesn't replace the already-running xterm
@@ -170,8 +176,43 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// Per-window pending focus state, last-emitted state, and pending task.
+    /// Used by the debounce: when AppKit activates two windows in quick
+    /// succession (window A becomes key → A resigns key → B becomes key,
+    /// all within ~40ms — common at app startup with multiple top-levels),
+    /// emitting all three FocusIn/Out events to the client destabilises
+    /// Motif's translation engine. Gold (Sun→Sun) emits ONE FocusIn at
+    /// startup; we mirror that by debouncing rapid changes per-window so
+    /// only the SETTLED final state lands on the wire.
+    /// All access is from the main thread (NSWindow delegate callbacks +
+    /// our own scheduled tasks targeting `.main`).
+    private nonisolated(unsafe) static var pendingFocusState: [UInt32: Bool] = [:]
+    private nonisolated(unsafe) static var lastEmittedFocusState: [UInt32: Bool] = [:]
+    private nonisolated(unsafe) static var pendingFocusTask: [UInt32: DispatchWorkItem] = [:]
+    private static let focusDebounceMs = 80
+
     func handleNSWindowFocusChange(id: UInt32, gained: Bool) {
-        fireFocus(id: id, gained: gained)
+        // Cancel any pending emit for this window.
+        Self.pendingFocusTask[id]?.cancel()
+        Self.pendingFocusState[id] = gained
+        let item = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            guard let pending = Self.pendingFocusState[id] else { return }
+            let last = Self.lastEmittedFocusState[id] ?? false
+            Self.pendingFocusTask[id] = nil
+            // Suppress if state didn't actually change since last emit
+            // (e.g. gain → lose → gain settles back to gain — same as
+            // last_emitted, no event needed).
+            if pending != last {
+                Self.lastEmittedFocusState[id] = pending
+                self.fireFocus(id: id, gained: pending)
+            }
+        }
+        Self.pendingFocusTask[id] = item
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + .milliseconds(Self.focusDebounceMs),
+            execute: item
+        )
     }
 
     // MARK: - WindowBridge
@@ -187,6 +228,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         geometry: TopLevelGeometry,
         eventMask: UInt32,
         descendants: [DescendantSnapshot],
+        overrideRedirect: Bool,
         byteOrder: ByteOrder,
         sequence: UInt16,
         outbound: OutboundQueue
@@ -270,11 +312,48 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 self?.fireCopy(id: id)
             }
 
-            let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
-            let contentRect = NSRect(x: 100, y: 100, width: pointsW, height: pointsH)
-            let win = NSWindow(contentRect: contentRect, styleMask: style, backing: .buffered, defer: false)
+            // Override-redirect popups (menus, tooltips, drag indicators)
+            // need different NSWindow styling than regular top-levels:
+            //   - borderless (no title bar / chrome)
+            //   - non-activating panel (clicks don't steal key from main)
+            //   - level=popUpMenu (floats above regular windows)
+            // Use NSPanel for the non-activating + window-level behavior;
+            // regular NSWindow for normal top-levels.
+            let style: NSWindow.StyleMask = overrideRedirect
+                ? [.borderless, .nonactivatingPanel]
+                : [.titled, .closable, .miniaturizable, .resizable]
+            // Position: regular top-levels go at (100, 100) by convention.
+            // Override-redirect popups need to land where the X client
+            // asked, in screen coords:
+            //   - x: parent NSWindow's screen-x + geometry.x (X-root is
+            //     parent-relative under our (0,0)-per-top-level convention)
+            //   - y: parent's screen-y-top - geometry.y - pointsH
+            //     (X is top-left origin, macOS is bottom-left, so flip)
+            // The "parent" for popup positioning is whichever top-level the
+            // user is currently interacting with — NSApp.keyWindow when
+            // available; fall back to (100,100) for headless / pre-key cases.
+            let contentRect: NSRect
+            if overrideRedirect, let parent = NSApp.keyWindow {
+                let parentFrame = parent.frame
+                let originX = parentFrame.origin.x + CGFloat(geometry.x) * CGFloat(scale) / backingScale
+                let parentTop = parentFrame.origin.y + parentFrame.size.height
+                let originY = parentTop - CGFloat(geometry.y) * CGFloat(scale) / backingScale - pointsH
+                contentRect = NSRect(x: originX, y: originY, width: pointsW, height: pointsH)
+            } else {
+                contentRect = NSRect(x: 100, y: 100, width: pointsW, height: pointsH)
+            }
+            let win: NSWindow
+            if overrideRedirect {
+                let panel = NSPanel(contentRect: contentRect, styleMask: style, backing: .buffered, defer: false)
+                panel.level = .popUpMenu
+                panel.hidesOnDeactivate = false
+                panel.becomesKeyOnlyIfNeeded = true
+                win = panel
+            } else {
+                win = NSWindow(contentRect: contentRect, styleMask: style, backing: .buffered, defer: false)
+            }
             win.contentView = view
-            win.title = pendingTitle
+            if !overrideRedirect { win.title = pendingTitle }
             win.isReleasedWhenClosed = false
             // Tracking-area-driven mouseMoved is reliable on its own, but this
             // is the legacy switch the Cocoa docs still call out — set it true
@@ -297,11 +376,26 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // before FocusIn — still holds because makeKeyAndOrderFront
             // triggers windowDidBecomeKey → focus handler → FocusIn AFTER
             // the map events have already landed in outbound.
-            win.makeKeyAndOrderFront(nil)
+            //
+            // Override-redirect popups: orderFrontRegardless instead of
+            // makeKeyAndOrderFront — they should NOT steal key focus from
+            // whatever main window the user was interacting with. Skips
+            // the windowDidBecomeKey → FocusIn synth, which is correct
+            // because the X server doesn't emit FocusIn on popup mapping
+            // either.
+            if overrideRedirect {
+                win.orderFrontRegardless()
+            } else {
+                win.makeKeyAndOrderFront(nil)
+            }
             // Make the FlippedXView the first responder so keyDown / keyUp
             // route to it. Without this, NSWindow swallows key events.
-            win.makeFirstResponder(view)
-            NSApp.activate(ignoringOtherApps: true)
+            // Override-redirect popups don't take key focus, so skip the
+            // app-activate step too.
+            if !overrideRedirect {
+                win.makeFirstResponder(view)
+                NSApp.activate(ignoringOtherApps: true)
+            }
         }
     }
 
@@ -319,27 +413,37 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     }
 
     public func unmapTopLevel(id: UInt32, byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {
+        // Emit UnmapNotify SYNCHRONOUSLY on the caller's (protocol) thread
+        // so the event lands in `outbound` with the correct sequence number
+        // at the right point in wire order. Earlier we were doing this
+        // inside the DispatchQueue.main.async block — by the time main ran,
+        // the session had advanced sequenceNumber and the wire saw a
+        // backwards seq dip. Xlib then reported "sequence lost in reply
+        // type 0x12" (= UnmapNotify code 18). Verified 2026-05-10 against
+        // xfontsel font-menu post/dismiss flow.
+        let event = UnmapNotifyEvent(
+            sequenceNumber: sequence, event: id, window: id, fromConfigure: false
+        )
+        outbound.append(event.encode(byteOrder: byteOrder))
         let win = slot(id)?.window
         DispatchQueue.main.async {
             win?.orderOut(nil)
-            let event = UnmapNotifyEvent(
-                sequenceNumber: sequence, event: id, window: id, fromConfigure: false
-            )
-            outbound.append(event.encode(byteOrder: byteOrder))
         }
     }
 
     public func destroyTopLevel(id: UInt32, byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {
+        // Same pattern as unmapTopLevel: emit DestroyNotify synchronously
+        // on the protocol thread for correct wire-order seq stamping.
+        let event = DestroyNotifyEvent(
+            sequenceNumber: sequence, event: id, window: id
+        )
+        outbound.append(event.encode(byteOrder: byteOrder))
         let win = slot(id)?.window
         lock.lock()
         slots.removeValue(forKey: id)
         lock.unlock()
         DispatchQueue.main.async {
             win?.close()
-            let event = DestroyNotifyEvent(
-                sequenceNumber: sequence, event: id, window: id
-            )
-            outbound.append(event.encode(byteOrder: byteOrder))
         }
     }
 
@@ -551,15 +655,72 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
-    public func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, rectangles: [Framer.Rectangle]) {
+    public func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, function: UInt8, rectangles: [Framer.Rectangle]) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
+            ctx.saveGState()
+            // X GC function = 6 (GXxor): XOR fill toggles destination pixels.
+            // Athena's menu-item highlight relies on this — first XOR-fill
+            // highlights, second XOR-fill on the same area un-highlights,
+            // text preserved because XOR-then-XOR is identity. CG's
+            // .difference blend mode is XOR-equivalent for binary colors
+            // (|D - S|: black↔white inverts, intermediate values don't
+            // perfectly reverse but Athena only uses solid colors here).
+            // Function 3 (GXcopy) is the spec default — overwrite.
+            if function == 6 {  // GXxor
+                ctx.setBlendMode(.difference)
+            }
+            applyFill(ctx, foreground)
+            for r in rectangles {
+                ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
+                                width: CGFloat(r.width), height: CGFloat(r.height)))
+            }
+            ctx.restoreGState()
+            view.setNeedsDisplay(view.bounds)
+        }
+    }
+
+    /// X11 arc geometry: bounding box (x, y, width, height) defines the
+    /// ellipse; angle1 is the start angle in 64ths of a degree (0 = east);
+    /// angle2 is the extent (positive = counterclockwise per X spec).
+    /// Implementation: parametric ellipse sampling in device coords —
+    /// build the arc as a polyline of N segments, where N scales with the
+    /// arc extent so a 360° arc gets ~64 segments. Avoids CTM-vs-stroke-
+    /// pen-width interaction (a scaled CGContext.addArc would also scale
+    /// the pen, distorting line width on non-circular arcs).
+    public func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc]) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
+            ctx.saveGState()
+            applyForeground(ctx, foreground)
+            self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
+            for a in arcs {
+                let path = ellipseArcPath(arc: a, includePieCenter: false)
+                ctx.beginPath()
+                ctx.addPath(path)
+                ctx.strokePath()
+            }
+            ctx.restoreGState()
+            view.setNeedsDisplay(view.bounds)
+        }
+    }
+
+    /// PolyFillArc: fill the pie slice (default arc-mode=PieSlice; chord mode
+    /// is unhandled — see OPCODE_STATUS). Path moves to the ellipse center,
+    /// out to the arc start, sweeps the arc, closes back to center.
+    public func drawPolyFillArc(topLevel: UInt32, foreground: RGB16, arcs: [Arc]) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
             ctx.saveGState()
             applyFill(ctx, foreground)
-            for r in rectangles {
-                ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
-                                width: CGFloat(r.width), height: CGFloat(r.height)))
+            for a in arcs {
+                let path = ellipseArcPath(arc: a, includePieCenter: true)
+                ctx.beginPath()
+                ctx.addPath(path)
+                ctx.fillPath()
             }
             ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
@@ -948,4 +1109,194 @@ private func applyFill(_ ctx: CGContext, _ rgb: RGB16) {
     let g = CGFloat(rgb.green) / 65535.0
     let b = CGFloat(rgb.blue) / 65535.0
     ctx.setFillColor(red: r, green: g, blue: b, alpha: 1)
+}
+
+extension CocoaWindowBridge {
+    public func bell() {
+        DispatchQueue.main.async { NSSound.beep() }
+    }
+
+    /// Cross-NSWindow drag tracking via NSEvent local monitor.
+    ///
+    /// Why we need this: AppKit binds `mouseDragged` events to the NSView
+    /// where `mouseDown` originated. Once the user clicks a menu title in
+    /// the main NSWindow and drags into the popup (a separate NSPanel),
+    /// AppKit keeps sending events to the menu title's view. Our X server
+    /// wants those events delivered to the popup so menu items can
+    /// highlight on enter / activate on release.
+    ///
+    /// XQuartz solves this with private `xp_*` kernel APIs — events route
+    /// at a layer below NSEvent. We don't have those APIs from a regular
+    /// Swift AppKit app, but `NSEvent.addLocalMonitorForEvents` is good
+    /// enough: it intercepts events in our app before responder dispatch.
+    /// We compute the global pointer position, look up which managed
+    /// NSWindow contains it (popup-level NSPanels first per z-order),
+    /// translate, and fire the X event with the correct window's id.
+    /// The original FlippedXView's mouseDragged path is bypassed during
+    /// the grab (we return nil from the monitor to consume the event).
+    ///
+    /// The monitor is only installed while an X grab is active, so the
+    /// regular within-window drag path stays unmodified for non-grab
+    /// scenarios. install/stop are idempotent and ref-counted via
+    /// `dragGrabDepth`; nested grabs don't double-install.
+    public func startCrossWindowDragTracking() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.dragGrabDepth += 1
+            guard self.dragGrabDepth == 1 else { return }
+            let mask: NSEvent.EventTypeMask = [
+                .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+                .leftMouseUp, .rightMouseUp, .otherMouseUp
+            ]
+            self.dragMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+                self?.dispatchCrossWindowDrag(event)
+                return nil   // consume — we've routed it
+            }
+        }
+    }
+
+    public func stopCrossWindowDragTracking() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.dragGrabDepth = max(0, self.dragGrabDepth - 1)
+            guard self.dragGrabDepth == 0 else { return }
+            if let m = self.dragMonitor {
+                NSEvent.removeMonitor(m)
+                self.dragMonitor = nil
+            }
+            self.dragLastWindowId = nil
+        }
+    }
+
+    /// Body of the local monitor: figure out which NSWindow's content
+    /// area is under the pointer, route the X event there with translated
+    /// coords, fire EnterView/ExitView on cross-window transitions so
+    /// menu items get a clean LeaveNotify when the pointer leaves the popup.
+    private func dispatchCrossWindowDrag(_ event: NSEvent) {
+        // Compute global screen point. AppKit gives us window-local when
+        // event.window is non-nil; convert to screen.
+        let screenPt: NSPoint
+        if let w = event.window {
+            screenPt = w.convertPoint(toScreen: event.locationInWindow)
+        } else {
+            screenPt = event.locationInWindow
+        }
+
+        let button = Self.xButton(forNSEventType: event.type)
+        let isUp: Bool = (event.type == .leftMouseUp
+                          || event.type == .rightMouseUp
+                          || event.type == .otherMouseUp)
+
+        let target = findManagedWindow(at: screenPt)
+
+        // Cross-window transition: emit EnterView/ExitView so the X server
+        // can run its EnterNotify/LeaveNotify chains and menu items
+        // un-highlight when the pointer leaves the popup.
+        if let lastId = dragLastWindowId, target?.0 != lastId {
+            firePointerExitedView(id: lastId)
+        }
+
+        if let (xid, view) = target, let win = view.window {
+            // Convert screen → window-base → view points. NSView.convert(_:from:nil)
+            // means "from window-base coords," NOT from screen — so the screen-to-window
+            // step has to happen first via NSWindow.frame offset (both screen-coords,
+            // both bottom-left origin in macOS, so simple subtraction).
+            let windowPt = NSPoint(
+                x: screenPt.x - win.frame.origin.x,
+                y: screenPt.y - win.frame.origin.y
+            )
+            let viewPt = view.convert(windowPt, from: nil)
+            // view points → X-logical pixels. The view is .flipped so viewPt.y
+            // is already top-left-origin, matching X. Scale by the device-pixel
+            // ratio so 1 X-logical pixel maps consistently.
+            let bs = NSScreen.main?.backingScaleFactor ?? 2.0
+            let logicalX = Int16(viewPt.x * bs / CGFloat(scaleFactor))
+            let logicalY = Int16(viewPt.y * bs / CGFloat(scaleFactor))
+
+            if dragLastWindowId != xid {
+                firePointerEnteredView(id: xid, x: logicalX, y: logicalY)
+            }
+            dragLastWindowId = xid
+
+            if isUp {
+                fireMouse(id: xid, x: logicalX, y: logicalY, button: button, isDown: false)
+            } else {
+                fireMouseDragged(id: xid, x: logicalX, y: logicalY, button: button)
+            }
+        } else {
+            // Pointer outside all managed NSWindows. The previous window's
+            // ExitView already fired above; just clear the tracker. Don't
+            // route the X event anywhere — equivalent to "drag continues
+            // off-screen" in real X (no grabbed-client gets motion events
+            // outside the screen anyway in our rootless model).
+            dragLastWindowId = nil
+        }
+    }
+
+    /// Find which managed NSWindow's content area contains the screen point.
+    /// Iterates highest NSWindow.level first so popups (`.popUpMenu` level)
+    /// win over regular top-levels when overlapping. Returns the X-id +
+    /// FlippedXView for coordinate translation.
+    private func findManagedWindow(at screenPt: NSPoint) -> (UInt32, FlippedXView)? {
+        lock.lock()
+        let snap = slots
+        lock.unlock()
+        // Sort by NSWindow.level descending (popups first per z-order)
+        let sorted = snap.sorted { lhs, rhs in
+            (lhs.value.window?.level.rawValue ?? 0)
+                > (rhs.value.window?.level.rawValue ?? 0)
+        }
+        for (id, slot) in sorted {
+            guard let win = slot.window, win.isVisible else { continue }
+            guard win.frame.contains(screenPt) else { continue }
+            guard let view = slot.view else { continue }
+            return (id, view)
+        }
+        return nil
+    }
+
+    /// Translate an NSEvent button to the X-protocol button number.
+    /// X11 convention: 1=left, 2=middle, 3=right. macOS "right" maps to X
+    /// button 3 even though NSEvent's enum names it `rightMouse`.
+    private static func xButton(forNSEventType type: NSEvent.EventType) -> UInt8 {
+        switch type {
+        case .leftMouseDragged, .leftMouseUp:    return 1
+        case .otherMouseDragged, .otherMouseUp:  return 2
+        case .rightMouseDragged, .rightMouseUp:  return 3
+        default:                                  return 0
+        }
+    }
+}
+
+/// Build a CGPath for an X11 elliptical arc. `arc.x/y/width/height` give the
+/// ellipse's bounding box in top-level coords; `arc.angle1` is the start
+/// angle in 64ths of a degree (0 = east), `arc.angle2` is the signed extent
+/// (positive = counterclockwise per X spec). When `includePieCenter` is true
+/// the path is built as a closed pie slice (for PolyFillArc); otherwise it's
+/// just the arc curve (for PolyArc). Sampled parametrically so stroke pen
+/// width stays uniform on non-circular ellipses.
+private func ellipseArcPath(arc a: Arc, includePieCenter: Bool) -> CGPath {
+    let cx = CGFloat(a.x) + CGFloat(a.width) / 2
+    let cy = CGFloat(a.y) + CGFloat(a.height) / 2
+    let rx = CGFloat(a.width) / 2
+    let ry = CGFloat(a.height) / 2
+    let start = CGFloat(a.angle1) / 64.0 * .pi / 180.0
+    let extent = CGFloat(a.angle2) / 64.0 * .pi / 180.0
+    let steps = max(8, Int((abs(extent) / .pi) * 32))
+    let path = CGMutablePath()
+    if includePieCenter {
+        path.move(to: CGPoint(x: cx, y: cy))
+        path.addLine(to: CGPoint(x: cx + rx * cos(start), y: cy + ry * sin(start)))
+    }
+    for i in 0...steps {
+        let t = start + extent * CGFloat(i) / CGFloat(steps)
+        let p = CGPoint(x: cx + rx * cos(t), y: cy + ry * sin(t))
+        if includePieCenter || i > 0 {
+            path.addLine(to: p)
+        } else {
+            path.move(to: p)
+        }
+    }
+    if includePieCenter { path.closeSubpath() }
+    return path
 }

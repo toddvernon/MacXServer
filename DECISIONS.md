@@ -264,6 +264,22 @@ This decision supersedes the "How to handle the initial X core font requirement"
 
 See `FontResolver.swift` and the empirical alias map in `SERVER_RESOLUTION_SCALING_AND_FONTS.md`.
 
+## 2026-05-10 — Single-thread protocol model + Athena/Motif menu support
+
+Two architectural changes shipped together to unblock real Xt/Motif client usability:
+
+**1. Single protocol thread per session.** Replaced the prior two-thread (read + write) model with one GCD serial queue per session that owns all session state, the client socket, and event synthesis. AppKit-side bridge callbacks now hop onto this queue instead of touching session state on the main thread. Mirrors R6's `Dispatch()` loop and XQuartz's pthread-based server thread (see `SERVER_CONCURRENCY.md`).
+
+Reason: Xlib "sequence lost" warnings from quickplot proved real wire-order corruption from the writeLock race; cross-thread reads of `sequenceNumber`/`pointerGrab`/`focusWindow` etc. were structurally racy regardless. One thread eliminates both classes of bug.
+
+**2. Cross-NSWindow drag tracking via `NSEvent.addLocalMonitorForEvents`.** Athena and Motif menus rely on the X server delivering drag events to the popup-menu window even when the user pressed the button on the menu title (in a different NSWindow). AppKit's `mouseDragged` is sticky to the origin view, so the popup never sees pointer motion natively. When an X-protocol pointer grab is active, `CocoaWindowBridge` now installs a local NSEvent monitor that intercepts drag/up events, looks up which managed NSWindow contains the global pointer position (popup-level NSPanels first per z-order), translates coordinates, and routes to the right window's X-id.
+
+XQuartz solves this with macOS-private `xp_*` kernel APIs we don't have; the local-monitor approach is the public-API approximation. See `SHORTCUTS.md` "Cross-NSWindow drag tracking" entry.
+
+Plus a sweep of opcode coverage on the path to making this work: TranslateCoordinates, QueryTree, GetAtomName, QueryPointer, ListExtensions, QueryKeymap, ChangeActivePointerGrab, override-redirect popup windows (NSPanel at `.popUpMenu` level), passive button grab activation, mode=Grab/Ungrab on crossing+focus events, GC function (GXxor → `CGBlendMode.difference` for Athena's menu-item XOR-fill highlight). See `OPCODE_STATUS.md` for the full per-opcode status. The systematic sweep replaces a "find one missing opcode at a time, ship it, repeat" pattern that was accumulating tech debt.
+
+Validated end-to-end against xfontsel font-menu drag-and-select on a real SS2 over the LAN; same machinery applies to Motif (quickplot) menus.
+
 ---
 
 ## Decisions still to make

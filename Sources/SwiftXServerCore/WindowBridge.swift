@@ -67,6 +67,7 @@ public protocol WindowBridge: AnyObject, Sendable {
         geometry: TopLevelGeometry,
         eventMask: UInt32,
         descendants: [DescendantSnapshot],
+        overrideRedirect: Bool,
         byteOrder: ByteOrder,
         sequence: UInt16,
         outbound: OutboundQueue
@@ -194,11 +195,24 @@ public protocol WindowBridge: AnyObject, Sendable {
     func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment])
     func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint])
     func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool)
-    func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, rectangles: [Rectangle])
+    /// PolyFillRectangle. `function` is the X GC drawing function — primarily
+    /// 3 (GXcopy, overwrite) or 6 (GXxor, toggle). XOR is what Athena/Motif
+    /// menu-item highlights use; non-XOR fills destroy text underneath.
+    func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, function: UInt8, rectangles: [Rectangle])
     /// PolyRectangle: stroke the perimeter of each rect (vs PolyFillRectangle
     /// which fills). Used by Athena Command for the highlight border that
     /// appears when the pointer enters the widget.
     func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Rectangle])
+    /// PolyArc: stroke the outline of each elliptical arc. Each arc's bounding
+    /// box is (x, y, width, height) in top-level coords, with angles in 64ths
+    /// of a degree (angle1 = start, angle2 = extent; positive = counterclockwise).
+    /// xclock uses this for the clock face; xeyes for eye outlines.
+    func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc])
+    /// PolyFillArc: fill the interior of each elliptical arc. Same arc geometry
+    /// as drawPolyArc; the filled region is the pie slice from arc center
+    /// (default arc-mode=PieSlice; chord mode unhandled per OPCODE_STATUS).
+    /// xeyes fills the white sclera of each eye via this opcode.
+    func drawPolyFillArc(topLevel: UInt32, foreground: RGB16, arcs: [Arc])
     func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16)
     /// In-window CopyArea: copies a rectangular region of pixels from
     /// (srcX, srcY, w, h) to (dstX, dstY, w, h) within the same top-level
@@ -239,6 +253,26 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// or exposed, the server fills its region with the configured background
     /// pixel BEFORE the client draws on top.
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect])
+
+    /// Audible alert. Mapped to NSBeep. Called on Bell with positive
+    /// percent (per spec, zero/negative percent requests a softer bell;
+    /// macOS has no volume control so we just stay silent on those).
+    func bell()
+
+    /// Called by the session when an X-protocol pointer grab is installed
+    /// (explicit GrabPointer, passive grab activation, or implicit grab on
+    /// first ButtonPress). Lets the bridge install an NSEvent local monitor
+    /// so drag/up events route to whichever NSWindow the pointer is over —
+    /// not just the one where mouseDown originated. Without this, AppKit's
+    /// drag-event-stickiness keeps menu drag-tracking confined to the origin
+    /// NSWindow and the popup never sees pointer motion.
+    /// Idempotent — multiple grabs nest safely; only the first call installs
+    /// the monitor, subsequent calls are no-ops until matched stop.
+    func startCrossWindowDragTracking()
+
+    /// Called by the session when the X-protocol pointer grab releases.
+    /// Removes the NSEvent monitor.
+    func stopCrossWindowDragTracking()
 
     /// Push a cursor to display when the pointer is inside the given
     /// top-level NSWindow's content area. `glyph` is the X cursor-font
@@ -290,8 +324,13 @@ public extension WindowBridge {
     func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment]) {}
     func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint]) {}
     func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool) {}
-    func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, rectangles: [Rectangle]) {}
+    func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, function: UInt8, rectangles: [Rectangle]) {}
     func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Rectangle]) {}
+    func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc]) {}
+    func drawPolyFillArc(topLevel: UInt32, foreground: RGB16, arcs: [Arc]) {}
+    func bell() {}
+    func startCrossWindowDragTracking() {}
+    func stopCrossWindowDragTracking() {}
     func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16) {}
     func copyArea(
         topLevel: UInt32,

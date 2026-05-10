@@ -323,6 +323,7 @@ public enum Dumper {
         case .grabPointer:               return GrabPointer.opcode
         case .ungrabPointer:             return UngrabPointer.opcode
         case .grabButton:                return GrabButton.opcode
+        case .changeActivePointerGrab:   return ChangeActivePointerGrab.opcode
         case .grabKeyboard:              return GrabKeyboard.opcode
         case .ungrabKeyboard:            return UngrabKeyboard.opcode
         case .grabKey:                   return GrabKey.opcode

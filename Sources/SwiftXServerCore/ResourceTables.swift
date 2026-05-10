@@ -152,6 +152,17 @@ public struct GCEntry: Equatable, Sendable {
     /// would leave the materialiser reading the original CreateGC value.
     public var values: [UInt32: UInt32]
 
+    /// Clip rectangles set by SetClipRectangles. nil = no clip set (drawing
+    /// is unclipped). Empty array = "clip everything" (per spec, draws
+    /// should produce no output). ClipXOrigin / ClipYOrigin live in `values`
+    /// under their attribute bits and offset every rect.
+    public var clipRectangles: [Rectangle]?
+
+    /// Dashes set by SetDashes. nil = solid lines. Bytes are alternating
+    /// on/off lengths (first is on). DashOffset lives in `values` under
+    /// its attribute bit. Per X spec the byte values must all be ≥ 1.
+    public var dashes: [UInt8]?
+
     public init(id: UInt32, drawable: UInt32, values: [UInt32: UInt32] = [:]) {
         self.id = id; self.drawable = drawable
         self.values = values
@@ -181,6 +192,23 @@ public final class GCTable {
     public func change(_ id: UInt32, valueMask: UInt32, valueList: [UInt8], byteOrder: ByteOrder) {
         guard var entry = gcs[id] else { return }
         applyValueList(into: &entry.values, mask: valueMask, list: valueList, byteOrder: byteOrder)
+        gcs[id] = entry
+    }
+
+    /// Update the GC's clip rectangles + clip origin (SetClipRectangles).
+    public func setClip(_ id: UInt32, rectangles: [Rectangle], xOrigin: Int16, yOrigin: Int16) {
+        guard var entry = gcs[id] else { return }
+        entry.clipRectangles = rectangles
+        entry.values[GCBits.clipXOrigin] = UInt32(UInt16(bitPattern: xOrigin))
+        entry.values[GCBits.clipYOrigin] = UInt32(UInt16(bitPattern: yOrigin))
+        gcs[id] = entry
+    }
+
+    /// Update the GC's dash pattern + offset (SetDashes).
+    public func setDashes(_ id: UInt32, dashes: [UInt8], offset: Int16) {
+        guard var entry = gcs[id] else { return }
+        entry.dashes = dashes
+        entry.values[GCBits.dashOffset] = UInt32(UInt16(bitPattern: offset))
         gcs[id] = entry
     }
 

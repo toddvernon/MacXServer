@@ -24,6 +24,7 @@ public enum Request: Equatable, Sendable {
     case grabPointer(GrabPointer)
     case ungrabPointer(UngrabPointer)
     case grabButton(GrabButton)
+    case changeActivePointerGrab(ChangeActivePointerGrab)
     case grabKeyboard(GrabKeyboard)
     case ungrabKeyboard(UngrabKeyboard)
     case grabKey(GrabKey)
@@ -105,6 +106,7 @@ public enum Request: Equatable, Sendable {
         case .grabPointer(let r):               return r.encode(byteOrder: byteOrder)
         case .ungrabPointer(let r):             return r.encode(byteOrder: byteOrder)
         case .grabButton(let r):                return r.encode(byteOrder: byteOrder)
+        case .changeActivePointerGrab(let r):   return r.encode(byteOrder: byteOrder)
         case .grabKeyboard(let r):              return r.encode(byteOrder: byteOrder)
         case .ungrabKeyboard(let r):            return r.encode(byteOrder: byteOrder)
         case .grabKey(let r):                   return r.encode(byteOrder: byteOrder)
@@ -224,6 +226,8 @@ public enum Request: Equatable, Sendable {
             return .ungrabPointer(try UngrabPointer.decode(from: bytes, byteOrder: byteOrder))
         case GrabButton.opcode:
             return .grabButton(try GrabButton.decode(from: bytes, byteOrder: byteOrder))
+        case ChangeActivePointerGrab.opcode:
+            return .changeActivePointerGrab(try ChangeActivePointerGrab.decode(from: bytes, byteOrder: byteOrder))
         case GrabKeyboard.opcode:
             return .grabKeyboard(try GrabKeyboard.decode(from: bytes, byteOrder: byteOrder))
         case UngrabKeyboard.opcode:

@@ -22,6 +22,9 @@ final class ResizeHandlingTests: XCTestCase {
         _ = session.outbound.drain()
 
         bridge.simulateResize(id: 0xA0001, width: 400, height: 300)
+        // Bridge callbacks now hop onto session.protocolQueue (async).
+        // Block until the queue drains the resize handler before asserting.
+        session.protocolQueue.sync {}
 
         let entry = try XCTUnwrap(session.windows.get(0xA0001))
         XCTAssertEqual(entry.width, 400)

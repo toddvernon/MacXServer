@@ -47,6 +47,7 @@ public final class MockWindowBridge: WindowBridge, @unchecked Sendable {
         geometry: TopLevelGeometry,
         eventMask: UInt32,
         descendants: [DescendantSnapshot],
+        overrideRedirect: Bool = false,
         byteOrder: ByteOrder,
         sequence: UInt16,
         outbound: OutboundQueue

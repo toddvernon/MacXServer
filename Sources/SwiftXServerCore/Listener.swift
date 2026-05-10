@@ -7,20 +7,21 @@ import Darwin
 // connection, drive a ServerSession on it, return when the client closes.
 //
 // `runAccepting(...)` is the multi-client path used by the real server —
-// loop accepting connections and spin a dedicated read+write thread pair
-// per accepted client. The supplied `ServerCoordinator` hands out a fresh
+// loop accepting connections and start a `DispatchSourceRead` on each
+// accepted client. The supplied `ServerCoordinator` hands out a fresh
 // resource-id-base per accept so client-allocated IDs don't collide, and
 // keeps atoms + selection ownership shared across all sessions (X11 spec
 // requires both to be server-global).
 //
-// Per session, two I/O threads share the socket:
-//   * Read thread: blocking POSIX read → feed session → write the bytes
-//     `feed()` returns directly (replies generated during dispatch).
-//   * Write thread: blocks on `outbound.waitAndDrain()` and writes whatever
-//     async producers (the Cocoa bridge from the main thread) appended.
+// Per session, ONE thread (the session's `protocolQueue`) owns:
+//   * the client socket (read + write)
+//   * all session state mutation
+//   * all event synthesis (AppKit-side callbacks hop onto this queue
+//     before touching state — see ServerSession.init)
 //
-// Both writers for a given session serialise on a per-session lock so they
-// don't interleave bytes within a single X11 message.
+// This matches R6's single-thread `Dispatch()` model; see
+// SERVER_CONCURRENCY.md for the rationale and migration. There is no
+// write thread, no OutboundQueue producer/consumer split, no writeLock.
 
 public enum ListenerError: Error, Sendable {
     case socketCreate(errno: Int32)
@@ -78,17 +79,25 @@ public final class Listener: @unchecked Sendable {
             sessionLog: log
         )
         onSession?(session)
-        runConnection(session: session, clientFd: clientFd, sessionLog: log)
+        // runConnection is non-blocking (sets up a DispatchSourceRead and
+        // returns), so block here on a semaphore until the cancel handler
+        // fires on EOF/error. That matches the old runOne semantics.
+        let done = DispatchSemaphore(value: 0)
+        runConnection(session: session, clientFd: clientFd, sessionLog: log) {
+            done.signal()
+        }
+        done.wait()
     }
 
-    /// Multi-client: accept connections forever (until `stop()`) and spawn
-    /// a dedicated read+write thread pair per accepted client. The supplied
-    /// `coordinator` is shared across every spawned session so atoms +
-    /// selection state are server-global. Per accept, `sessionLogFactory`
-    /// (if supplied) builds a per-session log sink (e.g. a FileLogSink);
-    /// otherwise the listener's own log is reused for everyone.
-    /// `sessionDidStart` runs synchronously on the listener thread before
-    /// the read loop kicks off, so callers can wire `onIdentified` etc.
+    /// Multi-client: accept connections forever (until `stop()`) and start
+    /// a `DispatchSourceRead` on each accepted client targeting that
+    /// session's `protocolQueue`. The supplied `coordinator` is shared
+    /// across every accepted session so atoms + selection state are
+    /// server-global. Per accept, `sessionLogFactory` (if supplied) builds
+    /// a per-session log sink (e.g. a FileLogSink); otherwise the
+    /// listener's own log is reused for everyone. `sessionDidStart` runs
+    /// synchronously on the listener thread before the dispatch source
+    /// resumes, so callers can wire `onIdentified` etc.
     public func runAccepting(
         template: ServerConfig = .default,
         bridge: WindowBridge? = nil,
@@ -122,11 +131,10 @@ public final class Listener: @unchecked Sendable {
             session.log = sessionLog
             sessionDidStart?(session, clientNumber, sessionLog)
 
-            let driver = Thread {
-                self.runConnection(session: session, clientFd: clientFd, sessionLog: sessionLog)
-            }
-            driver.name = "swiftx.session.\(clientNumber)"
-            driver.start()
+            // Non-blocking — dispatch source registers itself on the
+            // session's protocolQueue and returns immediately. The
+            // listener thread loops back to accept the next connection.
+            runConnection(session: session, clientFd: clientFd, sessionLog: sessionLog)
         }
     }
 
@@ -150,70 +158,99 @@ public final class Listener: @unchecked Sendable {
         )
     }
 
-    /// Per-connection driver: spawns the write thread, runs the read loop
-    /// on the calling thread, tears down on EOF/error. The write lock is
-    /// per-connection so two concurrent sessions don't serialize against
-    /// each other on socket writes.
+    /// Per-connection setup. Non-blocking: registers a DispatchSourceRead
+    /// on the client socket targeting `session.protocolQueue`, installs
+    /// the session's `writeCallback` so AppKit-side handlers can push
+    /// bytes, then returns. The dispatch source's cancel handler does
+    /// teardown on EOF / error; `onClose` fires last for callers (runOne)
+    /// that want to block on the session lifetime.
     private func runConnection(
         session: ServerSession,
         clientFd: Int32,
-        sessionLog: ServerLogSink?
+        sessionLog: ServerLogSink?,
+        onClose: (@Sendable () -> Void)? = nil
     ) {
-        let writeLock = NSLock()
         sessionLog?.log("client connected (resourceIdBase=0x\(String(session.config.resourceIdBase, radix: 16)))")
 
-        let writeThread = Thread { [weak self] in
-            guard let self = self else { return }
-            while true {
-                let bytes = session.outbound.waitAndDrain()
-                if bytes.isEmpty { return }
-                self.writeAll(clientFd, bytes, lock: writeLock)
-            }
+        // Single writer: protocolQueue. The closure captures clientFd and
+        // pushes whatever bytes the session hands it directly to the
+        // socket via writeAll. No lock needed — every call to this
+        // closure runs on protocolQueue.
+        session.writeCallback = { bytes in
+            writeAllToSocket(clientFd, bytes)
         }
-        writeThread.name = "swiftx.write"
-        writeThread.start()
 
-        var readBuffer = [UInt8](repeating: 0, count: 65536)
-        while !stopRequested {
+        let readSource = DispatchSource.makeReadSource(
+            fileDescriptor: clientFd,
+            queue: session.protocolQueue
+        )
+        // Use a ref-cycle-breaking holder so the cancel handler can clear
+        // the source after firing. Without it the source captures itself.
+        let sourceHolder = ReadSourceHolder(source: readSource)
+
+        readSource.setEventHandler {
+            var readBuffer = [UInt8](repeating: 0, count: 65536)
             let n = readBuffer.withUnsafeMutableBufferPointer { ptr -> Int in
                 Darwin.read(clientFd, ptr.baseAddress, ptr.count)
             }
             if n == 0 {
-                sessionLog?.log("client disconnected")
-                break
+                sourceHolder.source?.cancel()
+                return
             }
             if n < 0 {
-                if errno == EINTR { continue }
+                if errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { return }
                 sessionLog?.log("read error: errno=\(errno)")
-                break
+                sourceHolder.source?.cancel()
+                return
             }
             let chunk = Array(readBuffer[0..<n])
             let outBytes = session.feed(chunk)
-            writeAll(clientFd, outBytes, lock: writeLock)
-        }
-
-        session.outbound.stop()
-        let deadline = Date().addingTimeInterval(0.25)
-        while writeThread.isExecuting && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.01)
-        }
-
-        Darwin.close(clientFd)
-        sessionLog?.log("session: requests=\(session.requestsProcessed) windows=\(session.windows.count) colors=\(session.colors.count)")
-    }
-
-    private func writeAll(_ fd: Int32, _ bytes: [UInt8], lock: NSLock) {
-        guard !bytes.isEmpty else { return }
-        lock.lock()
-        defer { lock.unlock() }
-        var written = 0
-        while written < bytes.count {
-            let w = bytes.withUnsafeBufferPointer { ptr -> Int in
-                Darwin.write(fd, ptr.baseAddress!.advanced(by: written), bytes.count - written)
+            if !outBytes.isEmpty {
+                writeAllToSocket(clientFd, outBytes)
             }
-            if w <= 0 { return }
-            written += w
         }
+
+        readSource.setCancelHandler {
+            sessionLog?.log("client disconnected")
+            // Per X11 spec, default close-down mode is DestroyAll — the
+            // server destroys all the client's resources. The most visible
+            // effect for us: every top-level NSWindow the client mapped
+            // should close, so quitting an X client doesn't leave its
+            // windows on screen. Runs on the read source's queue
+            // (== session.protocolQueue), so session-state mutation here
+            // is in-thread.
+            session.cleanupOnDisconnect()
+            Darwin.close(clientFd)
+            sessionLog?.log("session: requests=\(session.requestsProcessed) windows=\(session.windows.count) colors=\(session.colors.count)")
+            sourceHolder.source = nil
+            onClose?()
+        }
+
+        readSource.resume()
+    }
+}
+
+/// Heap-allocated holder so the dispatch source's event/cancel handlers
+/// can refer to it without forming a retain cycle on the source itself.
+private final class ReadSourceHolder: @unchecked Sendable {
+    var source: DispatchSourceRead?
+    init(source: DispatchSourceRead) { self.source = source }
+}
+
+/// Free-function socket writer. Called only from a session's protocolQueue
+/// (either from the read source's event handler after `feed`, or from
+/// `flushOutbound` invoked at the tail of an AppKit-side handler), so no
+/// locking is needed.
+private func writeAllToSocket(_ fd: Int32, _ bytes: [UInt8]) {
+    guard !bytes.isEmpty else { return }
+    WireTrace.shared?.wrote(byteCount: bytes.count, peek: Array(bytes.prefix(8)))
+    var written = 0
+    while written < bytes.count {
+        let w = bytes.withUnsafeBufferPointer { ptr -> Int in
+            Darwin.write(fd, ptr.baseAddress!.advanced(by: written), bytes.count - written)
+        }
+        if w <= 0 { return }
+        written += w
     }
 }
 
