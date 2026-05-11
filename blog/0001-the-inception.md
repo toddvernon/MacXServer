@@ -11,7 +11,16 @@ The first day, before any X11 code existed. The shape of the problem, the altern
 
 I have a fleet of vintage Sun workstations (SS1, SS2, IPC, IPX, Voyager, SS5, Ultra 1, Ultra 5, plus an SGI Indigo). They all run real Xsun and their stock X clients.
 
-The motivation: my Suns should be able to display their X apps on my Mac with the rendering quality you'd expect from a modern macOS app, not the rendering quality you'd expect from a 1996-era X server.
+The motivation: my Suns should be able to display their X apps on my Mac at the proper size on modern hardware, with the rendering quality you'd expect from a Mac app. Not at 1x native pixel coordinates where xterm comes up two inches wide on a Studio Display. Not with bitmap fonts that XQuartz still ships in 2026. With anti-aliased scalable fonts and integer-scale projection to device pixels so glyphs land on the pixel grid.
+
+## The two design drivers
+
+The project pivots on two foundational drivers. Both shaped substantial chunks of design and both have their own post in this series.
+
+1. **xterm pixel-perfect on modern hardware.** This is the rendering and scaling story. xterm is the simplest X client protocol-wise but the one everyone judges an X server by. If xterm doesn't look right at modern resolution, nothing else about the project matters. The whole `SERVER_RESOLUTION_SCALING_AND_FONTS.md` design doc came out of this driver. Post 6.
+2. **Motif clients fully functional.** This is the protocol-correctness story. quickplot, dt-apps, the harder corners of Xt and libXm. If the server can't handle real Motif behavior, the project ships as "xterm replacement" and nothing more. Posts 9 and 10 of this series.
+
+Both drivers determine what the next-level architecture has to look like. The scaling driver decides the three-plane rendering decomposition, no-pixel-fonts, integer scale, cell-snapping. The Motif driver decides the selection model, override-redirect popup handling, the depth of Xt-correctness work we have to do.
 
 ## The "just use XQuartz" objection (load-bearing section)
 
@@ -48,7 +57,7 @@ swift-x targets the protocol, not the implementation. Sun clients from 1987-1996
 
 This is why writing a new X server in five days isn't insane. We're not reimplementing X.org. We're implementing a 40-year-stable wire protocol on top of Core Graphics, with a captured corpus from real Sun clients as the ground truth for what's actually needed.
 
-This thread keeps coming back. The capture tool (Post 2) captures the protocol. M1's stubs (Post 3) honor the protocol's contracts. The font/scale work (Post 6) is what happens when you take the protocol's commands and render them with modern technology instead of 1996 technology. The Motif debugging (Posts 8 and 9) is about libXm's expectations of the protocol, expectations that have been stable for thirty years. The protocol is the constant; everything else is choice.
+This thread keeps coming back. The capture tool (Post 2) captures the protocol. M1's stubs (Post 3) honor the protocol's contracts. The scaling and font work (Post 6) is what happens when you take the protocol's commands and render them with modern technology instead of 1996 technology. The Motif debugging (Posts 9 and 10) is about libXm's expectations of the protocol, expectations that have been stable for thirty years. The protocol is the constant; everything else is choice.
 
 ## Five candidate approaches
 

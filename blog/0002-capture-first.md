@@ -81,7 +81,7 @@ What replay is NOT good for: driving the Swift X server as a regression test. Pr
 
 ## Pivotal moment
 
-The first real capture: pointing u5 at the Mac, running xterm, watching the proxy forward bytes faithfully, watching the framer decode them in real time. That was the moment the project went from "speculative" to "this is going to work."
+The first real capture: pointing u5 at the Mac, running xterm, watching the proxy forward bytes faithfully and the framer decode them in real time. xterm bytes flowing across the wire and being decoded byte-for-byte from a 1989 wire format gave the first concrete evidence the rest of the project was doable.
 
 ## What Todd should add
 

@@ -1,4 +1,4 @@
-# Post 8: The Motif gauntlet
+# Post 9: The Motif gauntlet
 
 **Date range**: May 9, 2026
 **One-line elevator**: Athena was easy. Motif is harder. quickplot from a real SS2 brought every Motif-specific corner-case the simpler apps didn't exercise: implicit pointer grabs, override-redirect popup windows, GrabPointer, ChangeActivePointerGrab, the _MOTIF_DRAG_WINDOW init crash, the keymap that has to handle Sun L-keys for VirtualBindings, and a dead end on widget click dispatch that I parked at end of day.
@@ -70,7 +70,7 @@ Commit `b9f2b25` 2026-05-09: "ConvertSelection: route to owner or reply None. un
 
 dtcalc tripped this at request 85 (its init-time `Customize Data:0` probe). Before the fix, we silent-dropped opcode 24 and dtcalc hung waiting for a reply that never came.
 
-This fix unblocked dtcalc enough to reach further into init. It didn't fix the deeper bug that wedged dt-apps (that came the next day, see post 9).
+This fix unblocked dtcalc enough to reach further into init. It didn't fix the deeper bug that wedged dt-apps (that came the next day, see Post 10).
 
 ## Capture proxy improvements
 
@@ -92,7 +92,7 @@ Every observable opcode-level bug got fixed in this sweep. Motif was just silent
 
 I wrote `INVESTIGATION_MOTIF_INPUT.md` as a handoff document for the next session and parked it.
 
-That handoff turned out to be wrong about something. (See post 9.)
+That handoff turned out to be wrong about something. (See Post 10.)
 
 ## What Todd should add
 

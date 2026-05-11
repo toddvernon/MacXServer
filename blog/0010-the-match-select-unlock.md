@@ -1,4 +1,4 @@
-# Post 9: The MATCH_SELECT unlock
+# Post 10: The MATCH_SELECT unlock
 
 **Date range**: May 10, 2026
 **One-line elevator**: Five CDE Motif apps that wouldn't even render, plus a quickplot dead-end I'd already parked. All three blocked by a single bug hiding in Xt's selection-event handler in the X11R6 source. The fix is three lines. Finding it took reading the source.
@@ -107,7 +107,7 @@ The next week I'm away from the vintage workstation collection so live testing i
 - The detective-story arc. The trace, the discovery, the source-read.
 - The "I parked it" → "it actually works" moment for quickplot. That's a real emotional beat.
 - AI-assistance reflection. The pattern of working with Claude across this week: where I had to push back, where it had to push back, where the partnership found things neither side would have alone.
-- The "it had been there since M1" realization. Every selection in every test was silently broken. The MATCH_SELECT bug was the most consequential single thing in the whole week of work.
+- The "it had been there since M1" realization. Every Xt selection roundtrip with CurrentTime had been silently failing the whole week, on every client that exercised one. The three-line fix unblocked dt-apps and quickplot at the same time, plus whatever future Xt-based selections we hadn't encountered yet.
 - The honest scorecard. What's still wrong. What I'm proud of. What I'd do differently.
 - The closing reflection: five days, working X server, with a Sun on one end and a Mac on the other. The thing that motivated the whole project actually works.
 

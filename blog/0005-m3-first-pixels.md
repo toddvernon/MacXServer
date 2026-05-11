@@ -70,7 +70,7 @@ Without step 4, xclock just sits at the original size while AppKit resizes its w
 
 xclock running on u5, pointed at the Mac, the clock face rendering correctly on a native macOS window. The second hand ticking. Resize the window with the macOS title-bar drag, the clock face resizing live with it.
 
-That's the moment Product 2 went from "exists" to "real." Everything since has been "more X clients."
+Product 2 now had a working clock face on the Mac. Everything from this point forward is more X clients on top of the same foundation: the protocol path, the bridge, the drawing primitives, the resize handling.
 
 ## What Todd should add
 

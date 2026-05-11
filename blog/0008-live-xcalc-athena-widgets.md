@@ -1,4 +1,4 @@
-# Post 7: Live xcalc, Athena widgets, multi-client
+# Post 8: Live xcalc, Athena widgets, multi-client
 
 **Date range**: May 8, 2026
 **One-line elevator**: xcalc renders from a real Sun. Athena widget toolkit, PolyText8 for button labels, AllocNamedColor with X11R6 rgb.txt embedded, mouse clicks updating the LCD. Multi-client server. Per-session log files. The same day Mac-side gains a proper app shell with menu bar and Preferences.
