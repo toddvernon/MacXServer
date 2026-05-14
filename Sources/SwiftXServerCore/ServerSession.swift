@@ -1512,11 +1512,26 @@ public final class ServerSession: @unchecked Sendable {
     /// Used by handlers that take a `window` argument (ClearArea,
     /// GetWindowAttributes, MapWindow, etc.). Root is NOT in the windows
     /// table so calls referencing it return nil; handlers where the spec
-    /// allows root as an argument should special-case it before calling.
+    /// allows root as an argument should use validateWindowOrRoot instead.
     func validateWindow(_ window: UInt32, majorOpcode: UInt8) -> WindowEntry? {
         if let entry = windows.get(window) { return entry }
         emitError(.window, majorOpcode: majorOpcode, badResourceId: window)
         return nil
+    }
+
+    /// Validate a window argument for handlers where the screen root is a
+    /// spec-legal value (GetProperty/ChangeProperty/DeleteProperty on the
+    /// root, MapSubwindows on root meaning "map all top-levels", etc.).
+    /// Returns true on success; emits BadWindow + returns false on unknown
+    /// ID. Doesn't surface a WindowEntry — root has none, and root-aware
+    /// handlers typically operate on adjacent tables (properties, child
+    /// iteration) rather than the WindowEntry directly.
+    func validateWindowOrRoot(_ window: UInt32, majorOpcode: UInt8) -> Bool {
+        if windows.get(window) != nil || window == config.rootWindowId {
+            return true
+        }
+        emitError(.window, majorOpcode: majorOpcode, badResourceId: window)
+        return false
     }
 
     /// Validate a drawable for a drawing request and resolve it to a render
@@ -2275,6 +2290,7 @@ public final class ServerSession: @unchecked Sendable {
             }
 
         case .changeWindowAttributes(let r):
+            guard validateWindowOrRoot(r.window, majorOpcode: ChangeWindowAttributes.opcode) else { break }
             if let newMask = ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: CW.eventMask, byteOrder: byteOrder) {
                 windows.setEventMask(r.window, newMask)
             }
@@ -2309,6 +2325,7 @@ public final class ServerSession: @unchecked Sendable {
             // ENTIRE window each flip, wiping all scrolled content).
 
         case .destroyWindow(let r):
+            guard validateWindow(r.window, majorOpcode: DestroyWindow.opcode) != nil else { break }
             let wasTopLevel = isTopLevel(r.window)
             // Capture the containing top-level BEFORE remove so we can
             // recompute clip regions afterwards.
@@ -2325,12 +2342,13 @@ public final class ServerSession: @unchecked Sendable {
             }
 
         case .mapWindow(let r):
+            guard let preMapEntry = validateWindow(r.window, majorOpcode: MapWindow.opcode) else { break }
             // Per X11 spec section 10.5: "If the window is already mapped,
             // this request has no effect." Some Motif/Xt apps (quickplot
             // observed 2026-05-09) issue MapWindow twice during init; we
             // were creating a second NSWindow each time, hence the
             // duplicate-window-on-screen bug. Early-out if already mapped.
-            if windows.get(r.window)?.mapped == true {
+            if preMapEntry.mapped {
                 break
             }
             windows.setMapped(r.window, true)
@@ -2417,6 +2435,7 @@ public final class ServerSession: @unchecked Sendable {
             }
 
         case .mapSubwindows(let r):
+            guard validateWindowOrRoot(r.window, majorOpcode: MapSubwindows.opcode) else { break }
             // Per X11 spec 10.5: "MapSubwindows performs a MapWindow request
             // on all unmapped children of the window, in top-to-bottom
             // stacking order." Two cases matter for paint-on-map:
@@ -2477,6 +2496,7 @@ public final class ServerSession: @unchecked Sendable {
             }
 
         case .unmapWindow(let r):
+            guard validateWindow(r.window, majorOpcode: UnmapWindow.opcode) != nil else { break }
             windows.setMapped(r.window, false)
             log?.log("  UnmapWindow window=0x\(String(r.window, radix: 16)) topLevel=\(isTopLevel(r.window))")
             if isTopLevel(r.window) {
@@ -2488,6 +2508,7 @@ public final class ServerSession: @unchecked Sendable {
             recomputeClipsForSubtreeContaining(r.window)
 
         case .configureWindow(let r):
+            guard validateWindowOrRoot(r.window, majorOpcode: ConfigureWindow.opcode) else { break }
             let mask = UInt32(r.valueMask)
             let x = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.x, byteOrder: byteOrder).map { Int16(truncatingIfNeeded: $0) }
             let y = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.y, byteOrder: byteOrder).map { Int16(truncatingIfNeeded: $0) }
@@ -2579,6 +2600,7 @@ public final class ServerSession: @unchecked Sendable {
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .changeProperty(let r):
+            guard validateWindowOrRoot(r.window, majorOpcode: ChangeProperty.opcode) else { break }
             properties.change(
                 window: r.window, property: r.property, type: r.type,
                 format: r.format.rawValue, mode: r.mode.rawValue, value: r.data
@@ -2627,9 +2649,11 @@ public final class ServerSession: @unchecked Sendable {
             }
 
         case .deleteProperty(let r):
+            guard validateWindowOrRoot(r.window, majorOpcode: DeleteProperty.opcode) else { break }
             properties.delete(window: r.window, property: r.property)
 
         case .getProperty(let r):
+            guard validateWindowOrRoot(r.window, majorOpcode: GetProperty.opcode) else { break }
             let reply: GetPropertyReply
             if let entry = properties.get(window: r.window, property: r.property) {
                 reply = GetPropertyReply(
@@ -2798,6 +2822,13 @@ public final class ServerSession: @unchecked Sendable {
             cursors.remove(r.cursor)
 
         case .setInputFocus(let r):
+            // focus = 0 (None) or 1 (PointerRoot) are spec-legal sentinel
+            // values — not real window IDs, don't validate them. Otherwise
+            // the window must exist; root is also valid (per spec, focus
+            // can be set to root with revert-to None).
+            if r.focus != 0 && r.focus != 1 {
+                guard validateWindowOrRoot(r.focus, majorOpcode: SetInputFocus.opcode) else { break }
+            }
             // Track the requested focus window. KeyPress / KeyRelease will
             // route here on next event. We don't synthesize FocusIn /
             // FocusOut on the X-protocol-level focus chain — that's a
@@ -2809,6 +2840,12 @@ public final class ServerSession: @unchecked Sendable {
             log?.log("  SetInputFocus focus=0x\(String(r.focus, radix: 16))")
 
         case .grabPointer(let r):
+            guard validateWindowOrRoot(r.grabWindow, majorOpcode: GrabPointer.opcode) else { break }
+            // confineTo = 0 means None (no confinement) — sentinel, not a
+            // window ID. Otherwise must be a real window.
+            if r.confineTo != 0 {
+                guard validateWindowOrRoot(r.confineTo, majorOpcode: GrabPointer.opcode) else { break }
+            }
             handleGrabPointer(r, byteOrder: byteOrder)
 
         case .ungrabPointer:
@@ -2841,6 +2878,7 @@ public final class ServerSession: @unchecked Sendable {
             }
 
         case .grabKeyboard(let r):
+            guard validateWindowOrRoot(r.grabWindow, majorOpcode: GrabKeyboard.opcode) else { break }
             handleGrabKeyboard(r, byteOrder: byteOrder)
 
         case .ungrabKeyboard:
@@ -2891,7 +2929,9 @@ public final class ServerSession: @unchecked Sendable {
             // is supposed to emit ReparentNotify on the moved window if
             // its parent has SubstructureNotifyMask; we emit it
             // unconditionally on the moved window itself (matches what
-            // most WMs expect to round-trip).
+            // most WMs expect to round-trip). Parent validation deferred
+            // to the root-aware sweep (root is a valid parent argument).
+            guard validateWindow(r.window, majorOpcode: ReparentWindow.opcode) != nil else { break }
             if var entry = windows.get(r.window) {
                 let oldParent = entry.parent
                 // Capture old containing top-level before mutating parent.
@@ -2916,6 +2956,7 @@ public final class ServerSession: @unchecked Sendable {
             }
 
         case .destroySubwindows(let r):
+            guard validateWindowOrRoot(r.window, majorOpcode: DestroySubwindows.opcode) else { break }
             // Per spec, destroy each child of the requested window in
             // bottom-to-top order. We don't track stacking; iterate the
             // table. Recursive: each child's subwindows go too.
@@ -2923,6 +2964,7 @@ public final class ServerSession: @unchecked Sendable {
             recomputeClipsForSubtreeContaining(r.window)
 
         case .unmapSubwindows(let r):
+            guard validateWindowOrRoot(r.window, majorOpcode: UnmapSubwindows.opcode) else { break }
             // Set mapped=false on every direct child of the requested
             // window. Real X also emits UnmapNotify on each (with
             // SubstructureNotifyMask check on parent) and triggers
@@ -2935,6 +2977,7 @@ public final class ServerSession: @unchecked Sendable {
             recomputeClipsForSubtreeContaining(r.window)
 
         case .grabButton(let r):
+            guard validateWindowOrRoot(r.grabWindow, majorOpcode: GrabButton.opcode) else { break }
             // Passive button grab: when the matching button-press happens
             // on the grab-window or any descendant, the server is supposed
             // to auto-install an active pointer grab on grab-window. We
@@ -2954,6 +2997,7 @@ public final class ServerSession: @unchecked Sendable {
             log?.log("  GrabButton window=0x\(String(r.grabWindow, radix: 16)) button=\(r.button) mods=0x\(String(r.modifiers, radix: 16))")
 
         case .grabKey(let r):
+            guard validateWindowOrRoot(r.grabWindow, majorOpcode: GrabKey.opcode) else { break }
             // Passive key grab. Same pattern as GrabButton: record the
             // entry, deliver via the natural KeyPress path until we wire
             // active-on-match here. Quickplot registers ~5 of these for
@@ -2987,6 +3031,13 @@ public final class ServerSession: @unchecked Sendable {
             }
 
         case .sendEvent(let r):
+            // destination = 0 (PointerWindow) and 1 (InputFocus) are spec
+            // sentinels meaning "the window currently under the pointer /
+            // with input focus" — not real window IDs, don't validate.
+            // Otherwise the destination must be a real window or root.
+            if r.destination != 0 && r.destination != 1 {
+                guard validateWindowOrRoot(r.destination, majorOpcode: SendEvent.opcode) else { break }
+            }
             // Deliver the synthetic 32-byte event the client supplied to
             // the destination window. Per X11 spec the server rewrites
             // bytes 0 and 2..3:
@@ -3178,6 +3229,7 @@ public final class ServerSession: @unchecked Sendable {
         // Replies we don't yet implement — note them so the live test surfaces
         // what's missing without dropping the connection.
         case .getWindowAttributes(let r):
+            guard validateWindowOrRoot(r.window, majorOpcode: GetWindowAttributes.opcode) else { break }
             // Synthesise a reply from the WindowEntry. Most fields are
             // sensible defaults; the live ones xterm cares about are class,
             // mapState, your-event-mask, and colormap.
@@ -3259,6 +3311,8 @@ public final class ServerSession: @unchecked Sendable {
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .translateCoordinates(let r):
+            guard validateWindowOrRoot(r.srcWindow, majorOpcode: TranslateCoordinates.opcode) else { break }
+            guard validateWindowOrRoot(r.dstWindow, majorOpcode: TranslateCoordinates.opcode) else { break }
             // Translate (srcX, srcY) from srcWindow's coordinate system to
             // dstWindow's. If both share a top-level, walk each window's
             // origin chain to top-level coords, do the subtraction, return
@@ -3308,6 +3362,7 @@ public final class ServerSession: @unchecked Sendable {
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .queryTree(let r):
+            guard validateWindowOrRoot(r.window, majorOpcode: QueryTree.opcode) else { break }
             // Walk our window table for direct children of the requested
             // window. Per X11 spec the children list is in bottom-to-top
             // stacking order; we don't actually track stacking, so we
@@ -3345,6 +3400,7 @@ public final class ServerSession: @unchecked Sendable {
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .queryPointer(let r):
+            guard validateWindowOrRoot(r.window, majorOpcode: QueryPointer.opcode) else { break }
             // Best-effort answer: report the last known pointer position
             // in root coords (top-level local under our (0,0)-per-top-level
             // convention), the deepest mapped descendant of the queried

@@ -208,6 +208,78 @@ final class XErrorEmissionTests: XCTestCase {
         XCTAssertEqual(err.majorOpcode, ClearArea.opcode)
     }
 
+    func testDestroyWindowOnUnknownWindowEmitsBadWindow() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogus: UInt32 = 0x77777777
+        let bytes = session.feed(
+            Request.destroyWindow(DestroyWindow(window: bogus)).encode(byteOrder: .lsbFirst)
+        )
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.window.rawValue)
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogus)
+        XCTAssertEqual(err.majorOpcode, DestroyWindow.opcode)
+    }
+
+    func testMapWindowOnUnknownWindowEmitsBadWindow() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogus: UInt32 = 0x88888888
+        let bytes = session.feed(
+            Request.mapWindow(MapWindow(window: bogus)).encode(byteOrder: .lsbFirst)
+        )
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.window.rawValue)
+        XCTAssertEqual(err.majorOpcode, MapWindow.opcode)
+    }
+
+    func testGetPropertyOnRootSucceedsViaValidateWindowOrRoot() throws {
+        // validateWindowOrRoot must accept the screen root even though it's
+        // not in the windows table. GetProperty(root, ...) is the canonical
+        // "client probes RESOURCE_MANAGER at init" call and must not fail.
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bytes = session.feed(
+            Request.getProperty(GetProperty(
+                delete: false, window: ServerConfig.default.rootWindowId,
+                property: 1, type: 0, longOffset: 0, longLength: 100
+            )).encode(byteOrder: .lsbFirst)
+        )
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .reply = msg else {
+            XCTFail("expected GetProperty reply, got \(msg)")
+            return
+        }
+    }
+
+    func testGetPropertyOnUnknownWindowEmitsBadWindow() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogus: UInt32 = 0x55555555
+        let bytes = session.feed(
+            Request.getProperty(GetProperty(
+                delete: false, window: bogus, property: 1, type: 0,
+                longOffset: 0, longLength: 100
+            )).encode(byteOrder: .lsbFirst)
+        )
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.window.rawValue)
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogus)
+        XCTAssertEqual(err.majorOpcode, GetProperty.opcode)
+    }
+
     func testEmittedErrorCarriesCurrentSequenceNumber() throws {
         // After setup the session's sequenceNumber is 0; feed one InternAtom
         // request to advance it, then emit an error and assert the seq field
