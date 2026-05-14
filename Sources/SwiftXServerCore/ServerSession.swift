@@ -1497,6 +1497,16 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     /// Walk parents until we hit a top-level. Returns the top-level id and
+    /// True if the drawable ID resolves to anything we track: a known window,
+    /// a known pixmap, or the screen's root window. False for IDs that don't
+    /// correspond to any resource we've ever heard of — those should trigger
+    /// BadDrawable on requests that take a drawable argument.
+    public func isKnownDrawable(_ id: UInt32) -> Bool {
+        return windows.get(id) != nil
+            || pixmaps.get(id) != nil
+            || id == config.rootWindowId
+    }
+
     /// the (x, y) offset of `drawable` inside it. nil if the drawable isn't
     /// in a window subtree we own (e.g., a pixmap, the root, or unknown).
     public func topLevelAndOffset(for drawable: UInt32) -> (UInt32, Int16, Int16)? {
@@ -1899,14 +1909,27 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handleCopyArea(_ r: CopyArea, byteOrder: ByteOrder) {
+        // Per XError-honesty policy: distinguish unknown drawables (BadDrawable
+        // referencing the offending ID) from valid-but-unimplemented cases
+        // (cross-window copies and pixmap source/dest are spec-legal, we just
+        // don't implement them yet — BadImplementation). Validation runs
+        // before the bridge guard so error semantics don't depend on whether
+        // we have a rendering target.
+        if !isKnownDrawable(r.srcDrawable) {
+            emitError(.drawable, majorOpcode: CopyArea.opcode, badResourceId: r.srcDrawable)
+            return
+        }
+        if !isKnownDrawable(r.dstDrawable) {
+            emitError(.drawable, majorOpcode: CopyArea.opcode, badResourceId: r.dstDrawable)
+            return
+        }
         guard let bridge = bridge else { return }
-        // Phase 1: same-window copies only (xterm's scrolling case). If src
-        // and dst drawables resolve to different top-levels, drop on the
-        // floor with a log line — implement cross-window CopyArea later.
+        // Phase 1: same-window copies only (xterm's scrolling case).
         guard let (srcTop, srcDX, srcDY) = topLevelAndOffset(for: r.srcDrawable),
               let (dstTop, dstDX, dstDY) = topLevelAndOffset(for: r.dstDrawable),
               srcTop == dstTop else {
-            log?.log("  CopyArea: cross-window copy not supported yet (src=0x\(String(r.srcDrawable, radix: 16)) dst=0x\(String(r.dstDrawable, radix: 16)))")
+            log?.log("  CopyArea: cross-window or pixmap not supported yet (src=0x\(String(r.srcDrawable, radix: 16)) dst=0x\(String(r.dstDrawable, radix: 16)))")
+            emitError(.implementation, majorOpcode: CopyArea.opcode)
             return
         }
         log?.log("  CopyArea top=0x\(String(srcTop, radix: 16)) src=(\(r.srcX),\(r.srcY)) dst=(\(r.dstX),\(r.dstY)) \(r.width)x\(r.height)")

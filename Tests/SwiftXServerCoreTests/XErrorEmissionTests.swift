@@ -63,6 +63,43 @@ final class XErrorEmissionTests: XCTestCase {
         XCTAssertEqual(session.errorsEmitted, before)
     }
 
+    func testCopyAreaWithUnknownSrcDrawableEmitsBadDrawable() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogusSrc: UInt32 = 0xDEADBEEF
+        let copy = Request.copyArea(CopyArea(
+            srcDrawable: bogusSrc, dstDrawable: ServerConfig.default.rootWindowId,
+            gc: 0x4400000, srcX: 0, srcY: 0, dstX: 0, dstY: 0, width: 10, height: 10
+        ))
+        let bytes = session.feed(copy.encode(byteOrder: .lsbFirst))
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.drawable.rawValue, "must be BadDrawable")
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogusSrc, "badResourceId must point at the unknown src drawable")
+        XCTAssertEqual(err.majorOpcode, CopyArea.opcode)
+    }
+
+    func testCopyAreaWithUnknownDstDrawableEmitsBadDrawable() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogusDst: UInt32 = 0xCAFEBABE
+        let copy = Request.copyArea(CopyArea(
+            srcDrawable: ServerConfig.default.rootWindowId, dstDrawable: bogusDst,
+            gc: 0x4400000, srcX: 0, srcY: 0, dstX: 0, dstY: 0, width: 10, height: 10
+        ))
+        let bytes = session.feed(copy.encode(byteOrder: .lsbFirst))
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.drawable.rawValue, "must be BadDrawable")
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogusDst, "badResourceId must point at the unknown dst drawable")
+    }
+
     func testEmittedErrorCarriesCurrentSequenceNumber() throws {
         // After setup the session's sequenceNumber is 0; feed one InternAtom
         // request to advance it, then emit an error and assert the seq field
