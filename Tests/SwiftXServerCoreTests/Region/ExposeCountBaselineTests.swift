@@ -19,10 +19,31 @@ import Framer
 
 final class ExposeCountBaselineTests: XCTestCase {
 
-    // Baselines as of Step B (region populated but not consulted). The
-    // dtcalc number is the "way too many" Step E1 targets — the gold
-    // Sun X server emits ~7 for the same boot (per SHORTCUTS.md
-    // "dt-Motif widget chrome doesn't redraw on Expose").
+    // Baselines after Step E1. The "before" column captures the Step B
+    // state when Expose was still emitted as one event per full window
+    // rect (and per-mapped-descendant on map). E1 enumerates each
+    // window's clipList rect-list in window-local coords — fully-covered
+    // descendants emit zero Expose events; partially-covered ones emit
+    // one Expose per visible rect instead of one covering the obscured
+    // areas too. Net: big drops for dt-Motif (deep widget trees with
+    // lots of full coverage); small drops or net-neutral elsewhere.
+    //
+    // Before / after:
+    //   xclock          1 →   1
+    //   xterm_session   1 →   1
+    //   xeyes-sun       0 →   0
+    //   xcalc          47 →  47
+    //   xfontsel-sun    4 →   2
+    //   dthelpview      4 →   5  (one window's clipList has 2 rects now)
+    //   dtterm-sun     15 →  10
+    //   quickplot-sun  85 →  55
+    //   dticon-sun     62 →  53
+    //   dtcalc-sun    248 → 144  (the headline number)
+    //
+    // Gold Sun X server emits ~7 for dtcalc boot, so we're still over by
+    // 20×. The remaining gap closes as more region-aware behavior lands:
+    // E2 (resize Expose uses clipList delta), E1.5 (descendant-move
+    // repaint), Step D (stacking-aware sibling clipping).
 
     func testXclockExposeCount() throws {
         try assertExposeCount(capture: "xclock.xtap", expected: 1)
@@ -37,7 +58,7 @@ final class ExposeCountBaselineTests: XCTestCase {
     }
 
     func testXfontselExposeCount() throws {
-        try assertExposeCount(capture: "xfontsel-sun.xtap", expected: 4)
+        try assertExposeCount(capture: "xfontsel-sun.xtap", expected: 2)
     }
 
     func testXeyesExposeCount() throws {
@@ -45,23 +66,23 @@ final class ExposeCountBaselineTests: XCTestCase {
     }
 
     func testQuickplotExposeCount() throws {
-        try assertExposeCount(capture: "quickplot-sun.xtap", expected: 85)
+        try assertExposeCount(capture: "quickplot-sun.xtap", expected: 55)
     }
 
     func testDtcalcExposeCount() throws {
-        try assertExposeCount(capture: "dtcalc-sun.xtap", expected: 248)
+        try assertExposeCount(capture: "dtcalc-sun.xtap", expected: 144)
     }
 
     func testDttermExposeCount() throws {
-        try assertExposeCount(capture: "dtterm-sun.xtap", expected: 15)
+        try assertExposeCount(capture: "dtterm-sun.xtap", expected: 10)
     }
 
     func testDthelpviewExposeCount() throws {
-        try assertExposeCount(capture: "dthelpview-sun.xtap", expected: 4)
+        try assertExposeCount(capture: "dthelpview-sun.xtap", expected: 5)
     }
 
     func testDticonExposeCount() throws {
-        try assertExposeCount(capture: "dticon-sun.xtap", expected: 62)
+        try assertExposeCount(capture: "dticon-sun.xtap", expected: 53)
     }
 
     // MARK: - Harness

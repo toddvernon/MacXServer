@@ -227,6 +227,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         id: UInt32,
         geometry: TopLevelGeometry,
         eventMask: UInt32,
+        topLevelExposeRects: [BoxRec],
         descendants: [DescendantSnapshot],
         overrideRedirect: Bool,
         byteOrder: ByteOrder,
@@ -251,6 +252,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         MockWindowBridge.emitMapSequence(
             window: id, geometry: geometry,
             topLevelEventMask: eventMask,
+            topLevelExposeRects: topLevelExposeRects,
             descendants: descendants,
             byteOrder: byteOrder, sequence: sequence,
             outbound: outbound

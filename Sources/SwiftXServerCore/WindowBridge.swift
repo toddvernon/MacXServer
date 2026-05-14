@@ -36,15 +36,22 @@ public struct DrawPoint: Equatable, Sendable {
 
 /// Snapshot of a descendant window the bridge needs when emitting events
 /// after a top-level becomes viewable. Carries enough info to send
-/// MapNotify and Expose to the right window.
+/// MapNotify and Expose to the right window. `exposeRects` are the
+/// visible portions of the window in WINDOW-LOCAL coordinates (the same
+/// coord space Expose's x/y/width/height live in); typically a single
+/// rect (0, 0, width, height) for a leaf with no obscuring children,
+/// shrinks to zero for fully-covered windows.
 public struct DescendantSnapshot: Equatable, Sendable {
     public var id: UInt32
     public var eventMask: UInt32
     public var width: UInt16
     public var height: UInt16
-    public init(id: UInt32, eventMask: UInt32, width: UInt16, height: UInt16) {
+    public var exposeRects: [BoxRec]
+    public init(id: UInt32, eventMask: UInt32, width: UInt16, height: UInt16,
+                exposeRects: [BoxRec] = []) {
         self.id = id; self.eventMask = eventMask
         self.width = width; self.height = height
+        self.exposeRects = exposeRects
     }
 }
 
@@ -62,10 +69,14 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// event mask includes ExposureMask (the X11 spec's "newly viewable"
     /// rule). `eventMask` is the top-level's event mask; descendants is a
     /// snapshot of all already-mapped descendants of the top-level.
+    /// `topLevelExposeRects` are the visible portions of the top-level
+    /// (clipList) in window-local coords; Step E1 forward, this drives
+    /// Expose emission for the top-level itself.
     func mapTopLevel(
         id: UInt32,
         geometry: TopLevelGeometry,
         eventMask: UInt32,
+        topLevelExposeRects: [BoxRec],
         descendants: [DescendantSnapshot],
         overrideRedirect: Bool,
         byteOrder: ByteOrder,

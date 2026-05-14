@@ -1518,11 +1518,25 @@ public final class ServerSession: @unchecked Sendable {
     /// Recompute clipList + borderClip for the top-level subtree that
     /// contains `windowId`. Cheap to call from any tree-mutation handler
     /// after the WindowTable state has been updated. No-op if `windowId`
-    /// is unknown or its top-level can't be resolved. Region machinery
-    /// from Step B; not yet consulted by rendering or event paths.
+    /// is unknown or its top-level can't be resolved.
     func recomputeClipsForSubtreeContaining(_ windowId: UInt32) {
         guard let (topId, _, _) = topLevelAndOffset(for: windowId) else { return }
         ClipListEngine.recomputeClips(forTopLevel: topId, in: windows)
+    }
+
+    /// Translate a window's clipList from top-level coords to the
+    /// window-local coords Expose events expect. For a top-level this is
+    /// a no-op (offset is 0,0). Empty result if the window has no
+    /// visible rects (fully covered or unmapped).
+    func exposeRectsForWindow(_ windowId: UInt32) -> [BoxRec] {
+        guard let entry = windows.get(windowId) else { return [] }
+        guard let (_, dx, dy) = topLevelAndOffset(for: windowId) else { return [] }
+        let dxI = Int32(dx)
+        let dyI = Int32(dy)
+        return entry.clipList.rects.map {
+            BoxRec(x1: $0.x1 - dxI, y1: $0.y1 - dyI,
+                   x2: $0.x2 - dxI, y2: $0.y2 - dyI)
+        }
     }
 
     /// Resolve a foreground/background pixel value to RGB16. Falls back to
@@ -1533,7 +1547,10 @@ public final class ServerSession: @unchecked Sendable {
 
     /// Snapshot every already-mapped descendant of `windowId`. Used when a
     /// top-level becomes viewable so the bridge can emit Expose to whichever
-    /// descendants have ExposureMask in their event mask.
+    /// descendants have ExposureMask in their event mask. Each snapshot
+    /// carries the descendant's visible-rect list (window-local coords)
+    /// so Step E1's per-rect Expose emission can skip fully-covered
+    /// windows entirely.
     private func mappedDescendantSnapshots(of windowId: UInt32) -> [DescendantSnapshot] {
         var out: [DescendantSnapshot] = []
         var stack: [UInt32] = [windowId]
@@ -1541,7 +1558,8 @@ public final class ServerSession: @unchecked Sendable {
             for (childId, w) in windows.windows where w.parent == id && w.mapped {
                 out.append(DescendantSnapshot(
                     id: childId, eventMask: w.eventMask,
-                    width: w.width, height: w.height
+                    width: w.width, height: w.height,
+                    exposeRects: exposeRectsForWindow(childId)
                 ))
                 stack.append(childId)
             }
@@ -2195,6 +2213,13 @@ public final class ServerSession: @unchecked Sendable {
                 break
             }
             windows.setMapped(r.window, true)
+            // Recompute clipList BEFORE emitting events so the bridge can
+            // pass per-window visible-rect lists into the Expose path.
+            // Step E1 makes Expose enumerate clipList rects instead of
+            // covering the full window — fully-covered descendants now
+            // emit zero Expose events (the dt-Motif 248-Expose flood
+            // collapses to per-leaf-widget counts).
+            recomputeClipsForSubtreeContaining(r.window)
             let isTop = isTopLevel(r.window)
             let entry = windows.get(r.window)
             let isOverrideRedirect = entry?.overrideRedirect ?? false
@@ -2210,6 +2235,7 @@ public final class ServerSession: @unchecked Sendable {
             if isTop {
                 let descendants = mappedDescendantSnapshots(of: r.window)
                 let topMask = entry?.eventMask ?? 0
+                let topExposeRects = exposeRectsForWindow(r.window)
                 let currentGeom = entry.map { TopLevelGeometry(
                     x: $0.x, y: $0.y,
                     width: $0.width, height: $0.height,
@@ -2217,7 +2243,9 @@ public final class ServerSession: @unchecked Sendable {
                 ) } ?? TopLevelGeometry(x: 0, y: 0, width: 1, height: 1, borderWidth: 0)
                 bridge?.mapTopLevel(
                     id: r.window, geometry: currentGeom,
-                    eventMask: topMask, descendants: descendants,
+                    eventMask: topMask,
+                    topLevelExposeRects: topExposeRects,
+                    descendants: descendants,
                     overrideRedirect: isOverrideRedirect,
                     byteOrder: byteOrder, sequence: sequenceNumber,
                     outbound: outbound
@@ -2251,22 +2279,21 @@ public final class ServerSession: @unchecked Sendable {
                     id: r.window, byteOrder: byteOrder,
                     sequence: sequenceNumber, outbound: outbound
                 )
-                // Per X11 spec: a window that becomes viewable gets Expose if
-                // its event mask has ExposureMask. xcalc maps individual
-                // digit-toggle subwindows in response to button clicks; if we
-                // don't emit Expose here, those windows never get drawn even
-                // though their bg paint just happened. This is the case
-                // where the parent top-level was already mapped before us.
+                // Per X11 spec: a window that becomes viewable gets Expose
+                // for its visible region if its event mask has
+                // ExposureMask. Step E1: emit per-clipList-rect (in
+                // window-local coords) instead of one full-rect event —
+                // fully-covered descendants emit nothing.
                 if let entry = windows.get(r.window),
                    entry.eventMask & (1 << 15) != 0 {
-                    let expose = ExposeEvent(
-                        sequenceNumber: sequenceNumber, window: r.window,
-                        x: 0, y: 0, width: entry.width, height: entry.height, count: 0
+                    let rects = exposeRectsForWindow(r.window)
+                    MockWindowBridge.emitExposesForRects(
+                        window: r.window, rects: rects,
+                        byteOrder: byteOrder, sequence: sequenceNumber,
+                        outbound: outbound
                     )
-                    outbound.append(expose.encode(byteOrder: byteOrder))
                 }
             }
-            recomputeClipsForSubtreeContaining(r.window)
 
         case .mapSubwindows(let r):
             // Per X11 spec 10.5: "MapSubwindows performs a MapWindow request
@@ -2290,29 +2317,43 @@ public final class ServerSession: @unchecked Sendable {
             let parentEntry = windows.get(r.window)
             let parentIsMapped = parentEntry?.mapped ?? false
             let topInfo = topLevelAndOffset(for: r.window)
+
+            // Pass 1: mark each unmapped child mapped + emit MapNotify.
+            var newlyMapped: [UInt32] = []
             for (_, w) in windows.windows where w.parent == r.window && !w.mapped {
                 windows.setMapped(w.id, true)
                 bridge?.mapDescendant(
                     id: w.id, byteOrder: byteOrder,
                     sequence: sequenceNumber, outbound: outbound
                 )
-                guard parentIsMapped, let (top, _, _) = topInfo else { continue }
-                if let entry = windows.get(w.id) {
-                    let (_, dx, dy) = topLevelAndOffset(for: w.id) ?? (top, 0, 0)
+                newlyMapped.append(w.id)
+            }
+            // Recompute clipList once for the whole batch — every
+            // newly-mapped child now has its current visible region in
+            // WindowEntry.clipList.
+            recomputeClipsForSubtreeContaining(r.window)
+
+            // Pass 2: paint bg + emit Expose for each newly-mapped child.
+            // Step E1: Expose enumerates clipList rects in window-local
+            // coords; fully-covered children emit zero Expose events.
+            if parentIsMapped, let (top, _, _) = topInfo {
+                for childId in newlyMapped {
+                    guard let entry = windows.get(childId) else { continue }
+                    let (_, dx, dy) = topLevelAndOffset(for: childId) ?? (top, 0, 0)
                     let rects = paintRectsForWindow(entry: entry, dx: dx, dy: dy, byteOrder: byteOrder)
                     if !rects.isEmpty {
                         bridge?.paintWindowRects(topLevel: top, rects: rects)
                     }
                     if entry.eventMask & (1 << 15) != 0 {
-                        let expose = ExposeEvent(
-                            sequenceNumber: sequenceNumber, window: w.id,
-                            x: 0, y: 0, width: entry.width, height: entry.height, count: 0
+                        let exposeRects = exposeRectsForWindow(childId)
+                        MockWindowBridge.emitExposesForRects(
+                            window: childId, rects: exposeRects,
+                            byteOrder: byteOrder, sequence: sequenceNumber,
+                            outbound: outbound
                         )
-                        outbound.append(expose.encode(byteOrder: byteOrder))
                     }
                 }
             }
-            recomputeClipsForSubtreeContaining(r.window)
 
         case .unmapWindow(let r):
             windows.setMapped(r.window, false)

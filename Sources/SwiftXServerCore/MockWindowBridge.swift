@@ -46,6 +46,7 @@ public final class MockWindowBridge: WindowBridge, @unchecked Sendable {
         id: UInt32,
         geometry: TopLevelGeometry,
         eventMask: UInt32,
+        topLevelExposeRects: [BoxRec],
         descendants: [DescendantSnapshot],
         overrideRedirect: Bool = false,
         byteOrder: ByteOrder,
@@ -56,6 +57,7 @@ public final class MockWindowBridge: WindowBridge, @unchecked Sendable {
         Self.emitMapSequence(
             window: id, geometry: geometry,
             topLevelEventMask: eventMask,
+            topLevelExposeRects: topLevelExposeRects,
             descendants: descendants,
             byteOrder: byteOrder, sequence: sequence,
             outbound: outbound
@@ -88,11 +90,16 @@ public final class MockWindowBridge: WindowBridge, @unchecked Sendable {
     /// Emit ReparentNotify + ConfigureNotify + MapNotify on the top-level,
     /// then Expose on the top-level and any descendant whose event mask
     /// includes ExposureMask. Used by both Mock and Cocoa bridges so the
-    /// emission order stays in one place.
+    /// emission order stays in one place. Per Step E1, Expose emission
+    /// enumerates each window's clipList rect-list (in window-local
+    /// coords) — a fully-covered window emits no Expose; a partially-
+    /// obscured window emits one Expose per visible rect with the count
+    /// field tracking how many siblings follow.
     public static func emitMapSequence(
         window: UInt32,
         geometry: TopLevelGeometry,
         topLevelEventMask: UInt32,
+        topLevelExposeRects: [BoxRec],
         descendants: [DescendantSnapshot],
         byteOrder: ByteOrder,
         sequence: UInt16,
@@ -123,16 +130,45 @@ public final class MockWindowBridge: WindowBridge, @unchecked Sendable {
         outbound.append(mappedEv.encode(byteOrder: byteOrder))
 
         if topLevelEventMask & exposureMask != 0 {
-            let expose = ExposeEvent(
-                sequenceNumber: sequence, window: window,
-                x: 0, y: 0, width: geometry.width, height: geometry.height, count: 0
+            emitExposesForRects(
+                window: window, rects: topLevelExposeRects,
+                byteOrder: byteOrder, sequence: sequence, outbound: outbound
             )
-            outbound.append(expose.encode(byteOrder: byteOrder))
         }
         for d in descendants where d.eventMask & exposureMask != 0 {
+            emitExposesForRects(
+                window: d.id, rects: d.exposeRects,
+                byteOrder: byteOrder, sequence: sequence, outbound: outbound
+            )
+        }
+    }
+
+    /// Emit one Expose per visible rect (window-local coords) with the
+    /// `count` field set to the number of siblings remaining in the
+    /// batch. Per spec a `count > 0` tells the client more Expose events
+    /// for the same window are about to follow; some toolkits use this
+    /// to coalesce redraws. Empty rect list emits nothing.
+    public static func emitExposesForRects(
+        window: UInt32,
+        rects: [BoxRec],
+        byteOrder: ByteOrder,
+        sequence: UInt16,
+        outbound: OutboundQueue
+    ) {
+        let n = rects.count
+        for (i, r) in rects.enumerated() {
+            // Expose's x/y are UInt16 (per protocol; window-local coords
+            // that should be non-negative for a visible rect). Clamp at 0
+            // defensively — a negative top-left here would indicate a
+            // bug in clipList computation or window-local translation.
+            let x = r.x1 < 0 ? 0 : UInt16(clamping: r.x1)
+            let y = r.y1 < 0 ? 0 : UInt16(clamping: r.y1)
             let expose = ExposeEvent(
-                sequenceNumber: sequence, window: d.id,
-                x: 0, y: 0, width: d.width, height: d.height, count: 0
+                sequenceNumber: sequence, window: window,
+                x: x, y: y,
+                width: UInt16(clamping: r.x2 - r.x1),
+                height: UInt16(clamping: r.y2 - r.y1),
+                count: UInt16(clamping: n - 1 - i)
             )
             outbound.append(expose.encode(byteOrder: byteOrder))
         }
