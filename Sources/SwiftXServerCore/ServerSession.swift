@@ -1554,6 +1554,7 @@ public final class ServerSession: @unchecked Sendable {
         // whole subtree BEFORE emitting descendant Exposes so the new
         // clipList drives the rect-list each Expose carries.
         ClipListEngine.recomputeClips(forTopLevel: id, in: windows)
+        emitVisibilityChanges(forTopLevel: id)
 
         // The outer's resize means descendants' visible region changed
         // too. The bitmap was reallocated and bg-painted (no preserved
@@ -1668,13 +1669,74 @@ public final class ServerSession: @unchecked Sendable {
         return nil
     }
 
+    /// X11 VisibilityChangeMask bit per xproto X.h.
+    static let visibilityChangeMask: UInt32 = 1 << 16
+
     /// Recompute clipList + borderClip for the top-level subtree that
-    /// contains `windowId`. Cheap to call from any tree-mutation handler
-    /// after the WindowTable state has been updated. No-op if `windowId`
-    /// is unknown or its top-level can't be resolved.
+    /// contains `windowId`, then emit VisibilityNotify to any window whose
+    /// visibility state transitioned. Cheap to call from any tree-mutation
+    /// handler after the WindowTable state has been updated. No-op if
+    /// `windowId` is unknown or its top-level can't be resolved.
     func recomputeClipsForSubtreeContaining(_ windowId: UInt32) {
         guard let (topId, _, _) = topLevelAndOffset(for: windowId) else { return }
         ClipListEngine.recomputeClips(forTopLevel: topId, in: windows)
+        emitVisibilityChanges(forTopLevel: topId)
+    }
+
+    /// Walk every window in the subtree rooted at `topId`, derive its
+    /// current visibility state from clipList, and emit VisibilityNotify
+    /// when the state transitioned (and the window has VisibilityChangeMask
+    /// in its event mask). Update the stored `lastVisibilityState` either
+    /// way so future calls see correct prior state.
+    ///
+    /// State derivation:
+    ///   - !mapped → nil (window not viewable; X11 spec doesn't emit
+    ///     VisibilityNotify for transitions involving unmapped state)
+    ///   - mapped + area(clipList) == 0 → 2 (FullyObscured)
+    ///   - mapped + area(clipList) == width*height → 0 (Unobscured)
+    ///   - otherwise → 1 (PartiallyObscured)
+    private func emitVisibilityChanges(forTopLevel topId: UInt32) {
+        guard let order = byteOrder else { return }
+        // Walk every window that resolves to topId.
+        let candidates = windows.windows.filter {
+            topLevelAndOffset(for: $0.key)?.0 == topId
+        }
+        for (id, entry) in candidates {
+            let newState: UInt8?
+            if !entry.mapped {
+                newState = nil
+            } else {
+                let area = regionArea(entry.clipList)
+                let windowArea = Int64(entry.width) * Int64(entry.height)
+                if area == 0 {
+                    newState = 2
+                } else if area == windowArea {
+                    newState = 0
+                } else {
+                    newState = 1
+                }
+            }
+            if newState != entry.lastVisibilityState {
+                if let ns = newState,
+                   entry.eventMask & Self.visibilityChangeMask != 0,
+                   let state = VisibilityState(rawValue: ns) {
+                    let event = VisibilityNotifyEvent(
+                        sequenceNumber: sequenceNumber,
+                        window: id, state: state
+                    )
+                    outbound.append(event.encode(byteOrder: order))
+                }
+                windows.setLastVisibilityState(id, newState)
+            }
+        }
+    }
+
+    private func regionArea(_ region: Region) -> Int64 {
+        var sum: Int64 = 0
+        for rect in region.rects {
+            sum += Int64(rect.width) * Int64(rect.height)
+        }
+        return sum
     }
 
     /// Translate a window's clipList from top-level coords to the
@@ -2488,6 +2550,7 @@ public final class ServerSession: @unchecked Sendable {
             } else {
                 if let topId = preDestroyTopId, topId != r.window {
                     ClipListEngine.recomputeClips(forTopLevel: topId, in: windows)
+                    emitVisibilityChanges(forTopLevel: topId)
                 }
                 // Per X11 spec: parents with SubstructureNotifyMask receive
                 // DestroyNotify with `event` = the parent. Without this,
@@ -3252,6 +3315,7 @@ public final class ServerSession: @unchecked Sendable {
                 // Recompute both old and new top-level subtrees.
                 if let oldTopId, oldTopId != r.window {
                     ClipListEngine.recomputeClips(forTopLevel: oldTopId, in: windows)
+                    emitVisibilityChanges(forTopLevel: oldTopId)
                 }
                 recomputeClipsForSubtreeContaining(r.window)
             }

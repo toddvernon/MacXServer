@@ -50,6 +50,13 @@ public struct WindowEntry: Equatable, Sendable {
     /// under moved descendant" repaint once Step E lands.
     public var borderClip: Region
 
+    /// Last VisibilityNotify state emitted for this window (raw value of
+    /// VisibilityState: 0=Unobscured, 1=PartiallyObscured, 2=FullyObscured).
+    /// nil = no state yet (initial, or window is currently unmapped). Used
+    /// to detect transitions in `emitVisibilityChanges` so we only emit
+    /// VisibilityNotify when the state actually changed.
+    public var lastVisibilityState: UInt8?
+
     public init(
         id: UInt32, parent: UInt32, depth: UInt8,
         x: Int16, y: Int16, width: UInt16, height: UInt16,
@@ -61,7 +68,8 @@ public struct WindowEntry: Equatable, Sendable {
         cursor: UInt32? = nil,
         overrideRedirect: Bool = false,
         clipList: Region = .empty,
-        borderClip: Region = .empty
+        borderClip: Region = .empty,
+        lastVisibilityState: UInt8? = nil
     ) {
         self.id = id; self.parent = parent; self.depth = depth
         self.x = x; self.y = y; self.width = width; self.height = height
@@ -74,6 +82,7 @@ public struct WindowEntry: Equatable, Sendable {
         self.overrideRedirect = overrideRedirect
         self.clipList = clipList
         self.borderClip = borderClip
+        self.lastVisibilityState = lastVisibilityState
     }
 }
 
@@ -151,6 +160,13 @@ public final class WindowTable: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
         w.borderClip = region
+        _windows[id] = w
+    }
+
+    public func setLastVisibilityState(_ id: UInt32, _ state: UInt8?) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.lastVisibilityState = state
         _windows[id] = w
     }
 
