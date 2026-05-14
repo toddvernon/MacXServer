@@ -1212,6 +1212,25 @@ public final class ServerSession: @unchecked Sendable {
     /// X11 SubstructureNotifyMask bit per xproto X.h.
     static let substructureNotifyMask: UInt32 = 1 << 19
 
+    /// X11 PropertyChangeMask bit per xproto X.h.
+    static let propertyChangeMask: UInt32 = 1 << 22
+
+    /// Emit PropertyNotify to a window if its event mask has
+    /// PropertyChangeMask. Called from ChangeProperty (state=NewValue) and
+    /// DeleteProperty (state=Deleted, only if the property existed). Per
+    /// X11 spec section 10.10. Xt's PROPERTY_CHANGE_TIMESTAMP timestamp-
+    /// probe path consumes these.
+    private func emitPropertyNotify(window: UInt32, atom: UInt32, state: PropertyState, byteOrder: ByteOrder) {
+        guard let entry = windows.get(window),
+              entry.eventMask & Self.propertyChangeMask != 0 else { return }
+        let event = PropertyNotifyEvent(
+            sequenceNumber: sequenceNumber,
+            window: window, atom: atom,
+            time: serverTime, state: state
+        )
+        outbound.append(event.encode(byteOrder: byteOrder))
+    }
+
     /// If `parent` is a known window with SubstructureNotifyMask set, build
     /// the notify event with `event = parent` and append it to outbound.
     /// Per X11 spec each Substructure event mirrors the corresponding
@@ -2393,6 +2412,24 @@ public final class ServerSession: @unchecked Sendable {
                     eventMask: eventMask
                 )
             }
+            // Per X11 spec section 10.5: CreateNotify is emitted to clients
+            // with SubstructureNotifyMask on the parent. WMs use this to
+            // notice new top-levels; deep-widget toolkits use it to track
+            // children. Parent=root case is skipped because root isn't in
+            // our windows table.
+            let seq = sequenceNumber
+            let parent = r.parent
+            let wid = r.wid
+            let cx = r.x, cy = r.y, cw = r.width, ch = r.height
+            let cbw = r.borderWidth
+            let cOR = overrideRedirect
+            notifySubstructure(parent: parent) { eventTarget in
+                CreateNotifyEvent(
+                    sequenceNumber: seq, parent: eventTarget, window: wid,
+                    x: cx, y: cy, width: cw, height: ch,
+                    borderWidth: cbw, overrideRedirect: cOR
+                ).encode(byteOrder: byteOrder)
+            }
 
         case .changeWindowAttributes(let r):
             guard validateWindowOrRoot(r.window, majorOpcode: ChangeWindowAttributes.opcode) else { break }
@@ -2542,6 +2579,20 @@ public final class ServerSession: @unchecked Sendable {
                     id: r.window, byteOrder: byteOrder,
                     sequence: sequenceNumber, outbound: outbound
                 )
+                // Per X11 spec: parents with SubstructureNotifyMask receive
+                // MapNotify(event=parent) when a child becomes viewable.
+                // Toolkit code (Athena, Motif) uses this to redraw chrome
+                // around newly-shown widgets. The bridge above emits the
+                // event=window variant; emit the substructure variant here.
+                let seq = sequenceNumber
+                let win = r.window
+                let isOR = isOverrideRedirect
+                notifySubstructure(parent: preMapEntry.parent) { eventTarget in
+                    MapNotifyEvent(
+                        sequenceNumber: seq, event: eventTarget,
+                        window: win, overrideRedirect: isOR
+                    ).encode(byteOrder: byteOrder)
+                }
                 // Per X11 spec: a window that becomes viewable gets Expose
                 // for its visible region if its event mask has
                 // ExposureMask. Step E1: emit per-clipList-rect (in
@@ -2582,7 +2633,11 @@ public final class ServerSession: @unchecked Sendable {
             let parentIsMapped = parentEntry?.mapped ?? false
             let topInfo = topLevelAndOffset(for: r.window)
 
-            // Pass 1: mark each unmapped child mapped + emit MapNotify.
+            // Pass 1: mark each unmapped child mapped + emit MapNotify
+            // (event=window) via the bridge, plus MapNotify(event=parent)
+            // to r.window if it has SubstructureNotifyMask. The latter is
+            // the chain Athena/Motif depend on to redraw container chrome
+            // around newly-shown children.
             var newlyMapped: [UInt32] = []
             for (_, w) in windows.windows where w.parent == r.window && !w.mapped {
                 windows.setMapped(w.id, true)
@@ -2590,6 +2645,15 @@ public final class ServerSession: @unchecked Sendable {
                     id: w.id, byteOrder: byteOrder,
                     sequence: sequenceNumber, outbound: outbound
                 )
+                let seq = sequenceNumber
+                let childId = w.id
+                let childOR = w.overrideRedirect
+                notifySubstructure(parent: r.window) { eventTarget in
+                    MapNotifyEvent(
+                        sequenceNumber: seq, event: eventTarget,
+                        window: childId, overrideRedirect: childOR
+                    ).encode(byteOrder: byteOrder)
+                }
                 newlyMapped.append(w.id)
             }
             // Recompute clipList once for the whole batch — every
@@ -2679,17 +2743,37 @@ public final class ServerSession: @unchecked Sendable {
                 // realization — without it, Xt does a probing ping-pong
                 // resize that wipes xterm's screen buffer.
                 let structureNotifyMask: UInt32 = 1 << 17
-                if (sizeChanged || posChanged) && (entry.eventMask & structureNotifyMask != 0) {
-                    log?.log("  → emit ConfigureNotify on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height) at (\(new.x),\(new.y))")
-                    let cfgEv = ConfigureNotifyEvent(
-                        sequenceNumber: sequenceNumber,
-                        event: r.window, window: r.window, aboveSibling: 0,
-                        x: new.x, y: new.y,
-                        width: new.width, height: new.height,
-                        borderWidth: new.borderWidth,
-                        overrideRedirect: false
-                    )
-                    outbound.append(cfgEv.encode(byteOrder: byteOrder))
+                if sizeChanged || posChanged {
+                    // StructureNotify variant on the window itself.
+                    if entry.eventMask & structureNotifyMask != 0 {
+                        log?.log("  → emit ConfigureNotify on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height) at (\(new.x),\(new.y))")
+                        let cfgEv = ConfigureNotifyEvent(
+                            sequenceNumber: sequenceNumber,
+                            event: r.window, window: r.window, aboveSibling: 0,
+                            x: new.x, y: new.y,
+                            width: new.width, height: new.height,
+                            borderWidth: new.borderWidth,
+                            overrideRedirect: false
+                        )
+                        outbound.append(cfgEv.encode(byteOrder: byteOrder))
+                    }
+                    // SubstructureNotify variant on the parent. Athena/Motif
+                    // geometry managers use this to know "my child changed
+                    // size, time to re-layout siblings."
+                    let seq = sequenceNumber
+                    let win = r.window
+                    let nx = new.x, ny = new.y, nw = new.width, nh = new.height
+                    let nbw = new.borderWidth
+                    notifySubstructure(parent: entry.parent) { eventTarget in
+                        ConfigureNotifyEvent(
+                            sequenceNumber: seq, event: eventTarget,
+                            window: win, aboveSibling: 0,
+                            x: nx, y: ny,
+                            width: nw, height: nh,
+                            borderWidth: nbw,
+                            overrideRedirect: false
+                        ).encode(byteOrder: byteOrder)
+                    }
                 }
                 // Recompute clipList NOW so the new visible regions drive
                 // both the E1.5 parent-repaint pass and the E2 size-grow
@@ -2744,6 +2828,11 @@ public final class ServerSession: @unchecked Sendable {
                 window: r.window, property: r.property, type: r.type,
                 format: r.format.rawValue, mode: r.mode.rawValue, value: r.data
             )
+            // Per X11 spec section 10.10: ChangeProperty emits PropertyNotify
+            // with state=NewValue to clients with PropertyChangeMask on the
+            // window (atom 1<<22 in eventMask). Xt's PROPERTY_CHANGE_TIMESTAMP
+            // mechanism listens for these to capture a fresh server timestamp.
+            emitPropertyNotify(window: r.window, atom: r.property, state: .newValue, byteOrder: byteOrder)
             // WM_NAME or WM_ICON_NAME (39 / 37) → push to NSWindow title.
             // Strip trailing nulls — real Xlib clients sometimes include the
             // C string terminator in the property data, sometimes not.
@@ -2789,12 +2878,19 @@ public final class ServerSession: @unchecked Sendable {
 
         case .deleteProperty(let r):
             guard validateWindowOrRoot(r.window, majorOpcode: DeleteProperty.opcode) else { break }
+            // Per spec: PropertyNotify with state=Deleted fires only if the
+            // property actually existed before the delete.
+            let existed = properties.get(window: r.window, property: r.property) != nil
             properties.delete(window: r.window, property: r.property)
+            if existed {
+                emitPropertyNotify(window: r.window, atom: r.property, state: .deleted, byteOrder: byteOrder)
+            }
 
         case .getProperty(let r):
             guard validateWindowOrRoot(r.window, majorOpcode: GetProperty.opcode) else { break }
             let reply: GetPropertyReply
-            if let entry = properties.get(window: r.window, property: r.property) {
+            let existing = properties.get(window: r.window, property: r.property)
+            if let entry = existing {
                 reply = GetPropertyReply(
                     sequenceNumber: sequenceNumber,
                     format: entry.format,
@@ -2806,6 +2902,16 @@ public final class ServerSession: @unchecked Sendable {
                 reply = GetPropertyReply.empty(sequenceNumber: sequenceNumber)
             }
             outbound.append(reply.encode(byteOrder: byteOrder))
+            // Per X11 spec: when delete=True and the property existed, the
+            // property is removed after the reply and PropertyNotify(state=
+            // Deleted) is emitted (only when the type matched or AnyType
+            // was requested — our reply ignores the type filter today, so
+            // the simpler rule "existed → delete + notify" is what we
+            // implement).
+            if r.delete, existing != nil {
+                properties.delete(window: r.window, property: r.property)
+                emitPropertyNotify(window: r.window, atom: r.property, state: .deleted, byteOrder: byteOrder)
+            }
 
         case .openFont(let r):
             // Parse the font name (XLFD or alias), resolve to a Mac substitute
@@ -3155,18 +3261,43 @@ public final class ServerSession: @unchecked Sendable {
             // Per spec, destroy each child of the requested window in
             // bottom-to-top order. We don't track stacking; iterate the
             // table. Recursive: each child's subwindows go too.
+            // Capture child IDs BEFORE destroy so we can emit
+            // DestroyNotify(event=parent) for each via notifySubstructure
+            // after the table mutation.
+            let doomedDirectChildren = windows.windows
+                .filter { $0.value.parent == r.window }
+                .map { $0.key }
             destroySubtree(parentOf: r.window, includeRoot: false)
+            let seq = sequenceNumber
+            for childId in doomedDirectChildren {
+                notifySubstructure(parent: r.window) { eventTarget in
+                    DestroyNotifyEvent(
+                        sequenceNumber: seq, event: eventTarget, window: childId
+                    ).encode(byteOrder: byteOrder)
+                }
+            }
             recomputeClipsForSubtreeContaining(r.window)
 
         case .unmapSubwindows(let r):
             guard validateWindowOrRoot(r.window, majorOpcode: UnmapSubwindows.opcode) else { break }
             // Set mapped=false on every direct child of the requested
-            // window. Real X also emits UnmapNotify on each (with
-            // SubstructureNotifyMask check on parent) and triggers
-            // GraphicsExposure on regions that become uncovered; we skip
-            // those for now — log so it's visible.
+            // window. Emit UnmapNotify(event=parent) for each via
+            // notifySubstructure if the parent has SubstructureNotifyMask.
+            // GraphicsExposure on regions that become uncovered is still
+            // skipped — separate work.
+            var unmappedChildren: [UInt32] = []
             for (id, w) in windows.windows where w.parent == r.window && w.mapped {
                 if var e = windows.get(id) { e.mapped = false; windows.insert(e) }
+                unmappedChildren.append(id)
+            }
+            let seq = sequenceNumber
+            for childId in unmappedChildren {
+                notifySubstructure(parent: r.window) { eventTarget in
+                    UnmapNotifyEvent(
+                        sequenceNumber: seq, event: eventTarget, window: childId,
+                        fromConfigure: false
+                    ).encode(byteOrder: byteOrder)
+                }
             }
             log?.log("  UnmapSubwindows parent=0x\(String(r.window, radix: 16))")
             recomputeClipsForSubtreeContaining(r.window)
