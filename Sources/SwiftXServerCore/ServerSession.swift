@@ -1507,6 +1507,27 @@ public final class ServerSession: @unchecked Sendable {
             || id == config.rootWindowId
     }
 
+    /// Validate a drawable for a drawing request and resolve it to a render
+    /// target. Returns (topLevel, dx, dy) when the drawable is a renderable
+    /// window subtree; nil otherwise. For unknown drawable IDs, emits
+    /// BadDrawable referencing the bad ID. For valid-but-unrendererable
+    /// drawables (pixmaps and the root), silently drops with a log line — see
+    /// the "draws to pixmaps and root silently drop" entry in SHORTCUTS for
+    /// why this is a documented lie rather than BadImplementation today
+    /// (dt-apps draw into pixmaps as backing buffers, and emitting an error
+    /// would break a working flow we haven't gotten to rendering yet).
+    func validateDrawTarget(_ drawable: UInt32, majorOpcode: UInt8) -> (UInt32, Int16, Int16)? {
+        if !isKnownDrawable(drawable) {
+            emitError(.drawable, majorOpcode: majorOpcode, badResourceId: drawable)
+            return nil
+        }
+        if let target = topLevelAndOffset(for: drawable) {
+            return target
+        }
+        log?.log("validateDrawTarget: drawable 0x\(String(drawable, radix: 16)) is known (pixmap or root) but not renderable; dropping op opcode=\(majorOpcode)")
+        return nil
+    }
+
     /// the (x, y) offset of `drawable` inside it. nil if the drawable isn't
     /// in a window subtree we own (e.g., a pixmap, the root, or unknown).
     public func topLevelAndOffset(for drawable: UInt32) -> (UInt32, Int16, Int16)? {
@@ -1720,8 +1741,8 @@ public final class ServerSession: @unchecked Sendable {
     // MARK: - Drawing
 
     private func handlePolySegment(_ r: PolySegment, byteOrder: ByteOrder) {
-        guard let bridge = bridge,
-              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolySegment.opcode) else { return }
+        guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         let translated = r.segments.map {
             LineSegment(
@@ -1738,8 +1759,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyLine(_ r: PolyLine, byteOrder: ByteOrder) {
-        guard let bridge = bridge,
-              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyLine.opcode) else { return }
+        guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         // CoordinateMode.previous means each subsequent point is a delta from
         // the prior absolute position; we accumulate to get all-absolute.
@@ -1767,8 +1788,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handleFillPoly(_ r: FillPoly, byteOrder: ByteOrder) {
-        guard let bridge = bridge,
-              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: FillPoly.opcode) else { return }
+        guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         var points: [DrawPoint] = []
         points.reserveCapacity(r.points.count)
@@ -1796,8 +1817,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyFillRectangle(_ r: PolyFillRectangle, byteOrder: ByteOrder) {
-        guard let bridge = bridge,
-              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyFillRectangle.opcode) else { return }
+        guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         let translated = r.rectangles.map {
             Rectangle(
@@ -1814,8 +1835,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyRectangle(_ r: PolyRectangle, byteOrder: ByteOrder) {
-        guard let bridge = bridge,
-              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyRectangle.opcode) else { return }
+        guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         let translated = r.rectangles.map {
             Rectangle(
@@ -1832,8 +1853,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyArc(_ r: PolyArc, byteOrder: ByteOrder) {
-        guard let bridge = bridge,
-              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyArc.opcode) else { return }
+        guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         let translated = r.arcs.map {
             Arc(
@@ -1851,8 +1872,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyFillArc(_ r: PolyFillArc, byteOrder: ByteOrder) {
-        guard let bridge = bridge,
-              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyFillArc.opcode) else { return }
+        guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         let translated = r.arcs.map {
             Arc(
@@ -1869,8 +1890,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handleImageText8(_ r: ImageText8, byteOrder: ByteOrder) {
-        guard let bridge = bridge,
-              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: ImageText8.opcode) else { return }
+        guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         // Pull the GC's font; fall back to "fixed" if no font set.
         let resolvedFont: ResolvedFont
@@ -1890,8 +1911,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyText8(_ r: PolyText8, byteOrder: ByteOrder) {
-        guard let bridge = bridge,
-              let (top, dx, dy) = topLevelAndOffset(for: r.drawable) else { return }
+        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyText8.opcode) else { return }
+        guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         let resolvedFont: ResolvedFont
         if let entry = fonts.get(state.font) {

@@ -100,6 +100,39 @@ final class XErrorEmissionTests: XCTestCase {
         XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogusDst, "badResourceId must point at the unknown dst drawable")
     }
 
+    func testPolyFillRectangleWithUnknownDrawableEmitsBadDrawable() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogus: UInt32 = 0xBADDEC0D
+        let pfr = Request.polyFillRectangle(PolyFillRectangle(
+            drawable: bogus, gc: 0x4400000,
+            rectangles: [Rectangle(x: 0, y: 0, width: 5, height: 5)]
+        ))
+        let bytes = session.feed(pfr.encode(byteOrder: .lsbFirst))
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.drawable.rawValue)
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogus)
+        XCTAssertEqual(err.majorOpcode, PolyFillRectangle.opcode)
+    }
+
+    func testValidateDrawTargetSilentlyDropsForPixmapAndRoot() throws {
+        // Pixmaps and the root are isKnownDrawable=true but topLevelAndOffset
+        // returns nil. Per the documented lie in SHORTCUTS, this case logs and
+        // returns nil rather than emitting BadImplementation — dt-apps draw
+        // into pixmaps as backing buffers and the existing silent-drop is
+        // load-bearing for them.
+        let session = runningSession(byteOrder: .lsbFirst)
+        let rootId = ServerConfig.default.rootWindowId
+
+        let result = session.validateDrawTarget(rootId, majorOpcode: PolyFillRectangle.opcode)
+        XCTAssertNil(result, "root should not resolve to a render target")
+        XCTAssertTrue(session.outbound.drain().isEmpty, "must not emit XError for known-but-unrenderable drawable")
+    }
+
     func testEmittedErrorCarriesCurrentSequenceNumber() throws {
         // After setup the session's sequenceNumber is 0; feed one InternAtom
         // request to advance it, then emit an error and assert the seq field
