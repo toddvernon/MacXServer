@@ -1,84 +1,109 @@
-# Post 4: First NSWindow (M2)
+# Post 4: First NSWindow
 
-**Date range**: May 7, 2026
-**One-line elevator**: A real macOS window pops up on the Mac when the X client maps its top-level window. Rootless from day one. The whole bridge between the X protocol's "windowing" abstraction and AppKit's NSWindow lives in a single layer.
+**Date range**: May 7, 2026 **One-line elevator**: A real macOS window appears on the Mac when an X client
+maps its top-level. Rootless from day one, native chrome, no XQuartz-style faux-X11 title bar. Short post.
+One architectural decision, one event sequence, one moment.
 
 ## What this post covers
 
-Product 2 milestone M2. The shift from "bytes on the wire" to "pixels on the screen, even if blank." The NSWindow bridge. Synthesizing the post-Map event sequence (ReparentNotify, ConfigureNotify, MapNotify, Expose) that Xlib expects. Rootless as the default mode.
+M2 of Product 2. The architectural decision that defines what swift-x feels like as a Mac app: every
+top-level X window becomes a real NSWindow with real Mac chrome. The post-Map event sequence Xlib expects
+in return. The first time a window appeared on the Mac because a Sun told it to.
 
 ## Setting
 
-M1 shipped earlier the same day. xclock connects and stays connected, all protocol-level stubs fire correctly. Resource tables track every CreateWindow, but no NSWindow yet exists. The X client thinks it's mapped windows; the user sees nothing.
+M1 shipped earlier the same day. xclock connects, stays connected, all protocol-level stubs fire correctly.
+From the client's vantage everything looks normal: it thinks it's mapped a window. From mine, the Mac
+screen is empty. M2 closes that gap.
 
-## The architectural decision
+## Rootless, deliberately
 
-Rootless window mode as the primary mode (`DECISIONS.md` 2026-05-05). Each top-level X window becomes a native NSWindow with native macOS chrome.
+`DECISIONS.md` 2026-05-05: rootless window mode is the primary mode. Each top-level X window becomes a
+native NSWindow with native macOS chrome. No big "X11 desktop" surface hosting borderless X windows. No
+faux title bars drawn by the X server. Real `NSWindow`s with the macOS traffic-light buttons, integrated
+into Spaces, addressable from Cmd-Tab, draggable to other monitors via the standard Mac mechanism.
 
-- Native Mac chrome integrates with Spaces, Mission Control, Cmd-Tab
-- Window operations (move, resize, focus) happen at native Mac speed without round-tripping to the client
-- This is where we can clearly improve on XQuartz, which has a clunky rootless mode
+TODD: I want the X windows to coexist with Mac apps. I don't want a different environment for X. I have
+that already, ten feet away, with my Sun monitors, keyboards, and mice. When I'm on the Mac I want one
+desktop, one Cmd-Tab list, one set of Mission Control spaces. xclock and Safari side by side, not xclock
+in a separate "X11 world."
 
-The compromise: users who want full retro authenticity can run `mwm` on the Sun. The X server sees mwm's reparenting and decoration windows as just more X windows, and they display correctly.
+This is where swift-x differs from XQuartz the most visibly. XQuartz can run rootless, but its rootless
+mode still draws its own X11-style title bars instead of using AppKit chrome. The result looks 1996 next
+to a 2026 Safari window, and the X-titled windows don't pick up Mac shortcuts the way you'd expect. We
+use real `NSWindow`s from the first byte of M2.
+
+The escape hatch for retro authenticity is to run `mwm` on the Sun. The X server sees mwm's reparenting
+and decoration windows as just more X windows and displays them correctly inside our NSWindow. Someday
+we may ship a native Mac-side "mwm look" wrapper for NSWindow chrome (title bar pattern, corner grips,
+the right shade of Motif grey), but that's chrome theming, not hosting a real client-side mwm. Real
+client-side mwm rendered on a Mac is too clunky.
 
 ## The WindowBridge protocol
 
-`CocoaWindowBridge.swift` owns one NSWindow per top-level X window via the `WindowBridge` protocol. NSApplication runloop drives AppKit on main; the server's `Listener` runs read and write socket threads on background queues. `MockWindowBridge` lets unit tests run without a Cocoa runloop.
+The Mac side has to mediate between "the X protocol just got a `MapWindow`" and "make an NSWindow appear
+on screen." That mediation lives behind a `WindowBridge` protocol so the server core doesn't import
+AppKit directly.
 
-The bridge protocol has methods like:
-- `mapTopLevel(id: ..., geometry: ..., descendants: ..., ...)`. create the NSWindow
-- `unmapTopLevel(id: ...)`. orderOut
-- `paintWindowRects(topLevel: ..., rects: ...)`. fill background
-- `setTopLevelWindowTitle(id: ..., title: ...)`. for WM_NAME
+`CocoaWindowBridge` is the production implementation. It owns one NSWindow per top-level X window,
+positioned per the client's requested geometry. `MockWindowBridge` is the test implementation. It records
+every bridge call as a structured event so unit tests can assert "did we emit the right sequence" without
+spinning up a Cocoa runloop. Same protocol, same `emitMapSequence` helper, two backends.
 
-The protocol-side dispatcher doesn't know anything about Cocoa. It just calls bridge methods. CocoaWindowBridge translates those calls into AppKit operations. MockWindowBridge records them for tests.
+The bridge protocol surface is small: `mapTopLevel`, `unmapTopLevel`, `paintWindowRects`,
+`setTopLevelWindowTitle`. The dispatcher calls those methods. Cocoa or Mock decide what they mean.
 
 ## The post-Map event sequence
 
-When the client maps a top-level window, Xlib expects a specific sequence of events back:
-1. `ReparentNotify`. the window has been reparented (synthesized; we use a synthetic parent ID since there's no real WM)
-2. `ConfigureNotify`. final geometry confirmation (NSWindow positions the content area at the requested coords)
-3. `MapNotify`. window is now mapped
-4. `Expose`. content needs drawing
+When the client maps a top-level window, Xlib expects a specific sequence of events back. Wrong order
+and the client doesn't always disconnect, but the drawing path goes wrong in subtle ways:
 
-All four go out in that order via `emitMapSequence` in `MockWindowBridge.swift` (shared by Cocoa and Mock bridges so the emission order stays in one place).
+1. `ReparentNotify` — the window has been reparented. We synthesize a parent ID since there's no real
+   window manager on the Mac side.
+2. `ConfigureNotify` — final geometry confirmation. The NSWindow positions its content area at the
+   requested coords.
+3. `MapNotify` — the window is now mapped.
+4. `Expose` — content needs drawing.
 
-Mistakes here are subtle. Wrong order, wrong sequence number, wrong byte format on Expose. the client doesn't always disconnect, but the drawing path goes wrong in ways that look like rendering bugs.
-
-## Descendants and Expose
-
-A subtlety that matters later: when a top-level window is mapped and it has already-mapped descendants (`MapSubwindows` was called before the top-level mapped), each of those descendants whose event mask has `ExposureMask` also needs an Expose. Otherwise xclock's inner drawing window never receives the signal to draw and the clock stays blank.
-
-The bridge accepts a `descendants:` parameter and emits Expose for each one with ExposureMask set. xclock's pattern is: CreateWindow on root (outer), CreateWindow inside (inner), MapSubwindows on outer, MapWindow on outer. When the outer maps, both windows become viewable.
-
-## WM_NAME → NSWindow.title
-
-`ChangeProperty(WM_NAME, ...)` updates the NSWindow title. Trailing nulls in the property bytes are stripped. The bridge's `setTopLevelWindowTitle` is invoked with the resolved string.
-
-Per-session log files take this further later (in M3 / Beyond M3): once `WM_CLASS` arrives, the log filename gets renamed to include the instance, and the NSWindow title gets prefixed with the instance. So `[xclock] My Clock` shows in the title bar instead of just `My Clock`.
+All four emit in that order from `emitMapSequence` in `MockWindowBridge.swift:92`, shared by both
+bridges so the order stays in one place. If the top-level had already-mapped descendants (xclock's
+pattern is to `CreateWindow` outer + inner, `MapSubwindows`, then `MapWindow` on outer), each descendant
+with `ExposureMask` also gets an Expose. Without that, xclock's inner drawing window never gets the
+signal to redraw and the clock stays blank in M3.
 
 ## Pivotal moment
 
-The first time `xclock` came up on the Mac as a native NSWindow, with the macOS traffic-light buttons and the title from WM_NAME, sized correctly per the client's geometry. The clock face was blank because M3 wasn't done. but the window was REAL. You could move it, you could close it, the X client did the right thing on close.
+The first time xclock came up on the Mac as a native NSWindow, with the macOS traffic-light buttons and
+the title from `WM_NAME`, sized correctly per the client's geometry. The clock face was blank because M3
+wasn't done. But the window was real. Move it. Close it. Cmd-Tab past it. The X client did the right
+thing on close. The Mac responded the way it should to a Mac window.
+
+The visible payoff is in Post 5 (pixels). The architectural payoff is here.
 
 ## What Todd should add
 
-- The "first window" moment.
-- The rootless decision in voice. Why rootless mattered to YOU specifically, not just "it's better." Probably ties to "I want this to feel like a Mac app, not like 1996."
-- The mwm-as-compromise framing. You explicitly preserved the retro option. That's a perspective choice worth airing.
-- The split between protocol-side and bridge-side. Why this matters for testability, why MockWindowBridge exists, what tests it enables.
+- The "first window appears" moment in voice. This is the visible counterpart to Post 3's "fuck, wow"
+  about the protocol staying connected. M1 was invisible; M2 is the first time the project produced
+  something you could point at on a screen.
+- Any "Spaces / Mission Control / Cmd-Tab" memories. Mac users who came up through XQuartz will recognize
+  the small daily friction of X windows being almost-integrated. Concrete examples land.
 
 ## Anchors for fact-check pass
 
-- Files: `PRODUCT_2_SERVER.md` (M2 section), `Sources/SwiftXServerCore/CocoaWindowBridge.swift`, `Sources/SwiftXServerCore/MockWindowBridge.swift`, `Tests/SwiftXServerCoreTests/WindowBridgeTests.swift`
-- M2 commit: `4a0dd24` 2026-05-07 "Ship Product 2 M1-M3: xclock renders on swift-x server" (M1+M2+M3 all in one day)
-- Decision: Rootless window mode as primary (DECISIONS.md 2026-05-05)
-- Decision: No Motif implementation on the Mac side (DECISIONS.md 2026-05-05). relevant because mwm is preserved as the compromise
-- The Listener: `Sources/SwiftXServerCore/Listener.swift`
-- emitMapSequence: `Sources/SwiftXServerCore/MockWindowBridge.swift:92`
+- Files: `Sources/SwiftXServerCore/CocoaWindowBridge.swift`, `Sources/SwiftXServerCore/MockWindowBridge.swift`,
+  `Tests/SwiftXServerCoreTests/WindowBridgeTests.swift`
+- M2 commit: `4a0dd24` 2026-05-07 "Ship Product 2 M1-M3: xclock renders on swift-x server"
+  (M1+M2+M3 all in one day)
+- `emitMapSequence`: `Sources/SwiftXServerCore/MockWindowBridge.swift:92`
+- Decision: rootless window mode as primary (`DECISIONS.md` 2026-05-05)
+- Decision: no Motif implementation on the Mac side (`DECISIONS.md` 2026-05-05); relevant because mwm
+  is preserved as the escape hatch
+
+(`WM_NAME` → NSWindow title and the per-session log-renaming on `WM_CLASS` are mentioned in Post 8
+where multi-client makes them concrete. Not duplicated here.)
 
 ## Working title alternatives
 
 - "M2: a window on the Mac"
-- "From bytes to NSWindow"
 - "Rootless from day one"
+- "First window"

@@ -1,132 +1,263 @@
-# Post 1: The inception
+# Post 1: I have a basement full of Sun workstations
 
-**Date range**: May 5, 2026 (initial commit)
-**One-line elevator**: Why I'm building a Swift X server from scratch instead of using XQuartz, and how the day-one decision matrix narrowed five candidate approaches down to one.
+I have a basement full of Sun workstations. An SS1, an SS2, an IPC, an IPX, a Voyager, an SS5, an Ultra 1,
+an Ultra 5. Plus an SGI Indigo, because I couldn't help myself. Real CRTs, real type 4 and type 5 mice,
+real Sun keyboards with the L-key column on the left. The complete late-80s-through-mid-90s Unix
+workstation experience, set up on real desks, about ten feet from where I'm typing this on a Mac Studio
+with a Studio Display.
 
-## What this post covers
+I like the retro setup. I sit in front of it and the environment is what it was in 1995, hardware and
+all. But sometimes, usually, I'm working at the Mac, and I want to pop a couple of xterms up so I can do
+some maintenance on the collection (which, with eight aging Suns, is a real ongoing job), and I want
+that experience to be good. Not "fire up XQuartz and squint." Good.
 
-The first day, before any X11 code existed. The shape of the problem, the alternatives I considered, and the architectural decisions that made the rest of the project possible.
+There's a Mac terminal I admire here. iTerm2. Those folks have done excellent work: anti-aliased text,
+Retina-aware rendering, every knob you'd want for tuning the look of a terminal. The kind of terminal you
+set up once and never think about again. iTerm2 is the standard any terminal on a modern Mac gets judged
+by, and for this project it became the guiding light for what xterm rendering should look like. If I'm
+shipping a Mac-side X server in 2026 and the xterm I render doesn't sit comfortably next to an iTerm2
+window, the project has failed.
 
-## Setting
+xterm is the easy case. I also wanted Motif apps. Specifically one.
 
-I have a fleet of vintage Sun workstations (SS1, SS2, IPC, IPX, Voyager, SS5, Ultra 1, Ultra 5, plus an SGI Indigo). They all run real Xsun and their stock X clients.
+Thirty years ago, my first job out of college, I was a contract engineer at NASA in flight test. I got
+into programming in a big way and wanted to write a real app, one that people would use. The facility,
+being a flight test facility, needed a 2D time-history plotting application. I wrote one. The first
+version was pure Xlib. I wrote my own widgets, raw, no toolkit underneath. I was so excited to be
+programming on the (then very new) Unix Sun SPARC platforms that I sold my home Mac, a Mac II, and
+bought a Sun IPX. Not an easy box to buy for the home in 1990. Sun did not sell directly to consumers.
+I had to go through my employer, who placed the order on my behalf. I spent the next year writing the
+second iteration of the plotting app on my own time, nights and weekends. The new version used Motif as
+the widget foundation and Xlib as the graphing layer. Command window and dialogs in Motif. The graphing
+surfaces themselves were raw Xlib drawing: autoscaling, clipping, data plotting, line styles, symbols,
+labeled axes, the whole thing. Interactive, but also completely scriptable, which mattered for this
+application.
 
-The motivation: my Suns should be able to display their X apps on my Mac at the proper size on modern hardware, with the rendering quality you'd expect from a Mac app. Not at 1x native pixel coordinates where xterm comes up two inches wide on a Studio Display. Not with bitmap fonts that XQuartz still ships in 2026. With anti-aliased scalable fonts and integer-scale projection to device pixels so glyphs land on the pixel grid.
+Frankly, I think it was put together better than most Motif apps of its day. It was called quickplot. I
+ended up leaving NASA shortly after I finished the app and sold it to NASA on my way out the door. NASA
+is a government agency and its technology transfer office will provide the code to you if you ask. It's
+still available today.
 
-## The two design drivers
+I've compiled it several times for different platforms it supports (Sun, IRIX) and it still works
+great and displays great on those boxes. But I really want it to display on my Mac as well. Keeping
+retro gear like old monitors and LCD displays working is a bit of a challenge, to be honest. The actual
+Sun boxes are a little easier; they were built like tanks.
 
-The project pivots on two foundational drivers. Both shaped substantial chunks of design and both have their own post in this series.
+So I started thinking. Given the productivity gains of Claude-Code, the agentic coding platform from
+Anthropic, could I actually build a working X server on the Mac, with better performance and some
+different design choices than XQuartz? Alone, or even as a small group of people, this project would
+literally be a year or more. But from what I've personally experienced, agentic coding is astoundingly
+productive, especially if you actually know how to code to begin with. I estimated I could probably
+get something to work in a week.
 
-1. **xterm pixel-perfect on modern hardware.** This is the rendering and scaling story. xterm is the simplest X client protocol-wise but the one everyone judges an X server by. If xterm doesn't look right at modern resolution, nothing else about the project matters. The whole `SERVER_RESOLUTION_SCALING_AND_FONTS.md` design doc came out of this driver. Post 6.
-2. **Motif clients fully functional.** This is the protocol-correctness story. quickplot, dt-apps, the harder corners of Xt and libXm. If the server can't handle real Motif behavior, the project ships as "xterm replacement" and nothing more. Posts 9 and 10 of this series.
+So that was my goal for the project. Start simple, and see where it goes.
 
-Both drivers determine what the next-level architecture has to look like. The scaling driver decides the three-plane rendering decomposition, no-pixel-fonts, integer scale, cell-snapping. The Motif driver decides the selection model, override-redirect popup handling, the depth of Xt-correctness work we have to do.
+## Just use XQuartz?
 
-## The "just use XQuartz" objection (load-bearing section)
+The headline objection. Everyone who hears about a from-scratch X server for the Mac has the same first
+thought. Doesn't macOS already have an X server? Yes. It's called XQuartz. It works, and was hand-crafted
+over literally decades. It made some design decisions I don't agree with, and support is waning.
 
-This is the headline rebuttal from anyone seeing the project for the first time. The article you're reading exists because XQuartz isn't good enough. The reasoning has to land before the rest of the series can.
+A short history. In 2003, Apple shipped X11.app in Mac OS X 10.3 Panther, built on XFree86. In 2007 they
+moved it to the X.org codebase, the same release where macOS got UNIX 03 certification from The Open
+Group. The Open Group's UNIX 03 spec requires an X Window System implementation, so Apple shipping an X
+server was a load-bearing piece of certification compliance more than a product. In 2012 with 10.8
+Mountain Lion they removed X11.app from the OS, and it became XQuartz at xquartz.org, maintained outside
+Apple by a small community (largely Jeremy Huddleston Sequoia). Since 2012, XQuartz has had sporadic
+releases focused on keeping the build working on the current macOS, fixing the worst bugs, and not
+breaking anything. The codebase still has 2007-era X.org bones with patches on top. No Apple investment
+since 2012.
 
-### Short XQuartz history
+XQuartz isn't bad because anyone was incompetent. It's the predictable result of thirteen years of
+unfunded community maintenance on top of a 2007-era code drop from a company that had stopped caring once
+UNIX certification stopped mattering as a marketing point. It is what it is.
 
-- **2003**: Apple shipped `X11.app` in Mac OS X 10.3 Panther, built on XFree86 4.x. Aimed at Unix-workstation users and developers needing X clients on a Mac.
-- **2007**: 10.5 Leopard moves X11.app to the X.org codebase. Same release where macOS gets UNIX 03 certification from The Open Group, and UNIX 03 requires an X Window System implementation. The X server was a load-bearing part of that certification, which is the institutional reason it existed.
-- **2012**: 10.8 Mountain Lion removes X11.app from the OS. It becomes XQuartz at xquartz.org, maintained outside Apple by a small community (largely Jeremy Huddleston Sequoia).
-- **2012 to today**: sporadic releases, mostly "keep it building on the current OS, fix critical bugs, don't break anything." Codebase still has 2007-era X.org bones with patches on top. No Apple investment since 2012.
+Here's what that looks like in 2026 when I sit down to use it.
 
-### Why XQuartz isn't enough
+I run an xterm. It comes up about two inches wide on the Studio Display. Two inches because xterm assumes
+the pixel coordinates of a 1280×1024 cgsix-equipped SPARCstation in 1995, the Studio Display has 200+
+pixels per inch in 2026, and XQuartz doesn't have a scaling plane to bridge the difference. Same X
+protocol coordinates, much smaller window. I have to manually pass `-fa Monaco -fs 24` or whatever to
+even read the thing.
 
-Three concrete things, ordered by how immediate they are when you actually use XQuartz:
+The fonts are bitmaps. XQuartz still ships bitmap fonts as the default for terminal use. The result on a
+5K display is exactly what bitmap fonts on a 5K display look like: stair-stepping on diagonals, no
+anti-aliasing on curves. You can pass `-fa` to get a Core Text scalable font, but the default experience
+for a fresh user is 1996.
 
-1. **Scale.** XQuartz windows render at native pixel coordinates on a 5K Studio Display. xterm comes up about two inches wide. There's no display-adaptive scaling, no Retina awareness in the rendering plane. The Phase 1 scaling work in `SERVER_RESOLUTION_SCALING_AND_FONTS.md` addresses exactly this: integer scale projection from a sensible logical resolution to device pixels.
-2. **Font rendering.** XQuartz still ships bitmap fonts as the default for terminal use. Modern Core Text smoothing applied to drawing primitives in flight beats antialiased-bitmap-after-the-fact. xterm at 3x looks like a proper terminal on swift-x, looks like 1996 on XQuartz. Side-by-side screenshot makes the case in one glance.
-3. **Window integration.** XQuartz's rootless mode has its own X11 title bars that don't match other Mac apps and don't integrate cleanly with Spaces, Mission Control, Cmd-Tab. swift-x uses real NSWindows from day one. Native chrome, native shortcuts, native behavior.
+The windows have their own X11 title bars that don't pick up Mac keyboard shortcuts, don't co-exist with
+native apps in Cmd-Tab, and look exactly 1996 next to a 2026 Safari window. XQuartz can run rootless but
+its rootless mode still draws X11 chrome instead of using AppKit. xterm in XQuartz on my desktop, next to
+Safari and iTerm2 and a Notes window, looks like an artifact from a different decade. Which, in fairness,
+it is.
 
-### The "literally didn't care" frame
+So when I want to administer a Sun from the Mac, I have a choice. Either run XQuartz and accept that
+everything looks small and slightly wrong, or VNC into the Sun and accept blurry pixel-doubled output.
+Neither feels like what 2026 should look like. iTerm2 is actually my go-to for interacting with the Sun
+boxes, but older SunOS versions have very poor terminal resize support over telnet (ssh really isn't an
+option), so a real xterm on the Mac would be a very welcome addition.
 
-XQuartz isn't bad because anyone was incompetent. It's the predictable result of thirteen years of unfunded community maintenance on top of a 2007-era code drop from Apple. Nobody at Apple has had the time or budget to revisit the rendering quality since UNIX certification stopped mattering as a marketing point. That's the texture of how it ended up where it is, and it's the kind of project I find interesting to take a swing at because the technical bar is just "do what a modern Mac app would do."
+So I decided. Let's give it a try. Spend a day with Claude-Code and see what I could get working. Could
+I actually create MacXserver?
 
-## X11 as a protocol vs X11 as an implementation (recurring thread)
+I started.
 
-This framing is the answer to "isn't writing an X server insane?" and it threads through the rest of the series.
+## What X11 actually is
 
-X11 has two lives. As a **protocol**, it's one of the top technical successes of the Unix era. The wire format stabilized in 1987 and has been backward-compatible for forty years; a 1989 xterm binary connects to a 2024 X.org server and works. Network transparency, the open-source reference implementation under a permissive license, the toolkit ecosystem on top. Sat alongside TCP/IP, Unix itself, the C ABI as foundational infrastructure that the rest of the workstation era was built on.
+A short orientation for readers who know of X11 but don't really know exactly what it is.
 
-As an **implementation**, X.org is a half-million lines of accumulated extensions, work-arounds, and architectural assumptions that don't survive modern displays or modern security models. The Render and Composite extensions tried to bolt thick-client rendering onto a server-side-drawing architecture. The xhost security model is unfixable without throwing it out. Wayland exists because the protocol is fine but the implementation is a tar pit.
+**The server runs on the machine with the display.** "Server" and "client" are inverted from how most
+modern network software uses those words. In X11, the **server** is the program that owns your screen,
+keyboard, and mouse. The **clients** are the applications. If I sit in front of an SS2 running xterm
+locally, the X server AND the X client are both running on my SS2. But if I run xterm with a different
+display address on my network, the rendering is done and displayed on another Unix box running an X
+server. Or, if I'm successful, my Mac running my new X server process.
 
-swift-x targets the protocol, not the implementation. Sun clients from 1987-1996 use the core protocol that's been stable since X11R3. They don't use Render, don't use Composite, don't use RANDR, don't use GLX. The surface we have to implement is exactly the surface with the strongest stability guarantee. The successful part of X11 is the part we get to take advantage of, and we get to write the rendering layer for a 2026 Mac instead of a 1987 cgsix.
+This whole project exists to make my Mac a better X server for the clients running on my Suns.
 
-This is why writing a new X server in five days isn't insane. We're not reimplementing X.org. We're implementing a 40-year-stable wire protocol on top of Core Graphics, with a captured corpus from real Sun clients as the ground truth for what's actually needed.
+**The protocol is network-transparent.** The X wire protocol (the bytes that go over the network) is
+designed to run over any intermediate transport: Unix domain sockets (same box) or TCP/IP to another
+box somewhere else in the world.
 
-This thread keeps coming back. The capture tool (Post 2) captures the protocol. M1's stubs (Post 3) honor the protocol's contracts. The scaling and font work (Post 6) is what happens when you take the protocol's commands and render them with modern technology instead of 1996 technology. The Motif debugging (Posts 9 and 10) is about libXm's expectations of the protocol, expectations that have been stable for thirty years. The protocol is the constant; everything else is choice.
+The X protocol is a TCP byte stream of length-prefixed requests, replies,
+events, and errors. swift-x listens on `:6000` and accepts connections from any Sun on the LAN with
+`DISPLAY=mac.local:0` set in its environment.
 
-## Five candidate approaches
+**The wire protocol is drawing commands, not pixels.** xclock doesn't ship pixels of the clock face. It
+ships a PolySegment with the sixty tick endpoints and a FillPoly with the hour-hand polygon vertices. The
+server turns those into pixels on its own hardware, with its own font rendering, on its own framebuffer.
+A tiny amount of data drives a potentially complex display. This is the architectural fact that makes "modern
+rendering for vintage clients" tractable: I get to write a 2026 Mac-native renderer for a 1989 command
+stream.
 
-## Five candidate approaches
+**Toolkits stack on top of Xlib.** Xlib is the C library that turns function calls into wire bytes. On
+top of Xlib sits Xt, the toolkit intrinsics: widget infrastructure, the inheritance model. On top of Xt
+sit the actual widget sets: Athena (the spartan MIT default, what xcalc uses), Motif (the polished
+commercial standard ubiquitous on commercial Unix in the 1990s, what quickplot uses), OPEN LOOK (Sun's
+house style, OpenWindows). Each toolkit makes its own assumptions about server behavior that aren't quite
+written down in any spec.
 
-Documented in `DECISIONS.md` 2026-05-05. The five paths I considered:
+**Everything is a window. Literally everything.** This is the X11 design choice that surprises people
+whose mental model came from macOS or Windows. In modern systems, a "window" is the framed rectangle
+with a close button, and everything inside is a "widget" or a "view" handled by the application layer.
+In X11 it's the opposite. Every button is a window. Every scrollbar is a window. Every label is a
+window. The blinking cursor inside a Motif text field is, you guessed it, a window. A "window" in X11
+is more of an abstract construct than a thing you see.
 
-1. **Frame buffer scraper.** Custom daemon on the Sun that mmaps `/dev/cgsix0`, diffs tiles, ships pixels to the Mac. Like VNC but custom.
-2. **Modified Xlib on the Sun.** Replace the transport layer in libX11 with one that talks to a custom server elsewhere.
-3. **Custom SBus framebuffer card.** Dual-port RAM, FPGA, a Pi 5 watching the back side of the framebuffer memory and shipping pixels to the Mac. Pretends to be a cgthree to the Sun.
-4. **Just use Xvnc.** Zero code, works tonight.
-5. **Swift X server.** Build a modern X server in Swift on macOS, real Sun X clients connect to it.
+An xcalc has dozens of X windows: the top-level shell, the form widget that contains everything, the
+LCD readout, and one X window for every key on the keypad. The application I wrote in Motif, quickplot,
+contains hundreds of windows.
 
-## Why Swift X server won
+An X server implementation has to track all of them as first-class objects with parents, children,
+mapping state, event masks, properties, geometry, z-order placement, message inheritance, the works.
+When the client program calls `CreateWindow`, that window might be a top-level shell or a single button
+inside one.
 
-- Lowest bandwidth (X requests are tiny compared to pixel data)
-- Best output quality (modern font smoothing applied to drawing primitives in flight, not to bitmaps after the fact)
-- Lowest Sun-side load (Sun sends drawing commands; Mac does the heavy work)
-- Native macOS integration possible (rootless mode, one NSWindow per top-level X window)
+The reason is network transparency, again. If buttons were "just drawing the client did on top of one big
+window," the client would have to know where every button was at all times to dispatch clicks. By making
+each button its own server-side window, the X server can route a `ButtonPress` event to the right window
+based on pointer position, and the client just listens. The toolkit on the client side gets clean events
+with no geometry tracking.
 
-## Why the others lost
+The cost is a lot more server state than a modern compositor carries. Whether to mirror every X window
+as an NSView on the Mac side, or to fake it with a single NSView and clip internally, is a non-trivial
+design question. The trade-offs aren't obvious until you start drawing.
 
-- **Framebuffer scraper**: ships way more data than needed, results look like blurry pixel-doubled VNC. Doable in a weekend but the result is "VNC but worse."
-- **Modified Xlib**: brittle across SunOS 4 vs Solaris 2, no clean security boundary, deployment hassle.
-- **SBus card**: hardware engineering well outside my skill set. Filed as "if a collaborator appears."
-- **Xvnc**: works tonight but doesn't move the project forward. Useful as a baseline reference but not the goal.
+**The wire protocol stabilized in 1989 and has been backward-compatible ever since.** An xterm binary
+built against libX11 in 1990 connects to a 2025 X.org server and works. That stability is the central
+reason an X server in Swift, written in a week, is even possible. The surface area I have to implement
+is fixed and well-documented, and with the aid of Claude-Code, a doable thing (I think).
 
-## The Pi-as-frontend decision
 
-The single most important architectural decision in the project, also from day one. The Sun stays vintage and dumb. A Raspberry Pi on the Sun's LAN handles all modern protocol concerns (TLS, CrossFeed, encryption, auth). One Pi can serve multiple Suns; the Sun is never exposed to the internet directly. SunOS 4.1.4 can't do modern TLS anyway.
+## X11 as a protocol vs X11 as an implementation
 
-This eliminates an entire category of work and makes the whole thing cleanly tractable.
+Worth saying directly because it's the answer to "isn't writing an X server insane?"
 
-## The four-product plan
+X11 has two lives. As a **protocol**, it's one of the top technical successes of the Unix era. Wire
+format stable since 1987. Backward-compatible for forty years. Network transparency. Open-source
+reference implementation under a permissive license. The toolkit ecosystem on top. X11 sat alongside
+TCP/IP and Unix itself and the C ABI as foundational infrastructure that the entire workstation era was
+built on.
 
-Day-one structure for what gets built and in what order:
+As an **implementation**, X.org is half a million lines of accumulated extensions, work-arounds, and
+architectural assumptions that don't survive modern displays or modern security models. The Render and
+Composite extensions bolted thick-client rendering onto a server-side-drawing architecture and never
+quite fit. The xhost security model isn't fixable without throwing it out. Wayland exists because the
+protocol-side X11 is fine but the implementation is a tar pit.
 
-1. Capture tool (Product 1). A passive proxy/recorder that captures real X traffic between two Suns. Building this first means the test corpus for Product 2 comes from real workloads, not from the protocol spec.
-2. Sun-to-Sun Pi bridge (Product 3). CrossFeed transport validated against two reference Xsun implementations before introducing my own server as a third unknown.
-3. Swift X server (Product 2). The main artifact.
-4. Full WAN session via Pi bridge + Swift server (Product 4). Integration only.
+swift-x targets the protocol, not the implementation. The Sun clients I care about, from 1987 through
+1996, use the core protocol that's been stable since X11R3. They don't use Render, don't use Composite,
+don't use RANDR, don't use GLX. The surface I have to implement is exactly the surface with the strongest
+stability guarantee. The successful part of X11 is exactly the part I get to take advantage of, and I
+get to write the rendering layer for a 2026 Mac instead of a 1987 cgsix framebuffer driver.
 
-In practice the order shifted: Product 1 first, then Product 2 (skipping the Pi bridge for now since LAN mode works fine). Pi bridge and CrossFeed are post-Product-2 work.
+This is why writing a new X server in five days isn't insane. I'm not reimplementing X.org. I'm
+implementing a 40-year-stable wire protocol on top of Core Graphics, with a captured corpus of real Sun
+traffic as ground truth.
 
-## What Todd should add
+Xlib at its heart is quite simple. It's a line-level expression of the wire protocol, and I know it
+quite well. Everything in classic X (Xt, Motif, OPEN LOOK) eventually comes down to Xlib bytes on a
+TCP stream. There are protocol extensions, and they fall into the same framing. If you understand the
+wire protocol, you understand the system. That was the judgment call on day one. The protocol layer
+was tractable to write from scratch because I knew it quite well. Err, at least I did in 1994.
 
-- The personal angle. Why this project, why now, what triggered the start.
-- The connection to OldSilicon.com and the retirement-project arc.
-- The "I'd been thinking about this for X months" backstory if any.
-- What the day looked like. Did the four-product plan get written before any code? Was there a notebook session? A whiteboard? A conversation?
-- The "this seemed doable" judgment call. What made you confident the X protocol layer was tractable to write from scratch, vs the project being a 2-year slog?
-- Voice on the alternatives. The frame buffer scraper "VNC but worse" framing came from somewhere visceral; same with "imake is the single biggest barrier to anyone touching X11 source today."
+## A note on how this was actually built
 
-## Evidence assets to gather (post-week)
+This is the load-bearing paragraph for a reader who's seen four AI hype cycles and isn't here for the
+fifth. I am not going to try to convince you AI made this project possible. I'm going to tell you what
+the partnership shape actually was, and you can decide.
 
-- Side-by-side screenshot: same `xterm -fa Monaco -fs 12` on XQuartz vs swift-x, same Studio Display, default settings. The single strongest "just use XQuartz" rebuttal.
-- Same for xclock (the analog clock with antialiased curves shows the difference even more).
-- Optional: WM_NAME-titled NSWindow on swift-x next to XQuartz's X11-titled window for the chrome comparison.
+I'm the architect. Thirty years of writing C and C++ on Unix, Linux, Windows and the Mac.
+
+People think of AI agentic coding as "Build me an X server for my Mac." Well, that's not the way it
+works. It's more like having a co-collaborator. You spend a lot of time talking with Claude about the
+project, the design goals, the methodology. Then Claude builds a piece, you test it, you check the
+work, you ask more questions.
+
+What Claude does well: reads source files I don't have time to read. The X11R6 codebase is half a
+million lines, the relevant pieces live in `lib/Xt` and `lib/Xm`, and Claude has read more of them this
+week than I have in the last twenty years. Writes test scaffolding I don't want to write. Runs builds
+and tests in tight loops while I think about the next architectural problem. Notices contradictions
+across multiple design docs faster than I do. Holds the X spec in working memory across hour-long
+debugging sessions in a way I genuinely can't.
+
+What Claude does badly: confidently wrong about subtle things, sometimes. Misjudges scope when I haven't
+bounded it. Suggests refactors that look reasonable but break invariants I haven't articulated. Doesn't
+have the thirty-year context to know which API rough edges in X11 are load-bearing and which are
+historical accidents worth cleaning up. Claude knows how the collective of people think it works, knows
+how it's documented to work, but hasn't actually written an application using that information.
+
+## Closing
+
+On day five, my SPARCstation 2 in the basement booted my thirty-year-old Motif app, connected to an X
+server I'd written this week in Swift, and dispatched its widget callbacks against it. The plot
+rendered. The buttons clicked. The dialog opened when I asked it to. Things were not all the way right
+(still aren't), but quickplot displayed on the Mac, fast, from a real Sun, over the LAN, looking like a
+Mac app.
+
+That's the rest of this series.
+
+---
 
 ## Anchors for fact-check pass
 
 - Files: `PROJECT.md`, `ARCHITECTURE.md`, `DECISIONS.md` (entries dated 2026-05-05)
 - Initial commit: `96021e3` 2026-05-05 "Initial commit: Phase 1 capture tool + framer for swift-x"
-- README commit: `01b40e4` 2026-05-05 "Add README"
-- Constraints chosen on day one: X11R5/R6 only, Swift on Mac, C on Pi, no cloud dependencies, no imake, minimal tooling, tests come from real captured traffic
-- The Sun's `DISPLAY` environment variable as the only client-side configuration. The Sun stays unmodified.
+- README commit: `01b40e4` 2026-05-05
+- Constraints chosen day one: X11R5/R6 only, Swift on Mac, C on Pi, no cloud dependencies, no imake,
+  minimal tooling, tests come from real captured traffic
+- The Sun's `DISPLAY` env var is the only client-side configuration
+
+## Evidence assets to gather (post-week)
+
+- Side-by-side screenshot: same `xterm -fa Monaco -fs 12` on XQuartz vs swift-x, same Studio Display,
+  default settings. The single strongest "just use XQuartz" rebuttal.
+- Same for xclock (antialiased curves show the difference even more).
+- WM_NAME-titled NSWindow on swift-x next to XQuartz's X11-titled window for the chrome comparison.
 
 ## Working title alternatives
 
+- "I have a basement full of Sun workstations"
 - "Why I'm writing an X server"
 - "Five paths and the one I took"
 - "Building swift-x: day one"

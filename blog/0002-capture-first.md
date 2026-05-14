@@ -1,107 +1,197 @@
-# Post 2: Capture tool first
+# Post 2: Capture before code
 
-**Date range**: May 5 - May 6, 2026
-**One-line elevator**: Build the wire-format codec and a passive proxy/recorder before writing a single line of X server code, so that every later test is grounded in real-Sun behavior instead of in protocol-spec interpretation.
+Day one of MacXserver, I didn't write any X server code. I wrote a codec for the X11 wire protocol and a
+passive proxy that sits between two Suns on the LAN and records every byte going in both directions.
+Forty-eight hours later I had a corpus of real captured sessions for xterm, xclock, xeyes, xcalc, and
+quickplot, all decoded byte-for-byte by the codec I'd just written, all checked into the repo as test
+fixtures.
 
-## What this post covers
+Then I started thinking about the server.
 
-Product 1: the capture tool. Why it shipped before the server, what it does, what it produces, and how the captured corpus shaped everything downstream.
+This is the patience move. The X protocol spec is precise about wire format. It tells you what's legal.
+It does not tell you what a 1995 Sun client actually does in practice. The Xt and Motif libraries make
+assumptions about server behavior that aren't quite written down anywhere. xterm on SunOS 4.1.4 has its
+own per-build quirks. If I'd started by guessing at SetupAccepted byte layouts and seeing what hung, I'd
+be debugging two unknowns at once: my code, and my mental model of what real Sun bytes actually look
+like on the wire.
 
-## Thread anchor: protocol vs implementation
+So the order of operations was: codec first, capture corpus second, server third. The codec lives in its
+own Swift package (I call it the framer). The capture tool is another package on top of it. The server
+that this series is mostly about will import both. Every test I write for the server is going to have,
+as its ground truth, real bytes captured from a real Sun.
 
-This is the post where "protocol-not-implementation" gets the most concrete. The framer IS the protocol. It knows nothing about rendering, nothing about X.org's internal data structures, nothing about display hardware. Just the bytes on the wire that X11R6 specified in 1989. Capturing real Sun traffic and decoding it byte-for-byte is exactly how you isolate the stable protocol layer from the implementation it happens to be running on. Worth weaving in early in the body.
+If you want the byte-level walkthrough of what xterm actually sends across the wire to an X server, I
+wrote a companion piece on OldSilicon.com with Claude that walks an xterm startup byte by byte against
+the X protocol spec. This post is the meta-story: why I built the codec before the server, and what
+that bought me.
 
-## Setting
+## The framer
 
-The X11 protocol spec is well-documented (XCB.PDF and the OReilly volumes), but a spec tells you what's *legal*, not what real clients actually do. The Xt and Motif libraries from 1995 make assumptions about server behavior that aren't in any spec. The only ground truth is captured traffic from real Sun workstations.
+A pure protocol codec for X11 wire format. Decoders and encoders for requests, replies, events, and
+errors. No state tracking, no networking, no resource management. Bytes in, structured values out, and
+back.
 
-## The framer library
+Scope: connection setup in both byte orders, both auth paths. Every core request defined in X11R6
+(about 120 of them). All core replies, events, and errors. Encode for everything in scope, even though
+decode alone would have been enough for the capture tool. The server I'd write next was going to need
+encode. Doing it once and well meant not doing it twice.
 
-A pure protocol codec for X11 wire format. Decoders and encoders for requests, replies, events, and errors. No state tracking, no networking. Bytes in, structured values out.
+Extensions deliberately deferred, with two exceptions: SHAPE (for cursor outlines and the override-
+redirect popup windows Motif likes to use) and BIG-REQUESTS (because some clients send requests over
+256KB). Everything else, Render, Composite, RANDR, GLX, is out of scope. The Sun clients I care about,
+from 1987 through 1996, don't use those.
 
-Scope for Product 1:
-- Connection setup (both byte orders, both auth paths)
-- All core requests defined in X11R6 (~120 of them)
-- Core replies, events, errors
-- Encode for everything in scope (decode-only would suffice for Product 1, but Product 2 needs encode and doing it once avoids doing it twice)
+The framer ended up being the connective tissue of the whole project. Every piece of MacXserver reads
+or writes through it. The capture tool decodes through it. The server decodes incoming requests and
+encodes outgoing replies through it. One protocol library, multiple consumers.
 
-What it doesn't do:
-- Track resources (windows, GCs) as state
-- Networking
-- Extensions, except SHAPE and BIG-REQUESTS for Product 2
+## The capture tool
 
-The framer is what makes the four products cohere into one project. It's reused by the capture tool, the X server, and eventually (in a C or Go port) the Pi bridge.
+A Swift CLI that sits between two Suns on the LAN as a passive TCP proxy. Sun A is configured with
+`DISPLAY=mac.local:0`. The Mac listens on `:6000` and holds the port. When Sun A opens an X
+connection (because the user ran `xterm` or whatever), the Mac opens an outbound TCP connection to
+`sun-b:6000`, the real Xsun on the second Sun, and shovels bytes both ways while the framer decodes a
+side copy. Sun A thinks it's talking to the real X server. Sun B thinks it's talking to a real client.
+The Mac records everything that flies between them.
 
-## The capture tool itself
+Three subcommands. Default is proxy and record:
+`swiftx-capture --listen :6000 --forward sun-b:6000 --output session.xtap`. The `dump` subcommand reads
+a `.xtap` file and prints chronological decoded packets. The `replay` subcommand reads a `.xtap` and
+feeds the client-to-server bytes back into a target X server.
 
-A Swift CLI that sits between two Suns on the LAN as a passive proxy. Sun A is configured with `DISPLAY=mac.local:0`. The Mac listens on TCP :6000 and holds the port (no real X server). When Sun A connects, the Mac opens an outbound TCP connection to `sun-b:6000` (the real Xsun) and shovels bytes both ways while the framer decodes a side copy.
+The recorded file format is simple. An 8-byte header (`XTAP` magic plus version), then direction-
+tagged framed records: a direction byte, an 8-byte nanosecond timestamp, a 4-byte payload length, then
+the payload bytes verbatim. The payload is X protocol bytes unchanged. Not pcap. The X protocol sits
+on a single TCP byte stream and the container only needs direction, timestamp, length.
 
-Three subcommands:
-- (default): proxy + record. `swiftx-capture --listen :6000 --forward sun-b:6000 --output session.xtap`
-- `dump`: chronological decoded-packet output from a `.xtap` file
-- `replay`: feed C2S bytes from a capture back into a target X server
-
-## Capture file format
-
-Binary frames plus a JSON sidecar.
-
-`session.xtap`: 8-byte header (`XTAP` magic + version) followed by frames. Each frame is direction (1 byte), nanosecond timestamp (8 bytes little-endian), payload length (4 bytes little-endian), payload bytes. The payload is X protocol bytes verbatim.
-
-`session.xtap.json`: timing metadata, byte counts, recorded-at timestamp, auth name. Makes captures parseable in isolation.
-
-Why not pcap: pcap operates at the IP layer; we don't need that level. The X protocol sits on a TCP byte stream, the frame container only needs direction + timestamp + length.
+A separate `session.xtap.json` sidecar holds metadata: byte counts, timing, recorded-at timestamp, the
+auth name. Makes captures parseable in isolation without spelunking the binary.
 
 ## The corpus
 
-Recorded sessions from real Suns, checked into the repo as test fixtures:
+Real sessions from real Suns, checked in as test fixtures. xterm (the canonical first capture, the
+canary for everything text-related). xclock (animation, simple, no input, useful for event timing).
+xeyes (cursor tracking, the input event paths). xcalc (Xt and the Athena widget toolkit). quickplot
+(my own Motif app from thirty years ago, the real workload I care about).
 
-- xterm (the canonical first capture, lots of font work)
-- xclock (animation, simple, event timing)
-- xeyes (cursor tracking, input event coverage)
-- xcalc (Xt + Athena widget toolkit)
-- quickplot (my custom Motif app, the real workload)
+Each capture has a paired markdown README describing what was on the screen and what got clicked. The
+corpus is both the framer's regression test and the ground truth for every later server bug. When
+something breaks, the question is always "what does the Sun-to-Sun gold trace do here that we don't?"
+The corpus is the gold.
 
-Each capture is paired with a markdown README describing what was on screen and what got clicked.
+twm, CDE, and OpenWindows session-level captures were on the early list and got cut. The corpus's job
+is framer regression testing plus protocol ground truth for the server tests; both well served by the
+five apps I have. Adding more captures wasn't earning its keep.
 
-twm/CDE/OpenWindows captures were initially on the list, then dropped. The corpus's job is framer regression testing and article source material. Both well-served by what we have. Adding more captures for completeness wasn't earning its keep.
+## The OldSilicon article as a forcing function
 
-## The article
+I wrote the X11 wire-protocol piece on OldSilicon.com with Claude the same week the codec landed. The
+article walked through an xterm startup byte by byte, annotated and mapped to the X protocol spec
+sections. It served two purposes, neither of which was "I wanted to write an article."
 
-Written and published the same week. Walks through an xterm session on the wire with annotated bytes mapped to x.org spec sections. The article was both a forcing function (it required the dump output to be readable enough to publish) and a tool (it taught me the protocol in detail, since you can't explain something you don't actually understand).
+First, it forced the `dump` output to be readable enough to publish. The decoded format had to make
+sense to a reader who hadn't looked at the spec in a while. That pressure caught half a dozen places
+where the framer was right but the human-facing output was wrong: lazy field names, inconsistent
+number bases, missing context. The article shipped polished, and the framer benefited from the
+pressure.
 
-## Replay tool
+Second, writing it made me actually understand the protocol, not just compile it. You can't explain
+something you don't actually understand. Several decisions the server code makes later (sequence-
+number invariants, the post-Map event sequence, how property bytes encode trailing nulls) came from "I
+had to explain this in writing and realized I didn't know why it had to be that way." Writing forced
+the missing pieces forward.
 
-Subcommand of the capture binary. Reads a `.xtap`, opens TCP to a target, sends the C2S bytes. Two flags:
-- `--realtime` paces each frame by its timestamp. Without it, replay pumps as fast as possible (useful for smoke tests, useless for visual inspection because drawing requests land before the WM has reparented the window).
-- `--hold` keeps the connection open after the last frame, until SIGINT. Without it, the server's close-down tears down the windows before they're visible.
+It was also a real Claude-Code moment. Claude read the X protocol spec pages I pointed at, drafted
+byte-level walkthroughs that I corrected against the actual captures, and held all the spec details
+across multiple drafting sessions while I kept losing my place between byte tables. The article ended
+up co-authored honestly. The OldSilicon piece opens with "Claude and I wrote" for that reason.
 
-What replay is good for: smoke-testing the framer against real Sun behavior; visual demonstration; bug reproduction against the same Sun.
+## What Claude-Code looks like at this stage of the project
 
-What replay is NOT good for: driving the Swift X server as a regression test. Product 2 hands out different resource-id-bases than the original Sun did, so byte-pump replay against Product 2 fails with `BadIDChoice`. Stateful replay translation would fix this but wasn't built. Replay stays as a smoke test, not a test harness. (`DECISIONS.md` 2026-05-06.)
+The framer wasn't a "write me an X11 decoder" prompt. It was several days of iteration. I knew what
+the byte format had to be (I read the spec the first time in 1991, after all). Claude wrote the Swift.
+I sat with captures, comparing decoded output to the spec section the bytes came from. Round trip,
+correction, round trip, correction. Maybe twenty cycles before the codec passed corpus round-trip
+tests cleanly.
+
+Every round trip was me reading a capture, finding a place the decoder was wrong, telling Claude
+precisely what the bytes meant and where the existing code had misread them, and watching Claude fix
+it. Sometimes I was wrong, Claude pushed back, I'd reread the spec, and Claude was right. That kind of
+push-back is exactly what you want from a competent partner. It's also exactly what people who haven't
+worked this way assume you don't get from AI.
+
+The thing this isn't: me typing "build the framer" and waiting for a deliverable. The thing it is: me
+providing protocol knowledge and judgment, Claude providing fast hands and a working memory that holds
+the spec in view for hours at a time while I jump between captures.
+
+I kept a running set of notes about what I'd asked, what came back wrong the first time, what came
+back right. By the end of the codec week I had a clear sense of where Claude is strong (encode/decode
+mechanics, test scaffolding, refactor execution) and where I have to drive (architectural choices,
+when real-client behavior deviates from the spec, what's load-bearing versus cosmetic). That mapping
+has held up for everything since.
+
+## Replay turns out not to be a test harness
+
+End of day two I had the `replay` subcommand working. Read a `.xtap` file, open a TCP connection to a
+target X server, send the captured client-to-server bytes back. With `--realtime` it paces each frame
+by the original timestamp. With `--hold` it keeps the connection open after the last frame so the
+windows don't get torn down on close.
+
+The original plan was that replay would be the regression test for the swift-x server. Capture once
+from a real Sun, replay against my server, assert the bytes I get back match the bytes the real Xsun
+sent in the gold trace. Automated. Byte-perfect. No Sun required for the daily testing loop.
+
+It doesn't work.
+
+The swift-x server hands out different resource-id-bases than the original Sun did. When a client
+opens an X connection, the server's SetupAccepted reply tells the client what range of resource IDs
+to use for its own windows and pixmaps. Different servers hand out different ranges. The client then
+derives the IDs for its CreateWindow requests from that range. When I replay the captured client-to-
+server bytes verbatim against my own server, the CreateWindow requests reference IDs the original Sun
+allocated, not the IDs my server told the client to use. My server sees those IDs, doesn't recognize
+them, fails the first CreateWindow with `BadIDChoice`. Game over.
+
+Stateful replay translation, rewriting the IDs at the boundary as they fly through, would fix this
+but it was real work I wasn't going to do this week. Logged it in DECISIONS.md: replay is a smoke
+test, not a test harness. The corpus is the framer's regression test (where the codec is the unit
+under test and replay isn't needed). For server testing, live verification against a real Sun is the
+daily loop. Replay stays useful for bug reproduction against the Sun-side stack and for visual
+demonstrations.
+
+Building the wrong tool clearly enough to see exactly why it's the wrong tool is better than spending
+more time abstractly arguing for the right one.
 
 ## Pivotal moment
 
-The first real capture: pointing u5 at the Mac, running xterm, watching the proxy forward bytes faithfully and the framer decode them in real time. xterm bytes flowing across the wire and being decoded byte-for-byte from a 1989 wire format gave the first concrete evidence the rest of the project was doable.
+Pointing u5 at the Mac with `DISPLAY=mac:0`, running xterm, watching the proxy forward bytes
+faithfully while the framer decoded them in real time and the side log filled up with cleanly
+formatted requests. Real xterm bytes flowing across the LAN, decoded byte-for-byte from a 1989 wire
+format, by code Claude and I had written the previous afternoon.
 
-## What Todd should add
+I now had: a working codec, a way to capture real traffic, a corpus of real Sun sessions for the five
+apps that mattered, and a real-time decoder I could leave running while I worked on the server
+itself. Every test the server would ever need to pass was now grounded in real Sun behavior, not in
+my interpretation of the spec.
 
-- The article link (I don't have the URL).
-- What it felt like to see the first proxied xterm session work end-to-end. The "oh, this is real" moment.
-- The pre-framer state. Did the framer come together in a sprint, or was it incremental? What were the moments where the spec was confusing or wrong?
-- The article-writing process. Did writing it surface bugs in the decoder? Did the audience response shape anything?
-- The capture corpus choices. Why xterm first, why xclock as the simplest non-trivial app, why quickplot as the "real workload"?
-- The replay-isn't-a-test-harness realization on 2026-05-06. That's a real "huh, my plan was wrong" moment worth narrating.
+Time to write a server.
 
-## Anchors for fact-check pass
+---
 
-- Files: `PRODUCT_1_CAPTURE.md` (full spec), `DECISIONS.md` (2026-05-05 capture-tool-first entry, 2026-05-06 replay-not-test-harness entry)
-- Commits: `96021e3` 2026-05-05 initial commit, `01b40e4` README, `c89f576` 2026-05-06 replay subcommand, `c00832b` 2026-05-06 --realtime/--hold flags, `3cbcd32` 2026-05-06 Product 1 close-out (corpus round-trip test + docs)
-- Corpus location: `captures/*.xtap` + `Tests/SwiftXCaptureCoreTests/CorpusRoundTripTests.swift`
-- Framer source: `Sources/Framer/`
-- Capture tool: `Sources/SwiftXCapture/` (executable) + `Sources/SwiftXCaptureCore/` (library)
+## Anchors
+
+- Files: `Sources/Framer/`, `Sources/SwiftXCapture/` (executable), `Sources/SwiftXCaptureCore/`
+  (library), `PRODUCT_1_CAPTURE.md` (full spec), `DECISIONS.md` (2026-05-05 capture-tool-first entry,
+  2026-05-06 replay-not-test-harness entry)
+- Commits: `96021e3` 2026-05-05 "Initial commit: Phase 1 capture tool + framer", `01b40e4`
+  2026-05-05 README, `c89f576` 2026-05-06 replay subcommand, `c00832b` 2026-05-06 `--realtime` and
+  `--hold` flags, `3cbcd32` 2026-05-06 Product 1 close-out (corpus round-trip test plus docs)
+- Corpus location: `captures/*.xtap`, regression test:
+  `Tests/SwiftXCaptureCoreTests/CorpusRoundTripTests.swift`
+- Companion article on OldSilicon.com (URL: [Todd to insert])
 
 ## Working title alternatives
 
 - "Capture before code"
-- "How I built the test corpus for an X server I hadn't started writing"
-- "Product 1: the wire decoder"
+- "The codec came first"
+- "Why I didn't write a single line of server code on day one"
+- "Day one and two: ground truth"
