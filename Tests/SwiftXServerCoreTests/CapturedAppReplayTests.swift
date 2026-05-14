@@ -178,21 +178,22 @@ final class CapturedAppReplayTests: XCTestCase {
             if case .xError(let err) = msg {
                 let isExpectedExtensionProbe = err.errorCode == XErrorCode.request.rawValue
                     && baseline.allowedExtensionOpcodes.contains(err.majorOpcode)
-                // BadWindow on property opcodes is a known replay-vs-live
-                // artifact: gold captures reference Sun-server-internal
-                // window IDs (the Motif drag system at 0x1400001, the CDE
-                // customization daemon at 0x3000008, etc.) that we never
-                // see CreateWindow for, so they're not in our windows table.
-                // Real live clients hit our stub window IDs (0xFFFE_0003,
-                // etc.) and don't trip this. Per XError-honesty policy the
-                // server emits BadWindow correctly; the test acknowledges
-                // it rather than pretending the captured ID is ours.
+                // BadWindow / BadAtom on property opcodes is a known
+                // replay-vs-live artifact: gold captures reference Sun-
+                // server-internal IDs (the Motif drag system, the CDE
+                // customization daemon, Sun-WM-interned atom IDs) that we
+                // never see CreateWindow / InternAtom for, so they're not
+                // in our tables. Real live clients hit our own IDs and
+                // don't trip this. Per XError-honesty policy the server
+                // emits the correct error; the test acknowledges it rather
+                // than pretending the captured ID is ours.
                 let propertyOpcodes: Set<UInt8> = [
                     ChangeProperty.opcode, DeleteProperty.opcode, GetProperty.opcode,
                 ]
-                let isPropertyOpOnUnknownWindow = err.errorCode == XErrorCode.window.rawValue
+                let isPropertyOpOnUnknownResource = (err.errorCode == XErrorCode.window.rawValue
+                    || err.errorCode == XErrorCode.atom.rawValue)
                     && propertyOpcodes.contains(err.majorOpcode)
-                if !isExpectedExtensionProbe && !isPropertyOpOnUnknownWindow {
+                if !isExpectedExtensionProbe && !isPropertyOpOnUnknownResource {
                     unexpectedErrors.append(
                         "code=\(err.errorCode) majorOp=\(err.majorOpcode) seq=\(err.sequenceNumber(byteOrder: byteOrder))"
                     )

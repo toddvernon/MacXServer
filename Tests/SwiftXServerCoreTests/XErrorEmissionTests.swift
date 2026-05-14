@@ -455,6 +455,68 @@ final class XErrorEmissionTests: XCTestCase {
         XCTAssertEqual(err.majorOpcode, CreateGlyphCursor.opcode)
     }
 
+    func testChangePropertyWithUnknownAtomEmitsBadAtom() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        // Window must exist for the property handler to reach the atom check.
+        let wid: UInt32 = ServerConfig.default.resourceIdBase + 1
+        _ = session.feed(Request.createWindow(CreateWindow(
+            depth: 8, wid: wid, parent: ServerConfig.default.rootWindowId,
+            x: 0, y: 0, width: 10, height: 10, borderWidth: 0,
+            windowClass: .inputOutput, visual: ServerConfig.default.rootVisualId,
+            valueMask: 0, valueList: []
+        )).encode(byteOrder: .lsbFirst))
+
+        let bogusAtom: UInt32 = 0xFFFF_FF00
+        let change = Request.changeProperty(ChangeProperty(
+            mode: .replace, window: wid, property: bogusAtom,
+            type: 31, format: .format8, data: [0x01]
+        ))
+        let bytes = session.feed(change.encode(byteOrder: .lsbFirst))
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.atom.rawValue)
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogusAtom)
+        XCTAssertEqual(err.majorOpcode, ChangeProperty.opcode)
+    }
+
+    func testGetPropertyWithUnknownAtomEmitsBadAtom() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogusAtom: UInt32 = 0xFEED_F00D
+        let req = Request.getProperty(GetProperty(
+            delete: false, window: ServerConfig.default.rootWindowId,
+            property: bogusAtom, type: 0, longOffset: 0, longLength: 100
+        ))
+        let bytes = session.feed(req.encode(byteOrder: .lsbFirst))
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.atom.rawValue)
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogusAtom)
+        XCTAssertEqual(err.majorOpcode, GetProperty.opcode)
+    }
+
+    func testGetPropertyWithPredefinedAtomSucceeds() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        // Atom 23 = WM_HINTS per X11 spec; predefined in our AtomTable.
+        let req = Request.getProperty(GetProperty(
+            delete: false, window: ServerConfig.default.rootWindowId,
+            property: 23, type: 0, longOffset: 0, longLength: 100
+        ))
+        let bytes = session.feed(req.encode(byteOrder: .lsbFirst))
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .reply = msg else {
+            XCTFail("expected GetProperty reply for predefined atom, got \(msg)")
+            return
+        }
+    }
+
     func testEmittedErrorCarriesCurrentSequenceNumber() throws {
         // After setup the session's sequenceNumber is 0; feed one InternAtom
         // request to advance it, then emit an error and assert the seq field

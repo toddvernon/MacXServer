@@ -53,12 +53,24 @@ final class XclockReplayTests: XCTestCase {
             case .reply: replyCount += 1
             case .event: eventCount += 1
             case .xError(let err):
-                errorCount += 1
-                XCTFail("server emitted XError code=\(err.errorCode) majorOp=\(err.majorOpcode) seq=\(err.sequenceNumber(byteOrder: byteOrder))")
+                // Same replay-vs-live tolerance as CapturedAppReplayTests:
+                // BadWindow / BadAtom on property opcodes 18/19/20 are
+                // expected when captured streams reference Sun-server-
+                // internal IDs (Motif drag system, WM-interned atoms,
+                // etc.) that we never see Create/InternAtom for. Live
+                // clients hit our own IDs and don't trip this.
+                let propertyOpcodes: Set<UInt8> = [18, 19, 20]
+                let isExpectedReplayArtifact = (err.errorCode == XErrorCode.window.rawValue
+                    || err.errorCode == XErrorCode.atom.rawValue)
+                    && propertyOpcodes.contains(err.majorOpcode)
+                if !isExpectedReplayArtifact {
+                    errorCount += 1
+                    XCTFail("server emitted XError code=\(err.errorCode) majorOp=\(err.majorOpcode) seq=\(err.sequenceNumber(byteOrder: byteOrder))")
+                }
             }
             offset += msg.bytes.count
         }
-        XCTAssertEqual(errorCount, 0, "must not emit XErrors during xclock replay")
+        XCTAssertEqual(errorCount, 0, "must not emit unexpected XErrors during xclock replay")
         XCTAssertGreaterThan(replyCount, 0, "expected some replies (InternAtom, AllocColor, etc.)")
         // Events expected: M2 map sequence (Reparent, Configure, Map, plus
         // descendant MapNotify on inner) + M3 Expose on inner from each

@@ -1617,6 +1617,18 @@ public final class ServerSession: @unchecked Sendable {
         return false
     }
 
+    /// Validate an atom ID. Returns true when the atom is in the AtomTable
+    /// (predefined atoms 1..68 are preseeded, dynamically-interned atoms
+    /// from InternAtom requests are tracked). Emits BadAtom and returns
+    /// false otherwise. Atom 0 (None sentinel) is the caller's
+    /// responsibility — most callers should skip validation for atom==0
+    /// since spec uses it as a "no atom" marker on some requests.
+    func validateAtom(_ atom: UInt32, majorOpcode: UInt8) -> Bool {
+        if atoms.name(for: atom) != nil { return true }
+        emitError(.atom, majorOpcode: majorOpcode, badResourceId: atom)
+        return false
+    }
+
     /// Validate a graphics context argument. Returns the GCEntry when known;
     /// emits BadGC referencing the bad ID and returns nil otherwise. Used by
     /// every handler that takes a `gc` argument (draw ops, ChangeGC, FreeGC,
@@ -2887,6 +2899,15 @@ public final class ServerSession: @unchecked Sendable {
 
         case .changeProperty(let r):
             guard validateWindowOrRoot(r.window, majorOpcode: ChangeProperty.opcode) else { break }
+            // Property must be a valid atom (cannot be None=0). Type is a
+            // type atom — spec doesn't allow None either, but we accept
+            // type=0 as an effective no-op type tag since clients almost
+            // never do that and the resulting property reads back with
+            // type=0 (caller's choice).
+            guard validateAtom(r.property, majorOpcode: ChangeProperty.opcode) else { break }
+            if r.type != 0 {
+                guard validateAtom(r.type, majorOpcode: ChangeProperty.opcode) else { break }
+            }
             properties.change(
                 window: r.window, property: r.property, type: r.type,
                 format: r.format.rawValue, mode: r.mode.rawValue, value: r.data
@@ -2941,6 +2962,7 @@ public final class ServerSession: @unchecked Sendable {
 
         case .deleteProperty(let r):
             guard validateWindowOrRoot(r.window, majorOpcode: DeleteProperty.opcode) else { break }
+            guard validateAtom(r.property, majorOpcode: DeleteProperty.opcode) else { break }
             // Per spec: PropertyNotify with state=Deleted fires only if the
             // property actually existed before the delete.
             let existed = properties.get(window: r.window, property: r.property) != nil
@@ -2951,6 +2973,11 @@ public final class ServerSession: @unchecked Sendable {
 
         case .getProperty(let r):
             guard validateWindowOrRoot(r.window, majorOpcode: GetProperty.opcode) else { break }
+            guard validateAtom(r.property, majorOpcode: GetProperty.opcode) else { break }
+            // r.type = 0 means AnyPropertyType per spec — skip validation.
+            if r.type != 0 {
+                guard validateAtom(r.type, majorOpcode: GetProperty.opcode) else { break }
+            }
             let reply: GetPropertyReply
             let existing = properties.get(window: r.window, property: r.property)
             if let entry = existing {
