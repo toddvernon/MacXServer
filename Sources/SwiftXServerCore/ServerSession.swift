@@ -3185,9 +3185,9 @@ public final class ServerSession: @unchecked Sendable {
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .getGeometry(let r):
-            // Drawable can be a window or pixmap. We answer for windows
-            // (most common case xterm cares about); for pixmaps return
-            // tracked dimensions with depth from the pixmap entry.
+            // Drawable can be a window (incl. root) or pixmap. Unknown
+            // drawable → BadDrawable; silent-log was a wedging lie since the
+            // client blocks in _XReply waiting for a response.
             if let w = windows.get(r.drawable) {
                 let reply = GetGeometryReply(
                     sequenceNumber: sequenceNumber,
@@ -3206,11 +3206,32 @@ public final class ServerSession: @unchecked Sendable {
                     width: p.width, height: p.height, borderWidth: 0
                 )
                 outbound.append(reply.encode(byteOrder: byteOrder))
+            } else if r.drawable == config.rootWindowId {
+                // Root isn't in the windows table; synthesize from screen
+                // config. Root depth is 8 per SetupAccepted.
+                let reply = GetGeometryReply(
+                    sequenceNumber: sequenceNumber,
+                    depth: 8,
+                    root: config.rootWindowId,
+                    x: 0, y: 0,
+                    width: config.widthInPixels,
+                    height: config.heightInPixels,
+                    borderWidth: 0
+                )
+                outbound.append(reply.encode(byteOrder: byteOrder))
             } else {
-                log?.log("GetGeometry: unknown drawable 0x\(String(r.drawable, radix: 16))")
+                emitError(.drawable, majorOpcode: GetGeometry.opcode, badResourceId: r.drawable)
             }
 
         case .queryBestSize(let r):
+            // Spec takes a drawable to identify the screen/depth context.
+            // We don't actually use it for sizing, but still validate per
+            // XError-honesty policy — clients passing a bogus drawable
+            // should learn about it.
+            if !isKnownDrawable(r.drawable) {
+                emitError(.drawable, majorOpcode: QueryBestSize.opcode, badResourceId: r.drawable)
+                break
+            }
             // Pragmatic reply. For Cursor class, return 16×16 — the canonical
             // X cursor size; doesn't matter much because we substitute NSCursor.
             // For Tile / Stipple, echo the requested dimensions back so the

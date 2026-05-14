@@ -133,6 +133,62 @@ final class XErrorEmissionTests: XCTestCase {
         XCTAssertTrue(session.outbound.drain().isEmpty, "must not emit XError for known-but-unrenderable drawable")
     }
 
+    func testGetGeometryOnUnknownDrawableEmitsBadDrawable() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogus: UInt32 = 0xFEEDFACE
+        let bytes = session.feed(
+            Request.getGeometry(GetGeometry(drawable: bogus)).encode(byteOrder: .lsbFirst)
+        )
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.drawable.rawValue)
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogus)
+        XCTAssertEqual(err.majorOpcode, GetGeometry.opcode)
+    }
+
+    func testGetGeometryOnRootReturnsScreenDimensions() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bytes = session.feed(
+            Request.getGeometry(GetGeometry(drawable: ServerConfig.default.rootWindowId))
+                .encode(byteOrder: .lsbFirst)
+        )
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .reply(let reply) = msg else {
+            XCTFail("expected reply, got \(msg)")
+            return
+        }
+        let parsed = try GetGeometryReply.decode(from: reply.bytes, byteOrder: .lsbFirst)
+        XCTAssertEqual(parsed.root, ServerConfig.default.rootWindowId)
+        XCTAssertEqual(parsed.width, ServerConfig.default.widthInPixels)
+        XCTAssertEqual(parsed.height, ServerConfig.default.heightInPixels)
+        XCTAssertEqual(parsed.x, 0)
+        XCTAssertEqual(parsed.y, 0)
+    }
+
+    func testQueryBestSizeOnUnknownDrawableEmitsBadDrawable() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogus: UInt32 = 0x99999999
+        let bytes = session.feed(
+            Request.queryBestSize(QueryBestSize(
+                sizeClass: .cursor, drawable: bogus, width: 16, height: 16
+            )).encode(byteOrder: .lsbFirst)
+        )
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.drawable.rawValue)
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogus)
+        XCTAssertEqual(err.majorOpcode, QueryBestSize.opcode)
+    }
+
     func testEmittedErrorCarriesCurrentSequenceNumber() throws {
         // After setup the session's sequenceNumber is 0; feed one InternAtom
         // request to advance it, then emit an error and assert the seq field
