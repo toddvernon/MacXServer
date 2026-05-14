@@ -308,6 +308,24 @@ Validated end-to-end against xfontsel font-menu drag-and-select on a real SS2 ov
 
 **Net status**: dt-apps run, accept input, have correct geometry, and pass through every protocol-level checkpoint. The visual gap is button-shadow + button-label drawing. Acceptable parking point given dt-apps are a stretch goal beyond the core PRODUCT_2_SERVER.md scope.
 
+## 2026-05-13 — XError honesty becomes the default
+
+**Decision**: shift the server from "forgiving by default" to "XError-honest by default." When a request can't be served, emit the correct XError on the wire and log the condition. Faking a success to dodge an error becomes a documented exception, not an unspoken pattern.
+
+**Why now**: the forgiving-stub pattern (empty `GetProperty`, synthetic `AllocColor` pixels, track-and-ignore clip rectangles, silent-drop unknown opcodes) was a deliberate trade for the M1–M3 push. Each stub unblocked dependent work; replay-as-test required a server that didn't choke on Sun-captured bytes referencing Sun-allocated IDs; we knew it was tech debt. That was the right call at the time.
+
+The trade has flipped. M3 is done and we're in the comparison-and-diagnostic phase: real clients, diffs against gold captures, finding out *why* swiftx behaves differently. The same forgiving stubs that bought velocity now hide the divergences we're trying to find. Concrete example surfaced by `swiftx-capture diff` on 2026-05-13: the CreateGC `mask=0xc` (gold) vs `mask=0x8` (swiftx) divergence shows up identically in xeyes *and* dtcalc, plausibly driven by `GetProperty(RESOURCE_MANAGER)` returning empty so the client falls back to compiled-in defaults. That class of bug is invisibly absorbed by a forgiving stub and would either resolve or be cleanly ruled out if we returned the correct reply or the correct error.
+
+**Operational rules (also in `CLAUDE.md`)**:
+
+1. **XErrors on the wire, not internal panics.** Emit `BadWindow`, `BadValue`, `BadAtom`, etc. per the X11 spec. Real clients handle these routinely. In tests, an XError emitted on a path we claim to support is a failure.
+2. **Lying is a ledgered exception.** If we deliberately fake-success because the correct XError would break a working client we care about, the lie must be (a) listed in `SHORTCUTS.md` with a "what real looks like" exit plan, (b) annotated at the call site with a comment referencing the SHORTCUTS entry, and (c) revisited periodically.
+3. **SHORTCUTS is now an active ledger** of currently-justified lies with paid-down dates, not a wish list of things we forgot to do.
+
+**Follow-up sweep**: each open SHORTCUTS entry gets re-classified into one of three buckets: implement-for-real, convert-to-honest-error, or keep-as-justified-lie-with-contract. The fake CDE customization daemon and hardcoded SDT Pixel Set bytes already pass the contract (documented, scoped, rationale clear). Items like "GetProperty returns empty for unknown properties" don't and need either a real Xrm database or honest `BadAtom`.
+
+**Note on replay tests**: `XclockReplayTests` and cousins assert "no XErrors emitted." Once XErrors are real, that splits into "no XErrors on supported paths; expected XErrors on known-bad inputs." More broadly, replay tests are construction tests, not correctness tests. A captured C2S stream is what the client said *given Sun's specific replies*, so replaying it against our different replies can't tell us whether we'd behave like Sun on a live run. The correctness oracle is the diff tool against live captures, not bigger replay suites.
+
 ---
 
 ## Decisions still to make
