@@ -328,6 +328,133 @@ final class XErrorEmissionTests: XCTestCase {
         XCTAssertEqual(err.majorOpcode, FreeGC.opcode)
     }
 
+    func testGetAtomNameOnUnknownAtomEmitsBadAtom() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogusAtom: UInt32 = 0x9999_9999
+        let bytes = session.feed(
+            Request.getAtomName(GetAtomName(atom: bogusAtom)).encode(byteOrder: .lsbFirst)
+        )
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.atom.rawValue)
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogusAtom)
+        XCTAssertEqual(err.majorOpcode, GetAtomName.opcode)
+    }
+
+    func testGetAtomNameOnAtomZeroEmitsBadAtom() throws {
+        // Atom 0 is the spec sentinel `None`, not a valid atom argument.
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bytes = session.feed(
+            Request.getAtomName(GetAtomName(atom: 0)).encode(byteOrder: .lsbFirst)
+        )
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.atom.rawValue)
+    }
+
+    func testGetAtomNameOnPredefinedAtomSucceeds() throws {
+        // Atom 1 = PRIMARY (predefined per X11 spec). Must NOT error.
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bytes = session.feed(
+            Request.getAtomName(GetAtomName(atom: 1)).encode(byteOrder: .lsbFirst)
+        )
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .reply = msg else {
+            XCTFail("expected GetAtomName reply for PRIMARY, got \(msg)")
+            return
+        }
+    }
+
+    func testQueryFontOnUnknownFontEmitsBadFont() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogusFont: UInt32 = 0x4242_4242
+        let bytes = session.feed(
+            Request.queryFont(QueryFont(font: bogusFont)).encode(byteOrder: .lsbFirst)
+        )
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.font.rawValue)
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogusFont)
+        XCTAssertEqual(err.majorOpcode, QueryFont.opcode)
+    }
+
+    func testCloseFontOnUnknownFontEmitsBadFont() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogusFont: UInt32 = 0x3333_3333
+        let bytes = session.feed(
+            Request.closeFont(CloseFont(font: bogusFont)).encode(byteOrder: .lsbFirst)
+        )
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.font.rawValue)
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogusFont)
+        XCTAssertEqual(err.majorOpcode, CloseFont.opcode)
+    }
+
+    func testFreePixmapOnUnknownPixmapEmitsBadPixmap() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogus: UInt32 = 0x77AA77AA
+        let bytes = session.feed(
+            Request.freePixmap(FreePixmap(pixmap: bogus)).encode(byteOrder: .lsbFirst)
+        )
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.pixmap.rawValue)
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogus)
+        XCTAssertEqual(err.majorOpcode, FreePixmap.opcode)
+    }
+
+    func testFreeCursorOnUnknownCursorEmitsBadCursor() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogus: UInt32 = 0x6666_6666
+        let bytes = session.feed(
+            Request.freeCursor(FreeCursor(cursor: bogus)).encode(byteOrder: .lsbFirst)
+        )
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.cursor.rawValue)
+        XCTAssertEqual(err.majorOpcode, FreeCursor.opcode)
+    }
+
+    func testCreateGlyphCursorOnUnknownFontEmitsBadFont() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogusFont: UInt32 = 0xAB_AB_AB_AB
+        let cgc = Request.createGlyphCursor(CreateGlyphCursor(
+            cid: 0x4400000 + 1, sourceFont: bogusFont, maskFont: 0,
+            sourceChar: 0, maskChar: 0,
+            foreRed: 0, foreGreen: 0, foreBlue: 0,
+            backRed: 0xFFFF, backGreen: 0xFFFF, backBlue: 0xFFFF
+        ))
+        let bytes = session.feed(cgc.encode(byteOrder: .lsbFirst))
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.font.rawValue)
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogusFont)
+        XCTAssertEqual(err.majorOpcode, CreateGlyphCursor.opcode)
+    }
+
     func testEmittedErrorCarriesCurrentSequenceNumber() throws {
         // After setup the session's sequenceNumber is 0; feed one InternAtom
         // request to advance it, then emit an error and assert the seq field

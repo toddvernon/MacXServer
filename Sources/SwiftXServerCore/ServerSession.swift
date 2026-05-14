@@ -2701,6 +2701,10 @@ public final class ServerSession: @unchecked Sendable {
             fonts.insert(FontEntry(id: r.fid, name: r.name, resolved: resolved))
 
         case .closeFont(let r):
+            guard fonts.get(r.font) != nil else {
+                emitError(.font, majorOpcode: CloseFont.opcode, badResourceId: r.font)
+                break
+            }
             fonts.remove(r.font)
 
         case .queryFont(let r):
@@ -2708,15 +2712,23 @@ public final class ServerSession: @unchecked Sendable {
             // from the resolved Mac substitute. Per
             // SERVER_RESOLUTION_SCALING_AND_FONTS.md "critical invariant":
             // the metrics we report must match what we actually render.
-            let resolved = fonts.get(r.font)?.resolved
-                ?? FontResolver.resolve(name: "fixed")
-            let reply = makeQueryFontReply(resolved: resolved, sequence: sequenceNumber)
+            // Unknown font → BadFont; previous fallback-to-"fixed" was a
+            // lie that hid use-after-free / never-opened bugs.
+            guard let entry = fonts.get(r.font) else {
+                emitError(.font, majorOpcode: QueryFont.opcode, badResourceId: r.font)
+                break
+            }
+            let reply = makeQueryFontReply(resolved: entry.resolved, sequence: sequenceNumber)
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .createPixmap(let r):
             pixmaps.insert(PixmapEntry(id: r.pid, drawable: r.drawable, depth: r.depth, width: r.width, height: r.height))
 
         case .freePixmap(let r):
+            guard pixmaps.get(r.pixmap) != nil else {
+                emitError(.pixmap, majorOpcode: FreePixmap.opcode, badResourceId: r.pixmap)
+                break
+            }
             pixmaps.remove(r.pixmap)
 
         case .createGC(let r):
@@ -2838,12 +2850,28 @@ public final class ServerSession: @unchecked Sendable {
         // Silent no-ops: requests xclock or other apps may issue that we
         // don't yet wire to rendering. Add real handlers as needed.
         case .createGlyphCursor(let r):
+            // Source and mask fonts must be valid per spec. We don't actually
+            // use them (NSCursor substitution by sourceChar), but a client
+            // passing a bogus font ID should still hear BadFont. maskFont=0
+            // is the spec "None" sentinel and skips validation.
+            guard fonts.get(r.sourceFont) != nil else {
+                emitError(.font, majorOpcode: CreateGlyphCursor.opcode, badResourceId: r.sourceFont)
+                break
+            }
+            if r.maskFont != 0, fonts.get(r.maskFont) == nil {
+                emitError(.font, majorOpcode: CreateGlyphCursor.opcode, badResourceId: r.maskFont)
+                break
+            }
             // Only the source-glyph index matters — we substitute NSCursor at
             // crossing time, ignoring the source/mask fonts and fg/bg colors.
             cursors.insert(CursorEntry(id: r.cid, sourceGlyph: r.sourceChar))
             log?.log("  CreateGlyphCursor cid=0x\(String(r.cid, radix: 16)) sourceChar=\(r.sourceChar)")
 
         case .freeCursor(let r):
+            guard cursors.glyph(r.cursor) != nil else {
+                emitError(.cursor, majorOpcode: FreeCursor.opcode, badResourceId: r.cursor)
+                break
+            }
             cursors.remove(r.cursor)
 
         case .setInputFocus(let r):
@@ -3098,9 +3126,15 @@ public final class ServerSession: @unchecked Sendable {
             // wire conversation flowing; client expects no reply.
             break
 
-        case .recolorCursor:
+        case .recolorCursor(let r):
             // We substitute NSCursor glyphs and don't honor the X-protocol
-            // fg/bg colors. Cosmetic; safe no-op.
+            // fg/bg colors. Cosmetic no-op on the rendering side, but still
+            // validate the cursor argument per spec — clients passing a bad
+            // cursor ID should hear BadCursor.
+            guard cursors.glyph(r.cursor) != nil else {
+                emitError(.cursor, majorOpcode: RecolorCursor.opcode, badResourceId: r.cursor)
+                break
+            }
             break
 
         case .bell(let r):
@@ -3413,12 +3447,14 @@ public final class ServerSession: @unchecked Sendable {
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .getAtomName(let r):
-            // Return the interned name for this atom id, or empty if
-            // unknown. Spec says BadAtom for unknown; we don't emit
-            // XErrors yet (tracked in OPCODE_STATUS), so empty-name is
-            // the closest defensible fallback — Xlib treats it as a
-            // zero-length string rather than a protocol error.
-            let nameStr = atoms.name(for: r.atom) ?? ""
+            // Unknown atom (or atom=0 which is the spec sentinel None) →
+            // BadAtom. Previously returned an empty name as a lie — the
+            // spec is unambiguous here and Xlib clients DO handle BadAtom
+            // (Xt's atom intern path uses it as a probe).
+            guard r.atom != 0, let nameStr = atoms.name(for: r.atom) else {
+                emitError(.atom, majorOpcode: GetAtomName.opcode, badResourceId: r.atom)
+                break
+            }
             let reply = GetAtomNameReply(
                 sequenceNumber: sequenceNumber,
                 name: Array(nameStr.utf8)
