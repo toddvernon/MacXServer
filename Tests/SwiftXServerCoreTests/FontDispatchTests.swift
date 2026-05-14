@@ -35,7 +35,8 @@ private final class RecBridge: WindowBridge, @unchecked Sendable {
 
     func drawImageText8(
         topLevel: UInt32, foreground: RGB16, background: RGB16,
-        font: ResolvedFont, x: Int16, y: Int16, string: [UInt8]
+        font: ResolvedFont, x: Int16, y: Int16, string: [UInt8],
+        clipRectangles: [Framer.Rectangle]?
     ) {
         imageText8Calls.append(ImageText8Call(
             topLevel: topLevel, foreground: foreground, background: background,
@@ -44,7 +45,7 @@ private final class RecBridge: WindowBridge, @unchecked Sendable {
             x: x, y: y, string: string
         ))
     }
-    func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, function: UInt8, rectangles: [Framer.Rectangle]) {
+    func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, function: UInt8, rectangles: [Framer.Rectangle], clipRectangles: [Framer.Rectangle]?) {
         fillRectsCalls.append(FillRectsCall(
             topLevel: topLevel, foreground: foreground, rectangles: rectangles
         ))

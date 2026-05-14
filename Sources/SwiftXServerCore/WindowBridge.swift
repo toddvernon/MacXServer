@@ -203,36 +203,47 @@ public protocol WindowBridge: AnyObject, Sendable {
     // Coordinates are already translated to the top-level NSWindow's view
     // frame by the session before these are called.
 
-    func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment])
-    func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint])
-    func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool)
+    // `clipRectangles` reflects the GC's SetClipRectangles state, already
+    // translated into top-level coordinates by GCState.materialise. nil =
+    // unclipped (the common case); empty array = clip-everything (per X spec,
+    // skip the entire draw); non-empty = clip to the union of rectangles.
+    // Pre-existing clip on the CGContext (set by AppKit / our own layout
+    // pipeline) is preserved: each impl wraps the clip-apply + draw in
+    // saveGState/restoreGState.
+
+    func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Rectangle]?)
+    func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Rectangle]?)
+    func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Rectangle]?)
     /// PolyFillRectangle. `function` is the X GC drawing function — primarily
     /// 3 (GXcopy, overwrite) or 6 (GXxor, toggle). XOR is what Athena/Motif
     /// menu-item highlights use; non-XOR fills destroy text underneath.
-    func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, function: UInt8, rectangles: [Rectangle])
+    func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, function: UInt8, rectangles: [Rectangle], clipRectangles: [Rectangle]?)
     /// PolyRectangle: stroke the perimeter of each rect (vs PolyFillRectangle
     /// which fills). Used by Athena Command for the highlight border that
     /// appears when the pointer enters the widget.
-    func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Rectangle])
+    func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Rectangle], clipRectangles: [Rectangle]?)
     /// PolyArc: stroke the outline of each elliptical arc. Each arc's bounding
     /// box is (x, y, width, height) in top-level coords, with angles in 64ths
     /// of a degree (angle1 = start, angle2 = extent; positive = counterclockwise).
     /// xclock uses this for the clock face; xeyes for eye outlines.
-    func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc])
+    func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc], clipRectangles: [Rectangle]?)
     /// PolyFillArc: fill the interior of each elliptical arc. Same arc geometry
     /// as drawPolyArc; the filled region is the pie slice from arc center
     /// (default arc-mode=PieSlice; chord mode unhandled per OPCODE_STATUS).
     /// xeyes fills the white sclera of each eye via this opcode.
-    func drawPolyFillArc(topLevel: UInt32, foreground: RGB16, arcs: [Arc])
+    func drawPolyFillArc(topLevel: UInt32, foreground: RGB16, arcs: [Arc], clipRectangles: [Rectangle]?)
     func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16)
     /// In-window CopyArea: copies a rectangular region of pixels from
     /// (srcX, srcY, w, h) to (dstX, dstY, w, h) within the same top-level
-    /// X window's backing context. Used by xterm for scrolling.
+    /// X window's backing context. Used by xterm for scrolling. CopyArea
+    /// honors GC clip just like the draw ops — clients can copy through a
+    /// clip mask.
     func copyArea(
         topLevel: UInt32,
         srcX: Int16, srcY: Int16,
         dstX: Int16, dstY: Int16,
-        width: UInt16, height: UInt16
+        width: UInt16, height: UInt16,
+        clipRectangles: [Rectangle]?
     )
 
     /// ImageText8: fill bg rect, then draw text. `(x, y)` is the baseline of
@@ -243,7 +254,8 @@ public protocol WindowBridge: AnyObject, Sendable {
         foreground: RGB16, background: RGB16,
         font: ResolvedFont,
         x: Int16, y: Int16,
-        string: [UInt8]
+        string: [UInt8],
+        clipRectangles: [Rectangle]?
     )
 
     /// PolyText8: draw glyphs without filling the cell background. `items` is
@@ -256,7 +268,8 @@ public protocol WindowBridge: AnyObject, Sendable {
         foreground: RGB16,
         font: ResolvedFont,
         x: Int16, y: Int16,
-        items: [UInt8]
+        items: [UInt8],
+        clipRectangles: [Rectangle]?
     )
 
     /// Paint a list of solid-color rects on the top-level's backing context.
@@ -332,13 +345,13 @@ public extension WindowBridge {
     func writeClipboard(text: String) {}
     func setOnCloseRequest(_ handler: @escaping @Sendable (UInt32) -> Void) {}
     // Default no-ops so unit-test bridges don't have to implement every method.
-    func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment]) {}
-    func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint]) {}
-    func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool) {}
-    func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, function: UInt8, rectangles: [Rectangle]) {}
-    func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Rectangle]) {}
-    func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc]) {}
-    func drawPolyFillArc(topLevel: UInt32, foreground: RGB16, arcs: [Arc]) {}
+    func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Rectangle]?) {}
+    func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Rectangle]?) {}
+    func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Rectangle]?) {}
+    func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, function: UInt8, rectangles: [Rectangle], clipRectangles: [Rectangle]?) {}
+    func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Rectangle], clipRectangles: [Rectangle]?) {}
+    func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc], clipRectangles: [Rectangle]?) {}
+    func drawPolyFillArc(topLevel: UInt32, foreground: RGB16, arcs: [Arc], clipRectangles: [Rectangle]?) {}
     func bell() {}
     func startCrossWindowDragTracking() {}
     func stopCrossWindowDragTracking() {}
@@ -347,21 +360,24 @@ public extension WindowBridge {
         topLevel: UInt32,
         srcX: Int16, srcY: Int16,
         dstX: Int16, dstY: Int16,
-        width: UInt16, height: UInt16
+        width: UInt16, height: UInt16,
+        clipRectangles: [Rectangle]?
     ) {}
     func drawImageText8(
         topLevel: UInt32,
         foreground: RGB16, background: RGB16,
         font: ResolvedFont,
         x: Int16, y: Int16,
-        string: [UInt8]
+        string: [UInt8],
+        clipRectangles: [Rectangle]?
     ) {}
     func drawPolyText8(
         topLevel: UInt32,
         foreground: RGB16,
         font: ResolvedFont,
         x: Int16, y: Int16,
-        items: [UInt8]
+        items: [UInt8],
+        clipRectangles: [Rectangle]?
     ) {}
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {}
     func setCursor(topLevel: UInt32, glyph: UInt16?) {}

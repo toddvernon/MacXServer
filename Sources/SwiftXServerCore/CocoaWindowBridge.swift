@@ -472,38 +472,38 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
     // MARK: - Drawing
 
-    public func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment]) {
+    public func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Framer.Rectangle]?) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
-            ctx.saveGState()
-            applyForeground(ctx, foreground)
-            self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
-            for s in segments {
-                ctx.move(to: CGPoint(x: CGFloat(s.x1), y: CGFloat(s.y1)))
-                ctx.addLine(to: CGPoint(x: CGFloat(s.x2), y: CGFloat(s.y2)))
+            self.withClip(ctx, clipRectangles) {
+                applyForeground(ctx, foreground)
+                self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
+                for s in segments {
+                    ctx.move(to: CGPoint(x: CGFloat(s.x1), y: CGFloat(s.y1)))
+                    ctx.addLine(to: CGPoint(x: CGFloat(s.x2), y: CGFloat(s.y2)))
+                }
+                ctx.strokePath()
             }
-            ctx.strokePath()
-            ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
     }
 
-    public func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint]) {
+    public func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Framer.Rectangle]?) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing,
                   !points.isEmpty else { return }
-            ctx.saveGState()
-            applyForeground(ctx, foreground)
-            self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
-            ctx.beginPath()
-            ctx.move(to: CGPoint(x: CGFloat(points[0].x), y: CGFloat(points[0].y)))
-            for p in points.dropFirst() {
-                ctx.addLine(to: CGPoint(x: CGFloat(p.x), y: CGFloat(p.y)))
+            self.withClip(ctx, clipRectangles) {
+                applyForeground(ctx, foreground)
+                self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
+                ctx.beginPath()
+                ctx.move(to: CGPoint(x: CGFloat(points[0].x), y: CGFloat(points[0].y)))
+                for p in points.dropFirst() {
+                    ctx.addLine(to: CGPoint(x: CGFloat(p.x), y: CGFloat(p.y)))
+                }
+                ctx.strokePath()
             }
-            ctx.strokePath()
-            ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
     }
@@ -533,27 +533,45 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     ///
     /// AA stays on; the alignment is enough to get crisp strokes without
     /// giving up CG's diagonal-line smoothing (xclock's hands).
+    /// Run `body` with the X GC clip-rectangles applied to `ctx`. nil = no
+    /// clip (unbounded draw); empty array = clip-everything (skip the body
+    /// entirely per X spec); non-empty = clip to the union of the rectangles.
+    /// Wraps in saveGState/restoreGState so the clip doesn't leak. Replaces
+    /// the prior pattern of explicit save/restore in each draw method.
+    private func withClip(_ ctx: CGContext, _ clipRects: [Framer.Rectangle]?, _ body: () -> Void) {
+        if let rects = clipRects, rects.isEmpty { return }
+        ctx.saveGState()
+        if let rects = clipRects {
+            ctx.clip(to: rects.map {
+                CGRect(x: CGFloat($0.x), y: CGFloat($0.y),
+                       width: CGFloat($0.width), height: CGFloat($0.height))
+            })
+        }
+        body()
+        ctx.restoreGState()
+    }
+
     private func applyStrokePlane(_ ctx: CGContext, clientLineWidth: UInt32) {
         let cw = max(Int(clientLineWidth), 1)
         ctx.translateBy(x: 0.5, y: 0.5)
         ctx.setLineWidth(CGFloat(cw))
     }
 
-    public func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool) {
+    public func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Framer.Rectangle]?) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing,
                   !points.isEmpty else { return }
-            ctx.saveGState()
-            applyFill(ctx, foreground)
-            ctx.beginPath()
-            ctx.move(to: CGPoint(x: CGFloat(points[0].x), y: CGFloat(points[0].y)))
-            for p in points.dropFirst() {
-                ctx.addLine(to: CGPoint(x: CGFloat(p.x), y: CGFloat(p.y)))
+            self.withClip(ctx, clipRectangles) {
+                applyFill(ctx, foreground)
+                ctx.beginPath()
+                ctx.move(to: CGPoint(x: CGFloat(points[0].x), y: CGFloat(points[0].y)))
+                for p in points.dropFirst() {
+                    ctx.addLine(to: CGPoint(x: CGFloat(p.x), y: CGFloat(p.y)))
+                }
+                ctx.closePath()
+                ctx.fillPath(using: evenOdd ? .evenOdd : .winding)
             }
-            ctx.closePath()
-            ctx.fillPath(using: evenOdd ? .evenOdd : .winding)
-            ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
     }
@@ -574,8 +592,18 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         topLevel: UInt32,
         srcX: Int16, srcY: Int16,
         dstX: Int16, dstY: Int16,
-        width: UInt16, height: UInt16
+        width: UInt16, height: UInt16,
+        clipRectangles: [Framer.Rectangle]?
     ) {
+        // GC clip on CopyArea isn't honored for the same-window pixel-blit
+        // path because we copy pixels via direct bitmap memmove rather than
+        // through CGContext (the memcpy path is required for correct overlap
+        // handling). xterm's scroll case — the only place we currently see
+        // CopyArea — never sets clip rectangles. Logged so future divergence
+        // is visible. See SHORTCUTS for the planned fix.
+        if let rects = clipRectangles, !rects.isEmpty {
+            log?.log("  CopyArea: ignoring \(rects.count) clip rect(s) — bitmap path doesn't honor clip yet")
+        }
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view,
@@ -638,47 +666,49 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
-    public func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Framer.Rectangle]) {
+    public func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Framer.Rectangle], clipRectangles: [Framer.Rectangle]?) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
-            ctx.saveGState()
-            applyForeground(ctx, foreground)
-            self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
-            // CGContext.stroke(rect) draws a 1-line-width-wide outline of the
-            // rect using the current stroke color + line width. PolyRectangle
-            // batches multiple rects in one request; iterate and stroke each.
-            for r in rectangles {
-                ctx.stroke(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
-                                  width: CGFloat(r.width), height: CGFloat(r.height)))
+            self.withClip(ctx, clipRectangles) {
+                applyForeground(ctx, foreground)
+                self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
+                // CGContext.stroke(rect) draws a 1-line-width-wide outline of
+                // the rect using the current stroke color + line width.
+                // PolyRectangle batches multiple rects in one request;
+                // iterate and stroke each.
+                for r in rectangles {
+                    ctx.stroke(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
+                                      width: CGFloat(r.width), height: CGFloat(r.height)))
+                }
             }
-            ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
     }
 
-    public func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, function: UInt8, rectangles: [Framer.Rectangle]) {
+    public func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, function: UInt8, rectangles: [Framer.Rectangle], clipRectangles: [Framer.Rectangle]?) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
-            ctx.saveGState()
-            // X GC function = 6 (GXxor): XOR fill toggles destination pixels.
-            // Athena's menu-item highlight relies on this — first XOR-fill
-            // highlights, second XOR-fill on the same area un-highlights,
-            // text preserved because XOR-then-XOR is identity. CG's
-            // .difference blend mode is XOR-equivalent for binary colors
-            // (|D - S|: black↔white inverts, intermediate values don't
-            // perfectly reverse but Athena only uses solid colors here).
-            // Function 3 (GXcopy) is the spec default — overwrite.
-            if function == 6 {  // GXxor
-                ctx.setBlendMode(.difference)
+            self.withClip(ctx, clipRectangles) {
+                // X GC function = 6 (GXxor): XOR fill toggles destination
+                // pixels. Athena's menu-item highlight relies on this — first
+                // XOR-fill highlights, second XOR-fill on the same area
+                // un-highlights, text preserved because XOR-then-XOR is
+                // identity. CG's .difference blend mode is XOR-equivalent
+                // for binary colors (|D - S|: black↔white inverts,
+                // intermediate values don't perfectly reverse but Athena
+                // only uses solid colors here). Function 3 (GXcopy) is the
+                // spec default — overwrite.
+                if function == 6 {  // GXxor
+                    ctx.setBlendMode(.difference)
+                }
+                applyFill(ctx, foreground)
+                for r in rectangles {
+                    ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
+                                    width: CGFloat(r.width), height: CGFloat(r.height)))
+                }
             }
-            applyFill(ctx, foreground)
-            for r in rectangles {
-                ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
-                                width: CGFloat(r.width), height: CGFloat(r.height)))
-            }
-            ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
     }
@@ -691,20 +721,20 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// arc extent so a 360° arc gets ~64 segments. Avoids CTM-vs-stroke-
     /// pen-width interaction (a scaled CGContext.addArc would also scale
     /// the pen, distorting line width on non-circular arcs).
-    public func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc]) {
+    public func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc], clipRectangles: [Framer.Rectangle]?) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
-            ctx.saveGState()
-            applyForeground(ctx, foreground)
-            self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
-            for a in arcs {
-                let path = ellipseArcPath(arc: a, includePieCenter: false)
-                ctx.beginPath()
-                ctx.addPath(path)
-                ctx.strokePath()
+            self.withClip(ctx, clipRectangles) {
+                applyForeground(ctx, foreground)
+                self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
+                for a in arcs {
+                    let path = ellipseArcPath(arc: a, includePieCenter: false)
+                    ctx.beginPath()
+                    ctx.addPath(path)
+                    ctx.strokePath()
+                }
             }
-            ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
     }
@@ -712,19 +742,19 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// PolyFillArc: fill the pie slice (default arc-mode=PieSlice; chord mode
     /// is unhandled — see OPCODE_STATUS). Path moves to the ellipse center,
     /// out to the arc start, sweeps the arc, closes back to center.
-    public func drawPolyFillArc(topLevel: UInt32, foreground: RGB16, arcs: [Arc]) {
+    public func drawPolyFillArc(topLevel: UInt32, foreground: RGB16, arcs: [Arc], clipRectangles: [Framer.Rectangle]?) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
-            ctx.saveGState()
-            applyFill(ctx, foreground)
-            for a in arcs {
-                let path = ellipseArcPath(arc: a, includePieCenter: true)
-                ctx.beginPath()
-                ctx.addPath(path)
-                ctx.fillPath()
+            self.withClip(ctx, clipRectangles) {
+                applyFill(ctx, foreground)
+                for a in arcs {
+                    let path = ellipseArcPath(arc: a, includePieCenter: true)
+                    ctx.beginPath()
+                    ctx.addPath(path)
+                    ctx.fillPath()
+                }
             }
-            ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
     }
@@ -734,7 +764,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         foreground: RGB16, background: RGB16,
         font: ResolvedFont,
         x: Int16, y: Int16,
-        string: [UInt8]
+        string: [UInt8],
+        clipRectangles: [Framer.Rectangle]?
     ) {
         let printable = String(decoding: string.prefix(40), as: UTF8.self)
         log?.log("  drawImageText8 top=0x\(String(topLevel, radix: 16)) font=\(font.macFontName) cell=\(font.cellWidth)x\(font.cellHeight) at (\(x),\(y)) fg=(\(foreground.red >> 8),\(foreground.green >> 8),\(foreground.blue >> 8)) str=\"\(printable)\" len=\(string.count)")
@@ -756,7 +787,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 height: CGFloat(font.cellHeight)
             )
 
-            ctx.saveGState()
+            self.withClip(ctx, clipRectangles) {
             applyFill(ctx, background)
             ctx.fill(bgRect)
 
@@ -817,8 +848,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             }
 
             CTFontDrawGlyphs(ctFont, &glyphs, &positions, n, ctx)
-
-            ctx.restoreGState()
+            }
             view.setNeedsDisplay(view.bounds)
         }
     }
@@ -828,13 +858,14 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         foreground: RGB16,
         font: ResolvedFont,
         x: Int16, y: Int16,
-        items: [UInt8]
+        items: [UInt8],
+        clipRectangles: [Framer.Rectangle]?
     ) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
 
-            ctx.saveGState()
+            self.withClip(ctx, clipRectangles) {
             applyFill(ctx, foreground)
             ctx.setShouldAntialias(true)
             // Font smoothing OFF. macOS smoothing adds a half-step of stem
@@ -909,8 +940,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 penX += localX
                 i += 2 + n
             }
-
-            ctx.restoreGState()
+            }
             view.setNeedsDisplay(view.bounds)
         }
     }

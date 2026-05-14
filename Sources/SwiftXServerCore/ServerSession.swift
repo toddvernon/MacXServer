@@ -1795,7 +1795,8 @@ public final class ServerSession: @unchecked Sendable {
             topLevel: top,
             foreground: resolveColor(state.foreground),
             lineWidth: state.lineWidth,
-            segments: translated
+            segments: translated,
+            clipRectangles: state.clipRectangles
         )
     }
 
@@ -1825,7 +1826,8 @@ public final class ServerSession: @unchecked Sendable {
             topLevel: top,
             foreground: resolveColor(state.foreground),
             lineWidth: state.lineWidth,
-            points: points
+            points: points,
+            clipRectangles: state.clipRectangles
         )
     }
 
@@ -1855,7 +1857,8 @@ public final class ServerSession: @unchecked Sendable {
             topLevel: top,
             foreground: resolveColor(state.foreground),
             points: points,
-            evenOdd: state.fillRuleEvenOdd
+            evenOdd: state.fillRuleEvenOdd,
+            clipRectangles: state.clipRectangles
         )
     }
 
@@ -1874,7 +1877,8 @@ public final class ServerSession: @unchecked Sendable {
             topLevel: top,
             foreground: resolveColor(state.foreground),
             function: state.function,
-            rectangles: translated
+            rectangles: translated,
+            clipRectangles: state.clipRectangles
         )
     }
 
@@ -1893,7 +1897,8 @@ public final class ServerSession: @unchecked Sendable {
             topLevel: top,
             foreground: resolveColor(state.foreground),
             lineWidth: state.lineWidth,
-            rectangles: translated
+            rectangles: translated,
+            clipRectangles: state.clipRectangles
         )
     }
 
@@ -1913,7 +1918,8 @@ public final class ServerSession: @unchecked Sendable {
             topLevel: top,
             foreground: resolveColor(state.foreground),
             lineWidth: state.lineWidth,
-            arcs: translated
+            arcs: translated,
+            clipRectangles: state.clipRectangles
         )
     }
 
@@ -1932,7 +1938,8 @@ public final class ServerSession: @unchecked Sendable {
         bridge.drawPolyFillArc(
             topLevel: top,
             foreground: resolveColor(state.foreground),
-            arcs: translated
+            arcs: translated,
+            clipRectangles: state.clipRectangles
         )
     }
 
@@ -1954,7 +1961,8 @@ public final class ServerSession: @unchecked Sendable {
             background: resolveColor(state.background),
             font: resolvedFont,
             x: r.x &+ dx, y: r.y &+ dy,
-            string: r.string
+            string: r.string,
+            clipRectangles: state.clipRectangles
         )
     }
 
@@ -1974,7 +1982,8 @@ public final class ServerSession: @unchecked Sendable {
             foreground: resolveColor(state.foreground),
             font: resolvedFont,
             x: r.x &+ dx, y: r.y &+ dy,
-            items: r.items
+            items: r.items,
+            clipRectangles: state.clipRectangles
         )
     }
 
@@ -2004,11 +2013,13 @@ public final class ServerSession: @unchecked Sendable {
             return
         }
         log?.log("  CopyArea top=0x\(String(srcTop, radix: 16)) src=(\(r.srcX),\(r.srcY)) dst=(\(r.dstX),\(r.dstY)) \(r.width)x\(r.height)")
+        let state = gcState(r.gc, byteOrder: byteOrder)
         bridge.copyArea(
             topLevel: srcTop,
             srcX: r.srcX &+ srcDX, srcY: r.srcY &+ srcDY,
             dstX: r.dstX &+ dstDX, dstY: r.dstY &+ dstDY,
-            width: r.width, height: r.height
+            width: r.width, height: r.height,
+            clipRectangles: state.clipRectangles
         )
         // X11 spec: every CopyArea on a GC with graphics-exposures=True must
         // be followed by GraphicsExpose events (one per obscured source
