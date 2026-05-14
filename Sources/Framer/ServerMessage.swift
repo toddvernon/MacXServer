@@ -79,6 +79,29 @@ public struct Event: Equatable, Sendable {
     }
 }
 
+// The 17 core X11 error codes per the X11R6 protocol spec § "Errors". Extension
+// errors get higher numbers via the extension's firstError. We only emit core
+// errors today.
+public enum XErrorCode: UInt8, Sendable, Equatable {
+    case request        = 1   // BadRequest: major/minor opcode does not specify a valid request
+    case value          = 2   // BadValue: an out-of-range numeric value
+    case window         = 3   // BadWindow: window argument is not a valid window
+    case pixmap         = 4   // BadPixmap: pixmap argument is not a valid pixmap
+    case atom           = 5   // BadAtom: atom argument is not a valid atom
+    case cursor         = 6   // BadCursor: cursor argument is not a valid cursor
+    case font           = 7   // BadFont: font argument is not a valid font
+    case match          = 8   // BadMatch: arguments are inappropriate (e.g. depth mismatch)
+    case drawable       = 9   // BadDrawable: drawable argument is not a valid window or pixmap
+    case access         = 10  // BadAccess: attempt at an access not permitted
+    case alloc          = 11  // BadAlloc: server failed to allocate the requested resource
+    case color          = 12  // BadColor: colormap argument is not a valid colormap
+    case gc             = 13  // BadGC: GC argument is not a valid GC
+    case idChoice       = 14  // BadIDChoice: client-allocated ID is already in use or not in this client's range
+    case name           = 15  // BadName: font or color name not in the database
+    case length         = 16  // BadLength: request length does not match
+    case implementation = 17  // BadImplementation: server does not implement the operation
+}
+
 public struct XError: Equatable, Sendable {
     public var bytes: [UInt8]
 
@@ -101,6 +124,31 @@ public struct XError: Equatable, Sendable {
     public func minorOpcode(byteOrder: ByteOrder) -> UInt16 {
         readUInt16(bytes, offset: 8, byteOrder: byteOrder)
     }
+
+    /// Wire-format encoder for server-side error emission. Always 32 bytes.
+    /// Layout per X11 spec: byte 0 = 0 (error marker), byte 1 = errorCode,
+    /// bytes 2..3 = seq, bytes 4..7 = badResourceId (semantics vary by code:
+    /// the bad ID for BadWindow/Pixmap/Atom/Cursor/Font/Drawable/Color/GC/
+    /// IDChoice, the offending value for BadValue, 0 otherwise), bytes 8..9 =
+    /// minor opcode (0 for core requests), byte 10 = major opcode of the
+    /// failing request, bytes 11..31 = unused.
+    public static func encode(
+        code: XErrorCode,
+        sequenceNumber: UInt16,
+        badResourceId: UInt32 = 0,
+        minorOpcode: UInt16 = 0,
+        majorOpcode: UInt8,
+        byteOrder: ByteOrder
+    ) -> [UInt8] {
+        var b = [UInt8](repeating: 0, count: 32)
+        b[0] = 0
+        b[1] = code.rawValue
+        writeUInt16(into: &b, offset: 2, value: sequenceNumber, byteOrder: byteOrder)
+        writeUInt32(into: &b, offset: 4, value: badResourceId, byteOrder: byteOrder)
+        writeUInt16(into: &b, offset: 8, value: minorOpcode, byteOrder: byteOrder)
+        b[10] = majorOpcode
+        return b
+    }
 }
 
 private func readUInt16(_ b: [UInt8], offset: Int, byteOrder: ByteOrder) -> UInt16 {
@@ -109,6 +157,32 @@ private func readUInt16(_ b: [UInt8], offset: Int, byteOrder: ByteOrder) -> UInt
     switch byteOrder {
     case .lsbFirst: return (c << 8) | a
     case .msbFirst: return (a << 8) | c
+    }
+}
+
+private func writeUInt16(into b: inout [UInt8], offset: Int, value: UInt16, byteOrder: ByteOrder) {
+    switch byteOrder {
+    case .lsbFirst:
+        b[offset]     = UInt8(value & 0xFF)
+        b[offset + 1] = UInt8((value >> 8) & 0xFF)
+    case .msbFirst:
+        b[offset]     = UInt8((value >> 8) & 0xFF)
+        b[offset + 1] = UInt8(value & 0xFF)
+    }
+}
+
+private func writeUInt32(into b: inout [UInt8], offset: Int, value: UInt32, byteOrder: ByteOrder) {
+    switch byteOrder {
+    case .lsbFirst:
+        b[offset]     = UInt8(value & 0xFF)
+        b[offset + 1] = UInt8((value >> 8) & 0xFF)
+        b[offset + 2] = UInt8((value >> 16) & 0xFF)
+        b[offset + 3] = UInt8((value >> 24) & 0xFF)
+    case .msbFirst:
+        b[offset]     = UInt8((value >> 24) & 0xFF)
+        b[offset + 1] = UInt8((value >> 16) & 0xFF)
+        b[offset + 2] = UInt8((value >> 8) & 0xFF)
+        b[offset + 3] = UInt8(value & 0xFF)
     }
 }
 

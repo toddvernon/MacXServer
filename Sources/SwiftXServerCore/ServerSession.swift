@@ -87,7 +87,7 @@ public final class ServerSession: @unchecked Sendable {
 
     private var phase: Phase = .awaitingSetup
     private var inbound: [UInt8] = []
-    private var sequenceNumber: UInt16 = 0
+    public private(set) var sequenceNumber: UInt16 = 0
 
     /// Which X subwindow currently contains the pointer, per top-level
     /// NSWindow. Updated on every pointer-moved event; consulted to decide
@@ -1966,6 +1966,34 @@ public final class ServerSession: @unchecked Sendable {
     public var byteOrder: ByteOrder? {
         if case .running(let bo) = phase { return bo }
         return nil
+    }
+
+    /// Emit an X11 protocol error to the client. Per the XError-honesty policy
+    /// (CLAUDE.md Working conventions, DECISIONS.md 2026-05-14): when a request
+    /// can't be served, emit the correct error on the wire rather than silently
+    /// dropping or faking success. Logs prominently with `[XERROR]` so the
+    /// condition is visible during debugging. No-op if the session isn't in
+    /// the `.running` phase (pre-handshake errors travel through SetupRefused,
+    /// not XError).
+    func emitError(
+        _ code: XErrorCode,
+        majorOpcode: UInt8,
+        badResourceId: UInt32 = 0,
+        minorOpcode: UInt16 = 0
+    ) {
+        guard let order = byteOrder else { return }
+        let bytes = XError.encode(
+            code: code,
+            sequenceNumber: sequenceNumber,
+            badResourceId: badResourceId,
+            minorOpcode: minorOpcode,
+            majorOpcode: majorOpcode,
+            byteOrder: order
+        )
+        outbound.append(bytes)
+        errorsEmitted += 1
+        let opName = opcodeName(majorOpcode) ?? "?"
+        log?.log("[XERROR] \(code) on \(opName) (major=\(majorOpcode)) seq=\(sequenceNumber) badId=0x\(String(badResourceId, radix: 16))")
     }
 
     /// Tear down all of this client's resources on disconnect, per X11 spec

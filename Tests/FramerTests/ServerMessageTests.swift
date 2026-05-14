@@ -146,4 +146,65 @@ final class ServerMessageTests: XCTestCase {
         XCTAssertNil(errorName(0))
         XCTAssertNil(errorName(18))
     }
+
+    func testXErrorEncodeMatchesByteLayoutMSB() {
+        // Re-derives the existing badWindowMSB literal via the encoder. If this
+        // ever drifts, either the encoder is wrong or the spec interpretation
+        // shifted; both warrant investigation.
+        let encoded = XError.encode(
+            code: .window,
+            sequenceNumber: 42,
+            badResourceId: 0x10000005,
+            minorOpcode: 0,
+            majorOpcode: 8,
+            byteOrder: .msbFirst
+        )
+        XCTAssertEqual(encoded, badWindowMSB)
+    }
+
+    func testXErrorEncodeDecodeRoundTripBothByteOrders() throws {
+        for order in [ByteOrder.lsbFirst, .msbFirst] {
+            for code in [XErrorCode.request, .value, .window, .pixmap, .atom,
+                         .cursor, .font, .match, .drawable, .access, .alloc,
+                         .color, .gc, .idChoice, .name, .length, .implementation] {
+                let encoded = XError.encode(
+                    code: code,
+                    sequenceNumber: 0xABCD,
+                    badResourceId: 0xDEADBEEF,
+                    minorOpcode: 0x1234,
+                    majorOpcode: 99,
+                    byteOrder: order
+                )
+                XCTAssertEqual(encoded.count, 32, "XError must be 32 bytes (code=\(code), order=\(order))")
+                XCTAssertEqual(encoded[0], 0, "marker byte must be 0 (code=\(code))")
+
+                let msg = try ServerMessage.decodeOne(from: encoded, byteOrder: order)
+                guard case .xError(let err) = msg else {
+                    XCTFail("expected xError after decode for code=\(code), order=\(order)")
+                    continue
+                }
+                XCTAssertEqual(err.errorCode, code.rawValue)
+                XCTAssertEqual(err.sequenceNumber(byteOrder: order), 0xABCD)
+                XCTAssertEqual(err.badResourceId(byteOrder: order), 0xDEADBEEF)
+                XCTAssertEqual(err.minorOpcode(byteOrder: order), 0x1234)
+                XCTAssertEqual(err.majorOpcode, 99)
+            }
+        }
+    }
+
+    func testXErrorEncodeDefaultsToZeroForOptionalFields() throws {
+        let encoded = XError.encode(
+            code: .alloc,
+            sequenceNumber: 1,
+            majorOpcode: 1,
+            byteOrder: .lsbFirst
+        )
+        let msg = try ServerMessage.decodeOne(from: encoded, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError")
+            return
+        }
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), 0)
+        XCTAssertEqual(err.minorOpcode(byteOrder: .lsbFirst), 0)
+    }
 }
