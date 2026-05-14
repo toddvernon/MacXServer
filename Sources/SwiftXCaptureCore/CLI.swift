@@ -1,3 +1,15 @@
+public struct DiffArgs: Equatable, Sendable {
+    public var pathA: String
+    public var pathB: String
+    public var onlyDifferent: Bool
+
+    public init(pathA: String, pathB: String, onlyDifferent: Bool) {
+        self.pathA = pathA
+        self.pathB = pathB
+        self.onlyDifferent = onlyDifferent
+    }
+}
+
 public struct CaptureArgs: Equatable, Sendable {
     public var listenHost: String
     public var listenPort: UInt16
@@ -25,6 +37,7 @@ public enum CLI {
     public static let usage = """
     swiftx-capture --listen <[host:]port> --forward <host:port> --output <path>
     swiftx-capture dump <path-to-xtap>
+    swiftx-capture diff <a.xtap> <b.xtap> [--only-different]
     swiftx-capture replay <path-to-xtap> [--target <host:port>]
 
       --listen <[host:]port>    Address to listen for X clients on
@@ -33,6 +46,8 @@ public enum CLI {
 
       dump <path>               Chronological per-message dump
       summary <path>            Aggregate analysis of a recorded .xtap
+      diff <a> <b>              Markdown diff of two captures, aligned per-direction
+        --only-different        Suppress matching rows; show only diff/onlyA/onlyB
       replay <path>             Send a recorded session's C2S bytes to a target X server
         --target <host:port>    Defaults to 127.0.0.1:6000
         --realtime              Pace C2S frames using their original .xtap timestamps
@@ -114,6 +129,28 @@ public enum CLI {
         guard let path = path else { throw CLIError.missingFlag("<path>") }
         let targetHP = try parseHostPort(target ?? "127.0.0.1:6000", defaultHost: nil)
         return ReplayArgs(inputPath: path, targetHost: targetHP.host, targetPort: targetHP.port, hold: hold, realtime: realtime)
+    }
+
+    public static func parseDiff(_ args: [String]) throws -> DiffArgs {
+        var pathA: String?
+        var pathB: String?
+        var onlyDifferent = false
+
+        for arg in args {
+            switch arg {
+            case "--only-different":
+                onlyDifferent = true
+            default:
+                if arg.hasPrefix("--") { throw CLIError.unknownFlag(arg) }
+                if pathA == nil { pathA = arg }
+                else if pathB == nil { pathB = arg }
+                else { throw CLIError.unknownFlag(arg) }
+            }
+        }
+
+        guard let pathA = pathA else { throw CLIError.missingFlag("<a.xtap>") }
+        guard let pathB = pathB else { throw CLIError.missingFlag("<b.xtap>") }
+        return DiffArgs(pathA: pathA, pathB: pathB, onlyDifferent: onlyDifferent)
     }
 
     public static func parseHostPort(_ s: String, defaultHost: String?) throws -> (host: String, port: UInt16) {

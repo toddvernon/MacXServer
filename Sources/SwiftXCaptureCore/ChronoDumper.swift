@@ -183,13 +183,13 @@ private func format(timestamp: UInt64, direction: String, line: String) -> Strin
     return String(format: "%9.3fms  %@   %@\n", ms, direction as NSString, line as NSString) as String
 }
 
-private func formatSetupRequest(_ r: SetupRequest) -> String {
+func formatSetupRequest(_ r: SetupRequest) -> String {
     let auth = r.authProtocolName.isEmpty ? "(none)"
         : String(decoding: r.authProtocolName, as: UTF8.self)
     return "SetupRequest             \(r.byteOrder) proto=\(r.protocolMajor).\(r.protocolMinor) auth=\(auth)"
 }
 
-private func formatSetupReply(_ r: SetupReply) -> String {
+func formatSetupReply(_ r: SetupReply) -> String {
     switch r {
     case .accepted(let a):
         let vendor = String(decoding: a.vendor, as: UTF8.self)
@@ -204,18 +204,18 @@ private func formatSetupReply(_ r: SetupReply) -> String {
     }
 }
 
-private func atomDisplay(_ atom: UInt32, ctx: ChronoContext) -> String {
+func atomDisplay(_ atom: UInt32, ctx: ChronoContext) -> String {
     if atom == 0 { return "None" }
     if let p = predefinedAtomName(atom) { return p }
     if let n = ctx.atomToName[atom] { return n }
     return String(format: "0x%X", atom)
 }
 
-private func windowDisplay(_ w: UInt32) -> String {
+func windowDisplay(_ w: UInt32) -> String {
     return String(format: "0x%X", w)
 }
 
-private func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext) -> String {
+func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext) -> String {
     let seqStr = String(format: "[seq=%-4d]", seq)
     let body: String
     switch req {
@@ -371,7 +371,7 @@ private func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext) -> S
     return "\(seqStr) \(body)"
 }
 
-private func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout ChronoContext) -> String {
+func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout ChronoContext) -> String {
     switch msg {
     case .reply(let r):
         let seq = r.sequenceNumber(byteOrder: byteOrder)
@@ -459,7 +459,7 @@ private func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx
     }
 }
 
-private func opcodeOf(_ req: Request) -> UInt8 {
+func opcodeOf(_ req: Request) -> UInt8 {
     switch req {
     case .createWindow:              return CreateWindow.opcode
     case .changeWindowAttributes:    return ChangeWindowAttributes.opcode
@@ -540,7 +540,7 @@ private func opcodeOf(_ req: Request) -> UInt8 {
     }
 }
 
-private func previewBytes(_ data: [UInt8], format: PropertyFormat) -> String {
+func previewBytes(_ data: [UInt8], format: PropertyFormat) -> String {
     if format == .format8 && data.count <= 64 {
         let s = String(decoding: data.filter { $0 >= 32 && $0 < 127 }, as: UTF8.self)
         if !s.isEmpty {

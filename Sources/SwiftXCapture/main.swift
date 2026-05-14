@@ -44,6 +44,23 @@ if args.first == "summary" {
     exit(0)
 }
 
+if args.first == "diff" {
+    let rest = Array(args.dropFirst())
+    do {
+        let parsed = try CLI.parseDiff(rest)
+        let report = try CaptureDiff.compare(pathA: parsed.pathA, pathB: parsed.pathB)
+        let rendered = CaptureDiff.render(report, options: DiffRenderOptions(onlyDifferent: parsed.onlyDifferent))
+        print(rendered)
+    } catch let error as CLIError {
+        writeStderr("\(error)\n\n\(CLI.usage)\n")
+        exit(2)
+    } catch {
+        writeStderr("diff error: \(error)\n")
+        exit(1)
+    }
+    exit(0)
+}
+
 if args.first == "replay" {
     let rest = Array(args.dropFirst())
     do {
