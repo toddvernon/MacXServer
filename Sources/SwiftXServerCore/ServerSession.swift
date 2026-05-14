@@ -605,27 +605,43 @@ public final class ServerSession: @unchecked Sendable {
     ) {
         guard let order = byteOrder else { return }
         let mask: UInt32 = isDown ? (1 << 0) : (1 << 1)        // KeyPress / KeyRelease
-        // Routing precedence (highest → lowest):
-        //   1. Active keyboard grab with ownerEvents=false → grab window.
-        //   2. Explicit focus window (set via SetInputFocus) — Motif relies
-        //      on this for XmText/XmTextField input. Without it, our keys
-        //      go to whatever shallow descendant has KeyPressMask, which
-        //      isn't necessarily the focused widget.
-        //   3. keyTarget fallback (BFS for KeyPressMask in the subtree).
-        let target: UInt32
-        if let kg = keyboardGrab, !kg.ownerEvents {
-            target = kg.window
-        } else if let focus = focusWindow, windows.get(focus) != nil {
-            target = focus
-        } else if let natural = keyTarget(topLevel: topLevel, eventMaskBit: mask) {
-            target = natural
-        } else {
-            log?.log("  keyEvent: no target window with mask 0x\(String(mask, radix: 16)) under 0x\(String(topLevel, radix: 16))")
-            return
-        }
         let xKeycode = USKeymap.xKeycode(forMacKeyCode: macKeyCode)
         let state = USKeymap.translateModifiers(modifierFlags)
         currentModifierState = state
+        // Routing precedence (highest → lowest):
+        //   1. Active keyboard grab with ownerEvents=false → grab window.
+        //   2. Passive key grab matching this (keycode, modifiers) on the
+        //      natural target's ancestor chain → grab window. Quickplot's
+        //      accelerator keys (~5 GrabKey at startup) ride this path; if
+        //      we route to focus instead, the accelerator action never
+        //      fires.
+        //   3. Explicit focus window (set via SetInputFocus) — Motif relies
+        //      on this for XmText/XmTextField input. Without it, our keys
+        //      go to whatever shallow descendant has KeyPressMask, which
+        //      isn't necessarily the focused widget.
+        //   4. keyTarget fallback (BFS for KeyPressMask in the subtree).
+        let target: UInt32
+        if let kg = keyboardGrab, !kg.ownerEvents {
+            target = kg.window
+        } else {
+            // Compute the natural target first; passive-grab lookup walks
+            // its ancestor chain.
+            let natural: UInt32?
+            if let focus = focusWindow, windows.get(focus) != nil {
+                natural = focus
+            } else {
+                natural = keyTarget(topLevel: topLevel, eventMaskBit: mask)
+            }
+            if let n = natural,
+               let grab = findActivatablePassiveKeyGrab(key: xKeycode, modifiers: state, naturalTarget: n) {
+                target = grab.grabWindow
+            } else if let n = natural {
+                target = n
+            } else {
+                log?.log("  keyEvent: no target window with mask 0x\(String(mask, radix: 16)) under 0x\(String(topLevel, radix: 16))")
+                return
+            }
+        }
         // X11 InputEvent shape covers KeyPress / KeyRelease / button / motion.
         // code: 2 = KeyPress, 3 = KeyRelease.
         let code: UInt8 = isDown ? 2 : 3
@@ -1193,6 +1209,53 @@ public final class ServerSession: @unchecked Sendable {
     ///   to the top-level (so a click anywhere in the grab-window's subtree
     ///   activates the grab).
     /// Returns the matching grab, or nil if no match.
+    /// X11 SubstructureNotifyMask bit per xproto X.h.
+    static let substructureNotifyMask: UInt32 = 1 << 19
+
+    /// If `parent` is a known window with SubstructureNotifyMask set, build
+    /// the notify event with `event = parent` and append it to outbound.
+    /// Per X11 spec each Substructure event mirrors the corresponding
+    /// Structure event on the affected window: client-relevant fields are
+    /// identical, only the `event` field differs (window-itself vs parent).
+    /// `build(eventTarget)` returns the encoded bytes for the event with
+    /// the event field set to the given target.
+    private func notifySubstructure(
+        parent: UInt32,
+        build: (UInt32) -> [UInt8]
+    ) {
+        guard let parentEntry = windows.get(parent),
+              parentEntry.eventMask & Self.substructureNotifyMask != 0 else { return }
+        outbound.append(build(parent))
+    }
+
+    /// Find a passive key grab matching the given (key, modifiers) on the
+    /// path from naturalTarget up to root. Mirrors the button-grab match
+    /// algorithm: AnyKey (0) and AnyModifier (0x8000) wildcards, modifier
+    /// mask in low 8 bits. Used by handleKeyEvent to redirect KeyPress to
+    /// the grab window for accelerator-style bindings (quickplot's
+    /// XtPopupSpringLoaded / Motif accelerators).
+    private func findActivatablePassiveKeyGrab(
+        key: UInt8, modifiers: UInt16, naturalTarget: UInt32
+    ) -> PassiveKeyGrab? {
+        let activeMods = modifiers & 0xFF
+        let anyKey: UInt8 = 0
+        let anyModifier: UInt16 = 0x8000
+        for grab in passiveKeyGrabs {
+            guard grab.key == anyKey || grab.key == key else { continue }
+            let modsMatch = grab.modifiers == anyModifier
+                || (grab.modifiers & 0xFF) == activeMods
+            guard modsMatch else { continue }
+            var cur: UInt32? = naturalTarget
+            var hops = 0
+            while let id = cur, hops < 32 {
+                if id == grab.grabWindow { return grab }
+                cur = windows.get(id)?.parent
+                hops += 1
+            }
+        }
+        return nil
+    }
+
     private func findActivatablePassiveGrab(
         button: UInt8, modifiers: UInt16, naturalTarget: UInt32
     ) -> PassiveButtonGrab? {
@@ -1796,7 +1859,9 @@ public final class ServerSession: @unchecked Sendable {
             foreground: resolveColor(state.foreground),
             lineWidth: state.lineWidth,
             segments: translated,
-            clipRectangles: state.clipRectangles
+            clipRectangles: state.clipRectangles,
+            dashes: state.dashes,
+            dashOffset: state.dashOffset
         )
     }
 
@@ -1827,7 +1892,9 @@ public final class ServerSession: @unchecked Sendable {
             foreground: resolveColor(state.foreground),
             lineWidth: state.lineWidth,
             points: points,
-            clipRectangles: state.clipRectangles
+            clipRectangles: state.clipRectangles,
+            dashes: state.dashes,
+            dashOffset: state.dashOffset
         )
     }
 
@@ -1898,7 +1965,9 @@ public final class ServerSession: @unchecked Sendable {
             foreground: resolveColor(state.foreground),
             lineWidth: state.lineWidth,
             rectangles: translated,
-            clipRectangles: state.clipRectangles
+            clipRectangles: state.clipRectangles,
+            dashes: state.dashes,
+            dashOffset: state.dashOffset
         )
     }
 
@@ -1919,7 +1988,9 @@ public final class ServerSession: @unchecked Sendable {
             foreground: resolveColor(state.foreground),
             lineWidth: state.lineWidth,
             arcs: translated,
-            clipRectangles: state.clipRectangles
+            clipRectangles: state.clipRectangles,
+            dashes: state.dashes,
+            dashOffset: state.dashOffset
         )
     }
 
@@ -2359,20 +2430,39 @@ public final class ServerSession: @unchecked Sendable {
             // ENTIRE window each flip, wiping all scrolled content).
 
         case .destroyWindow(let r):
-            guard validateWindow(r.window, majorOpcode: DestroyWindow.opcode) != nil else { break }
+            guard let entry = validateWindow(r.window, majorOpcode: DestroyWindow.opcode) else { break }
             let wasTopLevel = isTopLevel(r.window)
-            // Capture the containing top-level BEFORE remove so we can
-            // recompute clip regions afterwards.
+            // Capture the containing top-level + parent BEFORE remove so we
+            // can recompute clip regions and emit SubstructureNotify after.
             let preDestroyTopId = topLevelAndOffset(for: r.window)?.0
+            let parentId = entry.parent
             windows.remove(r.window)
             properties.deleteAll(window: r.window)
             if wasTopLevel {
+                // destroyTopLevel emits DestroyNotify on the window itself.
+                // SubstructureNotify to the (root-equivalent) parent isn't
+                // emitted because the root isn't in our windows table — and
+                // no current client listens for top-level destroys via the
+                // root anyway.
                 bridge?.destroyTopLevel(
                     id: r.window, byteOrder: byteOrder,
                     sequence: sequenceNumber, outbound: outbound
                 )
-            } else if let topId = preDestroyTopId, topId != r.window {
-                ClipListEngine.recomputeClips(forTopLevel: topId, in: windows)
+            } else {
+                if let topId = preDestroyTopId, topId != r.window {
+                    ClipListEngine.recomputeClips(forTopLevel: topId, in: windows)
+                }
+                // Per X11 spec: parents with SubstructureNotifyMask receive
+                // DestroyNotify with `event` = the parent. Without this,
+                // toolkit code listening for child-destroyed events (e.g.,
+                // Athena's destroy-callback chain) misses the destroy.
+                let seq = sequenceNumber
+                let dst = r.window
+                notifySubstructure(parent: parentId) { eventTarget in
+                    DestroyNotifyEvent(
+                        sequenceNumber: seq, event: eventTarget, window: dst
+                    ).encode(byteOrder: byteOrder)
+                }
             }
 
         case .mapWindow(let r):
@@ -2530,7 +2620,8 @@ public final class ServerSession: @unchecked Sendable {
             }
 
         case .unmapWindow(let r):
-            guard validateWindow(r.window, majorOpcode: UnmapWindow.opcode) != nil else { break }
+            guard let entry = validateWindow(r.window, majorOpcode: UnmapWindow.opcode) else { break }
+            let parentId = entry.parent
             windows.setMapped(r.window, false)
             log?.log("  UnmapWindow window=0x\(String(r.window, radix: 16)) topLevel=\(isTopLevel(r.window))")
             if isTopLevel(r.window) {
@@ -2538,6 +2629,20 @@ public final class ServerSession: @unchecked Sendable {
                     id: r.window, byteOrder: byteOrder,
                     sequence: sequenceNumber, outbound: outbound
                 )
+            } else {
+                // Descendant unmap: parents with SubstructureNotifyMask
+                // receive UnmapNotify with event=parent. Real-WM toolkit
+                // code uses this to redraw uncovered regions; without it,
+                // the parent may render stale content under the (now hidden)
+                // child.
+                let seq = sequenceNumber
+                let dst = r.window
+                notifySubstructure(parent: parentId) { eventTarget in
+                    UnmapNotifyEvent(
+                        sequenceNumber: seq, event: eventTarget, window: dst,
+                        fromConfigure: false
+                    ).encode(byteOrder: byteOrder)
+                }
             }
             recomputeClipsForSubtreeContaining(r.window)
 
@@ -3013,6 +3118,30 @@ public final class ServerSession: @unchecked Sendable {
                     overrideRedirect: false
                 )
                 outbound.append(ev.encode(byteOrder: byteOrder))
+                // Per X spec: both the OLD and NEW parents receive
+                // ReparentNotify with event=parent if they have
+                // SubstructureNotifyMask. Without it, parent containers
+                // don't redraw their child layouts to reflect the move.
+                let seq = sequenceNumber
+                let win = r.window
+                let newParent = r.parent
+                let rx = r.x, ry = r.y
+                notifySubstructure(parent: oldParent) { eventTarget in
+                    ReparentNotifyEvent(
+                        sequenceNumber: seq, event: eventTarget, window: win,
+                        parent: newParent, x: rx, y: ry,
+                        overrideRedirect: false
+                    ).encode(byteOrder: byteOrder)
+                }
+                if newParent != oldParent {
+                    notifySubstructure(parent: newParent) { eventTarget in
+                        ReparentNotifyEvent(
+                            sequenceNumber: seq, event: eventTarget, window: win,
+                            parent: newParent, x: rx, y: ry,
+                            overrideRedirect: false
+                        ).encode(byteOrder: byteOrder)
+                    }
+                }
                 log?.log("  ReparentWindow window=0x\(String(r.window, radix: 16)) old-parent=0x\(String(oldParent, radix: 16)) new-parent=0x\(String(r.parent, radix: 16)) at (\(r.x),\(r.y))")
                 // Recompute both old and new top-level subtrees.
                 if let oldTopId, oldTopId != r.window {

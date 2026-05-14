@@ -39,7 +39,7 @@ private final class RecordingBridge: WindowBridge, @unchecked Sendable {
     func destroyTopLevel(id: UInt32, byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {}
     func setTopLevelTitle(id: UInt32, title: String) {}
 
-    func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Framer.Rectangle]?) {
+    func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
         polySegments.append(PolySegmentCall(topLevel: topLevel, foreground: foreground, lineWidth: lineWidth, segments: segments))
     }
     func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Framer.Rectangle]?) {

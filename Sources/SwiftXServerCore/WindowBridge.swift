@@ -211,8 +211,14 @@ public protocol WindowBridge: AnyObject, Sendable {
     // pipeline) is preserved: each impl wraps the clip-apply + draw in
     // saveGState/restoreGState.
 
-    func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Rectangle]?)
-    func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Rectangle]?)
+    // For stroke methods, `dashes` is the GC's SetDashes byte pattern (each
+    // byte = a run length in pixels, alternating on/off, first byte = on);
+    // nil or empty = solid line. `dashOffset` is the phase offset along the
+    // path in pixels. Applied via CGContext.setLineDash inside the clip
+    // scope.
+
+    func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32)
+    func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32)
     func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Rectangle]?)
     /// PolyFillRectangle. `function` is the X GC drawing function — primarily
     /// 3 (GXcopy, overwrite) or 6 (GXxor, toggle). XOR is what Athena/Motif
@@ -221,12 +227,12 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// PolyRectangle: stroke the perimeter of each rect (vs PolyFillRectangle
     /// which fills). Used by Athena Command for the highlight border that
     /// appears when the pointer enters the widget.
-    func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Rectangle], clipRectangles: [Rectangle]?)
+    func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Rectangle], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32)
     /// PolyArc: stroke the outline of each elliptical arc. Each arc's bounding
     /// box is (x, y, width, height) in top-level coords, with angles in 64ths
     /// of a degree (angle1 = start, angle2 = extent; positive = counterclockwise).
     /// xclock uses this for the clock face; xeyes for eye outlines.
-    func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc], clipRectangles: [Rectangle]?)
+    func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32)
     /// PolyFillArc: fill the interior of each elliptical arc. Same arc geometry
     /// as drawPolyArc; the filled region is the pie slice from arc center
     /// (default arc-mode=PieSlice; chord mode unhandled per OPCODE_STATUS).
@@ -345,12 +351,12 @@ public extension WindowBridge {
     func writeClipboard(text: String) {}
     func setOnCloseRequest(_ handler: @escaping @Sendable (UInt32) -> Void) {}
     // Default no-ops so unit-test bridges don't have to implement every method.
-    func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Rectangle]?) {}
-    func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Rectangle]?) {}
+    func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
+    func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
     func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Rectangle]?) {}
     func drawPolyFillRectangle(topLevel: UInt32, foreground: RGB16, function: UInt8, rectangles: [Rectangle], clipRectangles: [Rectangle]?) {}
-    func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Rectangle], clipRectangles: [Rectangle]?) {}
-    func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc], clipRectangles: [Rectangle]?) {}
+    func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Rectangle], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
+    func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
     func drawPolyFillArc(topLevel: UInt32, foreground: RGB16, arcs: [Arc], clipRectangles: [Rectangle]?) {}
     func bell() {}
     func startCrossWindowDragTracking() {}

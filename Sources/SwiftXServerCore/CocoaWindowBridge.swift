@@ -472,13 +472,14 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
     // MARK: - Drawing
 
-    public func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Framer.Rectangle]?) {
+    public func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
             self.withClip(ctx, clipRectangles) {
                 applyForeground(ctx, foreground)
                 self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
+                self.applyDashes(ctx, dashes, dashOffset: dashOffset)
                 for s in segments {
                     ctx.move(to: CGPoint(x: CGFloat(s.x1), y: CGFloat(s.y1)))
                     ctx.addLine(to: CGPoint(x: CGFloat(s.x2), y: CGFloat(s.y2)))
@@ -489,7 +490,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
-    public func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Framer.Rectangle]?) {
+    public func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing,
@@ -497,6 +498,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             self.withClip(ctx, clipRectangles) {
                 applyForeground(ctx, foreground)
                 self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
+                self.applyDashes(ctx, dashes, dashOffset: dashOffset)
                 ctx.beginPath()
                 ctx.move(to: CGPoint(x: CGFloat(points[0].x), y: CGFloat(points[0].y)))
                 for p in points.dropFirst() {
@@ -549,6 +551,25 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
         body()
         ctx.restoreGState()
+    }
+
+    /// Apply the GC's SetDashes pattern to the context. nil / empty pattern =
+    /// solid (no-op). Pattern bytes are run lengths in pixels, alternating
+    /// on/off starting with on; phase offset is in pixels along the path.
+    /// Per X spec a pattern of [N] (single byte) is equivalent to [N, N] —
+    /// equal on/off runs. CGContext.setLineDash with one length applies it
+    /// as a uniform on-period, so we duplicate single-byte patterns for
+    /// spec-compliant behavior.
+    private func applyDashes(_ ctx: CGContext, _ dashes: [UInt8]?, dashOffset: UInt32) {
+        guard let dashes = dashes, !dashes.isEmpty else { return }
+        let lengths: [CGFloat]
+        if dashes.count == 1 {
+            let v = CGFloat(dashes[0])
+            lengths = [v, v]
+        } else {
+            lengths = dashes.map { CGFloat($0) }
+        }
+        ctx.setLineDash(phase: CGFloat(dashOffset), lengths: lengths)
     }
 
     private func applyStrokePlane(_ ctx: CGContext, clientLineWidth: UInt32) {
@@ -666,13 +687,14 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
-    public func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Framer.Rectangle], clipRectangles: [Framer.Rectangle]?) {
+    public func drawPolyRectangle(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, rectangles: [Framer.Rectangle], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
             self.withClip(ctx, clipRectangles) {
                 applyForeground(ctx, foreground)
                 self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
+                self.applyDashes(ctx, dashes, dashOffset: dashOffset)
                 // CGContext.stroke(rect) draws a 1-line-width-wide outline of
                 // the rect using the current stroke color + line width.
                 // PolyRectangle batches multiple rects in one request;
@@ -721,13 +743,14 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// arc extent so a 360° arc gets ~64 segments. Avoids CTM-vs-stroke-
     /// pen-width interaction (a scaled CGContext.addArc would also scale
     /// the pen, distorting line width on non-circular arcs).
-    public func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc], clipRectangles: [Framer.Rectangle]?) {
+    public func drawPolyArc(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, arcs: [Arc], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
             self.withClip(ctx, clipRectangles) {
                 applyForeground(ctx, foreground)
                 self.applyStrokePlane(ctx, clientLineWidth: lineWidth)
+                self.applyDashes(ctx, dashes, dashOffset: dashOffset)
                 for a in arcs {
                     let path = ellipseArcPath(arc: a, includePieCenter: false)
                     ctx.beginPath()
