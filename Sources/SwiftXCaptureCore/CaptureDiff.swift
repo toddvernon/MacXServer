@@ -2,13 +2,15 @@ import Foundation
 import Framer
 
 // Walks two .xtap captures and diffs them per direction, message by message.
-// C2S and S2C are aligned independently by ordinal-within-direction: request #0
-// in A vs request #0 in B, event #0 in A vs event #0 in B, and so on. Each
-// pair is compared by its formatted-line representation from ChronoDumper, so
-// "same" means same opcode/kind plus same significant fields (atoms resolved
-// by name, etc.). Resource IDs are not normalized — for the gold-vs-swiftx
-// use case our resourceIdBase matches Sun's, so client-allocated IDs align
-// naturally.
+// C2S and S2C are aligned independently by longest-common-subsequence on the
+// formatted-line representation from ChronoDumper (so "same" means same
+// opcode/kind plus same significant fields with atoms resolved by name).
+// LCS makes the diff tolerant of stream skew: a divergence in the middle no
+// longer poisons every downstream row. Unmatched runs are paired up entry-
+// by-entry as `different` rows; excess on either side becomes onlyA / onlyB.
+//
+// Resource IDs are not normalized — for the gold-vs-swiftx use case our
+// resourceIdBase matches Sun's, so client-allocated IDs align naturally.
 
 public enum DiffStatus: String, Equatable, Sendable {
     case same
@@ -178,20 +180,122 @@ func walkMessages(path: String) throws -> [MessageEntry] {
 }
 
 private func alignAndCompare(direction: Direction, a: [MessageEntry], b: [MessageEntry]) -> [DiffRow] {
+    // LCS matches on a key that strips the leading "[seq=N]" prefix. Sequence
+    // numbers are stream-local: once gold and swiftx diverge in request count,
+    // every downstream message has a different seq even when the semantic
+    // content is identical. Strip for alignment, keep in displayed line.
+    let aKeys = a.map { stripSeqPrefix($0.line) }
+    let bKeys = b.map { stripSeqPrefix($0.line) }
+    let alignment = longestCommonSubsequence(a: aKeys, b: bKeys)
+    return emitRows(direction: direction, a: a, b: b, alignment: alignment)
+}
+
+func stripSeqPrefix(_ line: String) -> String {
+    guard line.hasPrefix("[seq=") else { return line }
+    guard let close = line.firstIndex(of: "]") else { return line }
+    let after = line.index(after: close)
+    if after < line.endIndex, line[after] == " " {
+        return String(line[line.index(after: after)...])
+    }
+    return String(line[after...])
+}
+
+// A single position in the aligned output. Either matched (both indices
+// non-nil) or unmatched (exactly one index non-nil).
+struct AlignmentPair: Equatable {
+    var aIdx: Int?
+    var bIdx: Int?
+}
+
+// Classic O(n*m) LCS on formatted lines. Captures of a few thousand messages
+// fit comfortably; if we ever need to diff 50K-message sessions we'd switch
+// to Hirschberg's for linear-space LCS or Myers for faster near-identical
+// streams. Not worth the complexity now.
+func longestCommonSubsequence(a: [String], b: [String]) -> [AlignmentPair] {
+    let n = a.count, m = b.count
+    if n == 0 { return (0..<m).map { AlignmentPair(aIdx: nil, bIdx: $0) } }
+    if m == 0 { return (0..<n).map { AlignmentPair(aIdx: $0, bIdx: nil) } }
+
+    var dp = Array(repeating: Array(repeating: 0, count: m + 1), count: n + 1)
+    for i in 1...n {
+        for j in 1...m {
+            if a[i-1] == b[j-1] {
+                dp[i][j] = dp[i-1][j-1] + 1
+            } else {
+                dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+            }
+        }
+    }
+
+    var pairs: [AlignmentPair] = []
+    var i = n, j = m
+    while i > 0 || j > 0 {
+        if i > 0, j > 0, a[i-1] == b[j-1] {
+            pairs.append(AlignmentPair(aIdx: i-1, bIdx: j-1))
+            i -= 1
+            j -= 1
+        } else if j > 0, (i == 0 || dp[i][j-1] >= dp[i-1][j]) {
+            pairs.append(AlignmentPair(aIdx: nil, bIdx: j-1))
+            j -= 1
+        } else {
+            pairs.append(AlignmentPair(aIdx: i-1, bIdx: nil))
+            i -= 1
+        }
+    }
+    return pairs.reversed()
+}
+
+// Walks the alignment and produces DiffRows. Matched pairs become `same`.
+// Each contiguous unmatched run gets its A- and B-only entries paired up
+// pairwise as `different` rows; whichever side has more entries spills the
+// excess as onlyA or onlyB after the paired rows.
+private func emitRows(direction: Direction, a: [MessageEntry], b: [MessageEntry], alignment: [AlignmentPair]) -> [DiffRow] {
     var rows: [DiffRow] = []
-    let n = max(a.count, b.count)
-    rows.reserveCapacity(n)
-    for i in 0..<n {
-        let aLine = i < a.count ? a[i].line : nil
-        let bLine = i < b.count ? b[i].line : nil
-        let status: DiffStatus
-        if let aLine = aLine, let bLine = bLine {
-            status = (aLine == bLine) ? .same : .different
-            rows.append(DiffRow(direction: direction, ordinal: i, aLine: aLine, bLine: bLine, status: status))
-        } else if let aLine = aLine {
-            rows.append(DiffRow(direction: direction, ordinal: i, aLine: aLine, bLine: nil, status: .onlyA))
-        } else if let bLine = bLine {
-            rows.append(DiffRow(direction: direction, ordinal: i, aLine: nil, bLine: bLine, status: .onlyB))
+    var ordinal = 0
+    var i = 0
+    while i < alignment.count {
+        let p = alignment[i]
+        if let aIdx = p.aIdx, let bIdx = p.bIdx {
+            rows.append(DiffRow(
+                direction: direction, ordinal: ordinal,
+                aLine: a[aIdx].line, bLine: b[bIdx].line, status: .same
+            ))
+            ordinal += 1
+            i += 1
+            continue
+        }
+
+        var aRun: [Int] = []
+        var bRun: [Int] = []
+        while i < alignment.count {
+            let q = alignment[i]
+            if q.aIdx != nil, q.bIdx != nil { break }
+            if let aIdx = q.aIdx { aRun.append(aIdx) }
+            if let bIdx = q.bIdx { bRun.append(bIdx) }
+            i += 1
+        }
+
+        let pairs = min(aRun.count, bRun.count)
+        for k in 0..<pairs {
+            rows.append(DiffRow(
+                direction: direction, ordinal: ordinal,
+                aLine: a[aRun[k]].line, bLine: b[bRun[k]].line, status: .different
+            ))
+            ordinal += 1
+        }
+        for k in pairs..<aRun.count {
+            rows.append(DiffRow(
+                direction: direction, ordinal: ordinal,
+                aLine: a[aRun[k]].line, bLine: nil, status: .onlyA
+            ))
+            ordinal += 1
+        }
+        for k in pairs..<bRun.count {
+            rows.append(DiffRow(
+                direction: direction, ordinal: ordinal,
+                aLine: nil, bLine: b[bRun[k]].line, status: .onlyB
+            ))
+            ordinal += 1
         }
     }
     return rows
