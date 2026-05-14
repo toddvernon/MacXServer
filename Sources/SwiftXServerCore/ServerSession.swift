@@ -149,6 +149,14 @@ public final class ServerSession: @unchecked Sendable {
     }
     private var passiveKeyGrabs: [PassiveKeyGrab] = []
 
+    /// Root window's event mask. Root isn't in the `windows` table (it has
+    /// no WindowEntry — see RegionStep tradeoffs), but a client can set an
+    /// event mask on it via ChangeWindowAttributes(root, ...) and most-often
+    /// what they care about is SubstructureNotifyMask (1<<19) for being
+    /// notified about new/destroyed top-levels. WMs are the canonical case.
+    /// We don't run a WM but the path should be spec-correct.
+    private var rootEventMask: UInt32 = 0
+
     /// Pointer buttons currently held. Used to manage the X11 implicit
     /// pointer grab that activates on the first ButtonPress and ends when
     /// all buttons are released. `implicitGrab` flag distinguishes our
@@ -1231,19 +1239,28 @@ public final class ServerSession: @unchecked Sendable {
         outbound.append(event.encode(byteOrder: byteOrder))
     }
 
-    /// If `parent` is a known window with SubstructureNotifyMask set, build
-    /// the notify event with `event = parent` and append it to outbound.
-    /// Per X11 spec each Substructure event mirrors the corresponding
-    /// Structure event on the affected window: client-relevant fields are
-    /// identical, only the `event` field differs (window-itself vs parent).
-    /// `build(eventTarget)` returns the encoded bytes for the event with
-    /// the event field set to the given target.
+    /// If `parent` is a known window (or root) with SubstructureNotifyMask
+    /// set, build the notify event with `event = parent` and append it to
+    /// outbound. Per X11 spec each Substructure event mirrors the
+    /// corresponding Structure event on the affected window: client-relevant
+    /// fields are identical, only the `event` field differs (window-itself
+    /// vs parent). `build(eventTarget)` returns the encoded bytes for the
+    /// event with the event field set to the given target. Root is handled
+    /// specially because it has no WindowEntry; its event mask is tracked
+    /// separately via `rootEventMask`.
     private func notifySubstructure(
         parent: UInt32,
         build: (UInt32) -> [UInt8]
     ) {
-        guard let parentEntry = windows.get(parent),
-              parentEntry.eventMask & Self.substructureNotifyMask != 0 else { return }
+        let parentMask: UInt32
+        if parent == config.rootWindowId {
+            parentMask = rootEventMask
+        } else if let parentEntry = windows.get(parent) {
+            parentMask = parentEntry.eventMask
+        } else {
+            return
+        }
+        guard parentMask & Self.substructureNotifyMask != 0 else { return }
         outbound.append(build(parent))
     }
 
@@ -2508,7 +2525,13 @@ public final class ServerSession: @unchecked Sendable {
         case .changeWindowAttributes(let r):
             guard validateWindowOrRoot(r.window, majorOpcode: ChangeWindowAttributes.opcode) else { break }
             if let newMask = ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: CW.eventMask, byteOrder: byteOrder) {
-                windows.setEventMask(r.window, newMask)
+                if r.window == config.rootWindowId {
+                    // Root has no WindowEntry; track its event mask
+                    // separately so SubstructureNotify-on-root works.
+                    rootEventMask = newMask
+                } else {
+                    windows.setEventMask(r.window, newMask)
+                }
             }
             if let newBackPixel = ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: CW.backPixel, byteOrder: byteOrder) {
                 windows.setBackPixel(r.window, newBackPixel)
@@ -2550,15 +2573,22 @@ public final class ServerSession: @unchecked Sendable {
             windows.remove(r.window)
             properties.deleteAll(window: r.window)
             if wasTopLevel {
-                // destroyTopLevel emits DestroyNotify on the window itself.
-                // SubstructureNotify to the (root-equivalent) parent isn't
-                // emitted because the root isn't in our windows table — and
-                // no current client listens for top-level destroys via the
-                // root anyway.
+                // destroyTopLevel emits DestroyNotify(event=window). The
+                // root substructure variant fires too if a WM-style client
+                // registered SubstructureNotifyMask on root via
+                // ChangeWindowAttributes. We don't currently have any such
+                // client but the path is spec-correct.
                 bridge?.destroyTopLevel(
                     id: r.window, byteOrder: byteOrder,
                     sequence: sequenceNumber, outbound: outbound
                 )
+                let seq = sequenceNumber
+                let dst = r.window
+                notifySubstructure(parent: parentId) { eventTarget in
+                    DestroyNotifyEvent(
+                        sequenceNumber: seq, event: eventTarget, window: dst
+                    ).encode(byteOrder: byteOrder)
+                }
             } else {
                 if let topId = preDestroyTopId, topId != r.window {
                     ClipListEngine.recomputeClips(forTopLevel: topId, in: windows)
@@ -2641,6 +2671,18 @@ public final class ServerSession: @unchecked Sendable {
                 let paints = mappedBackgroundPaints(topLevelId: r.window, byteOrder: byteOrder)
                 if !paints.isEmpty {
                     bridge?.paintWindowRects(topLevel: r.window, rects: paints)
+                }
+                // Root substructure notify for new top-level visibility
+                // (fires only if a WM-style client registered
+                // SubstructureNotifyMask on root).
+                let seq = sequenceNumber
+                let win = r.window
+                let isOR = isOverrideRedirect
+                notifySubstructure(parent: preMapEntry.parent) { eventTarget in
+                    MapNotifyEvent(
+                        sequenceNumber: seq, event: eventTarget,
+                        window: win, overrideRedirect: isOR
+                    ).encode(byteOrder: byteOrder)
                 }
             } else {
                 if let (top, dx, dy) = topLevelAndOffset(for: r.window),
@@ -2761,6 +2803,11 @@ public final class ServerSession: @unchecked Sendable {
         case .unmapWindow(let r):
             guard let entry = validateWindow(r.window, majorOpcode: UnmapWindow.opcode) else { break }
             let parentId = entry.parent
+            // Capture the soon-to-be-unmapped child's borderClip. After
+            // unmap + clip recompute that region becomes uncovered on the
+            // parent and needs to be painted + Expose'd. Same shape as the
+            // ConfigureWindow E1.5 path.
+            let preUnmapBorderClip = entry.borderClip
             windows.setMapped(r.window, false)
             log?.log("  UnmapWindow window=0x\(String(r.window, radix: 16)) topLevel=\(isTopLevel(r.window))")
             if isTopLevel(r.window) {
@@ -2768,6 +2815,16 @@ public final class ServerSession: @unchecked Sendable {
                     id: r.window, byteOrder: byteOrder,
                     sequence: sequenceNumber, outbound: outbound
                 )
+                // Root substructure notify (only fires if a WM-style client
+                // set SubstructureNotifyMask on root).
+                let seq = sequenceNumber
+                let dst = r.window
+                notifySubstructure(parent: parentId) { eventTarget in
+                    UnmapNotifyEvent(
+                        sequenceNumber: seq, event: eventTarget, window: dst,
+                        fromConfigure: false
+                    ).encode(byteOrder: byteOrder)
+                }
             } else {
                 // Descendant unmap: parents with SubstructureNotifyMask
                 // receive UnmapNotify with event=parent. Real-WM toolkit
@@ -2784,6 +2841,19 @@ public final class ServerSession: @unchecked Sendable {
                 }
             }
             recomputeClipsForSubtreeContaining(r.window)
+            // Repaint parent's bg over the area the child was occupying
+            // (the captured borderClip — now uncovered) + emit Expose to
+            // parent if it has ExposureMask. Mirrors the ConfigureWindow
+            // E1.5 path. Skipped when the unmap was a top-level (parent
+            // is root and not in the windows table) or borderClip was
+            // already empty (window was unviewable).
+            if !isTopLevel(r.window), !preUnmapBorderClip.isEmpty {
+                repaintParentOverUncovered(
+                    uncovered: preUnmapBorderClip,
+                    parentId: parentId,
+                    byteOrder: byteOrder
+                )
+            }
 
         case .configureWindow(let r):
             guard validateWindowOrRoot(r.window, majorOpcode: ConfigureWindow.opcode) else { break }
@@ -3277,16 +3347,22 @@ public final class ServerSession: @unchecked Sendable {
             // correct for the common case (no SetDashes ever issued).
             gcs.setDashes(r.gc, dashes: r.dashes, offset: r.dashOffset)
 
-        case .putImage:
+        case .putImage(let r):
             // PutImage needs depth/format-aware decoding (Bitmap / XYPixmap
             // / ZPixmap) and a pixel-storage model on PixmapEntry that we
-            // don't have yet — pixmaps are tracked id/depth/dims-only. So
-            // for now this is a documented no-op; clients that PutImage to
-            // a pixmap, then CopyArea from it to a window, will see no
-            // contents. Logged in OPCODE_STATUS / SHORTCUTS so we don't
-            // forget. xeyes eyeball texture lands here; cosmetic only,
-            // doesn't break event flow.
-            break
+            // don't have yet — pixmaps are tracked id/depth/dims-only.
+            // For now this is a documented no-op (logged in OPCODE_STATUS /
+            // SHORTCUTS). We still validate drawable + GC arguments at
+            // entry per XError-honesty policy: unknown drawable → BadDrawable,
+            // unknown GC → BadGC. The silent-drop is preserved for the
+            // valid-drawable case (load-bearing for dt-apps' button chrome
+            // pattern — same as the "draws to pixmaps silently drop" entry).
+            if !isKnownDrawable(r.drawable) {
+                emitError(.drawable, majorOpcode: PutImage.opcode, badResourceId: r.drawable)
+                break
+            }
+            guard validateGC(r.gc, majorOpcode: PutImage.opcode) != nil else { break }
+            log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) format=\(r.format) depth=\(r.depth) \(r.width)x\(r.height) at (\(r.dstX),\(r.dstY)) — silent-drop, see SHORTCUTS")
 
         case .reparentWindow(let r):
             // Update the window's parent + position. We don't move the
@@ -3374,15 +3450,20 @@ public final class ServerSession: @unchecked Sendable {
             // Set mapped=false on every direct child of the requested
             // window. Emit UnmapNotify(event=parent) for each via
             // notifySubstructure if the parent has SubstructureNotifyMask.
-            // GraphicsExposure on regions that become uncovered is still
-            // skipped — separate work.
-            var unmappedChildren: [UInt32] = []
+            // After the recompute, repaint parent's bg over each child's
+            // previously-occupied borderClip + emit Expose if the parent
+            // has ExposureMask. Same shape as the UnmapWindow descendant
+            // path.
+            var unmappedChildren: [(UInt32, Region)] = []  // (id, preUnmapBorderClip)
             for (id, w) in windows.windows where w.parent == r.window && w.mapped {
-                if var e = windows.get(id) { e.mapped = false; windows.insert(e) }
-                unmappedChildren.append(id)
+                if var e = windows.get(id) {
+                    unmappedChildren.append((id, e.borderClip))
+                    e.mapped = false
+                    windows.insert(e)
+                }
             }
             let seq = sequenceNumber
-            for childId in unmappedChildren {
+            for (childId, _) in unmappedChildren {
                 notifySubstructure(parent: r.window) { eventTarget in
                     UnmapNotifyEvent(
                         sequenceNumber: seq, event: eventTarget, window: childId,
@@ -3392,6 +3473,18 @@ public final class ServerSession: @unchecked Sendable {
             }
             log?.log("  UnmapSubwindows parent=0x\(String(r.window, radix: 16))")
             recomputeClipsForSubtreeContaining(r.window)
+            // After the recompute, repaint parent over each child's
+            // previously-covered region. Root parent (windows.get returns
+            // nil) is skipped — root isn't in our windows table.
+            if windows.get(r.window) != nil {
+                for (_, preUnmapClip) in unmappedChildren where !preUnmapClip.isEmpty {
+                    repaintParentOverUncovered(
+                        uncovered: preUnmapClip,
+                        parentId: r.window,
+                        byteOrder: byteOrder
+                    )
+                }
+            }
 
         case .grabButton(let r):
             guard validateWindowOrRoot(r.grabWindow, majorOpcode: GrabButton.opcode) else { break }

@@ -517,6 +517,50 @@ final class XErrorEmissionTests: XCTestCase {
         }
     }
 
+    func testCreateWindowOnRootEmitsSubstructureNotifyWhenMaskSet() throws {
+        // A WM-style client sets SubstructureNotifyMask on root, then a new
+        // top-level appears. Root should receive CreateNotify(event=root).
+        // This path is dormant for the captured app suite (no WM client)
+        // but locks in the root-substructure-notify plumbing.
+        let session = runningSession(byteOrder: .lsbFirst)
+
+        let substructureNotifyMask: UInt32 = 1 << 19
+        var maskValueList: [UInt8] = []
+        for shift in [0, 8, 16, 24] {
+            maskValueList.append(UInt8(truncatingIfNeeded: substructureNotifyMask >> shift))
+        }
+        _ = session.feed(Request.changeWindowAttributes(ChangeWindowAttributes(
+            window: ServerConfig.default.rootWindowId,
+            valueMask: 1 << 11,   // CWEventMask
+            valueList: maskValueList
+        )).encode(byteOrder: .lsbFirst))
+
+        let topWid: UInt32 = ServerConfig.default.resourceIdBase + 1
+        let bytes = session.feed(Request.createWindow(CreateWindow(
+            depth: 8, wid: topWid, parent: ServerConfig.default.rootWindowId,
+            x: 10, y: 20, width: 100, height: 50, borderWidth: 0,
+            windowClass: .inputOutput, visual: ServerConfig.default.rootVisualId,
+            valueMask: 0, valueList: []
+        )).encode(byteOrder: .lsbFirst))
+
+        // Walk for CreateNotify (code 16) with event=root, window=topWid.
+        var found = false
+        var offset = 0
+        while offset + 32 <= bytes.count {
+            let frame = Array(bytes[offset..<offset+32])
+            guard let msg = try? ServerMessage.decodeOne(from: frame, byteOrder: .lsbFirst),
+                  case .event(let ev) = msg else { offset += 32; continue }
+            if ev.code == 16,
+               let cn = try? CreateNotifyEvent.decode(from: ev.bytes, byteOrder: .lsbFirst),
+               cn.parent == ServerConfig.default.rootWindowId, cn.window == topWid {
+                found = true
+                break
+            }
+            offset += msg.bytes.count
+        }
+        XCTAssertTrue(found, "expected CreateNotify(event=root, window=topWid) on outbound")
+    }
+
     func testEmittedErrorCarriesCurrentSequenceNumber() throws {
         // After setup the session's sequenceNumber is 0; feed one InternAtom
         // request to advance it, then emit an error and assert the seq field
