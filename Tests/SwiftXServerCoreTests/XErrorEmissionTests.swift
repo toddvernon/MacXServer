@@ -280,6 +280,54 @@ final class XErrorEmissionTests: XCTestCase {
         XCTAssertEqual(err.majorOpcode, GetProperty.opcode)
     }
 
+    func testPolyFillRectangleWithUnknownGCEmitsBadGC() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        // Create a real top-level window first so the drawable check passes
+        // (root silently drops via the "known but unrenderable" branch,
+        // never reaching GC validation).
+        let wid: UInt32 = ServerConfig.default.resourceIdBase + 1
+        let create = Request.createWindow(CreateWindow(
+            depth: 8, wid: wid, parent: ServerConfig.default.rootWindowId,
+            x: 0, y: 0, width: 100, height: 100, borderWidth: 0,
+            windowClass: .inputOutput, visual: ServerConfig.default.rootVisualId,
+            valueMask: 0, valueList: []
+        ))
+        _ = session.feed(create.encode(byteOrder: .lsbFirst))
+
+        let bogusGC: UInt32 = 0xBADBADBA
+        let pfr = Request.polyFillRectangle(PolyFillRectangle(
+            drawable: wid, gc: bogusGC,
+            rectangles: [Rectangle(x: 0, y: 0, width: 5, height: 5)]
+        ))
+        let bytes = session.feed(pfr.encode(byteOrder: .lsbFirst))
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.gc.rawValue, "must be BadGC")
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogusGC)
+        XCTAssertEqual(err.majorOpcode, PolyFillRectangle.opcode)
+    }
+
+    func testFreeGCOnUnknownGCEmitsBadGC() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogusGC: UInt32 = 0x12121212
+        let bytes = session.feed(
+            Request.freeGC(FreeGC(gc: bogusGC)).encode(byteOrder: .lsbFirst)
+        )
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.gc.rawValue)
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogusGC)
+        XCTAssertEqual(err.majorOpcode, FreeGC.opcode)
+    }
+
     func testEmittedErrorCarriesCurrentSequenceNumber() throws {
         // After setup the session's sequenceNumber is 0; feed one InternAtom
         // request to advance it, then emit an error and assert the seq field

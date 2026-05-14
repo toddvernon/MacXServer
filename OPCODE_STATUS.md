@@ -21,6 +21,17 @@ When new R6-spec edge cases get verified, ratchet Confidence up. When a client m
 - **Stub** — returns enough to keep clients happy (replies have correct shape and sequence numbers) but doesn't do the actual work the opcode names. See `SHORTCUTS.md`.
 - **Not implemented** — opcode is not handled yet. Either errors out, gets ignored, or the server doesn't survive seeing it.
 
+## XError emission (cross-cutting)
+
+Per the XError-honesty policy (CLAUDE.md, DECISIONS.md 2026-05-13), handlers validate their resource arguments at entry and emit the spec-correct XError on bad input:
+
+- Window-taking handlers route through `validateWindow` (BadWindow) or `validateWindowOrRoot` (root accepted, BadWindow otherwise).
+- Drawable-taking handlers (poly/image-text/copy) route through `validateDrawTarget` (BadDrawable for unknown IDs; silent drop for pixmap/root targets we don't yet render to — see SHORTCUTS).
+- GC-taking handlers (poly/image-text/copy + ChangeGC/FreeGC/SetClipRectangles/SetDashes) route through `validateGC` (BadGC).
+- The unknown-opcode dispatcher emits BadRequest.
+
+Individual row notes call out behavior specific to a given opcode; the validation-on-entry behavior above is shared and isn't repeated per row.
+
 ## Status
 
 Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows as they're encountered.
@@ -58,8 +69,8 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | 53 | CreatePixmap | impl (M1 track-only) | medium | 2026-05-07 | Records id/depth/dimensions. No backing pixels (M3). |
 | 54 | FreePixmap | impl | medium | 2026-05-07 | Removes from table. |
 | 55 | CreateGC | impl (color xterm) | medium | 2026-05-08 | Parses valueMask+valueList into a per-bit `[UInt32: UInt32]` dict on the GCEntry. GCState.materialise reads directly from the dict. |
-| 56 | ChangeGC | impl (color xterm) | medium | 2026-05-08 | Re-parses the partial valueList using the change's own mask and merges into the entry's per-bit dict, overwriting prior values. Earlier version concatenated raw bytes onto the existing valueList; the materialiser then kept reading the original CreateGC foreground, so xterm's per-glyph color switches never landed. Fix is needed for ANSI color rendering and any client that ever re-sets a GC attribute. |
-| 60 | FreeGC | impl | medium | 2026-05-07 | Removes from table. |
+| 56 | ChangeGC | impl (color xterm) | medium | 2026-05-14 | Re-parses the partial valueList using the change's own mask and merges into the entry's per-bit dict, overwriting prior values. Earlier version concatenated raw bytes onto the existing valueList; the materialiser then kept reading the original CreateGC foreground, so xterm's per-glyph color switches never landed. Fix is needed for ANSI color rendering and any client that ever re-sets a GC attribute. Unknown GC → BadGC per XError-honesty policy. |
+| 60 | FreeGC | impl | medium | 2026-05-14 | Removes from table. Unknown GC → BadGC per XError-honesty policy. |
 | 72 | PutImage | accepted, no-op | low | 2026-05-07 | Bytes are decoded by framer but pixels are dropped. xclock writes icon bitmaps; we don't surface them anywhere yet. |
 | 84 | AllocColor | impl | medium | 2026-05-07 | Monotonic pixel (start=16), pixel→RGB cached. No real palette. |
 | 98 | QueryExtension | impl (stub) | medium | 2026-05-07 | Reports `present=false` for everything. |
@@ -79,8 +90,8 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | 40 | TranslateCoordinates | impl | medium | 2026-05-14 | Computes (srcX, srcY) in dstWindow's coords by walking each window's top-level-local origin chain. Top-levels are at (0,0) in root coords (matches our `rootX`/`rootY` event stamping convention). Always sameScreen=true. child=0 — we don't currently identify the child of dst containing the destination point; would need a hit-test walk. Replaces a prior silent-drop that blocked quickplot at request 2086 forever. Unknown src or dst window → BadWindow; root accepted on either side. |
 | 68 | PolyArc | impl | medium | 2026-05-10 | Strokes elliptical arcs via parametric sampling on a CGPath (~64 segments per 360° to keep stroke pen width uniform on non-circular ellipses). Honors GC foreground + lineWidth. Multi-arc batching supported. xclock face circle + xeyes outlines render via this. |
 | 71 | PolyFillArc | impl | medium | 2026-05-10 | Fills the pie slice via parametric path sampling. Default arc-mode is PieSlice; chord mode (GC arcMode bit) NOT honored — chord-filled arcs render as pie slices instead. xeyes white sclera renders via this. |
-| 59 | SetClipRectangles | tracked, not honored | low | 2026-05-10 | Clip rectangles + clipXOrigin/clipYOrigin stored on the GCEntry; resolved into GCState on read. Drawing pipeline does NOT yet apply them — every draw bridge method would need a `clipRectangles:` parameter (~10 signatures). Tracked separately so a future targeted draw-method sweep can pick them up without losing client state. xfontsel listbox + Athena Viewport scrolling + Motif text widget bounds will overflow widget edges until honored. |
-| 58 | SetDashes | tracked, not honored | low | 2026-05-10 | Dash bytes + dashOffset stored on the GCEntry. Stroke methods don't yet apply via CGContext.setLineDash. Solid lines still correct for the common case (no SetDashes ever issued). |
+| 59 | SetClipRectangles | tracked, not honored | low | 2026-05-14 | Clip rectangles + clipXOrigin/clipYOrigin stored on the GCEntry; resolved into GCState on read. Drawing pipeline does NOT yet apply them — every draw bridge method would need a `clipRectangles:` parameter (~10 signatures). Tracked separately so a future targeted draw-method sweep can pick them up without losing client state. xfontsel listbox + Athena Viewport scrolling + Motif text widget bounds will overflow widget edges until honored. Unknown GC → BadGC per XError-honesty policy. |
+| 58 | SetDashes | tracked, not honored | low | 2026-05-14 | Dash bytes + dashOffset stored on the GCEntry. Stroke methods don't yet apply via CGContext.setLineDash. Solid lines still correct for the common case (no SetDashes ever issued). Unknown GC → BadGC per XError-honesty policy. |
 | 72 | PutImage | accepted, no-op | low | 2026-05-10 | Bytes decoded by framer but pixels dropped — pixmaps are tracked id/depth/dims-only with no pixel storage. Full impl requires a PixelBuffer type on PixmapEntry plus per-format decoder (Bitmap/XYPixmap/ZPixmap × depth). Cosmetic for clients that PutImage to a pixmap then CopyArea to a window (xeyes eyeball texture, dialog button glyphs); doesn't break event flow. |
 | 7  | ReparentWindow | impl | medium | 2026-05-14 | Updates WindowEntry.parent + position, emits ReparentNotify on the moved window. Does NOT physically move the backing NSWindow (rootless: top-level moves are AppKit's responsibility); intra-NSWindow descendant reparenting works. SubstructureNotifyMask propagation to old/new parents is NOT emitted. Unknown window → BadWindow per XError-honesty policy; parent validation deferred to the root-aware sweep. |
 | 5  | DestroySubwindows | impl | medium | 2026-05-14 | Recursively destroys every descendant of the target window via destroySubtree helper. Does NOT emit DestroyNotify (would require iterating descendants and checking SubstructureNotifyMask on each parent). Unknown window → BadWindow; root accepted. (Previous entry mislabeled this row as opcode 4 — that's DestroyWindow.) |

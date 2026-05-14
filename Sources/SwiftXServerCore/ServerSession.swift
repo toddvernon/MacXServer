@@ -1534,6 +1534,19 @@ public final class ServerSession: @unchecked Sendable {
         return false
     }
 
+    /// Validate a graphics context argument. Returns the GCEntry when known;
+    /// emits BadGC referencing the bad ID and returns nil otherwise. Used by
+    /// every handler that takes a `gc` argument (draw ops, ChangeGC, FreeGC,
+    /// SetClipRectangles, SetDashes). Captured Sun streams reference client-
+    /// allocated GC IDs only, and our resourceIdBase matches Sun's, so this
+    /// validation should never trip on replay; live clients trigger it only
+    /// when they pass a freed or never-created GC ID.
+    func validateGC(_ gc: UInt32, majorOpcode: UInt8) -> GCEntry? {
+        if let entry = gcs.get(gc) { return entry }
+        emitError(.gc, majorOpcode: majorOpcode, badResourceId: gc)
+        return nil
+    }
+
     /// Validate a drawable for a drawing request and resolve it to a render
     /// target. Returns (topLevel, dx, dy) when the drawable is a renderable
     /// window subtree; nil otherwise. For unknown drawable IDs, emits
@@ -1769,6 +1782,7 @@ public final class ServerSession: @unchecked Sendable {
 
     private func handlePolySegment(_ r: PolySegment, byteOrder: ByteOrder) {
         guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolySegment.opcode) else { return }
+        guard validateGC(r.gc, majorOpcode: PolySegment.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         let translated = r.segments.map {
@@ -1787,6 +1801,7 @@ public final class ServerSession: @unchecked Sendable {
 
     private func handlePolyLine(_ r: PolyLine, byteOrder: ByteOrder) {
         guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyLine.opcode) else { return }
+        guard validateGC(r.gc, majorOpcode: PolyLine.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         // CoordinateMode.previous means each subsequent point is a delta from
@@ -1816,6 +1831,7 @@ public final class ServerSession: @unchecked Sendable {
 
     private func handleFillPoly(_ r: FillPoly, byteOrder: ByteOrder) {
         guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: FillPoly.opcode) else { return }
+        guard validateGC(r.gc, majorOpcode: FillPoly.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         var points: [DrawPoint] = []
@@ -1845,6 +1861,7 @@ public final class ServerSession: @unchecked Sendable {
 
     private func handlePolyFillRectangle(_ r: PolyFillRectangle, byteOrder: ByteOrder) {
         guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyFillRectangle.opcode) else { return }
+        guard validateGC(r.gc, majorOpcode: PolyFillRectangle.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         let translated = r.rectangles.map {
@@ -1863,6 +1880,7 @@ public final class ServerSession: @unchecked Sendable {
 
     private func handlePolyRectangle(_ r: PolyRectangle, byteOrder: ByteOrder) {
         guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyRectangle.opcode) else { return }
+        guard validateGC(r.gc, majorOpcode: PolyRectangle.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         let translated = r.rectangles.map {
@@ -1881,6 +1899,7 @@ public final class ServerSession: @unchecked Sendable {
 
     private func handlePolyArc(_ r: PolyArc, byteOrder: ByteOrder) {
         guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyArc.opcode) else { return }
+        guard validateGC(r.gc, majorOpcode: PolyArc.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         let translated = r.arcs.map {
@@ -1900,6 +1919,7 @@ public final class ServerSession: @unchecked Sendable {
 
     private func handlePolyFillArc(_ r: PolyFillArc, byteOrder: ByteOrder) {
         guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyFillArc.opcode) else { return }
+        guard validateGC(r.gc, majorOpcode: PolyFillArc.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         let translated = r.arcs.map {
@@ -1918,6 +1938,7 @@ public final class ServerSession: @unchecked Sendable {
 
     private func handleImageText8(_ r: ImageText8, byteOrder: ByteOrder) {
         guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: ImageText8.opcode) else { return }
+        guard validateGC(r.gc, majorOpcode: ImageText8.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         // Pull the GC's font; fall back to "fixed" if no font set.
@@ -1939,6 +1960,7 @@ public final class ServerSession: @unchecked Sendable {
 
     private func handlePolyText8(_ r: PolyText8, byteOrder: ByteOrder) {
         guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyText8.opcode) else { return }
+        guard validateGC(r.gc, majorOpcode: PolyText8.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
         let resolvedFont: ResolvedFont
@@ -1971,6 +1993,7 @@ public final class ServerSession: @unchecked Sendable {
             emitError(.drawable, majorOpcode: CopyArea.opcode, badResourceId: r.dstDrawable)
             return
         }
+        guard validateGC(r.gc, majorOpcode: CopyArea.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         // Phase 1: same-window copies only (xterm's scrolling case).
         guard let (srcTop, srcDX, srcDY) = topLevelAndOffset(for: r.srcDrawable),
@@ -2700,9 +2723,11 @@ public final class ServerSession: @unchecked Sendable {
             gcs.insert(id: r.cid, drawable: r.drawable, valueMask: r.valueMask, valueList: r.valueList, byteOrder: byteOrder)
 
         case .changeGC(let r):
+            guard validateGC(r.gc, majorOpcode: ChangeGC.opcode) != nil else { break }
             gcs.change(r.gc, valueMask: r.valueMask, valueList: r.valueList, byteOrder: byteOrder)
 
         case .freeGC(let r):
+            guard validateGC(r.gc, majorOpcode: FreeGC.opcode) != nil else { break }
             gcs.remove(r.gc)
 
         case .allocColor(let r):
@@ -2891,6 +2916,7 @@ public final class ServerSession: @unchecked Sendable {
             handlePolyFillArc(r, byteOrder: byteOrder)
 
         case .setClipRectangles(let r):
+            guard validateGC(r.gc, majorOpcode: SetClipRectangles.opcode) != nil else { break }
             // Update the GC's clip rectangles + clip origin. The rendering
             // pipeline does NOT yet honor these (would require threading
             // clip through every draw bridge method); the data is tracked
@@ -2903,6 +2929,7 @@ public final class ServerSession: @unchecked Sendable {
             )
 
         case .setDashes(let r):
+            guard validateGC(r.gc, majorOpcode: SetDashes.opcode) != nil else { break }
             // Update the GC's dash pattern + offset. Same caveat as
             // SetClipRectangles: data is tracked on the GCEntry, but the
             // stroke methods don't yet apply dashes via CGContext.
