@@ -100,6 +100,45 @@ final class ConvertSelectionTests: XCTestCase {
         XCTAssertEqual(sn.target, 31)
     }
 
+    func testSelectionMediatorDispatchesCorrectly() {
+        // White-box: poke the mediator directly to verify the three-way
+        // dispatch (stub / real client / no owner). The ServerSession
+        // ConvertSelection case is a thin shell over this; the routing
+        // policy lives here now.
+        let session = runningSession()
+        let primary: UInt32 = 1
+        let customize = session.atoms.intern("Customize Data:0")
+        // Pre-installed by the mediator at init time → stub owner.
+        let stubResult = session.selectionMediator.convertSelection(ConvertSelection(
+            requestor: 0xABC, selection: customize, target: 31, property: 5, time: 1
+        ))
+        if case .stubOwnerReplyEmpty(let win) = stubResult {
+            XCTAssertEqual(win, 0xFFFE_0003, "CDE customization daemon stub")
+        } else {
+            XCTFail("expected stubOwnerReplyEmpty, got \(stubResult)")
+        }
+
+        // Register a real-client owner and check forwarding path.
+        session.coordinator.setSelectionOwner(primary, window: 0x4400_0010, time: 7)
+        let fwdResult = session.selectionMediator.convertSelection(ConvertSelection(
+            requestor: 0xABC, selection: primary, target: 31, property: 5, time: 7
+        ))
+        if case .forwardToRealOwner(let win) = fwdResult {
+            XCTAssertEqual(win, 0x4400_0010)
+        } else {
+            XCTFail("expected forwardToRealOwner, got \(fwdResult)")
+        }
+
+        // Unowned selection.
+        let unowned = session.atoms.intern("UNOWNED_SEL_TEST")
+        let noOwnerResult = session.selectionMediator.convertSelection(ConvertSelection(
+            requestor: 0xABC, selection: unowned, target: 31, property: 5, time: 7
+        ))
+        if case .replyNoOwner = noOwnerResult {} else {
+            XCTFail("expected replyNoOwner, got \(noOwnerResult)")
+        }
+    }
+
     func testConvertSelectionWithNoOwnerEmitsPropertyNone() throws {
         let session = runningSession()
         let unownedAtom = session.atoms.intern("UNOWNED_FOR_TEST")

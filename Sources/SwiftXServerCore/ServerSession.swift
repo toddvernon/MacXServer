@@ -37,6 +37,12 @@ public final class ServerSession: @unchecked Sendable {
     public let cursors = CursorTable()
     public let properties = PropertyTable()
 
+    /// Selection-conversion policy: routes ConvertSelection to either
+    /// real-client owners (forward as SelectionRequest event) or server-
+    /// internal stubs (short-circuit with empty SelectionNotify success).
+    /// Owns the CDE customization daemon impersonation setup.
+    public let selectionMediator: SelectionMediator
+
     public let outbound: OutboundQueue
     public let bridge: WindowBridge?
 
@@ -211,6 +217,13 @@ public final class ServerSession: @unchecked Sendable {
         self.coordinator = coordinator
         self.clipboardPrefs = clipboardPrefs
         self.log = log
+        self.selectionMediator = SelectionMediator(
+            atoms: coordinator.atoms,
+            coordinator: coordinator,
+            properties: properties,
+            windows: windows,
+            config: config
+        )
         // Serial, target = global userInitiated. Identifier carries the
         // resource-id base so multi-client logs can tell sessions apart.
         self.protocolQueue = DispatchQueue(
@@ -402,69 +415,9 @@ public final class ServerSession: @unchecked Sendable {
             value: Array(resourceManagerText.utf8)
         )
 
-        // Impersonate the CDE customization daemon for the "Customize Data:N"
-        // selection. dtcalc / dtterm / probably all dt-apps probe this
-        // selection at init: gold shows GetSelectionOwner returning a daemon
-        // window, then a direct GetProperty(SDT Pixel Set) on that window.
-        // When the selection has no owner (our prior behaviour), dt apps fall
-        // back to a formal ConvertSelection that we answered with
-        // property=None per spec — Xt then wedges indefinitely (verified by
-        // capture+wait 2 minutes 2026-05-10). The "no daemon" fallback in
-        // Solaris Xt is apparently untested in real installs (dtsession is
-        // always running under CDE), so its timeout-or-fall-through path
-        // doesn't actually fire.
-        //
-        // Fix: pretend a daemon is here. Register a stub window as owner of
-        // Customize Data:0; the ConvertSelection handler below short-circuits
-        // any selection owned by a stub window — writes empty bytes to the
-        // requestor's property and replies SelectionNotify(property=p) to
-        // signal "successfully converted to empty data". dt apps then fall
-        // back to compiled defaults for colours and proceed to MapWindow.
-        let cdeDaemonWindow: UInt32 = 0xFFFE_0003
-        windows.insert(WindowEntry(
-            id: cdeDaemonWindow,
-            parent: config.rootWindowId,
-            depth: 0,
-            x: -1, y: -1, width: 1, height: 1,
-            borderWidth: 0,
-            windowClass: .inputOnly,
-            visual: 0,
-            valueMask: 0,
-            valueList: [],
-            mapped: false,
-            eventMask: 0
-        ))
-        let customizeAtom = atoms.intern("Customize Data:0")
-        coordinator.setSelectionOwner(customizeAtom, window: cdeDaemonWindow, time: 0)
-
-        // Publish the "SDT Pixel Set" property on the fake daemon. CDE dt-apps
-        // (dtcalc, dtterm, dthelpview, dticon — verified 2026-05-10) read this
-        // BEFORE doing the formal ConvertSelection, via:
-        //   InternAtom("SDT Pixel Set", only-if-exists)
-        //   GetProperty(daemonWindow, SDT Pixel Set)
-        // If the atom doesn't exist server-side, dtcalc skips the direct read
-        // and falls through to ConvertSelection, where it gets empty bytes
-        // (our short-circuit) and renders in its monochrome compiled fallback
-        // palette (black background, white text). Providing the actual gold
-        // CDE-daemon bytes here lets dt-apps take the colour palette path.
-        //
-        // Bytes captured 2026-05-10 from u5's real CDE customization daemon
-        // via dtcalc-sun.xtap seq=29 GetProperty reply. The contents are an
-        // ASCII string of underscore-separated colormap pixel indices in hex
-        // — the daemon's per-screen palette manifest. dt-apps parse this then
-        // run their own AllocColor sequence to get back consistent pixels.
-        let sdtPixelSetAtom = atoms.intern("SDT Pixel Set")
-        let sdtPixelSetBytes = Array(
-            "2_4_8_6_7_5_9_d_b_c_a_e_12_10_11_f_13_17_15_16_14_9_d_b_c_a_9_d_b_c_a_e_12_10_11_f_9_d_b_c_a_1".utf8
-        )
-        properties.change(
-            window: cdeDaemonWindow,
-            property: sdtPixelSetAtom,
-            type: stringAtom,                  // STRING (predefined atom 31)
-            format: 8,
-            mode: 0,
-            value: sdtPixelSetBytes
-        )
+        // CDE customization daemon impersonation. See SelectionMediator
+        // for the rationale + the captured-from-u5 SDT Pixel Set bytes.
+        selectionMediator.installCDECustomizationDaemonImpersonation()
     }
 
     /// User asked to close one of our NSWindows (red traffic-light button,
@@ -3657,64 +3610,50 @@ public final class ServerSession: @unchecked Sendable {
         // we silent-dropped opcode 24.
         case .convertSelection(let r):
             log?.log("  ConvertSelection requestor=0x\(String(r.requestor, radix: 16)) sel=\(r.selection) target=\(r.target) prop=\(r.property)")
-            if let ownerState = coordinator.selectionOwner(r.selection) {
-                // Owner-id range 0xFFFE_0000+ is our server-internal stubs
-                // (e.g. the fake CDE customization daemon at 0xFFFE_0003).
-                // No real client is listening for SelectionRequest events
-                // on that window, so we'd wedge the requestor if we just
-                // forwarded. Short-circuit: write empty bytes to the
-                // requestor's property and emit SelectionNotify(property=p)
-                // to signal "converted successfully to empty data". dt apps
-                // get an empty SDT-Pixel-Set-equivalent, fall back to
-                // compiled colour defaults, and proceed to MapWindow.
-                if ownerState.window >= 0xFFFE_0000 {
-                    properties.change(
-                        window: r.requestor,
-                        property: r.property,
-                        type: r.target,
-                        format: 8,
-                        mode: 0,
-                        value: []
-                    )
-                    // CRITICAL: the time field on SelectionNotify MUST be the
-                    // exact time Xt put in the ConvertSelection request. Xt's
-                    // HandleSelectionReplies in X11R6 Selection.c uses
-                    // MATCH_SELECT, which checks `event->time == info->time`
-                    // and silently drops the event if they differ. We used to
-                    // substitute serverTime when r.time was 0 (CurrentTime) —
-                    // that substitution is correct for server-generated events
-                    // like ButtonPress where time=0 confuses clients, but it's
-                    // wrong for selection events where the time round-trips
-                    // verbatim per spec. Bug verified 2026-05-10: dtcalc/Xt
-                    // wedged indefinitely on Customize Data:0 conversion
-                    // because Xt was discarding our reply via MATCH_SELECT.
-                    let event = SelectionNotifyEvent(
-                        sequenceNumber: sequenceNumber,
-                        time: r.time,
-                        requestor: r.requestor,
-                        selection: r.selection,
-                        target: r.target,
-                        property: r.property
-                    )
-                    outbound.append(event.encode(byteOrder: byteOrder))
-                    log?.log("  → stub-daemon SelectionNotify(empty) for sel=\(r.selection) prop=\(r.property) time=\(r.time)")
-                } else {
-                    let event = SelectionRequestEvent(
-                        sequenceNumber: sequenceNumber,
-                        time: r.time,
-                        owner: ownerState.window,
-                        requestor: r.requestor,
-                        selection: r.selection,
-                        target: r.target,
-                        property: r.property
-                    )
-                    outbound.append(event.encode(byteOrder: byteOrder))
-                    log?.log("  → forwarded SelectionRequest to owner=0x\(String(ownerState.window, radix: 16))")
-                }
-            } else {
-                // No owner — reply directly to requestor with property=None.
-                // Time MUST be the same as the ConvertSelection (see comment
-                // above on Xt's MATCH_SELECT check). Do not substitute.
+            // CRITICAL: every SelectionNotify below must echo `r.time`
+            // verbatim. Xt's HandleSelectionReplies in X11R6 Selection.c
+            // uses MATCH_SELECT, which checks `event->time == info->time`
+            // and silently drops the event if they differ. Do NOT
+            // substitute serverTime for selection events (server-generated
+            // events like ButtonPress are a different story).
+            switch selectionMediator.convertSelection(r) {
+            case .stubOwnerReplyEmpty:
+                // Stub owner (e.g. CDE customization daemon at 0xFFFE_0003).
+                // Write empty bytes to the requestor's property and emit
+                // SelectionNotify(property=p) signalling success. dt apps
+                // get empty bytes for whatever they're trying to convert,
+                // fall back to compiled defaults, and proceed.
+                properties.change(
+                    window: r.requestor, property: r.property, type: r.target,
+                    format: 8, mode: 0, value: []
+                )
+                let event = SelectionNotifyEvent(
+                    sequenceNumber: sequenceNumber,
+                    time: r.time,
+                    requestor: r.requestor,
+                    selection: r.selection,
+                    target: r.target,
+                    property: r.property
+                )
+                outbound.append(event.encode(byteOrder: byteOrder))
+                log?.log("  → stub-daemon SelectionNotify(empty) for sel=\(r.selection) prop=\(r.property) time=\(r.time)")
+
+            case .forwardToRealOwner(let ownerWindow):
+                let event = SelectionRequestEvent(
+                    sequenceNumber: sequenceNumber,
+                    time: r.time,
+                    owner: ownerWindow,
+                    requestor: r.requestor,
+                    selection: r.selection,
+                    target: r.target,
+                    property: r.property
+                )
+                outbound.append(event.encode(byteOrder: byteOrder))
+                log?.log("  → forwarded SelectionRequest to owner=0x\(String(ownerWindow, radix: 16))")
+
+            case .replyNoOwner:
+                // No owner — reply directly to requestor with property=None
+                // per spec.
                 let event = SelectionNotifyEvent(
                     sequenceNumber: sequenceNumber,
                     time: r.time,
