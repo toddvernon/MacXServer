@@ -189,6 +189,25 @@ final class XErrorEmissionTests: XCTestCase {
         XCTAssertEqual(err.majorOpcode, QueryBestSize.opcode)
     }
 
+    func testClearAreaOnUnknownWindowEmitsBadWindow() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogus: UInt32 = 0xAAAA1234
+        let bytes = session.feed(
+            Request.clearArea(ClearArea(
+                exposures: false, window: bogus, x: 0, y: 0, width: 10, height: 10
+            )).encode(byteOrder: .lsbFirst)
+        )
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.window.rawValue, "must be BadWindow")
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), bogus)
+        XCTAssertEqual(err.majorOpcode, ClearArea.opcode)
+    }
+
     func testEmittedErrorCarriesCurrentSequenceNumber() throws {
         // After setup the session's sequenceNumber is 0; feed one InternAtom
         // request to advance it, then emit an error and assert the seq field

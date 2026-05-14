@@ -1507,6 +1507,18 @@ public final class ServerSession: @unchecked Sendable {
             || id == config.rootWindowId
     }
 
+    /// Validate a window argument. Returns the WindowEntry when the ID
+    /// resolves to a known window; nil with a BadWindow emission otherwise.
+    /// Used by handlers that take a `window` argument (ClearArea,
+    /// GetWindowAttributes, MapWindow, etc.). Root is NOT in the windows
+    /// table so calls referencing it return nil; handlers where the spec
+    /// allows root as an argument should special-case it before calling.
+    func validateWindow(_ window: UInt32, majorOpcode: UInt8) -> WindowEntry? {
+        if let entry = windows.get(window) { return entry }
+        emitError(.window, majorOpcode: majorOpcode, badResourceId: window)
+        return nil
+    }
+
     /// Validate a drawable for a drawing request and resolve it to a render
     /// target. Returns (topLevel, dx, dy) when the drawable is a renderable
     /// window subtree; nil otherwise. For unknown drawable IDs, emits
@@ -1978,9 +1990,9 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handleClearArea(_ r: ClearArea, byteOrder: ByteOrder) {
+        guard let entry = validateWindow(r.window, majorOpcode: ClearArea.opcode) else { return }
         guard let bridge = bridge,
-              let (top, dx, dy) = topLevelAndOffset(for: r.window),
-              let entry = windows.get(r.window) else { return }
+              let (top, dx, dy) = topLevelAndOffset(for: r.window) else { return }
         let bg = windowBackground(r.window, byteOrder: byteOrder)
         // X11 spec: if width is 0, fill to window's right edge; if height is 0,
         // fill to bottom.
