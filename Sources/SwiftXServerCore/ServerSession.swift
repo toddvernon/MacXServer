@@ -3329,6 +3329,13 @@ public final class ServerSession: @unchecked Sendable {
             unknownOpcodes.append(op)
             let n = opcodeName(op) ?? "unknown"
             log?.log("dispatch: unknown opcode \(op) (\(n))")
+            // Per XError-honesty policy (CLAUDE.md), don't silently drop.
+            // BadRequest is the spec-correct error for "the major or minor
+            // opcode does not specify a valid request" — covers both true
+            // unknowns (extension opcodes from extensions we don't install,
+            // which is why our QueryExtension reports them not-present) and
+            // core opcodes whose body decoder we haven't written.
+            emitError(.request, majorOpcode: op)
         }
     }
 }

@@ -155,7 +155,11 @@ final class CapturedAppReplayTests: XCTestCase {
                        "\(filename): extension opcode set drift (expected \(baseline.allowedExtensionOpcodes), saw \(unknownExt))",
                        file: file, line: line)
 
-        // Walk the output and confirm no XErrors landed on the wire.
+        // Walk the output and check XError emission. Per the XError-honesty
+        // policy (DECISIONS.md 2026-05-14), unknown opcodes now produce a
+        // BadRequest on the wire. We expect exactly one BadRequest per
+        // unknown-opcode request, and only for the baseline's allowed
+        // extension opcodes — anything else is a real regression.
         guard let byteOrder = session.byteOrder else {
             XCTFail("\(filename): session never reached running phase", file: file, line: line)
             return
@@ -167,20 +171,24 @@ final class CapturedAppReplayTests: XCTestCase {
             return
         }
         var offset = accepted.encode(byteOrder: byteOrder).count
-        var errorCount = 0
+        var unexpectedErrors: [String] = []
         while offset < allOutput.count {
             let remaining = Array(allOutput[offset...])
             let msg = try ServerMessage.decodeOne(from: remaining, byteOrder: byteOrder)
             if case .xError(let err) = msg {
-                errorCount += 1
-                XCTFail("\(filename): XError code=\(err.errorCode) majorOp=\(err.majorOpcode) seq=\(err.sequenceNumber(byteOrder: byteOrder))",
-                        file: file, line: line)
+                let isExpectedExtensionProbe = err.errorCode == XErrorCode.request.rawValue
+                    && baseline.allowedExtensionOpcodes.contains(err.majorOpcode)
+                if !isExpectedExtensionProbe {
+                    unexpectedErrors.append(
+                        "code=\(err.errorCode) majorOp=\(err.majorOpcode) seq=\(err.sequenceNumber(byteOrder: byteOrder))"
+                    )
+                }
             }
             offset += msg.bytes.count
         }
-        XCTAssertEqual(errorCount, 0,
-                       "\(filename): must not emit XErrors",
-                       file: file, line: line)
+        XCTAssertTrue(unexpectedErrors.isEmpty,
+                      "\(filename): unexpected XErrors: \(unexpectedErrors)",
+                      file: file, line: line)
         XCTAssertEqual(offset, allOutput.count,
                        "\(filename): output should parse cleanly",
                        file: file, line: line)
