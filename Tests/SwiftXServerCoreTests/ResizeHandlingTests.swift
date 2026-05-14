@@ -47,6 +47,12 @@ final class ResizeHandlingTests: XCTestCase {
         // Inner with ExposureMask
         sendCreate(session, wid: 0xA0002, parent: 0xA0001, x: 0, y: 0, w: 200, h: 200,
                    eventMask: MockWindowBridge.exposureMask)
+        // Both windows must be mapped before ConfigureWindow can emit
+        // Expose — per spec, unmapped windows aren't viewable, so the
+        // server doesn't emit Expose for them. Region Step E1 forward,
+        // exposeRectsForWindow returns [] for unmapped windows.
+        _ = session.feed(MapWindow(window: 0xA0001).encode(byteOrder: .lsbFirst))
+        _ = session.feed(MapWindow(window: 0xA0002).encode(byteOrder: .lsbFirst))
         _ = session.outbound.drain()
 
         // ConfigureWindow on inner with new width=400, height=300.

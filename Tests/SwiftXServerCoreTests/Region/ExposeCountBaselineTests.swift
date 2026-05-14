@@ -19,38 +19,54 @@ import Framer
 
 final class ExposeCountBaselineTests: XCTestCase {
 
-    // Baselines after Step E1. The "before" column captures the Step B
-    // state when Expose was still emitted as one event per full window
-    // rect (and per-mapped-descendant on map). E1 enumerates each
-    // window's clipList rect-list in window-local coords — fully-covered
-    // descendants emit zero Expose events; partially-covered ones emit
-    // one Expose per visible rect instead of one covering the obscured
-    // areas too. Net: big drops for dt-Motif (deep widget trees with
-    // lots of full coverage); small drops or net-neutral elsewhere.
+    // Baselines after Steps E1 + E1.5 + E2.
     //
-    // Before / after:
-    //   xclock          1 →   1
-    //   xterm_session   1 →   1
-    //   xeyes-sun       0 →   0
-    //   xcalc          47 →  47
-    //   xfontsel-sun    4 →   2
-    //   dthelpview      4 →   5  (one window's clipList has 2 rects now)
-    //   dtterm-sun     15 →  10
-    //   quickplot-sun  85 →  55
-    //   dticon-sun     62 →  53
-    //   dtcalc-sun    248 → 144  (the headline number)
+    // Step B  (region populated, not consulted)
+    //   E1     first-map Expose uses clipList rects
+    //   E1.5   descendant-move: parent bg paint + Expose over uncovered area
+    //   E2     ConfigureWindow size-grow + handleTopLevelResize: Expose uses
+    //          clipList rects (in window-local coords) instead of full rect
     //
-    // Gold Sun X server emits ~7 for dtcalc boot, so we're still over by
-    // 20×. The remaining gap closes as more region-aware behavior lands:
-    // E2 (resize Expose uses clipList delta), E1.5 (descendant-move
-    // repaint), Step D (stacking-aware sibling clipping).
+    // Per-app counts across the steps:
+    //
+    //   Capture        | Step B | E1  | E1.5+E2
+    //   --------------- ------- ----- ---------
+    //   xclock         |   1    |   1 |    1
+    //   xterm_session  |   1    |   1 |    1
+    //   xeyes-sun      |   0    |   0 |    0
+    //   xcalc          |  47    |  47 |   62  (overlapping Athena widgets;
+    //                                          sorting children by id gives
+    //                                          deterministic but slightly
+    //                                          higher count than dictionary
+    //                                          iteration order happened to)
+    //   xfontsel-sun   |   4    |   2 |    0
+    //   dthelpview     |   4    |   5 |    4
+    //   dtterm-sun     |  15    |  10 |    0
+    //   quickplot-sun  |  85    |  55 |   13
+    //   dticon-sun     |  62    |  53 |    0
+    //   dtcalc-sun     | 248    | 144 |    8   ← gold Sun emits ~7
+    //
+    // dtcalc now matches gold's Expose stream within 1. The captures that
+    // went to ZERO (dtterm, dticon, xfontsel) had their previous counts
+    // inflated by spec-incorrect Expose emission: ConfigureWindow on
+    // unmapped windows used to emit Expose; per X11 spec unmapped windows
+    // aren't viewable, so they get no Expose. Bottom-up Motif map
+    // sequences with full-coverage children also collapse: every visible
+    // pixel is owned by leaf widgets, so their containers' Expose
+    // emission lands empty.
+    //
+    // The remaining concern is whether some Motif widget classes need
+    // Expose as a "redraw your chrome" signal even when the spec says
+    // backing-store would preserve it. Verified on u5 hardware before
+    // declaring dt-app chrome fixed. Step F (GraphicsExpose vs NoExpose)
+    // and Step D (stacking-aware sibling clipping) are still pending.
 
     func testXclockExposeCount() throws {
         try assertExposeCount(capture: "xclock.xtap", expected: 1)
     }
 
     func testXcalcExposeCount() throws {
-        try assertExposeCount(capture: "xcalc.xtap", expected: 47)
+        try assertExposeCount(capture: "xcalc.xtap", expected: 62)
     }
 
     func testXtermExposeCount() throws {
@@ -58,7 +74,7 @@ final class ExposeCountBaselineTests: XCTestCase {
     }
 
     func testXfontselExposeCount() throws {
-        try assertExposeCount(capture: "xfontsel-sun.xtap", expected: 2)
+        try assertExposeCount(capture: "xfontsel-sun.xtap", expected: 0)
     }
 
     func testXeyesExposeCount() throws {
@@ -66,23 +82,23 @@ final class ExposeCountBaselineTests: XCTestCase {
     }
 
     func testQuickplotExposeCount() throws {
-        try assertExposeCount(capture: "quickplot-sun.xtap", expected: 55)
+        try assertExposeCount(capture: "quickplot-sun.xtap", expected: 13)
     }
 
     func testDtcalcExposeCount() throws {
-        try assertExposeCount(capture: "dtcalc-sun.xtap", expected: 144)
+        try assertExposeCount(capture: "dtcalc-sun.xtap", expected: 8)
     }
 
     func testDttermExposeCount() throws {
-        try assertExposeCount(capture: "dtterm-sun.xtap", expected: 10)
+        try assertExposeCount(capture: "dtterm-sun.xtap", expected: 0)
     }
 
     func testDthelpviewExposeCount() throws {
-        try assertExposeCount(capture: "dthelpview-sun.xtap", expected: 5)
+        try assertExposeCount(capture: "dthelpview-sun.xtap", expected: 4)
     }
 
     func testDticonExposeCount() throws {
-        try assertExposeCount(capture: "dticon-sun.xtap", expected: 53)
+        try assertExposeCount(capture: "dticon-sun.xtap", expected: 0)
     }
 
     // MARK: - Harness

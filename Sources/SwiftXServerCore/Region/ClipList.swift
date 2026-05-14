@@ -114,14 +114,21 @@ public enum ClipListEngine {
         windows.setBorderClip(windowId, borderClip)
     }
 
-    /// Direct children of `id` (parent == id). Order is dictionary
-    /// iteration order — not stack order. Stack order matters only when
-    /// siblings overlap; Step D introduces real ordering.
+    /// Direct children of `id` (parent == id), in ascending id order.
+    /// Sorting matters because the recursion subtracts each child's
+    /// borderClip from a running parent-visible region — different
+    /// orderings produce identical results only when siblings are
+    /// non-overlapping. Dictionary iteration is unordered, so without
+    /// sorting we'd see non-deterministic clipList output (caught
+    /// 2026-05-13 against xcalc replay: same input produced 42-49
+    /// Expose events across runs). Sort-by-id is a stable approximation
+    /// of "creation order" until Step D introduces real X stacking.
     private static func directChildren(of id: UInt32, in windows: WindowTable) -> [UInt32] {
         var out: [UInt32] = []
         for (cid, w) in windows.windows where w.parent == id {
             out.append(cid)
         }
+        out.sort()
         return out
     }
 }

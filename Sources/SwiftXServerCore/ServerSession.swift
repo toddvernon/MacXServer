@@ -1468,26 +1468,26 @@ public final class ServerSession: @unchecked Sendable {
             bridge?.paintWindowRects(topLevel: id, rects: paints)
         }
 
-        // The outer's resize means descendants' visible region changed too —
-        // for xterm specifically, the inner's drawing area is now bigger
-        // (or smaller) and any newly-exposed pixels need redrawing. Real
-        // Xsun emits Expose on each viewable descendant with ExposureMask.
-        // We do the same (emit Expose covering full new descendant size,
-        // even if shrinking — slight over-emit, but xterm copes).
+        // Top-level dimensions changed — refresh clip regions for the
+        // whole subtree BEFORE emitting descendant Exposes so the new
+        // clipList drives the rect-list each Expose carries.
+        ClipListEngine.recomputeClips(forTopLevel: id, in: windows)
+
+        // The outer's resize means descendants' visible region changed
+        // too. The bitmap was reallocated and bg-painted (no preserved
+        // content for now — see SHORTCUTS "NSWindow resize discards
+        // prior pixels"), so each descendant's full visible region needs
+        // a redraw signal. Step E2: emit Expose per clipList rect in
+        // window-local coords; fully-covered descendants emit nothing.
         let exposureMask: UInt32 = 1 << 15
         for descendant in mappedDescendantSnapshots(of: id) {
             guard descendant.eventMask & exposureMask != 0 else { continue }
-            log?.log("  → emit Expose on descendant 0x\(String(descendant.id, radix: 16)) \(descendant.width)x\(descendant.height)")
-            let expose = ExposeEvent(
-                sequenceNumber: sequenceNumber, window: descendant.id,
-                x: 0, y: 0, width: descendant.width, height: descendant.height, count: 0
+            log?.log("  → emit Expose on descendant 0x\(String(descendant.id, radix: 16)) (\(descendant.exposeRects.count) rect(s))")
+            MockWindowBridge.emitExposesForRects(
+                window: descendant.id, rects: descendant.exposeRects,
+                byteOrder: order, sequence: sequenceNumber, outbound: outbound
             )
-            outbound.append(expose.encode(byteOrder: order))
         }
-        // Top-level dimensions changed — refresh clip regions for the
-        // whole subtree. Region machinery not consulted yet; this just
-        // keeps the per-window clipList honest for Step E to read.
-        ClipListEngine.recomputeClips(forTopLevel: id, in: windows)
     }
 
     /// True if `window` is a known top-level (parent == root). Used to decide
@@ -1536,6 +1536,43 @@ public final class ServerSession: @unchecked Sendable {
         return entry.clipList.rects.map {
             BoxRec(x1: $0.x1 - dxI, y1: $0.y1 - dyI,
                    x2: $0.x2 - dxI, y2: $0.y2 - dyI)
+        }
+    }
+
+    /// E1.5: paint parent's background over the region a descendant just
+    /// uncovered, then emit Expose to parent for that region. `uncovered`
+    /// is in top-level coords (the same space WindowEntry.borderClip
+    /// lives in). Called from configureWindow after a descendant's
+    /// move/resize when the resulting parent-visible delta is non-empty.
+    func repaintParentOverUncovered(uncovered: Region, parentId: UInt32, byteOrder: ByteOrder) {
+        guard let parentEntry = windows.get(parentId) else { return }
+        guard let (topLevelId, parentDx, parentDy) = topLevelAndOffset(for: parentId) else { return }
+
+        let parentBg = windowBackground(parentId, byteOrder: byteOrder)
+        let paintRects: [WindowBackgroundRect] = uncovered.rects.map {
+            WindowBackgroundRect(
+                x: Int16(clamping: $0.x1), y: Int16(clamping: $0.y1),
+                width: UInt16(clamping: $0.x2 - $0.x1),
+                height: UInt16(clamping: $0.y2 - $0.y1),
+                color: parentBg
+            )
+        }
+        if !paintRects.isEmpty {
+            bridge?.paintWindowRects(topLevel: topLevelId, rects: paintRects)
+        }
+
+        if parentEntry.eventMask & MockWindowBridge.exposureMask != 0 {
+            let parentLocalRects = uncovered.rects.map {
+                BoxRec(
+                    x1: $0.x1 - Int32(parentDx), y1: $0.y1 - Int32(parentDy),
+                    x2: $0.x2 - Int32(parentDx), y2: $0.y2 - Int32(parentDy)
+                )
+            }
+            MockWindowBridge.emitExposesForRects(
+                window: parentId, rects: parentLocalRects,
+                byteOrder: byteOrder, sequence: sequenceNumber,
+                outbound: outbound
+            )
         }
     }
 
@@ -2373,6 +2410,10 @@ public final class ServerSession: @unchecked Sendable {
             let w = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.width, byteOrder: byteOrder).map { UInt16(truncatingIfNeeded: $0) }
             let h = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.height, byteOrder: byteOrder).map { UInt16(truncatingIfNeeded: $0) }
             log?.log("  ConfigureWindow window=0x\(String(r.window, radix: 16)) mask=0x\(String(r.valueMask, radix: 16)) x=\(x.map(String.init) ?? "-") y=\(y.map(String.init) ?? "-") w=\(w.map(String.init) ?? "-") h=\(h.map(String.init) ?? "-")")
+            // E1.5: capture pre-move state so we can compute the area of
+            // parent newly uncovered by this window's move/resize.
+            let preMoveBorderClip = windows.get(r.window)?.borderClip ?? .empty
+            let preMoveParent = windows.get(r.window)?.parent
             let result = windows.resize(r.window, width: w, height: h, x: x, y: y)
             if let (old, new) = result, let entry = windows.get(r.window) {
                 if entry.parent != config.rootWindowId {
@@ -2406,18 +2447,45 @@ public final class ServerSession: @unchecked Sendable {
                     )
                     outbound.append(cfgEv.encode(byteOrder: byteOrder))
                 }
-                // Per X11 spec: Expose only on size GROW (newly visible
-                // area). Shrinking just hides content.
+                // Recompute clipList NOW so the new visible regions drive
+                // both the E1.5 parent-repaint pass and the E2 size-grow
+                // Expose emission below.
+                recomputeClipsForSubtreeContaining(r.window)
+
+                // E1.5: if a non-top-level window moved/resized, the
+                // parent has newly-uncovered area where this window used
+                // to be. Paint parent's bg over that delta and emit
+                // Expose to parent. Retires the "Descendant geometry
+                // change leaves stale pixels on parent" SHORTCUT.
+                if (sizeChanged || posChanged),
+                   let parentId = preMoveParent,
+                   parentId != config.rootWindowId {
+                    let postMoveBorderClip = windows.get(r.window)?.borderClip ?? .empty
+                    let uncovered = preMoveBorderClip.subtracting(postMoveBorderClip)
+                    if !uncovered.isEmpty {
+                        repaintParentOverUncovered(
+                            uncovered: uncovered, parentId: parentId,
+                            byteOrder: byteOrder
+                        )
+                    }
+                }
+
+                // E2: emit Expose using clipList rects when the window's
+                // size grew. clipList ∩ (new - old) would be exact; using
+                // clipList alone is a defensible over-emit (already-
+                // painted pixels get re-Exposed but clients redraw
+                // idempotently). Step F refines this with proper region
+                // delta math.
                 let sizeGrew = new.width > old.width || new.height > old.height
                 if sizeGrew && (entry.eventMask & MockWindowBridge.exposureMask != 0) {
                     log?.log("  → emit Expose on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height)")
-                    let expose = ExposeEvent(
-                        sequenceNumber: sequenceNumber, window: r.window,
-                        x: 0, y: 0, width: new.width, height: new.height, count: 0
+                    let rects = exposeRectsForWindow(r.window)
+                    MockWindowBridge.emitExposesForRects(
+                        window: r.window, rects: rects,
+                        byteOrder: byteOrder, sequence: sequenceNumber,
+                        outbound: outbound
                     )
-                    outbound.append(expose.encode(byteOrder: byteOrder))
                 }
-                recomputeClipsForSubtreeContaining(r.window)
             }
 
         case .internAtom(let r):
