@@ -39,6 +39,17 @@ public struct WindowEntry: Equatable, Sendable {
     /// Default false.
     public var overrideRedirect: Bool
 
+    /// Visible region of the window's *interior* (excluding border) in
+    /// top-level-local coordinates. Computed by ClipList.recomputeClips
+    /// whenever the window tree mutates. Empty when the window is unmapped
+    /// or unviewable. Step B+ field — written but not yet consulted by
+    /// rendering or event paths (see WHAT_TO_DO_THIS_WEEK.md).
+    public var clipList: Region
+    /// Visible region of the window including its border ring, in
+    /// top-level-local coordinates. Drives the parent's "stale pixels
+    /// under moved descendant" repaint once Step E lands.
+    public var borderClip: Region
+
     public init(
         id: UInt32, parent: UInt32, depth: UInt8,
         x: Int16, y: Int16, width: UInt16, height: UInt16,
@@ -48,7 +59,9 @@ public struct WindowEntry: Equatable, Sendable {
         backPixel: UInt32? = nil,
         borderPixel: UInt32? = nil,
         cursor: UInt32? = nil,
-        overrideRedirect: Bool = false
+        overrideRedirect: Bool = false,
+        clipList: Region = .empty,
+        borderClip: Region = .empty
     ) {
         self.id = id; self.parent = parent; self.depth = depth
         self.x = x; self.y = y; self.width = width; self.height = height
@@ -59,6 +72,8 @@ public struct WindowEntry: Equatable, Sendable {
         self.borderPixel = borderPixel
         self.cursor = cursor
         self.overrideRedirect = overrideRedirect
+        self.clipList = clipList
+        self.borderClip = borderClip
     }
 }
 
@@ -122,6 +137,20 @@ public final class WindowTable: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
         w.cursor = cursor
+        _windows[id] = w
+    }
+
+    public func setClipList(_ id: UInt32, _ region: Region) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.clipList = region
+        _windows[id] = w
+    }
+
+    public func setBorderClip(_ id: UInt32, _ region: Region) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.borderClip = region
         _windows[id] = w
     }
 

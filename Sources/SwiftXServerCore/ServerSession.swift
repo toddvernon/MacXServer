@@ -1484,6 +1484,10 @@ public final class ServerSession: @unchecked Sendable {
             )
             outbound.append(expose.encode(byteOrder: order))
         }
+        // Top-level dimensions changed — refresh clip regions for the
+        // whole subtree. Region machinery not consulted yet; this just
+        // keeps the per-window clipList honest for Step E to read.
+        ClipListEngine.recomputeClips(forTopLevel: id, in: windows)
     }
 
     /// True if `window` is a known top-level (parent == root). Used to decide
@@ -1509,6 +1513,16 @@ public final class ServerSession: @unchecked Sendable {
             id = entry.parent
         }
         return nil
+    }
+
+    /// Recompute clipList + borderClip for the top-level subtree that
+    /// contains `windowId`. Cheap to call from any tree-mutation handler
+    /// after the WindowTable state has been updated. No-op if `windowId`
+    /// is unknown or its top-level can't be resolved. Region machinery
+    /// from Step B; not yet consulted by rendering or event paths.
+    func recomputeClipsForSubtreeContaining(_ windowId: UInt32) {
+        guard let (topId, _, _) = topLevelAndOffset(for: windowId) else { return }
+        ClipListEngine.recomputeClips(forTopLevel: topId, in: windows)
     }
 
     /// Resolve a foreground/background pixel value to RGB16. Falls back to
@@ -2157,6 +2171,9 @@ public final class ServerSession: @unchecked Sendable {
 
         case .destroyWindow(let r):
             let wasTopLevel = isTopLevel(r.window)
+            // Capture the containing top-level BEFORE remove so we can
+            // recompute clip regions afterwards.
+            let preDestroyTopId = topLevelAndOffset(for: r.window)?.0
             windows.remove(r.window)
             properties.deleteAll(window: r.window)
             if wasTopLevel {
@@ -2164,6 +2181,8 @@ public final class ServerSession: @unchecked Sendable {
                     id: r.window, byteOrder: byteOrder,
                     sequence: sequenceNumber, outbound: outbound
                 )
+            } else if let topId = preDestroyTopId, topId != r.window {
+                ClipListEngine.recomputeClips(forTopLevel: topId, in: windows)
             }
 
         case .mapWindow(let r):
@@ -2247,6 +2266,7 @@ public final class ServerSession: @unchecked Sendable {
                     outbound.append(expose.encode(byteOrder: byteOrder))
                 }
             }
+            recomputeClipsForSubtreeContaining(r.window)
 
         case .mapSubwindows(let r):
             // Per X11 spec 10.5: "MapSubwindows performs a MapWindow request
@@ -2292,6 +2312,7 @@ public final class ServerSession: @unchecked Sendable {
                     }
                 }
             }
+            recomputeClipsForSubtreeContaining(r.window)
 
         case .unmapWindow(let r):
             windows.setMapped(r.window, false)
@@ -2302,6 +2323,7 @@ public final class ServerSession: @unchecked Sendable {
                     sequence: sequenceNumber, outbound: outbound
                 )
             }
+            recomputeClipsForSubtreeContaining(r.window)
 
         case .configureWindow(let r):
             let mask = UInt32(r.valueMask)
@@ -2354,6 +2376,7 @@ public final class ServerSession: @unchecked Sendable {
                     )
                     outbound.append(expose.encode(byteOrder: byteOrder))
                 }
+                recomputeClipsForSubtreeContaining(r.window)
             }
 
         case .internAtom(let r):
@@ -2678,6 +2701,8 @@ public final class ServerSession: @unchecked Sendable {
             // most WMs expect to round-trip).
             if var entry = windows.get(r.window) {
                 let oldParent = entry.parent
+                // Capture old containing top-level before mutating parent.
+                let oldTopId = topLevelAndOffset(for: r.window)?.0
                 entry.parent = r.parent
                 entry.x = r.x
                 entry.y = r.y
@@ -2690,6 +2715,11 @@ public final class ServerSession: @unchecked Sendable {
                 )
                 outbound.append(ev.encode(byteOrder: byteOrder))
                 log?.log("  ReparentWindow window=0x\(String(r.window, radix: 16)) old-parent=0x\(String(oldParent, radix: 16)) new-parent=0x\(String(r.parent, radix: 16)) at (\(r.x),\(r.y))")
+                // Recompute both old and new top-level subtrees.
+                if let oldTopId, oldTopId != r.window {
+                    ClipListEngine.recomputeClips(forTopLevel: oldTopId, in: windows)
+                }
+                recomputeClipsForSubtreeContaining(r.window)
             }
 
         case .destroySubwindows(let r):
@@ -2697,6 +2727,7 @@ public final class ServerSession: @unchecked Sendable {
             // bottom-to-top order. We don't track stacking; iterate the
             // table. Recursive: each child's subwindows go too.
             destroySubtree(parentOf: r.window, includeRoot: false)
+            recomputeClipsForSubtreeContaining(r.window)
 
         case .unmapSubwindows(let r):
             // Set mapped=false on every direct child of the requested
@@ -2708,6 +2739,7 @@ public final class ServerSession: @unchecked Sendable {
                 if var e = windows.get(id) { e.mapped = false; windows.insert(e) }
             }
             log?.log("  UnmapSubwindows parent=0x\(String(r.window, radix: 16))")
+            recomputeClipsForSubtreeContaining(r.window)
 
         case .grabButton(let r):
             // Passive button grab: when the matching button-press happens
