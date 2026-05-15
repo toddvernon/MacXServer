@@ -326,6 +326,29 @@ The trade has flipped. M3 is done and we're in the comparison-and-diagnostic pha
 
 **Note on replay tests**: `XclockReplayTests` and cousins assert "no XErrors emitted." Once XErrors are real, that splits into "no XErrors on supported paths; expected XErrors on known-bad inputs." More broadly, replay tests are construction tests, not correctness tests. A captured C2S stream is what the client said *given Sun's specific replies*, so replaying it against our different replies can't tell us whether we'd behave like Sun on a live run. The correctness oracle is the diff tool against live captures, not bigger replay suites.
 
+## 2026-05-14 — Skip backing-store advertise + Expose suppression
+
+**Decision**: don't advertise `backing-store = Always` in SetupAccepted, and don't pursue server-side Expose suppression on region-uncovering events. Keep the current "emit Expose, client redraws" pattern.
+
+**Background**: `WHAT_TO_DO_THIS_WEEK.md` Tier 1 #2 proposed advertising backing-store=Always plus suppressing Expose for region-uncovering events (sibling unmap, descendant move, etc.). The rationale claimed we already have de-facto backing-store at the NSWindow level because every top-level has a persistent CGContext, so suppression should be cheap. By end of week with the Region work + SubstructureNotify + VisibilityNotify shipped, time to re-evaluate.
+
+**Why the original rationale was wrong**: the persistent CGContext per top-level retains the *live composite* of what's been drawn, not a per-child save-under buffer. When a child window maps on top of parent pixels, our code paints the child's background over the parent's pixels (`paintRectsForWindow`). The parent's content in that region is gone the moment the child maps. When the child later unmaps, `repaintParentOverUncovered` paints parent.bg over the uncovered region — but that's the background color, not the content the parent client had drawn there.
+
+Real backing-store servers maintain a save-under buffer: stash parent pixels before a child obscures them, blit them back on uncovering. We don't have that. Without it, the persistent CGContext is NOT save-under-equivalent.
+
+**The two real options**:
+1. **Advertise backing-store=Always while still emitting Expose.** Dishonest — spec-compliant clients read the flag and decide they can skip Expose-driven redraws. Result: regions stay as parent.bg even though the client believed it had drawn over that area. Breaks every working client.
+2. **Implement real save-under buffers.** Per-window pixel cache, save-on-obscure, restore-on-uncover, eviction policy. Multi-commit project comparable in scope to PutImage-on-depth-1.
+
+**Rejected**:
+- **Selectively suppress Expose where we can prove pixels are preserved.** Walked every Expose-emission path in the codebase. First-map (newly viewable, no prior content), resize-grow (newly revealed area has no content), descendant unmap (we paint parent.bg over the uncovered region), descendant move (same). None have a "pixels are actually preserved, skip the notify" path under the current architecture. The supposed "suppression case" doesn't exist for our code.
+
+**The deeper reason to skip**: the dt-Motif Expose-count investigation drove us to *match* gold's Expose pattern (Region Step E1+ collapsed dtcalc 248 → 8 Exposes, matching gold within 1). Gold emits Exposes despite running with its own backing-store mode. So matching gold's pattern is the right target — not minimizing Exposes.
+
+**When this might be revisited**: save-under has real value for popup menus (close-without-flicker) and other transient overlays. If/when that matters visually, the work is a save-under buffer attached to override-redirect windows specifically. Tracked as a future feature, not a foundational gap.
+
+**Follow-up**: removed Tier 1 #2 from any future "things to do without hardware" list — the implicit assumption of "small win" was incorrect, and the current pattern is right.
+
 ---
 
 ## Decisions still to make
