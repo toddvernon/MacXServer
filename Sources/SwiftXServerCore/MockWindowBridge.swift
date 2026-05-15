@@ -29,7 +29,7 @@ public final class MockWindowBridge: WindowBridge, @unchecked Sendable {
 
     private var resizeHandler: (@Sendable (UInt32, UInt16, UInt16) -> Void)?
 
-    public func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {
+    public func setOnTopLevelResize(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {
         resizeHandler = handler
     }
 

@@ -581,4 +581,110 @@ final class XErrorEmissionTests: XCTestCase {
         XCTAssertEqual(err.sequenceNumber(byteOrder: .lsbFirst), seqBeforeEmit,
                        "error must reference the failing request's seq")
     }
+
+    // MARK: - Opcodes added 2026-05-14 (post-comparison-study sweep)
+
+    func testNoOperationEmitsNothing() throws {
+        // Xt scatters XNoOp as wire flushes. Pre-decoder-add this returned
+        // BadRequest every time. Must now be silent — no reply, no error.
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bytes = session.feed(Request.noOperation(NoOperation()).encode(byteOrder: .lsbFirst))
+        XCTAssertTrue(bytes.isEmpty,
+                      "NoOperation must produce no outbound bytes; got \(bytes.count)")
+    }
+
+    func testAllocColorCellsEmitsBadAllocNotBadRequest() throws {
+        // Spec lets us emit BadAlloc when read-write cell allocation can't
+        // succeed. Critical that we emit .alloc not .request: Xt's color
+        // converter catches BadAlloc to fall back to read-only AllocColor;
+        // BadRequest gets logged as "server is broken" and the client
+        // doesn't degrade gracefully.
+        let session = runningSession(byteOrder: .lsbFirst)
+        let req = Request.allocColorCells(AllocColorCells(
+            contiguous: false, cmap: 0x21, colors: 4, planes: 0
+        ))
+        let bytes = session.feed(req.encode(byteOrder: .lsbFirst))
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected xError, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.alloc.rawValue,
+                       "AllocColorCells must emit BadAlloc, not BadRequest")
+        XCTAssertEqual(err.majorOpcode, AllocColorCells.opcode)
+    }
+
+    func testKillClientAcceptedSilently() throws {
+        // No multi-client lifecycle yet — KillClient is accepted but does
+        // nothing on the wire. Must NOT emit BadRequest.
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bytes = session.feed(Request.killClient(KillClient(resource: 0xDEADBEEF))
+            .encode(byteOrder: .lsbFirst))
+        XCTAssertTrue(bytes.isEmpty)
+    }
+
+    func testSetCloseDownModeAcceptedSilently() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bytes = session.feed(Request.setCloseDownMode(SetCloseDownMode(mode: 1))
+            .encode(byteOrder: .lsbFirst))
+        XCTAssertTrue(bytes.isEmpty)
+    }
+
+    func testGetMotionEventsRepliesWithEmptyEventList() throws {
+        // No motion-event ring yet. Spec-correct empty reply: 32-byte
+        // header, nEvents=0, length=0.
+        let session = runningSession(byteOrder: .lsbFirst)
+        let req = Request.getMotionEvents(GetMotionEvents(
+            window: ServerConfig.default.rootWindowId, start: 0, stop: 0
+        ))
+        let bytes = session.feed(req.encode(byteOrder: .lsbFirst))
+        XCTAssertEqual(bytes.count, 32, "GetMotionEvents reply is 32 bytes when nEvents=0")
+        // Byte 0 must be 1 (reply marker), bytes 8..12 must be 0 (nEvents).
+        XCTAssertEqual(bytes[0], 1, "first byte must be reply marker (1)")
+        let nEvents = UInt32(bytes[8]) | (UInt32(bytes[9]) << 8)
+                    | (UInt32(bytes[10]) << 16) | (UInt32(bytes[11]) << 24)
+        XCTAssertEqual(nEvents, 0)
+    }
+
+    func testBogusRequestLengthEmitsBadLengthAndSignalsClose() throws {
+        // Length field of 0 makes the request stream unparseable — we
+        // can't compute "how many bytes to skip" so we have to tear down.
+        // Pre-2026-05-14 we just logged and looped forever on the wedge
+        // bytes. Now: emit BadLength + set shouldClose so the listener
+        // cancels the read source.
+        let session = runningSession(byteOrder: .lsbFirst)
+        XCTAssertFalse(session.shouldClose, "precondition")
+
+        // 4-byte request with opcode=42 (any value) and length=0.
+        let wedge: [UInt8] = [42, 0, 0, 0]
+        let bytes = session.feed(wedge)
+
+        XCTAssertTrue(session.shouldClose, "must signal close on length=0")
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected BadLength on the wire, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.length.rawValue, "must be BadLength")
+        XCTAssertEqual(err.majorOpcode, 42)
+    }
+
+    func testUngrabButtonOnUnknownWindowEmitsBadWindow() throws {
+        // UngrabButton routes through validateWindowOrRoot like the other
+        // grab opcodes. Unknown grabWindow → BadWindow (the validator
+        // emits it). Spec is fine with this.
+        let session = runningSession(byteOrder: .lsbFirst)
+        let req = Request.ungrabButton(UngrabButton(
+            button: 1, grabWindow: 0xDEADBEEF, modifiers: 0
+        ))
+        let bytes = session.feed(req.encode(byteOrder: .lsbFirst))
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected BadWindow on unknown grabWindow")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.window.rawValue)
+        XCTAssertEqual(err.majorOpcode, UngrabButton.opcode)
+    }
 }

@@ -66,9 +66,42 @@ public final class ServerCoordinator: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Atomically replace the owner of `atom` and return what was there
+    /// before. Returns nil if the selection was previously unowned. The
+    /// caller is responsible for emitting SelectionClear to the prior
+    /// owner per X11 spec section 4.2.1.
+    public func swapSelectionOwner(_ atom: UInt32, window: UInt32, time: UInt32) -> SelectionState? {
+        lock.lock(); defer { lock.unlock() }
+        let prior = selectionOwners[atom]
+        selectionOwners[atom] = SelectionState(window: window, time: time)
+        return prior
+    }
+
     public func clearSelectionOwner(_ atom: UInt32) {
         lock.lock()
         selectionOwners.removeValue(forKey: atom)
         lock.unlock()
+    }
+
+    /// Revoke ownership of every selection currently held by any window in
+    /// `windowIds`. Returns the atoms that were cleared so the caller can
+    /// log / verify. Used by destroyWindow and session cleanup per spec
+    /// (R6 dispatch.c:DeleteWindowFromAnySelections /
+    /// DeleteClientFromAnySelections). Spec doesn't require SelectionClear
+    /// emission for the destroy/disconnect path (the window or client is
+    /// gone, no one to deliver to).
+    @discardableResult
+    public func revokeSelections(ownedBy windowIds: Set<UInt32>) -> [UInt32] {
+        lock.lock(); defer { lock.unlock() }
+        let stale = selectionOwners.filter { windowIds.contains($0.value.window) }.map { $0.key }
+        for atom in stale { selectionOwners.removeValue(forKey: atom) }
+        return stale
+    }
+
+    /// All atoms currently owned by `window`. Read-only view; coordinator
+    /// holds the lock for the duration.
+    public func selectionsOwned(by window: UInt32) -> [UInt32] {
+        lock.lock(); defer { lock.unlock() }
+        return selectionOwners.compactMap { $0.value.window == window ? $0.key : nil }
     }
 }

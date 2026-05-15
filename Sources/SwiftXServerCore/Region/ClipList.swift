@@ -114,21 +114,18 @@ public enum ClipListEngine {
         windows.setBorderClip(windowId, borderClip)
     }
 
-    /// Direct children of `id` (parent == id), in ascending id order.
-    /// Sorting matters because the recursion subtracts each child's
-    /// borderClip from a running parent-visible region — different
-    /// orderings produce identical results only when siblings are
-    /// non-overlapping. Dictionary iteration is unordered, so without
-    /// sorting we'd see non-deterministic clipList output (caught
-    /// 2026-05-13 against xcalc replay: same input produced 42-49
-    /// Expose events across runs). Sort-by-id is a stable approximation
-    /// of "creation order" until Step D introduces real X stacking.
+    /// Direct children of `id` in top-to-bottom stack order — topmost
+    /// first. Order matters because the recursion subtracts each child's
+    /// borderClip from a running parent-visible region: the topmost
+    /// sibling sees the full parent area, lower siblings see what's left
+    /// after higher siblings' regions are excluded.
+    ///
+    /// Delegates to `SiblingChain.directChildrenTopFirst`, which walks the
+    /// real R6-style sibling chain (firstChild → nextSib → ...) shipped
+    /// 2026-05-14. Falls back to dict-scan-sorted-by-id when `id` isn't in
+    /// the WindowTable (the root case) — AppKit handles top-level Z-order
+    /// in rootless mode, so the fallback is fine for that path.
     private static func directChildren(of id: UInt32, in windows: WindowTable) -> [UInt32] {
-        var out: [UInt32] = []
-        for (cid, w) in windows.windows where w.parent == id {
-            out.append(cid)
-        }
-        out.sort()
-        return out
+        return SiblingChain.directChildrenTopFirst(of: id, in: windows)
     }
 }

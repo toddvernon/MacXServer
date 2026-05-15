@@ -40,18 +40,24 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     // no-ops for windows it doesn't own. Mutations of the lists happen on
     // the listener accept thread; reads happen on the main thread —
     // `handlerLock` covers both.
+    //
+    // Each handler is paired with a `token` (the registering session's
+    // unique `bridgeHandlerToken`) so `removeHandlers(token:)` can prune
+    // a session's entries on disconnect. Pre-2026-05-14 the lists grew
+    // unboundedly across accept/disconnect cycles and dead-session
+    // closures (weak-self no-ops) kept firing on every AppKit event.
     private let handlerLock = NSLock()
-    private var resizeHandlers: [@Sendable (UInt32, UInt16, UInt16) -> Void] = []
-    private var keyHandlers: [@Sendable (UInt32, UInt8, UInt, Bool) -> Void] = []
-    private var focusHandlers: [@Sendable (UInt32, Bool) -> Void] = []
-    private var mouseHandlers: [@Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void] = []
-    private var mouseDraggedHandlers: [@Sendable (UInt32, Int16, Int16, UInt8) -> Void] = []
-    private var pointerMovedHandlers: [@Sendable (UInt32, Int16, Int16) -> Void] = []
-    private var pointerEnteredViewHandlers: [@Sendable (UInt32, Int16, Int16) -> Void] = []
-    private var pointerExitedViewHandlers: [@Sendable (UInt32) -> Void] = []
-    private var pasteHandlers: [@Sendable (UInt32, String) -> Void] = []
-    private var copyHandlers: [@Sendable (UInt32) -> Void] = []
-    private var closeHandlers: [@Sendable (UInt32) -> Void] = []
+    private var resizeHandlers: [(UInt64, @Sendable (UInt32, UInt16, UInt16) -> Void)] = []
+    private var keyHandlers: [(UInt64, @Sendable (UInt32, UInt8, UInt, Bool) -> Void)] = []
+    private var focusHandlers: [(UInt64, @Sendable (UInt32, Bool) -> Void)] = []
+    private var mouseHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void)] = []
+    private var mouseDraggedHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16, UInt8) -> Void)] = []
+    private var pointerMovedHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16) -> Void)] = []
+    private var pointerEnteredViewHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16) -> Void)] = []
+    private var pointerExitedViewHandlers: [(UInt64, @Sendable (UInt32) -> Void)] = []
+    private var pasteHandlers: [(UInt64, @Sendable (UInt32, String) -> Void)] = []
+    private var copyHandlers: [(UInt64, @Sendable (UInt32) -> Void)] = []
+    private var closeHandlers: [(UInt64, @Sendable (UInt32) -> Void)] = []
     private weak var log: ServerLogSink?
 
     /// Scale factor: 1 X-logical pixel = `scaleFactor` device pixels.
@@ -65,48 +71,76 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         self.log = log
     }
 
-    public func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {
-        handlerLock.lock(); resizeHandlers.append(handler); handlerLock.unlock()
+    public func setOnTopLevelResize(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {
+        handlerLock.lock(); resizeHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnKey(_ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {
-        handlerLock.lock(); keyHandlers.append(handler); handlerLock.unlock()
+    public func setOnKey(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {
+        handlerLock.lock(); keyHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnFocus(_ handler: @escaping @Sendable (UInt32, Bool) -> Void) {
-        handlerLock.lock(); focusHandlers.append(handler); handlerLock.unlock()
+    public func setOnFocus(token: UInt64, _ handler: @escaping @Sendable (UInt32, Bool) -> Void) {
+        handlerLock.lock(); focusHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnMouse(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void) {
-        handlerLock.lock(); mouseHandlers.append(handler); handlerLock.unlock()
+    public func setOnMouse(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void) {
+        handlerLock.lock(); mouseHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnMouseDragged(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void) {
-        handlerLock.lock(); mouseDraggedHandlers.append(handler); handlerLock.unlock()
+    public func setOnMouseDragged(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void) {
+        handlerLock.lock(); mouseDraggedHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnPointerMoved(_ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {
-        handlerLock.lock(); pointerMovedHandlers.append(handler); handlerLock.unlock()
+    public func setOnPointerMoved(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {
+        handlerLock.lock(); pointerMovedHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnPointerEnteredView(_ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {
-        handlerLock.lock(); pointerEnteredViewHandlers.append(handler); handlerLock.unlock()
+    public func setOnPointerEnteredView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {
+        handlerLock.lock(); pointerEnteredViewHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnPointerExitedView(_ handler: @escaping @Sendable (UInt32) -> Void) {
-        handlerLock.lock(); pointerExitedViewHandlers.append(handler); handlerLock.unlock()
+    public func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void) {
+        handlerLock.lock(); pointerExitedViewHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnPaste(_ handler: @escaping @Sendable (UInt32, String) -> Void) {
-        handlerLock.lock(); pasteHandlers.append(handler); handlerLock.unlock()
+    public func setOnPaste(token: UInt64, _ handler: @escaping @Sendable (UInt32, String) -> Void) {
+        handlerLock.lock(); pasteHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnCopy(_ handler: @escaping @Sendable (UInt32) -> Void) {
-        handlerLock.lock(); copyHandlers.append(handler); handlerLock.unlock()
+    public func setOnCopy(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void) {
+        handlerLock.lock(); copyHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnCloseRequest(_ handler: @escaping @Sendable (UInt32) -> Void) {
-        handlerLock.lock(); closeHandlers.append(handler); handlerLock.unlock()
+    public func setOnCloseRequest(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void) {
+        handlerLock.lock(); closeHandlers.append((token, handler)); handlerLock.unlock()
+    }
+
+    /// Remove every handler this session previously registered. Called from
+    /// the session's cleanupOnDisconnect path. Idempotent — second call is
+    /// a no-op once the lists no longer contain that token.
+    public func removeHandlers(token: UInt64) {
+        handlerLock.lock(); defer { handlerLock.unlock() }
+        resizeHandlers.removeAll              { $0.0 == token }
+        keyHandlers.removeAll                 { $0.0 == token }
+        focusHandlers.removeAll               { $0.0 == token }
+        mouseHandlers.removeAll               { $0.0 == token }
+        mouseDraggedHandlers.removeAll        { $0.0 == token }
+        pointerMovedHandlers.removeAll        { $0.0 == token }
+        pointerEnteredViewHandlers.removeAll  { $0.0 == token }
+        pointerExitedViewHandlers.removeAll   { $0.0 == token }
+        pasteHandlers.removeAll               { $0.0 == token }
+        copyHandlers.removeAll                { $0.0 == token }
+        closeHandlers.removeAll               { $0.0 == token }
+    }
+
+    /// Total registered handler count across every list. Test affordance.
+    public var totalHandlerCount: Int {
+        handlerLock.lock(); defer { handlerLock.unlock() }
+        return resizeHandlers.count + keyHandlers.count + focusHandlers.count
+             + mouseHandlers.count + mouseDraggedHandlers.count
+             + pointerMovedHandlers.count + pointerEnteredViewHandlers.count
+             + pointerExitedViewHandlers.count + pasteHandlers.count
+             + copyHandlers.count + closeHandlers.count
     }
 
     // MARK: - Handler fan-out
@@ -116,47 +150,47 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// a handler can safely append/register new handlers without deadlocking.
     private func fireResize(id: UInt32, w: UInt16, h: UInt16) {
         handlerLock.lock(); let snap = resizeHandlers; handlerLock.unlock()
-        for handler in snap { handler(id, w, h) }
+        for (_, handler) in snap { handler(id, w, h) }
     }
     private func fireKey(id: UInt32, code: UInt8, mods: UInt, isDown: Bool) {
         handlerLock.lock(); let snap = keyHandlers; handlerLock.unlock()
-        for h in snap { h(id, code, mods, isDown) }
+        for (_, h) in snap { h(id, code, mods, isDown) }
     }
     private func fireFocus(id: UInt32, gained: Bool) {
         handlerLock.lock(); let snap = focusHandlers; handlerLock.unlock()
-        for h in snap { h(id, gained) }
+        for (_, h) in snap { h(id, gained) }
     }
     private func fireMouse(id: UInt32, x: Int16, y: Int16, button: UInt8, isDown: Bool) {
         handlerLock.lock(); let snap = mouseHandlers; handlerLock.unlock()
-        for h in snap { h(id, x, y, button, isDown) }
+        for (_, h) in snap { h(id, x, y, button, isDown) }
     }
     private func fireMouseDragged(id: UInt32, x: Int16, y: Int16, button: UInt8) {
         handlerLock.lock(); let snap = mouseDraggedHandlers; handlerLock.unlock()
-        for h in snap { h(id, x, y, button) }
+        for (_, h) in snap { h(id, x, y, button) }
     }
     private func firePointerMoved(id: UInt32, x: Int16, y: Int16) {
         handlerLock.lock(); let snap = pointerMovedHandlers; handlerLock.unlock()
-        for h in snap { h(id, x, y) }
+        for (_, h) in snap { h(id, x, y) }
     }
     private func firePointerEnteredView(id: UInt32, x: Int16, y: Int16) {
         handlerLock.lock(); let snap = pointerEnteredViewHandlers; handlerLock.unlock()
-        for h in snap { h(id, x, y) }
+        for (_, h) in snap { h(id, x, y) }
     }
     private func firePointerExitedView(id: UInt32) {
         handlerLock.lock(); let snap = pointerExitedViewHandlers; handlerLock.unlock()
-        for h in snap { h(id) }
+        for (_, h) in snap { h(id) }
     }
     private func firePaste(id: UInt32, text: String) {
         handlerLock.lock(); let snap = pasteHandlers; handlerLock.unlock()
-        for h in snap { h(id, text) }
+        for (_, h) in snap { h(id, text) }
     }
     private func fireCopy(id: UInt32) {
         handlerLock.lock(); let snap = copyHandlers; handlerLock.unlock()
-        for h in snap { h(id) }
+        for (_, h) in snap { h(id) }
     }
     private func fireCloseRequest(id: UInt32) {
         handlerLock.lock(); let snap = closeHandlers; handlerLock.unlock()
-        for h in snap { h(id) }
+        for (_, h) in snap { h(id) }
     }
 
     /// Called by the NSWindowDelegate when the user clicks the red close
@@ -1330,7 +1364,12 @@ extension CocoaWindowBridge {
 /// the path is built as a closed pie slice (for PolyFillArc); otherwise it's
 /// just the arc curve (for PolyArc). Sampled parametrically so stroke pen
 /// width stays uniform on non-circular ellipses.
-private func ellipseArcPath(arc a: Arc, includePieCenter: Bool) -> CGPath {
+///
+/// Y-flip note: we draw into a FlippedXView, so screen-y increases DOWNWARD.
+/// To keep angle1=π/2 visually "north" and positive angle2 visually CCW per
+/// X spec, the sin term is subtracted from cy (not added). Mathematical
+/// y-up math here would draw upside-down on screen.
+internal func ellipseArcPath(arc a: Arc, includePieCenter: Bool) -> CGPath {
     let cx = CGFloat(a.x) + CGFloat(a.width) / 2
     let cy = CGFloat(a.y) + CGFloat(a.height) / 2
     let rx = CGFloat(a.width) / 2
@@ -1341,11 +1380,11 @@ private func ellipseArcPath(arc a: Arc, includePieCenter: Bool) -> CGPath {
     let path = CGMutablePath()
     if includePieCenter {
         path.move(to: CGPoint(x: cx, y: cy))
-        path.addLine(to: CGPoint(x: cx + rx * cos(start), y: cy + ry * sin(start)))
+        path.addLine(to: CGPoint(x: cx + rx * cos(start), y: cy - ry * sin(start)))
     }
     for i in 0...steps {
         let t = start + extent * CGFloat(i) / CGFloat(steps)
-        let p = CGPoint(x: cx + rx * cos(t), y: cy + ry * sin(t))
+        let p = CGPoint(x: cx + rx * cos(t), y: cy - ry * sin(t))
         if includePieCenter || i > 0 {
             path.addLine(to: p)
         } else {

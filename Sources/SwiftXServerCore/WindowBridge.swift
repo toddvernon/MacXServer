@@ -111,7 +111,7 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// (top-level X window id, new width, new height). The session uses this
     /// to update its WindowTable and emit ConfigureNotify back to the client.
     /// Always invoked on the main thread.
-    func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void)
+    func setOnTopLevelResize(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void)
 
     /// Called by the session at startup. The bridge stores the closure and
     /// invokes it on every keyDown / keyUp NSEvent in any of its NSWindows.
@@ -119,14 +119,14 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// isDown). The session translates to an X KeyPress / KeyRelease event,
     /// resolves the key target via the X subtree, and queues the event.
     /// Always invoked on the main thread.
-    func setOnKey(_ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void)
+    func setOnKey(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void)
 
     /// Called by the session at startup. The bridge invokes this whenever an
     /// NSWindow becomes key (gained=true) or resigns key (gained=false). The
     /// session emits a FocusIn / FocusOut event to the X client. xterm uses
     /// this to switch its cursor between filled (focused) and hollow outline
     /// (unfocused). Args: (top-level X window id, gained).
-    func setOnFocus(_ handler: @escaping @Sendable (UInt32, Bool) -> Void)
+    func setOnFocus(token: UInt64, _ handler: @escaping @Sendable (UInt32, Bool) -> Void)
 
     /// Called by the session at startup. Bridge invokes this on every
     /// mouseDown / mouseUp inside one of its NSWindows. Args: (top-level X
@@ -134,7 +134,7 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// number 1..3, isDown). The session resolves which X subwindow should
     /// receive the event and emits ButtonPress / ButtonRelease.
     /// Always invoked on the main thread.
-    func setOnMouse(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void)
+    func setOnMouse(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void)
 
     /// Called by the session at startup. Bridge invokes this on every
     /// mouseDragged event (mouse moved while a button is held). Args:
@@ -143,7 +143,7 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// MotionNotify so clients can track a drag — xterm needs this to
     /// render the inverse-video selection highlight as the user drags.
     /// Always invoked on the main thread.
-    func setOnMouseDragged(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void)
+    func setOnMouseDragged(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void)
 
     /// Called by the session at startup. Bridge invokes this on every
     /// mouseMoved (pointer moved with NO button held). Args: (top-level X
@@ -152,7 +152,7 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// emits EnterNotify / LeaveNotify when the containing window changes.
     /// Always invoked on the main thread. Mouse-with-button-held is
     /// `setOnMouseDragged` — the protocol distinguishes the two.
-    func setOnPointerMoved(_ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void)
+    func setOnPointerMoved(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void)
 
     /// Called by the session at startup. Bridge invokes this when the
     /// pointer crosses INTO an NSWindow's content area (from outside our
@@ -161,21 +161,21 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// y in top-level coords). The session emits the EnterNotify chain
     /// from top-level down to the deepest window currently under the
     /// pointer.
-    func setOnPointerEnteredView(_ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void)
+    func setOnPointerEnteredView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void)
 
     /// Called by the session at startup. Bridge invokes this when the
     /// pointer leaves an NSWindow's content area (mouse moves off the
     /// window edge or to another app). Args: (top-level X window id). The
     /// session emits the LeaveNotify chain from the current pointer
     /// window up to the top-level.
-    func setOnPointerExitedView(_ handler: @escaping @Sendable (UInt32) -> Void)
+    func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void)
 
     /// Called by the session at startup. Bridge invokes this when the user
     /// pastes (Cmd-V or Edit > Paste) into one of its NSWindows. Args:
     /// (top-level X window id, pasteboard text). The session synthesises
     /// a KeyPress/KeyRelease pair per character so the running X client
     /// receives the paste as typed input.
-    func setOnPaste(_ handler: @escaping @Sendable (UInt32, String) -> Void)
+    func setOnPaste(token: UInt64, _ handler: @escaping @Sendable (UInt32, String) -> Void)
 
     /// Called by the session at startup. Bridge invokes this when the user
     /// asks to copy the X selection into the Mac clipboard (Cmd-C or
@@ -183,7 +183,7 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// The session looks up the current selection owner and runs the
     /// ConvertSelection roundtrip, eventually calling writeClipboard with
     /// the resulting text.
-    func setOnCopy(_ handler: @escaping @Sendable (UInt32) -> Void)
+    func setOnCopy(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void)
 
     /// Push text to the Mac clipboard. Called from the session after a
     /// successful copy roundtrip — the bridge writes it to NSPasteboard.
@@ -196,7 +196,13 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// xcalc, xclock, …) take that as their cue to exit. The NSWindow is
     /// closed by AppKit independently, so the visual feedback is immediate.
     /// Args: (top-level X window id).
-    func setOnCloseRequest(_ handler: @escaping @Sendable (UInt32) -> Void)
+    func setOnCloseRequest(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void)
+
+    /// Remove every handler previously registered with `token`. Called by
+    /// the session in `cleanupOnDisconnect` so dead-session closures stop
+    /// firing on every AppKit event. Idempotent. The default implementation
+    /// is a no-op for mock/test bridges that don't actually store handlers.
+    func removeHandlers(token: UInt64)
 
     // MARK: - Drawing (M3)
     //
@@ -338,18 +344,19 @@ public struct WindowBackgroundRect: Equatable, Sendable {
 public extension WindowBridge {
     func descendantResized(id: UInt32, parent: UInt32, geometry: TopLevelGeometry) {}
     func drawingTarget(for drawable: UInt32) -> Any? { nil }
-    func setOnTopLevelResize(_ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {}
-    func setOnKey(_ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {}
-    func setOnFocus(_ handler: @escaping @Sendable (UInt32, Bool) -> Void) {}
-    func setOnMouse(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void) {}
-    func setOnMouseDragged(_ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void) {}
-    func setOnPointerMoved(_ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {}
-    func setOnPointerEnteredView(_ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {}
-    func setOnPointerExitedView(_ handler: @escaping @Sendable (UInt32) -> Void) {}
-    func setOnPaste(_ handler: @escaping @Sendable (UInt32, String) -> Void) {}
-    func setOnCopy(_ handler: @escaping @Sendable (UInt32) -> Void) {}
+    func setOnTopLevelResize(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {}
+    func setOnKey(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {}
+    func setOnFocus(token: UInt64, _ handler: @escaping @Sendable (UInt32, Bool) -> Void) {}
+    func setOnMouse(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void) {}
+    func setOnMouseDragged(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void) {}
+    func setOnPointerMoved(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {}
+    func setOnPointerEnteredView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {}
+    func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void) {}
+    func setOnPaste(token: UInt64, _ handler: @escaping @Sendable (UInt32, String) -> Void) {}
+    func setOnCopy(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void) {}
     func writeClipboard(text: String) {}
-    func setOnCloseRequest(_ handler: @escaping @Sendable (UInt32) -> Void) {}
+    func setOnCloseRequest(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void) {}
+    func removeHandlers(token: UInt64) {}
     // Default no-ops so unit-test bridges don't have to implement every method.
     func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
     func drawPolyLine(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}

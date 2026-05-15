@@ -16,6 +16,14 @@ public final class ServerSession: @unchecked Sendable {
         case running(byteOrder: ByteOrder)
     }
 
+    /// Set by handlers that detect an unrecoverable wire-protocol state
+    /// (e.g., a request length-field of 0 — we can't advance the stream
+    /// without knowing how many bytes to consume). The listener checks
+    /// this after every feed() and cancels the read source. Per spec,
+    /// the server is allowed to close on malformed requests after first
+    /// emitting BadLength.
+    public private(set) var shouldClose: Bool = false
+
     public let config: ServerConfig
 
     /// Cross-session shared state (atoms, selection ownership, ID ranges).
@@ -23,6 +31,24 @@ public final class ServerSession: @unchecked Sendable {
     /// session owns alone; in multi-client mode the listener hands the same
     /// coordinator to every session so they share atoms + selections.
     public let coordinator: ServerCoordinator
+
+    /// Unique-per-session token threaded into every bridge handler
+    /// registration so `cleanupOnDisconnect` can remove this session's
+    /// handlers in bulk via `bridge.removeHandlers(token:)`. Pre-2026-05-14
+    /// every accepted session permanently grew the bridge's handler lists
+    /// (the closures captured `[weak self]` and no-op'd after dealloc, but
+    /// the lists themselves kept growing and every closure fired on every
+    /// AppKit event).
+    public let bridgeHandlerToken: UInt64 = ServerSession.nextBridgeHandlerToken()
+    private static let _bridgeHandlerTokenLock = NSLock()
+    private nonisolated(unsafe) static var _nextBridgeHandlerToken: UInt64 = 1
+    private static func nextBridgeHandlerToken() -> UInt64 {
+        _bridgeHandlerTokenLock.lock()
+        defer { _bridgeHandlerTokenLock.unlock() }
+        let t = _nextBridgeHandlerToken
+        _nextBridgeHandlerToken &+= 1
+        return t
+    }
 
     /// Atoms — delegated to coordinator so atom IDs stay consistent across
     /// sessions. Kept as a property so call sites read `self.atoms.intern(…)`
@@ -235,13 +261,14 @@ public final class ServerSession: @unchecked Sendable {
         // and flush any bytes the handler appended to outbound. Since
         // protocolQueue is the only writer, no lock is needed at the socket.
         let queue = self.protocolQueue
-        bridge?.setOnTopLevelResize { [weak self] id, width, height in
+        let token = self.bridgeHandlerToken
+        bridge?.setOnTopLevelResize(token: token) { [weak self] id, width, height in
             queue.async {
                 self?.handleTopLevelResize(id: id, width: width, height: height)
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnKey { [weak self] topLevel, macKeyCode, modifierFlags, isDown in
+        bridge?.setOnKey(token: token) { [weak self] topLevel, macKeyCode, modifierFlags, isDown in
             queue.async {
                 self?.handleKeyEvent(
                     topLevel: topLevel, macKeyCode: macKeyCode,
@@ -250,13 +277,13 @@ public final class ServerSession: @unchecked Sendable {
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnFocus { [weak self] topLevel, gained in
+        bridge?.setOnFocus(token: token) { [weak self] topLevel, gained in
             queue.async {
                 self?.handleFocusChange(topLevel: topLevel, gained: gained)
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnMouse { [weak self] topLevel, x, y, button, isDown in
+        bridge?.setOnMouse(token: token) { [weak self] topLevel, x, y, button, isDown in
             queue.async {
                 self?.handleMouseEvent(
                     topLevel: topLevel, x: x, y: y, button: button, isDown: isDown
@@ -264,43 +291,43 @@ public final class ServerSession: @unchecked Sendable {
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnMouseDragged { [weak self] topLevel, x, y, button in
+        bridge?.setOnMouseDragged(token: token) { [weak self] topLevel, x, y, button in
             queue.async {
                 self?.handleMouseDragged(topLevel: topLevel, x: x, y: y, button: button)
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnPointerMoved { [weak self] topLevel, x, y in
+        bridge?.setOnPointerMoved(token: token) { [weak self] topLevel, x, y in
             queue.async {
                 self?.handlePointerMoved(topLevel: topLevel, x: x, y: y)
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnPointerEnteredView { [weak self] topLevel, x, y in
+        bridge?.setOnPointerEnteredView(token: token) { [weak self] topLevel, x, y in
             queue.async {
                 self?.handlePointerEnteredView(topLevel: topLevel, x: x, y: y)
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnPointerExitedView { [weak self] topLevel in
+        bridge?.setOnPointerExitedView(token: token) { [weak self] topLevel in
             queue.async {
                 self?.handlePointerExitedView(topLevel: topLevel)
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnPaste { [weak self] topLevel, text in
+        bridge?.setOnPaste(token: token) { [weak self] topLevel, text in
             queue.async {
                 self?.handlePaste(topLevel: topLevel, text: text)
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnCopy { [weak self] topLevel in
+        bridge?.setOnCopy(token: token) { [weak self] topLevel in
             queue.async {
                 self?.handleCopy(topLevel: topLevel)
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnCloseRequest { [weak self] topLevel in
+        bridge?.setOnCloseRequest(token: token) { [weak self] topLevel in
             queue.async {
                 self?.handleCloseRequest(topLevel: topLevel)
                 self?.flushOutbound()
@@ -704,9 +731,11 @@ public final class ServerSession: @unchecked Sendable {
         if let redirect = grabRedirect(topLevel: topLevel, eventMaskBit16: mask16) {
             resolved = redirect
         } else if pointerGrab != nil {
-            // Grab active with ownerEvents=true. Deliver to natural target
-            // since we're single-client (the client owns every window in
-            // this session); ownerEvents=true means "no redirect."
+            // Grab active with ownerEvents=true. ownerEvents=true means
+            // "no redirect" — deliver to the natural target within the
+            // grabbing client's window subtree. (Each session sees only
+            // its own windows under `topLevel`, so the natural target is
+            // by definition owned by this session's client.)
             resolved = mouseTarget(topLevel: topLevel, x: x, y: y, eventMaskBit: mask)
         } else if isDown,
                   let natural = mouseTarget(topLevel: topLevel, x: x, y: y, eventMaskBit: mask),
@@ -1286,8 +1315,18 @@ public final class ServerSession: @unchecked Sendable {
             }
         }
         walk(parent)
-        for id in toRemove { windows.remove(id) }
-        if includeRoot { windows.remove(parent) }
+        // Unlink before removing so the sibling chain stays consistent
+        // throughout (each unlink fixes up its own grandparent's chain;
+        // by the time we finish, the parent's firstChild/lastChild are
+        // correctly nil because all direct children went through unlink).
+        for id in toRemove {
+            SiblingChain.unlink(id, in: windows)
+            windows.remove(id)
+        }
+        if includeRoot {
+            SiblingChain.unlink(parent, in: windows)
+            windows.remove(parent)
+        }
     }
 
     private func absoluteOrigin(of window: UInt32, topLevel: UInt32) -> (Int16, Int16) {
@@ -1305,10 +1344,12 @@ public final class ServerSession: @unchecked Sendable {
     // MARK: - Grabs
 
     private func handleGrabPointer(_ r: GrabPointer, byteOrder: ByteOrder) {
-        // We always succeed. Real X servers can return AlreadyGrabbed when
-        // a different client holds the pointer grab, but our session is
-        // single-client per definition (one X connection = one session
-        // = one client view of the pointer). NotViewable / Frozen aren't
+        // We always succeed. Real X servers return AlreadyGrabbed when a
+        // different client already holds the pointer grab. pointerGrab is
+        // session-local and we don't currently coordinate across sessions
+        // via the ServerCoordinator, so a cross-session AlreadyGrabbed is
+        // a latent multi-client gap (no client we host today exercises
+        // cross-session pointer grabs). NotViewable / Frozen aren't
         // produced because we don't enforce window-viewable preconditions.
         let alreadyGrabbed = (pointerGrab != nil)
         pointerGrab = PointerGrab(
@@ -1666,16 +1707,32 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     /// Walk every window in the subtree rooted at `topId`, derive its
-    /// current visibility state from clipList, and emit VisibilityNotify
-    /// when the state transitioned (and the window has VisibilityChangeMask
-    /// in its event mask). Update the stored `lastVisibilityState` either
-    /// way so future calls see correct prior state.
+    /// current visibility state, and emit VisibilityNotify when the state
+    /// transitioned (and the window has VisibilityChangeMask in its event
+    /// mask). Update the stored `lastVisibilityState` either way so future
+    /// calls see correct prior state.
+    ///
+    /// Per X11 spec, visibility state is computed **ignoring this window's
+    /// subwindows**. A container fully covered by its child widgets is
+    /// Unobscured, not FullyObscured — that distinction is load-bearing
+    /// for Motif: PushButton's redraw method gates shadow-chrome drawing
+    /// on its parent NOT being FullyObscured. R6's `mi/mivaltree.c`
+    /// computes this with `RECT_IN_REGION(universe, &borderSize)` where
+    /// universe is parent-visible BEFORE subtracting children.
+    ///
+    /// Our stored regions: `borderClip` is `parentVisible ∩ borderBox`
+    /// (the window's max possible visibility, children-agnostic).
+    /// `clipList` is `borderClip ∩ interiorBox − sum(children's borderClips)`
+    /// — children-subtracted, which is what we used until 2026-05-14 and
+    /// which produced the wrong answer. We now compute `borderClip ∩
+    /// interiorBox` on the fly to get the children-agnostic interior
+    /// region, then compare its area to `width * height`.
     ///
     /// State derivation:
-    ///   - !mapped → nil (window not viewable; X11 spec doesn't emit
+    ///   - !mapped → nil (window not viewable; spec doesn't emit
     ///     VisibilityNotify for transitions involving unmapped state)
-    ///   - mapped + area(clipList) == 0 → 2 (FullyObscured)
-    ///   - mapped + area(clipList) == width*height → 0 (Unobscured)
+    ///   - mapped + area(borderClip ∩ interiorBox) == 0 → 2 (FullyObscured)
+    ///   - mapped + area(borderClip ∩ interiorBox) == width*height → 0 (Unobscured)
     ///   - otherwise → 1 (PartiallyObscured)
     private func emitVisibilityChanges(forTopLevel topId: UInt32) {
         guard let order = byteOrder else { return }
@@ -1688,7 +1745,7 @@ public final class ServerSession: @unchecked Sendable {
             if !entry.mapped {
                 newState = nil
             } else {
-                let area = regionArea(entry.clipList)
+                let area = regionArea(interiorVisibleRegion(of: id, entry: entry))
                 let windowArea = Int64(entry.width) * Int64(entry.height)
                 if area == 0 {
                     newState = 2
@@ -1711,6 +1768,22 @@ public final class ServerSession: @unchecked Sendable {
                 windows.setLastVisibilityState(id, newState)
             }
         }
+    }
+
+    /// Children-agnostic visible region for `id`, in top-level coords.
+    /// Equals `borderClip ∩ interiorBox`. Used for VisibilityNotify state
+    /// derivation per spec ("ignoring all of the window's subwindows").
+    /// borderBox includes the border; interiorBox is the client drawing
+    /// area only — the spec talks about window contents, so we project
+    /// the border-inclusive borderClip back onto the interior.
+    private func interiorVisibleRegion(of id: UInt32, entry: WindowEntry) -> Region {
+        guard let (_, dx, dy) = topLevelAndOffset(for: id) else { return .empty }
+        let interiorBox = BoxRec(
+            x1: Int32(dx), y1: Int32(dy),
+            x2: Int32(dx) + Int32(entry.width),
+            y2: Int32(dy) + Int32(entry.height)
+        )
+        return entry.borderClip.intersected(with: Region(box: interiorBox))
     }
 
     private func regionArea(_ region: Region) -> Int64 {
@@ -2244,6 +2317,20 @@ public final class ServerSession: @unchecked Sendable {
     /// `protocolQueue` so the bridge's destroyTopLevel runs in the same
     /// thread context as session-state mutation.
     public func cleanupOnDisconnect() {
+        // Revoke selection ownership held by ANY window this session created
+        // (R6 dispatch.c:DeleteClientFromAnySelections). Without this,
+        // GetSelectionOwner from another client would return a stale window
+        // id, and ConvertSelection would forward a SelectionRequest into the
+        // void. No SelectionClear emitted — the owner client is gone.
+        let allIds = Set(windows.windows.keys)
+        let revoked = coordinator.revokeSelections(ownedBy: allIds)
+        if !revoked.isEmpty {
+            log?.log("disconnect: revoked ownership of \(revoked.count) selection(s)")
+        }
+        // Pull this session's handlers off the bridge so dead-session
+        // closures stop firing on every AppKit event. Safe even when
+        // bridge is nil (test mode).
+        bridge?.removeHandlers(token: bridgeHandlerToken)
         guard let bridge = bridge, let bo = byteOrder else { return }
         // Snapshot top-level ids first (mutating windows during walk would
         // be a bug). Top-levels = direct children of the root window.
@@ -2386,7 +2473,16 @@ public final class ServerSession: @unchecked Sendable {
         }
         let totalSize = Int(lenIn4) * 4
         guard totalSize >= 4 else {
-            log?.log("request: bogus length \(lenIn4) — closing")
+            // length=0 leaves us unable to advance the stream — we don't
+            // know how many bytes to skip. Per spec we may emit BadLength
+            // and close. Bump the sequence so the error carries a useful
+            // value, emit, then ask the listener to tear us down via
+            // shouldClose. Pre-2026-05-14 this just returned nil and
+            // looped forever with the same wedge bytes at the front.
+            sequenceNumber &+= 1
+            log?.log("request: bogus length \(lenIn4) — emitting BadLength and closing")
+            emitError(.length, majorOpcode: inbound[0])
+            shouldClose = true
             return nil
         }
         guard inbound.count >= totalSize else { return nil }
@@ -2400,10 +2496,16 @@ public final class ServerSession: @unchecked Sendable {
             log?.log("req[\(sequenceNumber)] \(opcodeName(request))")
             dispatch(request, byteOrder: byteOrder)
         } catch {
+            // Decode of a well-framed request failed — the length was sane,
+            // the body wasn't. Per spec emit BadLength/BadValue and skip
+            // the bad bytes; don't tear down the connection because the
+            // stream is still synchronized after `totalSize`. The framer
+            // throws on (a) truncated bodies (we already gated on
+            // count >= totalSize), (b) invalid enum values inside known
+            // request bodies — both map cleanest to BadValue, which is what
+            // xorg's dispatch.c does in the equivalent path.
             log?.log("request: decode error opcode=\(bytes[0]) seq=\(sequenceNumber): \(error)")
-            // M1: don't synthesize XError for decode failures yet — for our
-            // capture corpus, decode is trusted. If a real client sends bytes
-            // we can't decode, that's a framer bug, not a protocol error.
+            emitError(.value, majorOpcode: bytes[0])
         }
         return totalSize
     }
@@ -2433,6 +2535,12 @@ public final class ServerSession: @unchecked Sendable {
                 overrideRedirect: overrideRedirect
             )
             windows.insert(entry)
+            // Link into parent's sibling chain at the TOP — newly created
+            // windows go above all existing siblings per X spec
+            // ("MapWindow with no sibling specified, default Above"). No-op
+            // for top-levels (root has no WindowEntry to anchor on);
+            // AppKit handles inter-top-level stacking.
+            SiblingChain.linkAtTop(r.wid, parent: r.parent, in: windows)
             let isTop = r.parent == config.rootWindowId
             log?.log("  CreateWindow wid=0x\(String(r.wid, radix: 16)) parent=0x\(String(r.parent, radix: 16)) \(r.width)x\(r.height) at (\(r.x),\(r.y)) bw=\(r.borderWidth) eventMask=0x\(String(eventMask, radix: 16)) topLevel=\(isTop) override=\(overrideRedirect)")
             // Register top-levels with the bridge. Both regular and
@@ -2523,6 +2631,15 @@ public final class ServerSession: @unchecked Sendable {
             // can recompute clip regions and emit SubstructureNotify after.
             let preDestroyTopId = topLevelAndOffset(for: r.window)?.0
             let parentId = entry.parent
+            // Spec: a destroyed window can't own selections any more. R6's
+            // dispatch.c:DeleteWindowFromAnySelections walks the table; we
+            // call into the coordinator equivalent. No SelectionClear
+            // emitted (window is gone; no one to deliver to).
+            coordinator.revokeSelections(ownedBy: [r.window])
+            // Unlink from parent's sibling chain before removing the entry
+            // itself. unlink() handles fixing both ends of every link
+            // (firstChild/lastChild, prevSib/nextSib of neighbors).
+            SiblingChain.unlink(r.window, in: windows)
             windows.remove(r.window)
             properties.deleteAll(window: r.window)
             if wasTopLevel {
@@ -2815,7 +2932,79 @@ public final class ServerSession: @unchecked Sendable {
             let y = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.y, byteOrder: byteOrder).map { Int16(truncatingIfNeeded: $0) }
             let w = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.width, byteOrder: byteOrder).map { UInt16(truncatingIfNeeded: $0) }
             let h = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.height, byteOrder: byteOrder).map { UInt16(truncatingIfNeeded: $0) }
-            log?.log("  ConfigureWindow window=0x\(String(r.window, radix: 16)) mask=0x\(String(r.valueMask, radix: 16)) x=\(x.map(String.init) ?? "-") y=\(y.map(String.init) ?? "-") w=\(w.map(String.init) ?? "-") h=\(h.map(String.init) ?? "-")")
+            let stackModeRaw = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.stackMode, byteOrder: byteOrder).map { UInt8(truncatingIfNeeded: $0) }
+            let siblingRaw = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CWindow.sibling, byteOrder: byteOrder)
+            log?.log("  ConfigureWindow window=0x\(String(r.window, radix: 16)) mask=0x\(String(r.valueMask, radix: 16)) x=\(x.map(String.init) ?? "-") y=\(y.map(String.init) ?? "-") w=\(w.map(String.init) ?? "-") h=\(h.map(String.init) ?? "-") stackMode=\(stackModeRaw.map(String.init) ?? "-") sibling=\(siblingRaw.map { "0x" + String($0, radix: 16) } ?? "-")")
+
+            // Apply stack-mode + sibling BEFORE geometry, mirroring R6's
+            // dispatch.c order. Stack reordering is independent of move/
+            // resize but affects what's visible after the configure, so
+            // the subsequent clipList recompute sees the new chain order.
+            // Skip for top-levels — root has no WindowEntry to anchor
+            // firstChild/lastChild on; AppKit handles top-level stacking.
+            var stackChanged = false
+            if let mode = stackModeRaw,
+               let entry = windows.get(r.window),
+               windows.get(entry.parent) != nil {
+                let priorPrev = entry.prevSib
+                let priorNext = entry.nextSib
+                if let sib = siblingRaw, sib != 0 {
+                    // Spec BadMatch if sibling isn't actually a sibling
+                    // (different parent) or doesn't exist.
+                    guard let sibEntry = windows.get(sib),
+                          sibEntry.parent == entry.parent else {
+                        emitError(.match, majorOpcode: ConfigureWindow.opcode, badResourceId: sib)
+                        break
+                    }
+                    SiblingChain.unlink(r.window, in: windows)
+                    switch mode {
+                    case 0:     // Above sibling → id goes directly above sibling
+                        SiblingChain.linkAbove(r.window, sibling: sib, in: windows)
+                    case 1:     // Below sibling → id goes directly below sibling
+                        if let nextOfSib = sibEntry.nextSib {
+                            SiblingChain.linkAbove(r.window, sibling: nextOfSib, in: windows)
+                        } else {
+                            SiblingChain.linkAtBottom(r.window, parent: entry.parent, in: windows)
+                        }
+                    case 2, 3, 4:
+                        // TopIf / BottomIf / Opposite need rectangle-occlusion
+                        // tests we don't yet implement. Approximation:
+                        // Above-semantics, which preserves the "ensure
+                        // visibility" intent for the common case. Logged
+                        // for visibility; revisit when a client we host
+                        // actually exercises these.
+                        log?.log("  ConfigureWindow stackMode=\(mode) (TopIf/BottomIf/Opposite) approximated as Above")
+                        SiblingChain.linkAbove(r.window, sibling: sib, in: windows)
+                    default:
+                        emitError(.value, majorOpcode: ConfigureWindow.opcode)
+                        break
+                    }
+                } else {
+                    SiblingChain.unlink(r.window, in: windows)
+                    switch mode {
+                    case 0:     // Above (no sibling) → top of stack
+                        SiblingChain.linkAtTop(r.window, parent: entry.parent, in: windows)
+                    case 1:     // Below (no sibling) → bottom of stack
+                        SiblingChain.linkAtBottom(r.window, parent: entry.parent, in: windows)
+                    case 2, 3, 4:
+                        // Same approximation as above. TopIf without a
+                        // sibling means "if any sibling occludes me, go
+                        // top"; we just go to top.
+                        log?.log("  ConfigureWindow stackMode=\(mode) (no sibling) approximated as Above")
+                        SiblingChain.linkAtTop(r.window, parent: entry.parent, in: windows)
+                    default:
+                        emitError(.value, majorOpcode: ConfigureWindow.opcode)
+                        break
+                    }
+                }
+                let nowEntry = windows.get(r.window)
+                stackChanged = (nowEntry?.prevSib != priorPrev) || (nowEntry?.nextSib != priorNext)
+            } else if let sib = siblingRaw, sib != 0, stackModeRaw == nil {
+                // Spec BadMatch: CWSibling without CWStackMode is invalid.
+                emitError(.match, majorOpcode: ConfigureWindow.opcode, badResourceId: sib)
+                break
+            }
+
             // E1.5: capture pre-move state so we can compute the area of
             // parent newly uncovered by this window's move/resize.
             let preMoveBorderClip = windows.get(r.window)?.borderClip ?? .empty
@@ -2841,13 +3030,18 @@ public final class ServerSession: @unchecked Sendable {
                 // realization — without it, Xt does a probing ping-pong
                 // resize that wipes xterm's screen buffer.
                 let structureNotifyMask: UInt32 = 1 << 17
-                if sizeChanged || posChanged {
+                if sizeChanged || posChanged || stackChanged {
+                    // aboveSibling per X spec: "the sibling immediately
+                    // above this window, or None (0) if topmost". That's
+                    // prevSib in our chain orientation. For top-levels
+                    // (parent isn't in the table) it's 0.
+                    let aboveSibling: UInt32 = windows.get(r.window)?.prevSib ?? 0
                     // StructureNotify variant on the window itself.
                     if entry.eventMask & structureNotifyMask != 0 {
-                        log?.log("  → emit ConfigureNotify on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height) at (\(new.x),\(new.y))")
+                        log?.log("  → emit ConfigureNotify on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height) at (\(new.x),\(new.y)) above=0x\(String(aboveSibling, radix: 16))")
                         let cfgEv = ConfigureNotifyEvent(
                             sequenceNumber: sequenceNumber,
-                            event: r.window, window: r.window, aboveSibling: 0,
+                            event: r.window, window: r.window, aboveSibling: aboveSibling,
                             x: new.x, y: new.y,
                             width: new.width, height: new.height,
                             borderWidth: new.borderWidth,
@@ -2865,7 +3059,7 @@ public final class ServerSession: @unchecked Sendable {
                     notifySubstructure(parent: entry.parent) { eventTarget in
                         ConfigureNotifyEvent(
                             sequenceNumber: seq, event: eventTarget,
-                            window: win, aboveSibling: 0,
+                            window: win, aboveSibling: aboveSibling,
                             x: nx, y: ny,
                             width: nw, height: nh,
                             borderWidth: nbw,
@@ -2912,6 +3106,39 @@ public final class ServerSession: @unchecked Sendable {
                         outbound: outbound
                     )
                 }
+            } else if stackChanged, let entry = windows.get(r.window) {
+                // Stack-only change (no geometry mutation). Still need to
+                // emit ConfigureNotify per spec and recompute clips so
+                // overlap-affected siblings get correct visibility.
+                let structureNotifyMask: UInt32 = 1 << 17
+                let aboveSibling: UInt32 = entry.prevSib ?? 0
+                if entry.eventMask & structureNotifyMask != 0 {
+                    log?.log("  → emit ConfigureNotify on 0x\(String(r.window, radix: 16)) stack-only above=0x\(String(aboveSibling, radix: 16))")
+                    let cfgEv = ConfigureNotifyEvent(
+                        sequenceNumber: sequenceNumber,
+                        event: r.window, window: r.window,
+                        aboveSibling: aboveSibling,
+                        x: entry.x, y: entry.y,
+                        width: entry.width, height: entry.height,
+                        borderWidth: entry.borderWidth,
+                        overrideRedirect: false
+                    )
+                    outbound.append(cfgEv.encode(byteOrder: byteOrder))
+                }
+                let seq = sequenceNumber
+                let win = r.window
+                let ex = entry.x, ey = entry.y, ew = entry.width, eh = entry.height, ebw = entry.borderWidth
+                notifySubstructure(parent: entry.parent) { eventTarget in
+                    ConfigureNotifyEvent(
+                        sequenceNumber: seq, event: eventTarget,
+                        window: win, aboveSibling: aboveSibling,
+                        x: ex, y: ey, width: ew, height: eh,
+                        borderWidth: ebw,
+                        overrideRedirect: false
+                    ).encode(byteOrder: byteOrder)
+                }
+                // Recompute clips: stack reorder changes who occludes whom.
+                recomputeClipsForSubtreeContaining(r.window)
             }
 
         case .internAtom(let r):
@@ -3332,10 +3559,16 @@ public final class ServerSession: @unchecked Sendable {
                 let oldParent = entry.parent
                 // Capture old containing top-level before mutating parent.
                 let oldTopId = topLevelAndOffset(for: r.window)?.0
+                // Unlink from OLD parent's sibling chain before mutating
+                // parent. Per X spec, the reparented window goes on top of
+                // the new parent's stack (equivalent of MapWindow's default
+                // stack mode). linkAtTop after the parent change.
+                SiblingChain.unlink(r.window, in: windows)
                 entry.parent = r.parent
                 entry.x = r.x
                 entry.y = r.y
                 windows.insert(entry)
+                SiblingChain.linkAtTop(r.window, parent: r.parent, in: windows)
                 let ev = ReparentNotifyEvent(
                     sequenceNumber: sequenceNumber,
                     event: r.window, window: r.window,
@@ -3529,10 +3762,76 @@ public final class ServerSession: @unchecked Sendable {
             log?.log("  SendEvent dest=0x\(String(r.destination, radix: 16)) propagate=\(r.propagate) eventCode=\(bytes[0] & 0x7F)")
 
         case .grabServer, .ungrabServer:
-            // Single-client server: GrabServer's "block all other clients"
-            // semantic has no effect. We accept the request to keep the
-            // wire conversation flowing; client expects no reply.
+            // Accepted as a no-op. We're multi-client today but don't yet
+            // implement GrabServer's "block all other clients" semantic
+            // (would require coordinator-mediated pause of other sessions'
+            // request dispatch). Latent gap: a WM that depends on
+            // GrabServer to make atomic multi-request changes won't get
+            // atomicity. No client we host today exercises this.
             break
+
+        case .noOperation:
+            // Xt scatters XNoOp as wire flushes. Spec says always succeeds;
+            // no reply. Pre-2026-05-14 this fell through to BadRequest,
+            // hitting every Xt-based client multiple times per session.
+            break
+
+        case .setCloseDownMode(let r):
+            // Client tells server what to do with its resources on
+            // disconnect. We don't yet support RetainPermanent /
+            // RetainTemporary close-down (Product 2 territory); spec lets
+            // us implement only Destroy (the default). Accept silently
+            // — clients expect no reply, and the next disconnect will
+            // tear down all resources regardless of stored mode.
+            log?.log("  SetCloseDownMode: mode=\(r.mode) (recorded, not honored)")
+
+        case .killClient(let r):
+            // Spec: kill the client owning the given resource (or all
+            // RetainTemporary clients if resource == AllTemporary=0).
+            // Single-real-client tier today; accept silently. Real impl
+            // would look up resource → client → close client socket.
+            log?.log("  KillClient: resource=0x\(String(r.resource, radix: 16)) (no-op, multi-client not yet)")
+
+        case .ungrabButton(let r):
+            // Remove matching passive button grabs. AnyButton=0 and
+            // AnyModifier=0x8000 are wildcards per spec — they match
+            // every previously-registered grab on the window.
+            guard validateWindowOrRoot(r.grabWindow, majorOpcode: UngrabButton.opcode) else { break }
+            passiveButtonGrabs.removeAll { g in
+                g.grabWindow == r.grabWindow
+                  && (r.button == 0 || g.button == r.button)
+                  && (r.modifiers == 0x8000 || g.modifiers == r.modifiers)
+            }
+
+        case .ungrabKey(let r):
+            guard validateWindowOrRoot(r.grabWindow, majorOpcode: UngrabKey.opcode) else { break }
+            passiveKeyGrabs.removeAll { g in
+                g.grabWindow == r.grabWindow
+                  && (r.key == 0 || g.key == r.key)
+                  && (r.modifiers == 0x8000 || g.modifiers == r.modifiers)
+            }
+
+        case .getMotionEvents(let r):
+            // swift-x doesn't keep a motion-event ring (motion-buffer-size
+            // is advertised as 0 in the connection-info reply). Spec-correct
+            // answer is an empty event list.
+            guard validateWindowOrRoot(r.window, majorOpcode: GetMotionEvents.opcode) else { break }
+            let reply = GetMotionEventsReply(sequenceNumber: sequenceNumber)
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        case .allocColorCells(let r):
+            // Read-write colormap cells aren't supported: swift-x advertises
+            // a single PseudoColor visual but renders on TrueColor (Mac
+            // backing store has no real palette). Spec lets us emit
+            // BadAlloc when the requested allocation can't succeed.
+            // Important: must NOT be BadRequest (the pre-2026-05-14 default
+            // for opcodes with no framer decoder). Xt's color converter
+            // catches BadAlloc and falls back to read-only AllocColor;
+            // BadRequest gets logged as "server is broken." Equivalent of
+            // what XQuartz does at xpr/xprScreen.c — TrueColor framebuffer,
+            // refuse writable cells.
+            log?.log("  AllocColorCells: cmap=0x\(String(r.cmap, radix: 16)) colors=\(r.colors) planes=\(r.planes) → BadAlloc (no read-write cells on TrueColor backing)")
+            emitError(.alloc, majorOpcode: AllocColorCells.opcode, badResourceId: r.cmap)
 
         case .recolorCursor(let r):
             // We substitute NSCursor glyphs and don't honor the X-protocol
@@ -3670,11 +3969,36 @@ public final class ServerSession: @unchecked Sendable {
         // mode). owner=0 clears the selection.
         case .setSelectionOwner(let r):
             if r.owner == 0 {
+                // Clearing ownership. If we previously held this selection,
+                // a SelectionClear isn't required by spec for the "owner ==
+                // None" path — the owning client is the one driving the
+                // clear and already knows it gave up the selection.
                 coordinator.clearSelectionOwner(r.selection)
                 log?.log("SetSelectionOwner: cleared selection atom=\(r.selection)")
             } else {
-                coordinator.setSelectionOwner(r.selection, window: r.owner, time: r.time)
+                // Atomic swap returns the prior owner. Spec 4.2.1: when a
+                // new client takes ownership, the previous owner gets a
+                // SelectionClear. We emit it only when the prior owner
+                // window lives in our windows table (same-session case);
+                // cross-session SelectionClear delivery would need a
+                // coordinator-mediated routing path that doesn't exist
+                // yet. The mediator's stub-owned-selection case (CDE
+                // daemon impersonation) is also same-session and works
+                // here because the stub window IS in our windows table.
+                let prior = coordinator.swapSelectionOwner(r.selection, window: r.owner, time: r.time)
                 log?.log("SetSelectionOwner: selection atom=\(r.selection) owner=0x\(String(r.owner, radix: 16)) time=\(r.time)")
+                if let prior = prior,
+                   prior.window != r.owner,
+                   windows.get(prior.window) != nil {
+                    let clear = SelectionClearEvent(
+                        sequenceNumber: sequenceNumber,
+                        time: r.time,
+                        owner: prior.window,
+                        selection: r.selection
+                    )
+                    outbound.append(clear.encode(byteOrder: byteOrder))
+                    log?.log("  → SelectionClear to prior owner 0x\(String(prior.window, radix: 16))")
+                }
                 let prefs = clipboardPrefs.current
                 if r.selection == 1, prefs.enabled, prefs.mode == .xtermStyle {
                     requestSelectionConversion(selectionAtom: 1)
@@ -3818,16 +4142,14 @@ public final class ServerSession: @unchecked Sendable {
 
         case .queryTree(let r):
             guard validateWindowOrRoot(r.window, majorOpcode: QueryTree.opcode) else { break }
-            // Walk our window table for direct children of the requested
-            // window. Per X11 spec the children list is in bottom-to-top
-            // stacking order; we don't actually track stacking, so we
-            // return them in our table-iteration order — works fine for
-            // every Xt/Motif use we've seen, which only consumes the LIST
-            // (e.g. to enumerate children for property propagation), not
-            // its order. Parent is None (0) for the root window.
-            let children = windows.windows.compactMap { (id, w) in
-                w.parent == r.window ? id : nil
-            }
+            // Per X11 spec the children list is in bottom-to-top stacking
+            // order. For windows in our table we walk the sibling chain
+            // (lastChild → prevSib → ...); for the root we fall back to
+            // dict-sort-by-id since root has no WindowEntry and AppKit
+            // owns top-level stacking.
+            let children = SiblingChain.directChildrenBottomFirst(
+                of: r.window, in: windows
+            )
             let parent: UInt32 = r.window == config.rootWindowId
                 ? 0
                 : (windows.get(r.window)?.parent ?? 0)
@@ -4009,6 +4331,13 @@ private func opcodeName(_ request: Request) -> String {
     case .getKeyboardMapping: return "GetKeyboardMapping"
     case .getModifierMapping: return "GetModifierMapping"
     case .getPointerMapping: return "GetPointerMapping"
+    case .ungrabButton: return "UngrabButton"
+    case .ungrabKey: return "UngrabKey"
+    case .getMotionEvents: return "GetMotionEvents"
+    case .allocColorCells: return "AllocColorCells"
+    case .setCloseDownMode: return "SetCloseDownMode"
+    case .killClient: return "KillClient"
+    case .noOperation: return "NoOperation"
     case .unknown(let op, _): return "unknown(\(op))"
     }
 }

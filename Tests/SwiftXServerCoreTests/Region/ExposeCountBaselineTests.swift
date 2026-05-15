@@ -29,22 +29,23 @@ final class ExposeCountBaselineTests: XCTestCase {
     //
     // Per-app counts across the steps:
     //
-    //   Capture        | Step B | E1  | E1.5+E2
-    //   --------------- ------- ----- ---------
-    //   xclock         |   1    |   1 |    1
-    //   xterm_session  |   1    |   1 |    1
-    //   xeyes-sun      |   0    |   0 |    0
-    //   xcalc          |  47    |  47 |   62  (overlapping Athena widgets;
-    //                                          sorting children by id gives
-    //                                          deterministic but slightly
-    //                                          higher count than dictionary
-    //                                          iteration order happened to)
-    //   xfontsel-sun   |   4    |   2 |    0
-    //   dthelpview     |   4    |   5 |    4
-    //   dtterm-sun     |  15    |  10 |    0
-    //   quickplot-sun  |  85    |  55 |   13
-    //   dticon-sun     |  62    |  53 |    0
-    //   dtcalc-sun     | 248    | 144 |    8   ← gold Sun emits ~7
+    //   Capture        | Step B | E1  | E1.5+E2 | +SibChain
+    //   --------------- ------- ----- --------- ----------
+    //   xclock         |   1    |   1 |    1    |    1
+    //   xterm_session  |   1    |   1 |    1    |    1
+    //   xeyes-sun      |   0    |   0 |    0    |    0
+    //   xcalc          |  47    |  47 |   62    |   18  (sibling chain
+    //                                                    fixes id-sort over-
+    //                                                    count of occluded
+    //                                                    Athena widgets;
+    //                                                    new-at-top order is
+    //                                                    spec-correct)
+    //   xfontsel-sun   |   4    |   2 |    0    |    0
+    //   dthelpview     |   4    |   5 |    4    |    4
+    //   dtterm-sun     |  15    |  10 |    0    |    0
+    //   quickplot-sun  |  85    |  55 |   13    |   13
+    //   dticon-sun     |  62    |  53 |    0    |    0
+    //   dtcalc-sun     | 248    | 144 |    8    |    8   ← gold Sun ~7
     //
     // dtcalc now matches gold's Expose stream within 1. The captures that
     // went to ZERO (dtterm, dticon, xfontsel) had their previous counts
@@ -66,7 +67,7 @@ final class ExposeCountBaselineTests: XCTestCase {
     }
 
     func testXcalcExposeCount() throws {
-        try assertExposeCount(capture: "xcalc.xtap", expected: 62)
+        try assertExposeCount(capture: "xcalc.xtap", expected: 18)
     }
 
     func testXtermExposeCount() throws {

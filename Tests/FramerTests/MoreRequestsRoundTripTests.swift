@@ -135,6 +135,57 @@ final class MoreRequestsRoundTripTests: XCTestCase {
             decode: { try ListExtensions.decode(from: $0, byteOrder: $1) })
     }
 
+    func testNoOperation() throws {
+        try roundTrip(NoOperation(),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try NoOperation.decode(from: $0, byteOrder: $1) })
+    }
+
+    // MARK: - Additional opcodes (added 2026-05-14 to close framer gaps)
+
+    func testUngrabButton() throws {
+        try roundTrip(UngrabButton(button: 1, grabWindow: 0xABCDEF01, modifiers: 0x4),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try UngrabButton.decode(from: $0, byteOrder: $1) })
+        // AnyButton + AnyModifier
+        try roundTrip(UngrabButton(button: 0, grabWindow: 0xABCDEF01, modifiers: 0x8000),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try UngrabButton.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testUngrabKey() throws {
+        try roundTrip(UngrabKey(key: 24, grabWindow: 0xABCDEF01, modifiers: 0x4),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try UngrabKey.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testGetMotionEvents() throws {
+        try roundTrip(GetMotionEvents(window: 0x10000005, start: 1000, stop: 2000),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try GetMotionEvents.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testAllocColorCells() throws {
+        try roundTrip(AllocColorCells(contiguous: true, cmap: 0x21, colors: 16, planes: 0),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try AllocColorCells.decode(from: $0, byteOrder: $1) })
+        try roundTrip(AllocColorCells(contiguous: false, cmap: 0x21, colors: 4, planes: 2),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try AllocColorCells.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testSetCloseDownMode() throws {
+        try roundTrip(SetCloseDownMode(mode: 1),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try SetCloseDownMode.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testKillClient() throws {
+        try roundTrip(KillClient(resource: 0xDEADBEEF),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try KillClient.decode(from: $0, byteOrder: $1) })
+    }
+
     // MARK: - Structured requests
 
     func testReparentWindow() throws {

@@ -9,11 +9,13 @@ import Framer
 // mask. Not emitted when the window becomes unmapped (the spec only
 // covers transitions while viewable).
 //
-// State derivation in ServerSession.emitVisibilityChanges:
+// State derivation in ServerSession.emitVisibilityChanges (per spec,
+// computed IGNORING this window's subwindows — a container fully covered
+// by its own children is Unobscured, not FullyObscured):
 //   !mapped → nil (no tracked state)
-//   mapped + clipList empty → FullyObscured (2)
-//   mapped + clipList == window bounds → Unobscured (0)
-//   mapped + partial coverage → PartiallyObscured (1)
+//   mapped + area(borderClip ∩ interiorBox) == 0 → FullyObscured (2)
+//   mapped + area(borderClip ∩ interiorBox) == width*height → Unobscured (0)
+//   mapped + partial → PartiallyObscured (1)
 
 final class VisibilityNotifyTests: XCTestCase {
 
@@ -114,5 +116,65 @@ final class VisibilityNotifyTests: XCTestCase {
             return
         }
         XCTAssertEqual(vn.state, .unobscured)
+    }
+
+    func testContainerCoveredByChildrenStaysUnobscured() throws {
+        // Motif PushButton gates its shadow-chrome redraw on its parent
+        // not being FullyObscured. Per spec, visibility is computed
+        // IGNORING subwindows — a container fully covered by its child
+        // widgets is Unobscured, not FullyObscured. Regression test for
+        // the 2026-05-14 fix that switched the state-derivation region
+        // from clipList (post-children-subtraction) to borderClip ∩
+        // interiorBox (children-agnostic). Pre-fix, this test would see
+        // the container transition to FullyObscured on child map.
+        let session = runningSession()
+        let parent = createTopLevel(session, eventMask: 1 << 16)
+        _ = session.feed(Request.mapWindow(MapWindow(window: parent))
+            .encode(byteOrder: .lsbFirst))
+        _ = session.outbound.drain()
+
+        // Child that fully covers the parent's interior (same 0,0,100x100
+        // geometry inside the parent).
+        let child: UInt32 = parent &+ 1
+        var valueList: [UInt8] = []
+        for shift in [0, 8, 16, 24] {
+            valueList.append(UInt8(truncatingIfNeeded: UInt32(0) >> shift))
+        }
+        let createChild = Request.createWindow(CreateWindow(
+            depth: 8, wid: child, parent: parent,
+            x: 0, y: 0, width: 100, height: 100, borderWidth: 0,
+            windowClass: .inputOutput, visual: ServerConfig.default.rootVisualId,
+            valueMask: 1 << 11,
+            valueList: valueList
+        ))
+        _ = session.feed(createChild.encode(byteOrder: .lsbFirst))
+        let bytes = session.feed(Request.mapWindow(MapWindow(window: child))
+            .encode(byteOrder: .lsbFirst))
+
+        // Parent's stored visibility state must still be Unobscured.
+        // Verifying via the WindowTable is enough; mapping a child below
+        // an already-Unobscured parent should not emit a transition.
+        let parentEntry = session.windows.get(parent)
+        XCTAssertEqual(parentEntry?.lastVisibilityState, 0,
+                       "parent stays Unobscured when children cover it (spec)")
+
+        // No VisibilityNotify for the parent should be in this batch —
+        // it was already Unobscured and nothing changed about its
+        // children-agnostic visibility.
+        var sawParentTransition = false
+        var offset = 0
+        while offset + 32 <= bytes.count {
+            let frame = Array(bytes[offset..<offset+32])
+            if let msg = try? ServerMessage.decodeOne(from: frame, byteOrder: .lsbFirst),
+               case .event(let ev) = msg, ev.code == 15,
+               let vn = try? VisibilityNotifyEvent.decode(from: ev.bytes,
+                                                          byteOrder: .lsbFirst),
+               vn.window == parent {
+                sawParentTransition = true
+            }
+            offset += 32
+        }
+        XCTAssertFalse(sawParentTransition,
+                       "parent visibility must not transition when a child covers it")
     }
 }

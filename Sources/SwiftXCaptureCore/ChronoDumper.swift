@@ -363,6 +363,20 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext) -> String {
         body = "GetKeyboardMapping       firstKeycode=\(r.firstKeycode) count=\(r.count)"
     case .getModifierMapping: body = "GetModifierMapping"
     case .getPointerMapping:  body = "GetPointerMapping"
+    case .ungrabButton(let r):
+        body = "UngrabButton             button=\(r.button) grabWindow=0x\(String(r.grabWindow, radix: 16)) modifiers=0x\(String(r.modifiers, radix: 16))"
+    case .ungrabKey(let r):
+        body = "UngrabKey                key=\(r.key) grabWindow=0x\(String(r.grabWindow, radix: 16)) modifiers=0x\(String(r.modifiers, radix: 16))"
+    case .getMotionEvents(let r):
+        body = "GetMotionEvents          window=0x\(String(r.window, radix: 16)) start=\(r.start) stop=\(r.stop)"
+    case .allocColorCells(let r):
+        body = "AllocColorCells          cmap=0x\(String(r.cmap, radix: 16)) colors=\(r.colors) planes=\(r.planes) contiguous=\(r.contiguous)"
+    case .setCloseDownMode(let r):
+        body = "SetCloseDownMode         mode=\(r.mode)"
+    case .killClient(let r):
+        body = "KillClient               resource=0x\(String(r.resource, radix: 16))"
+    case .noOperation:
+        body = "NoOperation"
     case .bell(let r):
         body = "Bell                     percent=\(r.percent)"
     case .unknown(let op, _):
@@ -532,6 +546,13 @@ func opcodeOf(_ req: Request) -> UInt8 {
     case .getKeyboardMapping:        return GetKeyboardMapping.opcode
     case .getModifierMapping:        return GetModifierMapping.opcode
     case .getPointerMapping:         return GetPointerMapping.opcode
+    case .ungrabButton:              return UngrabButton.opcode
+    case .ungrabKey:                 return UngrabKey.opcode
+    case .getMotionEvents:           return GetMotionEvents.opcode
+    case .allocColorCells:           return AllocColorCells.opcode
+    case .setCloseDownMode:          return SetCloseDownMode.opcode
+    case .killClient:                return KillClient.opcode
+    case .noOperation:               return NoOperation.opcode
     case .createGlyphCursor:         return CreateGlyphCursor.opcode
     case .freeCursor:                return FreeCursor.opcode
     case .recolorCursor:             return RecolorCursor.opcode

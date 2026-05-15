@@ -71,6 +71,20 @@ public struct ListExtensions: Equatable, Sendable {
     }
 }
 
+// Xt scatters NoOperation calls as wire flushes; the request length can be
+// arbitrary (Xlib uses the body as padding). decodeHeaderOnly accepts any
+// length because Request.decode already validated `bytes.count >= expected`
+// before dispatch.
+public struct NoOperation: Equatable, Sendable {
+    public static let opcode: UInt8 = 127
+    public init() {}
+    public func encode(byteOrder: ByteOrder) -> [UInt8] { encodeHeaderOnly(opcode: Self.opcode, byteOrder: byteOrder) }
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> NoOperation {
+        try decodeHeaderOnly(opcode: Self.opcode, from: bytes, byteOrder: byteOrder)
+        return NoOperation()
+    }
+}
+
 func encodeHeaderOnly(opcode: UInt8, byteOrder: ByteOrder) -> [UInt8] {
     var w = ByteWriter(byteOrder: byteOrder)
     w.writeUInt8(opcode)

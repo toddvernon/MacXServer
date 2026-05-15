@@ -57,6 +57,31 @@ public struct WindowEntry: Equatable, Sendable {
     /// VisibilityNotify when the state actually changed.
     public var lastVisibilityState: UInt8?
 
+    // MARK: - Sibling chain
+    //
+    // R6-style doubly-linked sibling chain per parent. The chain order IS
+    // the Z-order. `firstChild` is the topmost child; `lastChild` is the
+    // bottommost. `prevSib` points up (toward firstChild); `nextSib` points
+    // down (toward lastChild). Convention matches `windowstr.h:101-104` so
+    // future reads of R6/xorg/XQuartz source line up cleanly.
+    //
+    // The chain is maintained only for windows whose parent is in the
+    // WindowTable — i.e. non-top-levels. Top-levels (parent == root) are
+    // not chained because the root has no WindowEntry to anchor
+    // firstChild/lastChild on; AppKit handles inter-top-level stacking
+    // via NSWindow ordering in rootless mode, mirroring what XQuartz does.
+
+    /// Sibling above this one in stack order (closer to the top). nil = this
+    /// IS the topmost child (i.e. equals parent.firstChild).
+    public var prevSib: UInt32?
+    /// Sibling below this one in stack order (closer to the bottom). nil =
+    /// this IS the bottommost child (equals parent.lastChild).
+    public var nextSib: UInt32?
+    /// Topmost (front-most, on top) child of this window. nil = no children.
+    public var firstChild: UInt32?
+    /// Bottommost (back-most, behind everything) child. nil = no children.
+    public var lastChild: UInt32?
+
     public init(
         id: UInt32, parent: UInt32, depth: UInt8,
         x: Int16, y: Int16, width: UInt16, height: UInt16,
@@ -69,7 +94,11 @@ public struct WindowEntry: Equatable, Sendable {
         overrideRedirect: Bool = false,
         clipList: Region = .empty,
         borderClip: Region = .empty,
-        lastVisibilityState: UInt8? = nil
+        lastVisibilityState: UInt8? = nil,
+        prevSib: UInt32? = nil,
+        nextSib: UInt32? = nil,
+        firstChild: UInt32? = nil,
+        lastChild: UInt32? = nil
     ) {
         self.id = id; self.parent = parent; self.depth = depth
         self.x = x; self.y = y; self.width = width; self.height = height
@@ -83,6 +112,10 @@ public struct WindowEntry: Equatable, Sendable {
         self.clipList = clipList
         self.borderClip = borderClip
         self.lastVisibilityState = lastVisibilityState
+        self.prevSib = prevSib
+        self.nextSib = nextSib
+        self.firstChild = firstChild
+        self.lastChild = lastChild
     }
 }
 
@@ -167,6 +200,42 @@ public final class WindowTable: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
         w.lastVisibilityState = state
+        _windows[id] = w
+    }
+
+    // MARK: - Sibling chain mutators
+    //
+    // Each modifies one window's chain field. The sibling-chain helper code
+    // in ServerSession composes these into the higher-level operations
+    // (link-at-top, unlink, move-above) and is responsible for keeping the
+    // chain consistent. Callers that touch these directly must maintain
+    // both ends of every link.
+
+    public func setPrevSib(_ id: UInt32, _ value: UInt32?) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.prevSib = value
+        _windows[id] = w
+    }
+
+    public func setNextSib(_ id: UInt32, _ value: UInt32?) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.nextSib = value
+        _windows[id] = w
+    }
+
+    public func setFirstChild(_ id: UInt32, _ value: UInt32?) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.firstChild = value
+        _windows[id] = w
+    }
+
+    public func setLastChild(_ id: UInt32, _ value: UInt32?) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.lastChild = value
         _windows[id] = w
     }
 

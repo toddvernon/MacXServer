@@ -109,8 +109,19 @@ public struct ServerConfig: Sendable {
         let screen = Screen(
             root: rootWindowId,
             defaultColormap: defaultColormapId,
-            whitePixel: 0xFFFFFF,
-            blackPixel: 0x000000,
+            // Match real u5 Xsun: whitePixel=0, blackPixel=1. Both
+            // in-range valid cells for the 256-entry PseudoColor colormap.
+            // Verified 2026-05-14 against four captures (dtcalc-sun,
+            // quickplot-sun, dtterm-sun, xeyes-sun). Pre-2026-05-14 we
+            // advertised 0xFFFFFF, which is out-of-range for a depth-8
+            // visual; clients reading screen.whitePixel and using it as a
+            // foreground value got our pinned-to-white-by-accident slot,
+            // but the captured corpus (which used gold-server pixel 0 =
+            // white) silently inverted white/black against our server
+            // because we'd pinned pixel 0 to black to match the old
+            // 0xFFFFFF advertise.
+            whitePixel: 0x00000000,
+            blackPixel: 0x00000001,
             currentInputMasks: 0,
             widthInPixels: widthInPixels,
             heightInPixels: heightInPixels,

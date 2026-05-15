@@ -373,6 +373,13 @@ public enum Dumper {
         case .getKeyboardMapping:        return GetKeyboardMapping.opcode
         case .getModifierMapping:        return GetModifierMapping.opcode
         case .getPointerMapping:         return GetPointerMapping.opcode
+        case .ungrabButton:              return UngrabButton.opcode
+        case .ungrabKey:                 return UngrabKey.opcode
+        case .getMotionEvents:           return GetMotionEvents.opcode
+        case .allocColorCells:           return AllocColorCells.opcode
+        case .setCloseDownMode:          return SetCloseDownMode.opcode
+        case .killClient:                return KillClient.opcode
+        case .noOperation:               return NoOperation.opcode
         case .unknown(let op, _):        return op
         }
     }

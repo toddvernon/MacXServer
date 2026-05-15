@@ -22,9 +22,21 @@ public final class ColorTable {
     private var nextPixel: UInt32 = 16
 
     public init() {
-        // Pin black=0, white=0xFFFFFF for completeness. Most apps refer to these
-        // by the screen's blackPixel/whitePixel rather than allocating.
-        pixelToRGB[0] = RGB16(red: 0, green: 0, blue: 0)
+        // Pin pixel 0 = white, pixel 1 = black. Matches the
+        // whitePixel/blackPixel values our SetupAccepted advertises
+        // (ServerConfig.swift) which in turn match real u5 Xsun (verified
+        // 2026-05-14 against four captured Sun sessions). Counter-intuitive
+        // — many people expect 0 = black — but X11 monochrome convention is
+        // 0 = paper = white, 1 = ink = black, and Sun's PseudoColor screen
+        // setup inherited that convention.
+        //
+        // Also pin 0xFFFFFF = white as a defensive carryover. Pre-2026-05-14
+        // we incorrectly advertised whitePixel=0xFFFFFF (out of range for a
+        // depth-8 visual); a few captured corpus paths reference 0xFFFFFF
+        // expecting white. Keeping the pin means those paths render correctly
+        // even though we've stopped advertising the value.
+        pixelToRGB[0] = RGB16(red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF)
+        pixelToRGB[1] = RGB16(red: 0, green: 0, blue: 0)
         pixelToRGB[0xFFFFFF] = RGB16(red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF)
 
         // Pre-seed the CDE customization-daemon palette: pixels 1..23 (decimal).

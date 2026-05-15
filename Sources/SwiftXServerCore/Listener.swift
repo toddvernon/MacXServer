@@ -208,6 +208,14 @@ public final class Listener: @unchecked Sendable {
             if !outBytes.isEmpty {
                 writeAllToSocket(clientFd, outBytes)
             }
+            // Session marked itself unrecoverable (e.g., a bogus request
+            // length wedged the parse stream). Drain any outbound bytes
+            // we just queued (the trailing XError) and tear down.
+            if session.shouldClose {
+                sessionLog?.log("session signaled close after feed — cancelling read source")
+                sourceHolder.source?.cancel()
+                return
+            }
         }
 
         readSource.setCancelHandler {

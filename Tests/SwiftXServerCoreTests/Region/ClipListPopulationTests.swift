@@ -35,9 +35,15 @@ final class ClipListPopulationTests: XCTestCase {
 
     /// Convenience: build a table with the given entries and immediately
     /// recompute. Returns the table so tests can read post-compute state.
+    /// Entries must be in topological order (parent before child) so
+    /// SiblingChain.linkAtTop can find each new window's parent. Mirrors
+    /// what real CreateWindow dispatch does (insert + linkAtTop).
     private func recompute(_ entries: [WindowEntry], topLevel: UInt32) -> WindowTable {
         let table = WindowTable()
-        for e in entries { table.insert(e) }
+        for e in entries {
+            table.insert(e)
+            SiblingChain.linkAtTop(e.id, parent: e.parent, in: table)
+        }
         ClipListEngine.recomputeClips(forTopLevel: topLevel, in: table)
         return table
     }
@@ -143,7 +149,9 @@ final class ClipListPopulationTests: XCTestCase {
         let rootId: UInt32 = 0x28
         let table = WindowTable()
         table.insert(makeWindow(id: aId, parent: rootId, width: 100, height: 100, mapped: true))
+        SiblingChain.linkAtTop(aId, parent: rootId, in: table)
         table.insert(makeWindow(id: bId, parent: aId, x: 10, y: 10, width: 50, height: 50, mapped: true))
+        SiblingChain.linkAtTop(bId, parent: aId, in: table)
         ClipListEngine.recomputeClips(forTopLevel: aId, in: table)
         let firstClipA = table.get(aId)!.clipList
 
@@ -172,7 +180,9 @@ final class ClipListPopulationTests: XCTestCase {
         let rootId: UInt32 = 0x28
         let table = WindowTable()
         table.insert(makeWindow(id: aId, parent: rootId, width: 100, height: 100, mapped: false))
+        SiblingChain.linkAtTop(aId, parent: rootId, in: table)
         table.insert(makeWindow(id: bId, parent: aId, x: 10, y: 10, width: 50, height: 50, mapped: true))
+        SiblingChain.linkAtTop(bId, parent: aId, in: table)
 
         // Recompute while A is unmapped. Both should have empty clip.
         ClipListEngine.recomputeClips(forTopLevel: aId, in: table)

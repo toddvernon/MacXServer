@@ -74,6 +74,13 @@ public enum Request: Equatable, Sendable {
     case getKeyboardMapping(GetKeyboardMapping)
     case getModifierMapping(GetModifierMapping)
     case getPointerMapping(GetPointerMapping)
+    case ungrabButton(UngrabButton)
+    case ungrabKey(UngrabKey)
+    case getMotionEvents(GetMotionEvents)
+    case allocColorCells(AllocColorCells)
+    case setCloseDownMode(SetCloseDownMode)
+    case killClient(KillClient)
+    case noOperation(NoOperation)
     // Carries the full request bytes including the 4-byte header. Encode is a
     // pass-through and ignores the byteOrder argument since the bytes are already
     // in their original byte order.
@@ -156,6 +163,13 @@ public enum Request: Equatable, Sendable {
         case .getKeyboardMapping(let r):        return r.encode(byteOrder: byteOrder)
         case .getModifierMapping(let r):        return r.encode(byteOrder: byteOrder)
         case .getPointerMapping(let r):         return r.encode(byteOrder: byteOrder)
+        case .ungrabButton(let r):              return r.encode(byteOrder: byteOrder)
+        case .ungrabKey(let r):                 return r.encode(byteOrder: byteOrder)
+        case .getMotionEvents(let r):           return r.encode(byteOrder: byteOrder)
+        case .allocColorCells(let r):           return r.encode(byteOrder: byteOrder)
+        case .setCloseDownMode(let r):          return r.encode(byteOrder: byteOrder)
+        case .killClient(let r):                return r.encode(byteOrder: byteOrder)
+        case .noOperation(let r):               return r.encode(byteOrder: byteOrder)
         case .unknown(_, let bytes):            return bytes
         }
     }
@@ -326,6 +340,20 @@ public enum Request: Equatable, Sendable {
             return .getModifierMapping(try GetModifierMapping.decode(from: bytes, byteOrder: byteOrder))
         case GetPointerMapping.opcode:
             return .getPointerMapping(try GetPointerMapping.decode(from: bytes, byteOrder: byteOrder))
+        case UngrabButton.opcode:
+            return .ungrabButton(try UngrabButton.decode(from: bytes, byteOrder: byteOrder))
+        case UngrabKey.opcode:
+            return .ungrabKey(try UngrabKey.decode(from: bytes, byteOrder: byteOrder))
+        case GetMotionEvents.opcode:
+            return .getMotionEvents(try GetMotionEvents.decode(from: bytes, byteOrder: byteOrder))
+        case AllocColorCells.opcode:
+            return .allocColorCells(try AllocColorCells.decode(from: bytes, byteOrder: byteOrder))
+        case SetCloseDownMode.opcode:
+            return .setCloseDownMode(try SetCloseDownMode.decode(from: bytes, byteOrder: byteOrder))
+        case KillClient.opcode:
+            return .killClient(try KillClient.decode(from: bytes, byteOrder: byteOrder))
+        case NoOperation.opcode:
+            return .noOperation(try NoOperation.decode(from: bytes, byteOrder: byteOrder))
         default:
             return .unknown(opcode: opcode, bytes: Array(bytes[0..<expected]))
         }
