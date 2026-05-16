@@ -168,6 +168,32 @@ public struct SetCloseDownMode: Equatable, Sendable {
     }
 }
 
+public struct CirculateWindow: Equatable, Sendable {
+    public static let opcode: UInt8 = 13
+    public var direction: UInt8         // 0 RaiseLowest, 1 LowerHighest
+    public var window: UInt32
+
+    public init(direction: UInt8, window: UInt32) {
+        self.direction = direction; self.window = window
+    }
+
+    public func encode(byteOrder: ByteOrder) -> [UInt8] {
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(Self.opcode); w.writeUInt8(direction); w.writeUInt16(2)
+        w.writeUInt32(window)
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> CirculateWindow {
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        let op = try r.readUInt8()
+        guard op == Self.opcode else { throw FramerError.invalidOpcode(expected: Self.opcode, got: op) }
+        let dir = try r.readUInt8()
+        _ = try r.readUInt16()
+        return CirculateWindow(direction: dir, window: try r.readUInt32())
+    }
+}
+
 public struct KillClient: Equatable, Sendable {
     public static let opcode: UInt8 = 113
     // AllTemporary = 0 — close all clients with RetainTemporary close-down.

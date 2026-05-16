@@ -670,6 +670,139 @@ final class XErrorEmissionTests: XCTestCase {
         XCTAssertEqual(err.majorOpcode, 42)
     }
 
+    // MARK: - Per-handler validation sweep (Create* handlers, 2026-05-15)
+
+    func testCreateWindowOnUnknownParentEmitsBadWindow() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let bogusParent: UInt32 = 0xDEADBEEF
+        let wid: UInt32 = ServerConfig.default.resourceIdBase + 1
+        let req = Request.createWindow(CreateWindow(
+            depth: 8, wid: wid, parent: bogusParent,
+            x: 0, y: 0, width: 10, height: 10, borderWidth: 0,
+            windowClass: .inputOutput, visual: ServerConfig.default.rootVisualId,
+            valueMask: 0, valueList: []
+        ))
+        let bytes = session.feed(req.encode(byteOrder: .lsbFirst))
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected BadWindow on bad parent, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.window.rawValue)
+        XCTAssertEqual(err.majorOpcode, CreateWindow.opcode)
+    }
+
+    func testCreateWindowWithDuplicateIDEmitsBadIDChoice() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let wid: UInt32 = ServerConfig.default.resourceIdBase + 1
+        let root = ServerConfig.default.rootWindowId
+        let create = { (id: UInt32) -> Request in
+            Request.createWindow(CreateWindow(
+                depth: 8, wid: id, parent: root,
+                x: 0, y: 0, width: 10, height: 10, borderWidth: 0,
+                windowClass: .inputOutput, visual: ServerConfig.default.rootVisualId,
+                valueMask: 0, valueList: []
+            ))
+        }
+        _ = session.feed(create(wid).encode(byteOrder: .lsbFirst))
+        _ = session.outbound.drain()
+        let bytes = session.feed(create(wid).encode(byteOrder: .lsbFirst))
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected BadIDChoice on duplicate wid, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.idChoice.rawValue)
+        XCTAssertEqual(err.majorOpcode, CreateWindow.opcode)
+        XCTAssertEqual(err.badResourceId(byteOrder: .lsbFirst), wid)
+    }
+
+    func testCreatePixmapWithDepthZeroEmitsBadValue() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let pid: UInt32 = ServerConfig.default.resourceIdBase + 2
+        let req = Request.createPixmap(CreatePixmap(
+            depth: 0, pid: pid, drawable: ServerConfig.default.rootWindowId,
+            width: 10, height: 10
+        ))
+        let bytes = session.feed(req.encode(byteOrder: .lsbFirst))
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected BadValue on depth=0, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.value.rawValue)
+        XCTAssertEqual(err.majorOpcode, CreatePixmap.opcode)
+    }
+
+    func testCreatePixmapOnUnknownDrawableEmitsBadDrawable() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let pid: UInt32 = ServerConfig.default.resourceIdBase + 2
+        let req = Request.createPixmap(CreatePixmap(
+            depth: 8, pid: pid, drawable: 0xDEADBEEF,
+            width: 10, height: 10
+        ))
+        let bytes = session.feed(req.encode(byteOrder: .lsbFirst))
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected BadDrawable, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.drawable.rawValue)
+        XCTAssertEqual(err.majorOpcode, CreatePixmap.opcode)
+    }
+
+    func testCreateGCOnUnknownDrawableEmitsBadDrawable() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let cid: UInt32 = ServerConfig.default.resourceIdBase + 3
+        let req = Request.createGC(CreateGC(
+            cid: cid, drawable: 0xDEADBEEF,
+            valueMask: 0, valueList: []
+        ))
+        let bytes = session.feed(req.encode(byteOrder: .lsbFirst))
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected BadDrawable on CreateGC, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.drawable.rawValue)
+        XCTAssertEqual(err.majorOpcode, CreateGC.opcode)
+    }
+
+    func testAllocColorOnUnknownColormapEmitsBadColor() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let req = Request.allocColor(AllocColor(
+            cmap: 0xDEADBEEF, red: 0, green: 0, blue: 0
+        ))
+        let bytes = session.feed(req.encode(byteOrder: .lsbFirst))
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected BadColor, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.color.rawValue)
+        XCTAssertEqual(err.majorOpcode, AllocColor.opcode)
+    }
+
+    func testCreateWindowCollidingWithRootEmitsBadIDChoice() throws {
+        // Picking wid = root is the textbook BadIDChoice case (root is
+        // a server-allocated sentinel, not in any client's range).
+        let session = runningSession(byteOrder: .lsbFirst)
+        let req = Request.createWindow(CreateWindow(
+            depth: 8, wid: ServerConfig.default.rootWindowId,
+            parent: ServerConfig.default.rootWindowId,
+            x: 0, y: 0, width: 10, height: 10, borderWidth: 0,
+            windowClass: .inputOutput, visual: ServerConfig.default.rootVisualId,
+            valueMask: 0, valueList: []
+        ))
+        let bytes = session.feed(req.encode(byteOrder: .lsbFirst))
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected BadIDChoice on wid==root, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.idChoice.rawValue)
+    }
+
     func testUngrabButtonOnUnknownWindowEmitsBadWindow() throws {
         // UngrabButton routes through validateWindowOrRoot like the other
         // grab opcodes. Unknown grabWindow → BadWindow (the validator

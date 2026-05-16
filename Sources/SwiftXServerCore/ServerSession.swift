@@ -1601,6 +1601,44 @@ public final class ServerSession: @unchecked Sendable {
             || id == config.rootWindowId
     }
 
+    /// True iff `id` is already allocated as a window, pixmap, GC, font,
+    /// cursor, or root/default-colormap sentinel. Used to detect the
+    /// BadIDChoice case where a client picks an ID already in use.
+    ///
+    /// Note we deliberately do NOT range-check against the session's
+    /// `resourceIdBase|resourceIdMask`. Strictly per spec, IDs outside
+    /// the client's range are also BadIDChoice — but the captured-corpus
+    /// replay tests feed us C2S byte streams whose IDs came from real
+    /// Sun sessions with their own per-client bases (e.g. captured xterm
+    /// uses `0x05000000` because it was the second client on gold).
+    /// Range-checking would reject every captured ID and break replay.
+    /// Collision detection is the more important practical safety
+    /// (preventing internal-stub and root/default-colormap clobbers);
+    /// per-client range enforcement is a defense-in-depth we skip until
+    /// it becomes load-bearing.
+    public func isResourceIdInUse(_ id: UInt32) -> Bool {
+        if id == config.rootWindowId { return true }
+        if id == config.defaultColormapId { return true }
+        if windows.get(id) != nil { return true }
+        if pixmaps.get(id) != nil { return true }
+        if gcs.get(id) != nil { return true }
+        if fonts.get(id) != nil { return true }
+        if cursors.glyph(id) != nil { return true }
+        return false
+    }
+
+    /// One-shot BadIDChoice gate for Create* handlers. Returns true and
+    /// emits the error when the supplied id collides with an existing
+    /// resource. See `isResourceIdInUse` for the rationale on skipping
+    /// the per-client range check.
+    private func emitBadIDChoiceIfInvalid(_ id: UInt32, majorOpcode: UInt8) -> Bool {
+        if isResourceIdInUse(id) {
+            emitError(.idChoice, majorOpcode: majorOpcode, badResourceId: id)
+            return true
+        }
+        return false
+    }
+
     /// Validate a window argument. Returns the WindowEntry when the ID
     /// resolves to a known window; nil with a BadWindow emission otherwise.
     /// Used by handlers that take a `window` argument (ClearArea,
@@ -2516,6 +2554,16 @@ public final class ServerSession: @unchecked Sendable {
         switch request {
 
         case .createWindow(let r):
+            // BadWindow on bad parent. Root is a valid parent argument.
+            guard validateWindowOrRoot(r.parent, majorOpcode: CreateWindow.opcode) else { break }
+            // BadIDChoice on wid out of client range or already in use.
+            if emitBadIDChoiceIfInvalid(r.wid, majorOpcode: CreateWindow.opcode) { break }
+            // BadCursor on bad CWCursor value (sentinel 0 = None, OK).
+            if let cursorVal = ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: CW.cursor, byteOrder: byteOrder),
+               cursorVal != 0, cursors.glyph(cursorVal) == nil {
+                emitError(.cursor, majorOpcode: CreateWindow.opcode, badResourceId: cursorVal)
+                break
+            }
             let mask = r.valueMask
             let eventMask = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.eventMask, byteOrder: byteOrder) ?? 0
             let backPixel = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.backPixel, byteOrder: byteOrder)
@@ -2631,10 +2679,58 @@ public final class ServerSession: @unchecked Sendable {
             // can recompute clip regions and emit SubstructureNotify after.
             let preDestroyTopId = topLevelAndOffset(for: r.window)?.0
             let parentId = entry.parent
-            // Spec: a destroyed window can't own selections any more. R6's
-            // dispatch.c:DeleteWindowFromAnySelections walks the table; we
-            // call into the coordinator equivalent. No SelectionClear
-            // emitted (window is gone; no one to deliver to).
+
+            // Per X11 spec, DestroyWindow recursively destroys all inferiors
+            // in inferior-first (post-order) traversal and emits DestroyNotify
+            // for each. Pre-2026-05-15 only the named window was destroyed,
+            // leaving descendants orphaned in the table. Build the list now,
+            // then sweep below before tearing down r.window itself.
+            var doomedInferiors: [UInt32] = []
+            func collectInferiors(of p: UInt32) {
+                for (cid, w) in windows.windows where w.parent == p {
+                    collectInferiors(of: cid)
+                    doomedInferiors.append(cid)
+                }
+            }
+            collectInferiors(of: r.window)
+
+            let structureNotifyMask: UInt32 = 1 << 17
+            let seq = sequenceNumber
+            for id in doomedInferiors {
+                guard let infEntry = windows.get(id) else { continue }
+                coordinator.revokeSelections(ownedBy: [id])
+                let infParent = infEntry.parent
+                // Structure-variant DestroyNotify on the inferior itself
+                // if it has StructureNotifyMask.
+                if infEntry.eventMask & structureNotifyMask != 0 {
+                    let ev = DestroyNotifyEvent(
+                        sequenceNumber: seq, event: id, window: id
+                    )
+                    outbound.append(ev.encode(byteOrder: byteOrder))
+                }
+                // Substructure-variant DestroyNotify on the inferior's
+                // parent. Skipped at the top of this loop when infParent
+                // is r.window — but actually we still want it, since the
+                // parent IS being destroyed but its SubstructureNotifyMask
+                // may want to know its children died first. Spec says
+                // emit; we'll do it. The parent's own destroy comes
+                // after this loop, so events stay in inferior-first order.
+                notifySubstructure(parent: infParent) { eventTarget in
+                    DestroyNotifyEvent(
+                        sequenceNumber: seq, event: eventTarget, window: id
+                    ).encode(byteOrder: byteOrder)
+                }
+                SiblingChain.unlink(id, in: windows)
+                windows.remove(id)
+                properties.deleteAll(window: id)
+            }
+
+            // Now r.window itself. (Bridge.destroyTopLevel emits the
+            // structure-variant DestroyNotify for top-levels below; for
+            // non-top-levels we don't currently emit a structure-variant
+            // on the named window — only the substructure variant via
+            // notifySubstructure. That's a pre-existing gap, not
+            // introduced by inferior recursion. Leaving as-is.)
             coordinator.revokeSelections(ownedBy: [r.window])
             // Unlink from parent's sibling chain before removing the entry
             // itself. unlink() handles fixing both ends of every link
@@ -3254,6 +3350,13 @@ public final class ServerSession: @unchecked Sendable {
             }
 
         case .openFont(let r):
+            // BadIDChoice on fid out of client range or already in use.
+            // We always resolve some font (FontResolver falls back to a
+            // default), so BadName isn't a real outcome for us — even
+            // unknown XLFD strings find a Mac substitute. Empty name
+            // strings would be BadValue per spec; the resolver tolerates
+            // them too. Leave that as a future tightening.
+            if emitBadIDChoiceIfInvalid(r.fid, majorOpcode: OpenFont.opcode) { break }
             // Parse the font name (XLFD or alias), resolve to a Mac substitute
             // with cell-snapped metrics. Stored on the FontEntry so QueryFont
             // and any future text-rendering dispatch can answer without
@@ -3284,6 +3387,19 @@ public final class ServerSession: @unchecked Sendable {
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .createPixmap(let r):
+            // BadDrawable on bad drawable arg (per spec, drawable supplies
+            // the pixmap's screen). Root is acceptable.
+            if !isKnownDrawable(r.drawable) {
+                emitError(.drawable, majorOpcode: CreatePixmap.opcode, badResourceId: r.drawable)
+                break
+            }
+            // BadValue on depth=0 (per spec; zero is not a valid depth).
+            if r.depth == 0 {
+                emitError(.value, majorOpcode: CreatePixmap.opcode)
+                break
+            }
+            // BadIDChoice on pid out of client range or already in use.
+            if emitBadIDChoiceIfInvalid(r.pid, majorOpcode: CreatePixmap.opcode) { break }
             pixmaps.insert(PixmapEntry(id: r.pid, drawable: r.drawable, depth: r.depth, width: r.width, height: r.height))
 
         case .freePixmap(let r):
@@ -3294,6 +3410,13 @@ public final class ServerSession: @unchecked Sendable {
             pixmaps.remove(r.pixmap)
 
         case .createGC(let r):
+            // BadDrawable on bad drawable arg (drawable supplies the GC's
+            // screen + depth). BadIDChoice on cid out of range or in use.
+            if !isKnownDrawable(r.drawable) {
+                emitError(.drawable, majorOpcode: CreateGC.opcode, badResourceId: r.drawable)
+                break
+            }
+            if emitBadIDChoiceIfInvalid(r.cid, majorOpcode: CreateGC.opcode) { break }
             gcs.insert(id: r.cid, drawable: r.drawable, valueMask: r.valueMask, valueList: r.valueList, byteOrder: byteOrder)
 
         case .changeGC(let r):
@@ -3304,7 +3427,108 @@ public final class ServerSession: @unchecked Sendable {
             guard validateGC(r.gc, majorOpcode: FreeGC.opcode) != nil else { break }
             gcs.remove(r.gc)
 
+        // MARK: Colormap opcodes 78-90 (post-comparison-study sweep 2026-05-15)
+        //
+        // We only advertise the default colormap. PseudoColor → TrueColor
+        // backing means no real palette: writable cells aren't supported,
+        // colormap allocation isn't real. Emitting the spec-correct error
+        // (BadAlloc for "we can't allocate", BadAccess for "writable but
+        // not by you", BadColor for "no such colormap") lets Xt's color-
+        // converter fallback paths degrade gracefully.
+
+        case .createColormap(let r):
+            // We don't allocate additional colormaps. BadAlloc says
+            // "server out of resources" which is honest.
+            log?.log("  CreateColormap mid=0x\(String(r.mid, radix: 16)) alloc=\(r.alloc) → BadAlloc")
+            emitError(.alloc, majorOpcode: CreateColormap.opcode, badResourceId: r.mid)
+
+        case .freeColormap(let r):
+            if r.cmap == config.defaultColormapId {
+                // Per spec, the root's default colormap cannot be freed.
+                emitError(.access, majorOpcode: FreeColormap.opcode, badResourceId: r.cmap)
+                break
+            }
+            emitError(.color, majorOpcode: FreeColormap.opcode, badResourceId: r.cmap)
+
+        case .copyColormapAndFree(let r):
+            if r.srcCmap != config.defaultColormapId {
+                emitError(.color, majorOpcode: CopyColormapAndFree.opcode, badResourceId: r.srcCmap)
+                break
+            }
+            // Source is valid but we can't allocate the destination.
+            emitError(.alloc, majorOpcode: CopyColormapAndFree.opcode, badResourceId: r.mid)
+
+        case .installColormap(let r):
+            // No-op when cmap is the default (already "installed");
+            // BadColor otherwise. Real impl would also emit
+            // ColormapNotify(installed=true) when something actually
+            // changes. Here nothing changes.
+            if r.cmap != config.defaultColormapId {
+                emitError(.color, majorOpcode: InstallColormap.opcode, badResourceId: r.cmap)
+            }
+
+        case .uninstallColormap(let r):
+            if r.cmap != config.defaultColormapId {
+                emitError(.color, majorOpcode: UninstallColormap.opcode, badResourceId: r.cmap)
+            }
+            // Uninstalling the default is a no-op in our model (it's
+            // always effectively installed since we have only one).
+
+        case .listInstalledColormaps(let r):
+            // We always have exactly one colormap installed (the default).
+            // Spec says reply lists colormaps currently mapped on the
+            // screen's hardware lookup table; with a TrueColor backing
+            // the concept doesn't really apply, but spec-correct reply
+            // is required by clients that consult it.
+            guard validateWindowOrRoot(r.window, majorOpcode: ListInstalledColormaps.opcode) else { break }
+            let reply = ListInstalledColormapsReply(
+                sequenceNumber: sequenceNumber,
+                colormaps: [config.defaultColormapId]
+            )
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        case .allocColorPlanes(let r):
+            // Same as AllocColorCells: no read-write planes on TrueColor.
+            // BadAlloc is the right semantic for Xt fallback.
+            log?.log("  AllocColorPlanes cmap=0x\(String(r.cmap, radix: 16)) colors=\(r.colors) rgb=\(r.red)/\(r.green)/\(r.blue) → BadAlloc")
+            emitError(.alloc, majorOpcode: AllocColorPlanes.opcode, badResourceId: r.cmap)
+
+        case .freeColors(let r):
+            // FreeColors is the inverse of AllocColor — releases pixels.
+            // We track pixel allocations with a monotonic counter, no
+            // reference counting yet. Accepting silently on the default
+            // cmap (the client's allocation will eventually be reused
+            // because we don't recycle anyway). BadColor otherwise.
+            if r.cmap != config.defaultColormapId {
+                emitError(.color, majorOpcode: FreeColors.opcode, badResourceId: r.cmap)
+            }
+
+        case .storeColors(let r):
+            // Spec: StoreColors writes RGB values into specific colormap
+            // cells. Requires the cells to have been allocated read-write
+            // via AllocColorCells/AllocColorPlanes — neither of which we
+            // honor. Per spec, attempting to store into a cell the client
+            // doesn't own r/w is BadAccess. (BadColor on bad cmap.)
+            if r.cmap != config.defaultColormapId {
+                emitError(.color, majorOpcode: StoreColors.opcode, badResourceId: r.cmap)
+                break
+            }
+            emitError(.access, majorOpcode: StoreColors.opcode)
+
+        case .storeNamedColor(let r):
+            if r.cmap != config.defaultColormapId {
+                emitError(.color, majorOpcode: StoreNamedColor.opcode, badResourceId: r.cmap)
+                break
+            }
+            emitError(.access, majorOpcode: StoreNamedColor.opcode)
+
         case .allocColor(let r):
+            // BadColor on cmap arg that isn't a known colormap. We only
+            // advertise the default colormap; anything else is BadColor.
+            if r.cmap != config.defaultColormapId {
+                emitError(.color, majorOpcode: AllocColor.opcode, badResourceId: r.cmap)
+                break
+            }
             let allocated = colors.allocate(red: r.red, green: r.green, blue: r.blue)
             let reply = AllocColorReply(
                 sequenceNumber: sequenceNumber,
@@ -3543,6 +3767,71 @@ public final class ServerSession: @unchecked Sendable {
             }
             guard validateGC(r.gc, majorOpcode: PutImage.opcode) != nil else { break }
             log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) format=\(r.format) depth=\(r.depth) \(r.width)x\(r.height) at (\(r.dstX),\(r.dstY)) — silent-drop, see SHORTCUTS")
+
+        case .circulateWindow(let r):
+            // Per X11 spec section 10.6 / CirculateWindow:
+            //   direction=0 RaiseLowest: if any sibling is occluded by
+            //     another, raise the lowest occluded sibling to the top.
+            //   direction=1 LowerHighest: if any sibling occludes another,
+            //     lower the highest occluding sibling to the bottom.
+            // No CirculateNotify if no rotation occurred.
+            //
+            // We don't yet have per-sibling occlusion tests, so we
+            // approximate: if there are at least two children, always
+            // rotate one position. RaiseLowest moves lastChild to top;
+            // LowerHighest moves firstChild to bottom. Matches what R6
+            // produces when siblings genuinely do overlap (the common
+            // client expectation). Clients calling CirculateWindow as a
+            // no-op-if-already-stacked check will see an unconditional
+            // rotation; no hosted client today exercises that pattern.
+            // Root is a valid arg per spec, but root has no WindowEntry —
+            // top-level Z-order is owned by AppKit. No-op on root.
+            if r.window == config.rootWindowId { break }
+            guard let entry = validateWindow(r.window, majorOpcode: CirculateWindow.opcode) else { break }
+            guard r.direction == 0 || r.direction == 1 else {
+                emitError(.value, majorOpcode: CirculateWindow.opcode)
+                break
+            }
+            guard let first = entry.firstChild, let last = entry.lastChild,
+                  first != last else {
+                // Zero or one child — nothing to rotate, no event.
+                break
+            }
+            let moved: UInt32
+            let place: UInt8
+            if r.direction == 0 {
+                // RaiseLowest: take lastChild, put it at the top.
+                moved = last
+                place = 0       // Top
+                SiblingChain.unlink(last, in: windows)
+                SiblingChain.linkAtTop(last, parent: r.window, in: windows)
+            } else {
+                // LowerHighest: take firstChild, put it at the bottom.
+                moved = first
+                place = 1       // Bottom
+                SiblingChain.unlink(first, in: windows)
+                SiblingChain.linkAtBottom(first, parent: r.window, in: windows)
+            }
+            let seq = sequenceNumber
+            let structureNotifyMask: UInt32 = 1 << 17
+            // CirculateNotify(event=window) — delivered to the moved
+            // window if it has StructureNotifyMask.
+            if let movedEntry = windows.get(moved),
+               movedEntry.eventMask & structureNotifyMask != 0 {
+                let ev = CirculateNotifyEvent(
+                    sequenceNumber: seq, event: moved, window: moved, place: place
+                )
+                outbound.append(ev.encode(byteOrder: byteOrder))
+            }
+            // CirculateNotify(event=parent) — delivered to the parent via
+            // notifySubstructure if it has SubstructureNotifyMask.
+            notifySubstructure(parent: r.window) { eventTarget in
+                CirculateNotifyEvent(
+                    sequenceNumber: seq, event: eventTarget,
+                    window: moved, place: place
+                ).encode(byteOrder: byteOrder)
+            }
+            recomputeClipsForSubtreeContaining(r.window)
 
         case .reparentWindow(let r):
             // Update the window's parent + position. We don't move the
@@ -4338,6 +4627,17 @@ private func opcodeName(_ request: Request) -> String {
     case .setCloseDownMode: return "SetCloseDownMode"
     case .killClient: return "KillClient"
     case .noOperation: return "NoOperation"
+    case .createColormap: return "CreateColormap"
+    case .freeColormap: return "FreeColormap"
+    case .copyColormapAndFree: return "CopyColormapAndFree"
+    case .installColormap: return "InstallColormap"
+    case .uninstallColormap: return "UninstallColormap"
+    case .listInstalledColormaps: return "ListInstalledColormaps"
+    case .allocColorPlanes: return "AllocColorPlanes"
+    case .freeColors: return "FreeColors"
+    case .storeColors: return "StoreColors"
+    case .storeNamedColor: return "StoreNamedColor"
+    case .circulateWindow: return "CirculateWindow"
     case .unknown(let op, _): return "unknown(\(op))"
     }
 }

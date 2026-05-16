@@ -67,7 +67,11 @@ final class CapturedAppReplayTests: XCTestCase {
 
     func testReplayQuickplot() throws {
         try runReplay(capture: "quickplot-sun.xtap", expecting: ReplayBaseline(
-            windows: 95, colors: 47, pixmaps: 57, fonts: 25, gcs: 52,
+            // windows dropped 95 → 83 on 2026-05-15 when DestroyWindow
+            // started honoring spec-mandated inferior recursion. Previously
+            // descendants were orphaned in the table when their parent
+            // was destroyed.
+            windows: 83, colors: 47, pixmaps: 57, fonts: 25, gcs: 52,
             atoms: 82, requests: 8397,
             allowedExtensionOpcodes: []
         ))

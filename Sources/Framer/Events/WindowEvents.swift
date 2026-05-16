@@ -286,3 +286,43 @@ public struct ConfigureNotifyEvent: Equatable, Sendable {
         )
     }
 }
+
+// CirculateNotify event code 26 (per X.h). Per spec, emitted on each
+// successful CirculateWindow when a child is restacked. `event` carries
+// the substructure-recipient (= window itself for StructureNotifyMask,
+// = parent for SubstructureNotifyMask). `place` is 0=Top or 1=Bottom.
+public struct CirculateNotifyEvent: Equatable, Sendable {
+    public var sequenceNumber: UInt16
+    public var event: UInt32           // recipient — same window as StructureNotify
+    public var window: UInt32          // the restacked window
+    public var place: UInt8            // 0 Top, 1 Bottom
+
+    public init(sequenceNumber: UInt16, event: UInt32, window: UInt32, place: UInt8) {
+        self.sequenceNumber = sequenceNumber
+        self.event = event
+        self.window = window
+        self.place = place
+    }
+
+    public func encode(byteOrder: ByteOrder) -> [UInt8] {
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(26); w.writeUInt8(0)
+        w.writeUInt16(sequenceNumber)
+        w.writeUInt32(event); w.writeUInt32(window)
+        w.writeUInt32(0)                 // parent — zero on Notify per spec
+        w.writeUInt8(place)
+        w.writePadding(11)
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> CirculateNotifyEvent {
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        _ = try r.readUInt8(); _ = try r.readUInt8()
+        let seq = try r.readUInt16()
+        let event = try r.readUInt32()
+        let window = try r.readUInt32()
+        _ = try r.readUInt32()
+        let place = try r.readUInt8()
+        return CirculateNotifyEvent(sequenceNumber: seq, event: event, window: window, place: place)
+    }
+}

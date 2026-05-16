@@ -377,6 +377,28 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext) -> String {
         body = "KillClient               resource=0x\(String(r.resource, radix: 16))"
     case .noOperation:
         body = "NoOperation"
+    case .createColormap(let r):
+        body = "CreateColormap           mid=0x\(String(r.mid, radix: 16)) window=0x\(String(r.window, radix: 16)) visual=0x\(String(r.visual, radix: 16)) alloc=\(r.alloc)"
+    case .freeColormap(let r):
+        body = "FreeColormap             cmap=0x\(String(r.cmap, radix: 16))"
+    case .copyColormapAndFree(let r):
+        body = "CopyColormapAndFree      mid=0x\(String(r.mid, radix: 16)) srcCmap=0x\(String(r.srcCmap, radix: 16))"
+    case .installColormap(let r):
+        body = "InstallColormap          cmap=0x\(String(r.cmap, radix: 16))"
+    case .uninstallColormap(let r):
+        body = "UninstallColormap        cmap=0x\(String(r.cmap, radix: 16))"
+    case .listInstalledColormaps(let r):
+        body = "ListInstalledColormaps   window=0x\(String(r.window, radix: 16))"
+    case .allocColorPlanes(let r):
+        body = "AllocColorPlanes         cmap=0x\(String(r.cmap, radix: 16)) colors=\(r.colors) rgb=\(r.red)/\(r.green)/\(r.blue) contiguous=\(r.contiguous)"
+    case .freeColors(let r):
+        body = "FreeColors               cmap=0x\(String(r.cmap, radix: 16)) planeMask=0x\(String(r.planeMask, radix: 16)) pixels=\(r.pixels.count)"
+    case .storeColors(let r):
+        body = "StoreColors              cmap=0x\(String(r.cmap, radix: 16)) items=\(r.rawItems.count / 12)"
+    case .storeNamedColor(let r):
+        body = "StoreNamedColor          cmap=0x\(String(r.cmap, radix: 16)) pixel=\(r.pixel) name=\"\(String(decoding: r.name, as: UTF8.self))\" flags=0x\(String(r.flags, radix: 16))"
+    case .circulateWindow(let r):
+        body = "CirculateWindow          window=0x\(String(r.window, radix: 16)) direction=\(r.direction == 0 ? "RaiseLowest" : "LowerHighest")"
     case .bell(let r):
         body = "Bell                     percent=\(r.percent)"
     case .unknown(let op, _):
@@ -444,6 +466,8 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
                 detail = " window=\(windowDisplay(rn.window)) parent=\(windowDisplay(rn.parent)) at (\(rn.x),\(rn.y))"
             case .configureNotify(let cn):
                 detail = " window=\(windowDisplay(cn.window)) \(cn.width)x\(cn.height) at (\(cn.x),\(cn.y))"
+            case .circulateNotify(let cn):
+                detail = " window=\(windowDisplay(cn.window)) place=\(cn.place == 0 ? "Top" : "Bottom")"
             case .propertyNotify(let pn):
                 detail = " window=\(windowDisplay(pn.window)) prop=\(atomDisplay(pn.atom, ctx: ctx)) state=\(pn.state)"
             case .selectionClear(let sc):
@@ -553,6 +577,17 @@ func opcodeOf(_ req: Request) -> UInt8 {
     case .setCloseDownMode:          return SetCloseDownMode.opcode
     case .killClient:                return KillClient.opcode
     case .noOperation:               return NoOperation.opcode
+    case .createColormap:            return CreateColormap.opcode
+    case .freeColormap:              return FreeColormap.opcode
+    case .copyColormapAndFree:       return CopyColormapAndFree.opcode
+    case .installColormap:           return InstallColormap.opcode
+    case .uninstallColormap:         return UninstallColormap.opcode
+    case .listInstalledColormaps:    return ListInstalledColormaps.opcode
+    case .allocColorPlanes:          return AllocColorPlanes.opcode
+    case .freeColors:                return FreeColors.opcode
+    case .storeColors:               return StoreColors.opcode
+    case .storeNamedColor:           return StoreNamedColor.opcode
+    case .circulateWindow:           return CirculateWindow.opcode
     case .createGlyphCursor:         return CreateGlyphCursor.opcode
     case .freeCursor:                return FreeCursor.opcode
     case .recolorCursor:             return RecolorCursor.opcode

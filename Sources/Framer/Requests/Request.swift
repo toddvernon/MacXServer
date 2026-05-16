@@ -81,6 +81,17 @@ public enum Request: Equatable, Sendable {
     case setCloseDownMode(SetCloseDownMode)
     case killClient(KillClient)
     case noOperation(NoOperation)
+    case createColormap(CreateColormap)
+    case freeColormap(FreeColormap)
+    case copyColormapAndFree(CopyColormapAndFree)
+    case installColormap(InstallColormap)
+    case uninstallColormap(UninstallColormap)
+    case listInstalledColormaps(ListInstalledColormaps)
+    case allocColorPlanes(AllocColorPlanes)
+    case freeColors(FreeColors)
+    case storeColors(StoreColors)
+    case storeNamedColor(StoreNamedColor)
+    case circulateWindow(CirculateWindow)
     // Carries the full request bytes including the 4-byte header. Encode is a
     // pass-through and ignores the byteOrder argument since the bytes are already
     // in their original byte order.
@@ -170,6 +181,17 @@ public enum Request: Equatable, Sendable {
         case .setCloseDownMode(let r):          return r.encode(byteOrder: byteOrder)
         case .killClient(let r):                return r.encode(byteOrder: byteOrder)
         case .noOperation(let r):               return r.encode(byteOrder: byteOrder)
+        case .createColormap(let r):            return r.encode(byteOrder: byteOrder)
+        case .freeColormap(let r):              return r.encode(byteOrder: byteOrder)
+        case .copyColormapAndFree(let r):       return r.encode(byteOrder: byteOrder)
+        case .installColormap(let r):           return r.encode(byteOrder: byteOrder)
+        case .uninstallColormap(let r):         return r.encode(byteOrder: byteOrder)
+        case .listInstalledColormaps(let r):    return r.encode(byteOrder: byteOrder)
+        case .allocColorPlanes(let r):          return r.encode(byteOrder: byteOrder)
+        case .freeColors(let r):                return r.encode(byteOrder: byteOrder)
+        case .storeColors(let r):               return r.encode(byteOrder: byteOrder)
+        case .storeNamedColor(let r):           return r.encode(byteOrder: byteOrder)
+        case .circulateWindow(let r):           return r.encode(byteOrder: byteOrder)
         case .unknown(_, let bytes):            return bytes
         }
     }
@@ -354,6 +376,28 @@ public enum Request: Equatable, Sendable {
             return .killClient(try KillClient.decode(from: bytes, byteOrder: byteOrder))
         case NoOperation.opcode:
             return .noOperation(try NoOperation.decode(from: bytes, byteOrder: byteOrder))
+        case CreateColormap.opcode:
+            return .createColormap(try CreateColormap.decode(from: bytes, byteOrder: byteOrder))
+        case FreeColormap.opcode:
+            return .freeColormap(try FreeColormap.decode(from: bytes, byteOrder: byteOrder))
+        case CopyColormapAndFree.opcode:
+            return .copyColormapAndFree(try CopyColormapAndFree.decode(from: bytes, byteOrder: byteOrder))
+        case InstallColormap.opcode:
+            return .installColormap(try InstallColormap.decode(from: bytes, byteOrder: byteOrder))
+        case UninstallColormap.opcode:
+            return .uninstallColormap(try UninstallColormap.decode(from: bytes, byteOrder: byteOrder))
+        case ListInstalledColormaps.opcode:
+            return .listInstalledColormaps(try ListInstalledColormaps.decode(from: bytes, byteOrder: byteOrder))
+        case AllocColorPlanes.opcode:
+            return .allocColorPlanes(try AllocColorPlanes.decode(from: bytes, byteOrder: byteOrder))
+        case FreeColors.opcode:
+            return .freeColors(try FreeColors.decode(from: bytes, byteOrder: byteOrder))
+        case StoreColors.opcode:
+            return .storeColors(try StoreColors.decode(from: bytes, byteOrder: byteOrder))
+        case StoreNamedColor.opcode:
+            return .storeNamedColor(try StoreNamedColor.decode(from: bytes, byteOrder: byteOrder))
+        case CirculateWindow.opcode:
+            return .circulateWindow(try CirculateWindow.decode(from: bytes, byteOrder: byteOrder))
         default:
             return .unknown(opcode: opcode, bytes: Array(bytes[0..<expected]))
         }

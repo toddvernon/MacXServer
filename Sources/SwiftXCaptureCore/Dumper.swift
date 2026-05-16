@@ -380,6 +380,17 @@ public enum Dumper {
         case .setCloseDownMode:          return SetCloseDownMode.opcode
         case .killClient:                return KillClient.opcode
         case .noOperation:               return NoOperation.opcode
+        case .createColormap:            return CreateColormap.opcode
+        case .freeColormap:              return FreeColormap.opcode
+        case .copyColormapAndFree:       return CopyColormapAndFree.opcode
+        case .installColormap:           return InstallColormap.opcode
+        case .uninstallColormap:         return UninstallColormap.opcode
+        case .listInstalledColormaps:    return ListInstalledColormaps.opcode
+        case .allocColorPlanes:          return AllocColorPlanes.opcode
+        case .freeColors:                return FreeColors.opcode
+        case .storeColors:               return StoreColors.opcode
+        case .storeNamedColor:           return StoreNamedColor.opcode
+        case .circulateWindow:           return CirculateWindow.opcode
         case .unknown(let op, _):        return op
         }
     }

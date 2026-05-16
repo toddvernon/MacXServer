@@ -280,6 +280,99 @@ final class SiblingChainTests: XCTestCase {
                        "destroyed B must be removed from the chain, C and A splice")
     }
 
+    func testCirculateWindowRaiseLowestRotatesLastChildToTop() throws {
+        // Chain top→bottom: C, B, A. CirculateWindow(parent, RaiseLowest)
+        // moves A (lastChild) to the top → A, C, B.
+        let (session, parent) = runningSession()
+        let a = parent &+ 0x10, b = parent &+ 0x20, c = parent &+ 0x30
+        _ = session.feed(Request.circulateWindow(CirculateWindow(
+            direction: 0, window: parent
+        )).encode(byteOrder: .lsbFirst))
+        let order = SiblingChain.directChildrenTopFirst(of: parent, in: session.windows)
+        XCTAssertEqual(order, [a, c, b])
+    }
+
+    func testCirculateWindowLowerHighestRotatesFirstChildToBottom() throws {
+        // Chain top→bottom: C, B, A. CirculateWindow(parent, LowerHighest)
+        // moves C (firstChild) to the bottom → B, A, C.
+        let (session, parent) = runningSession()
+        let a = parent &+ 0x10, b = parent &+ 0x20, c = parent &+ 0x30
+        _ = session.feed(Request.circulateWindow(CirculateWindow(
+            direction: 1, window: parent
+        )).encode(byteOrder: .lsbFirst))
+        let order = SiblingChain.directChildrenTopFirst(of: parent, in: session.windows)
+        XCTAssertEqual(order, [b, a, c])
+    }
+
+    func testCirculateWindowOnSingleChildIsNoOp() throws {
+        // Parent with one child — nothing to rotate, no CirculateNotify.
+        let session = ServerSession()
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        _ = session.outbound.drain()
+        let parent: UInt32 = ServerConfig.default.resourceIdBase + 0x100
+        let child: UInt32 = parent &+ 0x10
+        for (id, p) in [(parent, ServerConfig.default.rootWindowId), (child, parent)] {
+            _ = session.feed(Request.createWindow(CreateWindow(
+                depth: 8, wid: id, parent: p,
+                x: 0, y: 0, width: 10, height: 10, borderWidth: 0,
+                windowClass: .inputOutput, visual: ServerConfig.default.rootVisualId,
+                valueMask: 0, valueList: []
+            )).encode(byteOrder: .lsbFirst))
+        }
+        _ = session.outbound.drain()
+
+        let bytes = session.feed(Request.circulateWindow(CirculateWindow(
+            direction: 0, window: parent
+        )).encode(byteOrder: .lsbFirst))
+        XCTAssertTrue(bytes.isEmpty, "single-child parent: no rotation, no CirculateNotify")
+    }
+
+    func testCirculateWindowBadDirectionEmitsBadValue() throws {
+        let (session, parent) = runningSession()
+        let bytes = session.feed(Request.circulateWindow(CirculateWindow(
+            direction: 99, window: parent
+        )).encode(byteOrder: .lsbFirst))
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected BadValue on direction=99, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.value.rawValue)
+        XCTAssertEqual(err.majorOpcode, CirculateWindow.opcode)
+    }
+
+    func testDestroyWindowRecursivelyDestroysInferiors() {
+        // X spec: DestroyWindow recursively destroys inferiors in
+        // inferior-first order. Pre-2026-05-15 we left descendants
+        // orphaned in the table.
+        let session = ServerSession()
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        _ = session.outbound.drain()
+
+        let parent: UInt32 = ServerConfig.default.resourceIdBase + 0x100
+        let child: UInt32  = parent &+ 0x10
+        let grand: UInt32  = child &+ 1
+        for (id, p) in [(parent, ServerConfig.default.rootWindowId), (child, parent), (grand, child)] {
+            let req = Request.createWindow(CreateWindow(
+                depth: 8, wid: id, parent: p,
+                x: 0, y: 0, width: 20, height: 20, borderWidth: 0,
+                windowClass: .inputOutput, visual: ServerConfig.default.rootVisualId,
+                valueMask: 0, valueList: []
+            ))
+            _ = session.feed(req.encode(byteOrder: .lsbFirst))
+        }
+        XCTAssertNotNil(session.windows.get(parent))
+        XCTAssertNotNil(session.windows.get(child))
+        XCTAssertNotNil(session.windows.get(grand))
+
+        _ = session.feed(Request.destroyWindow(DestroyWindow(window: parent))
+            .encode(byteOrder: .lsbFirst))
+
+        XCTAssertNil(session.windows.get(parent), "named window destroyed")
+        XCTAssertNil(session.windows.get(child),  "direct inferior destroyed")
+        XCTAssertNil(session.windows.get(grand),  "grand-inferior destroyed")
+    }
+
     func testReparentMovesChainToNewParent() {
         let (session, parent) = runningSession()
         let a = parent &+ 0x10
