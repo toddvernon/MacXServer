@@ -1965,33 +1965,100 @@ public final class ServerSession: @unchecked Sendable {
         return out
     }
 
-    /// Build a QueryFontReply that reports the resolved font's cell-snapped
-    /// metrics. Monospace path: min/max CharInfo bounds equal, charInfos
-    /// empty (means "every char in range has metrics equal to minBounds"
-    /// per X11 spec). Range covers printable ASCII 32..126 — Phase 4 polish
-    /// extends to full Latin-1 / iso10646 BMP.
+    /// Build a QueryFontReply with per-glyph CHARINFO entries from Core
+    /// Text bounding boxes. Pre-2026-05-15 this returned the monospace
+    /// shortcut (`minBounds == maxBounds`, `charInfos: []`, `allCharsExist:
+    /// true`) — correct for Monaco but the wrong answer for proportional
+    /// fonts like quickplot's menu `-adobe-helvetica-medium-o-12-...`,
+    /// where Xt's LabelWidget reads min/max-bounds to decide whether to
+    /// per-string measure or assume uniform-width. Same family of bug as
+    /// QueryTextExtents had before its 2026-05-15 fix.
+    ///
+    /// Strategy:
+    ///   - Call FontResolver.measureGlyphMetrics for the encoded range.
+    ///   - Compute component-wise min/max for minBounds/maxBounds.
+    ///   - Per spec, an empty charInfos[] means "every char has minBounds
+    ///     metrics." That's correct iff minBounds == maxBounds, so we
+    ///     populate the per-char array only when they differ (proportional
+    ///     fonts) and elide it for monospace.
+    ///   - Emit a useful subset of FONTPROPS: FONT_ASCENT, FONT_DESCENT,
+    ///     DEFAULT_CHAR, AVERAGE_WIDTH. All are integer-valued, so we
+    ///     don't need to intern atom-string values.
     private func makeQueryFontReply(resolved: ResolvedFont, sequence: UInt16) -> QueryFontReply {
-        let bounds = CharInfo(
-            leftSideBearing: 0,
-            rightSideBearing: Int16(resolved.cellWidth),
-            characterWidth: Int16(resolved.cellWidth),
-            ascent: Int16(resolved.ascent),
-            descent: Int16(resolved.descent),
+        let range: ClosedRange<UInt16> = 32...126
+        let payload = FontResolver.measureGlyphMetrics(resolved, range: range)
+        let infos = payload.infos
+
+        // Component-wise min/max. Skip missing-glyph entries (all-zero)
+        // when computing min — they'd give false zeros.
+        var minBounds = CharInfo(
+            leftSideBearing: Int16.max, rightSideBearing: Int16.max,
+            characterWidth: Int16.max, ascent: Int16.max, descent: Int16.max,
             attributes: 0
         )
+        var maxBounds = CharInfo(
+            leftSideBearing: Int16.min, rightSideBearing: Int16.min,
+            characterWidth: Int16.min, ascent: Int16.min, descent: Int16.min,
+            attributes: 0
+        )
+        var sawAny = false
+        for c in infos where c.characterWidth != 0 {
+            sawAny = true
+            minBounds.leftSideBearing  = min(minBounds.leftSideBearing,  c.leftSideBearing)
+            minBounds.rightSideBearing = min(minBounds.rightSideBearing, c.rightSideBearing)
+            minBounds.characterWidth   = min(minBounds.characterWidth,   c.characterWidth)
+            minBounds.ascent           = min(minBounds.ascent,           c.ascent)
+            minBounds.descent          = min(minBounds.descent,          c.descent)
+            maxBounds.leftSideBearing  = max(maxBounds.leftSideBearing,  c.leftSideBearing)
+            maxBounds.rightSideBearing = max(maxBounds.rightSideBearing, c.rightSideBearing)
+            maxBounds.characterWidth   = max(maxBounds.characterWidth,   c.characterWidth)
+            maxBounds.ascent           = max(maxBounds.ascent,           c.ascent)
+            maxBounds.descent          = max(maxBounds.descent,          c.descent)
+        }
+        if !sawAny {
+            // Pathological no-glyph font; fall back to cell-snapped defaults.
+            let b = CharInfo(
+                leftSideBearing: 0,
+                rightSideBearing: Int16(resolved.cellWidth),
+                characterWidth: Int16(resolved.cellWidth),
+                ascent: Int16(resolved.ascent),
+                descent: Int16(resolved.descent),
+                attributes: 0
+            )
+            minBounds = b
+            maxBounds = b
+        }
+
+        // charInfos[] is the per-char metrics list. Spec: empty array means
+        // "every char has minBounds metrics" — only correct when minBounds
+        // == maxBounds. Populate iff they differ (proportional fonts).
+        let charInfos: [CharInfo] = (minBounds == maxBounds) ? [] : infos
+
+        // FONTPROPS the integer-valued subset most clients consult. Atom-
+        // valued ones (FAMILY_NAME, FOUNDRY, etc.) need atom-string interns
+        // we don't yet wire here.
+        let props: [FontProp] = [
+            FontProp(name: atoms.intern("FONT_ASCENT"),  value: UInt32(resolved.ascent)),
+            FontProp(name: atoms.intern("FONT_DESCENT"), value: UInt32(resolved.descent)),
+            FontProp(name: atoms.intern("DEFAULT_CHAR"), value: 32),
+            // AVERAGE_WIDTH per XLFD convention is in 1/10 pixel units.
+            FontProp(name: atoms.intern("AVERAGE_WIDTH"),
+                     value: UInt32(maxBounds.characterWidth) * 10),
+        ]
+
         return QueryFontReply(
             sequenceNumber: sequence,
-            minBounds: bounds,
-            maxBounds: bounds,
-            minCharOrByte2: 32, maxCharOrByte2: 126,
+            minBounds: minBounds,
+            maxBounds: maxBounds,
+            minCharOrByte2: range.lowerBound, maxCharOrByte2: range.upperBound,
             defaultChar: 32,
             drawDirection: .leftToRight,
             minByte1: 0, maxByte1: 0,
-            allCharsExist: true,
+            allCharsExist: payload.allExist,
             fontAscent: Int16(resolved.ascent),
             fontDescent: Int16(resolved.descent),
-            properties: [],
-            charInfos: []
+            properties: props,
+            charInfos: charInfos
         )
     }
 
@@ -2036,6 +2103,43 @@ public final class ServerSession: @unchecked Sendable {
             clipRectangles: state.clipRectangles,
             dashes: state.dashes,
             dashOffset: state.dashOffset
+        )
+    }
+
+    /// PolyPoint (op 64) — draws single-pixel dots at each point using the
+    /// GC's foreground. Pre-2026-05-15 had no Framer decoder and fell
+    /// through to BadRequest, breaking any plotting client (xmgrace,
+    /// xfig point markers, scatter plots). Implemented here as a series
+    /// of 1×1 PolyFillRectangle calls — Phase 1; the proper bridge
+    /// method would use CGContext.fill(rect) with a 1×1 pixel directly
+    /// without going through the rectangle dispatch. Same coordinate-
+    /// mode handling as PolyLine.
+    private func handlePolyPoint(_ r: PolyPoint, byteOrder: ByteOrder) {
+        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyPoint.opcode) else { return }
+        guard validateGC(r.gc, majorOpcode: PolyPoint.opcode) != nil else { return }
+        guard let bridge = bridge else { return }
+        let state = gcState(r.gc, byteOrder: byteOrder)
+        var rects: [Rectangle] = []
+        rects.reserveCapacity(r.points.count)
+        var lastX: Int16 = 0
+        var lastY: Int16 = 0
+        for (i, p) in r.points.enumerated() {
+            let absX: Int16
+            let absY: Int16
+            if r.coordinateMode == .origin || i == 0 {
+                absX = p.x; absY = p.y
+            } else {
+                absX = lastX &+ p.x; absY = lastY &+ p.y
+            }
+            lastX = absX; lastY = absY
+            rects.append(Rectangle(x: absX &+ dx, y: absY &+ dy, width: 1, height: 1))
+        }
+        bridge.drawPolyFillRectangle(
+            topLevel: top,
+            foreground: resolveColor(state.foreground),
+            function: state.function,
+            rectangles: rects,
+            clipRectangles: state.clipRectangles
         )
     }
 
@@ -2266,21 +2370,28 @@ public final class ServerSession: @unchecked Sendable {
             width: r.width, height: r.height,
             clipRectangles: state.clipRectangles
         )
-        // X11 spec: every CopyArea on a GC with graphics-exposures=True must
-        // be followed by GraphicsExpose events (one per obscured source
+        // X11 spec: when GC has graphics-exposures=True, CopyArea must be
+        // followed by GraphicsExpose events (one per obscured source
         // region) OR a single NoExpose if the source had no obscured
-        // pixels. graphics-exposures defaults to True; xterm's CopyWait
-        // (util.c:709) BLOCKS in XWindowEvent waiting for one of these.
-        // Without it, the first scroll works but every subsequent scroll
-        // hangs xterm. Our same-window backing-store copies never have
-        // obscured source regions, so we always emit NoExpose.
-        let noExpose = NoExposureEvent(
-            sequenceNumber: sequenceNumber,
-            drawable: r.dstDrawable,
-            minorOpcode: 0,
-            majorOpcode: 62  // X_CopyArea
-        )
-        outbound.append(noExpose.encode(byteOrder: byteOrder))
+        // pixels. When graphics-exposures=False, the server MUST emit
+        // NEITHER. Pre-2026-05-15 we emitted NoExpose unconditionally,
+        // queuing an event Xt-internal GCs (which set graphicsExposures
+        // = False) explicitly said they didn't want — Athena ScrollBar's
+        // GC is the classic case.
+        //
+        // xterm's CopyWait (util.c:709) BLOCKS in XWindowEvent waiting
+        // for the GraphicsExpose/NoExpose pair when graphics-exposures
+        // is True, so we still emit NoExpose for that case (every
+        // same-window backing-store copy has no obscured source).
+        if state.graphicsExposures {
+            let noExpose = NoExposureEvent(
+                sequenceNumber: sequenceNumber,
+                drawable: r.dstDrawable,
+                minorOpcode: 0,
+                majorOpcode: 62  // X_CopyArea
+            )
+            outbound.append(noExpose.encode(byteOrder: byteOrder))
+        }
     }
 
     private func handleClearArea(_ r: ClearArea, byteOrder: ByteOrder) {
@@ -3318,10 +3429,17 @@ public final class ServerSession: @unchecked Sendable {
             if r.type != 0 {
                 guard validateAtom(r.type, majorOpcode: ChangeProperty.opcode) else { break }
             }
-            properties.change(
+            let changeResult = properties.change(
                 window: r.window, property: r.property, type: r.type,
                 format: r.format.rawValue, mode: r.mode.rawValue, value: r.data
             )
+            if changeResult == .mismatch {
+                // Spec 10.10: BadMatch on Prepend/Append when request's
+                // type or format doesn't match the existing entry's. The
+                // entry is left untouched; no PropertyNotify.
+                emitError(.match, majorOpcode: ChangeProperty.opcode)
+                break
+            }
             // Per X11 spec section 10.10: ChangeProperty emits PropertyNotify
             // with state=NewValue to clients with PropertyChangeMask on the
             // window (atom 1<<22 in eventMask). Xt's PROPERTY_CHANGE_TIMESTAMP
@@ -3716,6 +3834,9 @@ public final class ServerSession: @unchecked Sendable {
 
         case .polyLine(let r):
             handlePolyLine(r, byteOrder: byteOrder)
+
+        case .polyPoint(let r):
+            handlePolyPoint(r, byteOrder: byteOrder)
 
         case .fillPoly(let r):
             handleFillPoly(r, byteOrder: byteOrder)
@@ -4759,6 +4880,7 @@ private func opcodeName(_ request: Request) -> String {
     case .storeNamedColor: return "StoreNamedColor"
     case .circulateWindow: return "CirculateWindow"
     case .queryTextExtents: return "QueryTextExtents"
+    case .polyPoint: return "PolyPoint"
     case .unknown(let op, _): return "unknown(\(op))"
     }
 }

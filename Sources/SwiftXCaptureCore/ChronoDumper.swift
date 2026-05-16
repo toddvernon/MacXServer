@@ -401,6 +401,8 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext) -> String {
         body = "CirculateWindow          window=0x\(String(r.window, radix: 16)) direction=\(r.direction == 0 ? "RaiseLowest" : "LowerHighest")"
     case .queryTextExtents(let r):
         body = "QueryTextExtents         fid=0x\(String(r.fid, radix: 16)) nChars=\(r.stringBytes.count / 2)"
+    case .polyPoint(let r):
+        body = "PolyPoint                drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) mode=\(r.coordinateMode) n=\(r.points.count)"
     case .bell(let r):
         body = "Bell                     percent=\(r.percent)"
     case .unknown(let op, _):
@@ -591,6 +593,7 @@ func opcodeOf(_ req: Request) -> UInt8 {
     case .storeNamedColor:           return StoreNamedColor.opcode
     case .circulateWindow:           return CirculateWindow.opcode
     case .queryTextExtents:          return QueryTextExtents.opcode
+    case .polyPoint:                 return PolyPoint.opcode
     case .createGlyphCursor:         return CreateGlyphCursor.opcode
     case .freeCursor:                return FreeCursor.opcode
     case .recolorCursor:             return RecolorCursor.opcode

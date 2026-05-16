@@ -558,20 +558,44 @@ public final class PropertyTable {
     private(set) public var properties: [UInt32: [UInt32: PropertyEntry]] = [:]
     public init() {}
 
-    public func change(window: UInt32, property: UInt32, type: UInt32, format: UInt8, mode: UInt8, value: [UInt8]) {
+    /// Result of a ChangeProperty mutation. `.ok` succeeded; `.mismatch`
+    /// means the request's type or format doesn't match the existing
+    /// entry's (Prepend / Append modes only) and the caller must emit
+    /// BadMatch per spec 10.10 — the entry was NOT mutated.
+    public enum ChangeResult: Equatable, Sendable {
+        case ok
+        case mismatch
+    }
+
+    @discardableResult
+    public func change(window: UInt32, property: UInt32, type: UInt32, format: UInt8, mode: UInt8, value: [UInt8]) -> ChangeResult {
         var perWindow = properties[window] ?? [:]
         if mode == 0 || perWindow[property] == nil {
+            // Replace mode OR no existing entry: store as-is. Spec allows
+            // overwriting any type/format on Replace.
             perWindow[property] = PropertyEntry(window: window, property: property, type: type, format: format, value: value)
-        } else if mode == 1 {                          // PropModePrepend
+        } else {
+            // Prepend (mode==1) or Append (mode==2) into an existing entry.
+            // Spec 10.10: BadMatch if request's type ≠ existing.type or
+            // request's format ≠ existing.format. Pre-2026-05-15 we
+            // silently kept the existing type/format and concatenated the
+            // bytes — which corrupts the property because the wire-format
+            // contract on the stored bytes (count of 8/16/32-bit units) no
+            // longer matches what the client appended. Now we refuse,
+            // leaving the entry untouched.
             var existing = perWindow[property]!
-            existing.value = value + existing.value
-            perWindow[property] = existing
-        } else {                                       // PropModeAppend (mode == 2)
-            var existing = perWindow[property]!
-            existing.value.append(contentsOf: value)
+            if existing.type != type || existing.format != format {
+                return .mismatch
+            }
+            if mode == 1 {                              // PropModePrepend
+                existing.value = value + existing.value
+            } else {                                    // PropModeAppend
+                existing.value.append(contentsOf: value)
+            }
             perWindow[property] = existing
         }
         properties[window] = perWindow
+        return .ok
     }
 
     public func get(window: UInt32, property: UInt32) -> PropertyEntry? {

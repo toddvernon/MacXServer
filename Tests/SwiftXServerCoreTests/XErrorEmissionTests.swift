@@ -672,6 +672,184 @@ final class XErrorEmissionTests: XCTestCase {
 
     // MARK: - Per-handler validation sweep (Create* handlers, 2026-05-15)
 
+    /// Build a session with a MockWindowBridge and a single top-level
+    /// window mapped. Returns (session, topLevelId). CopyArea needs a
+    /// bridge AND a window resolvable via topLevelAndOffset, since the
+    /// handler early-returns without emitting events when bridge is nil
+    /// or the drawable isn't in a known top-level subtree.
+    private func sessionWithMappedTopLevel() -> (ServerSession, UInt32) {
+        let bridge = MockWindowBridge()
+        let session = ServerSession(bridge: bridge)
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        _ = session.outbound.drain()
+        let wid: UInt32 = ServerConfig.default.resourceIdBase + 0x600
+        _ = session.feed(Request.createWindow(CreateWindow(
+            depth: 8, wid: wid, parent: ServerConfig.default.rootWindowId,
+            x: 0, y: 0, width: 100, height: 100, borderWidth: 0,
+            windowClass: .inputOutput, visual: ServerConfig.default.rootVisualId,
+            valueMask: 0, valueList: []
+        )).encode(byteOrder: .lsbFirst))
+        _ = session.feed(Request.mapWindow(MapWindow(window: wid))
+            .encode(byteOrder: .lsbFirst))
+        _ = session.outbound.drain()
+        return (session, wid)
+    }
+
+    func testCopyArea_GraphicsExposuresFalse_SuppressesNoExposeEvent() throws {
+        // Pre-2026-05-15: NoExposure was emitted unconditionally after every
+        // CopyArea, regardless of the GC's graphics-exposures bit. Per spec,
+        // when GC has graphics-exposures=False the server MUST emit neither
+        // GraphicsExpose nor NoExposure. Athena ScrollBar's internal GC sets
+        // this; we used to queue a NoExpose the client explicitly didn't
+        // want.
+        let (session, wid) = sessionWithMappedTopLevel()
+
+        // CreateGC with graphics-exposures explicitly set to 0 (False).
+        // CWGraphicsExposures = 1 << 16; value 0 = False.
+        let cid: UInt32 = ServerConfig.default.resourceIdBase + 0x700
+        var valueList: [UInt8] = []
+        for shift in [0, 8, 16, 24] {
+            valueList.append(UInt8(truncatingIfNeeded: UInt32(0) >> shift))
+        }
+        _ = session.feed(Request.createGC(CreateGC(
+            cid: cid, drawable: wid,
+            valueMask: 1 << 16,    // CWGraphicsExposures
+            valueList: valueList
+        )).encode(byteOrder: .lsbFirst))
+        _ = session.outbound.drain()
+
+        // Same-window CopyArea on the top-level. Must produce no events.
+        let bytes = session.feed(Request.copyArea(CopyArea(
+            srcDrawable: wid, dstDrawable: wid,
+            gc: cid,
+            srcX: 0, srcY: 0, dstX: 10, dstY: 10,
+            width: 20, height: 20
+        )).encode(byteOrder: .lsbFirst))
+
+        XCTAssertTrue(bytes.isEmpty,
+                      "CopyArea with graphics-exposures=False must emit no events; got \(bytes.count) bytes")
+    }
+
+    func testCopyArea_GraphicsExposuresDefault_EmitsNoExposeEvent() throws {
+        // Default GC has graphics-exposures=True; we still emit NoExpose
+        // (since our same-window backing-store copies have no obscured
+        // source). xterm's CopyWait BLOCKS waiting for this — load-bearing.
+        let (session, wid) = sessionWithMappedTopLevel()
+
+        // Default-CW GC: graphics-exposures defaults to True.
+        let cid: UInt32 = ServerConfig.default.resourceIdBase + 0x701
+        _ = session.feed(Request.createGC(CreateGC(
+            cid: cid, drawable: wid, valueMask: 0, valueList: []
+        )).encode(byteOrder: .lsbFirst))
+        _ = session.outbound.drain()
+
+        let bytes = session.feed(Request.copyArea(CopyArea(
+            srcDrawable: wid, dstDrawable: wid,
+            gc: cid,
+            srcX: 0, srcY: 0, dstX: 10, dstY: 10,
+            width: 20, height: 20
+        )).encode(byteOrder: .lsbFirst))
+
+        // Should contain a NoExposureEvent (code 14). May also contain
+        // other events from the CopyArea path, so check for presence
+        // rather than exact byte count.
+        var sawNoExpose = false
+        var offset = 0
+        while offset + 32 <= bytes.count {
+            if bytes[offset] & 0x7F == 14 { sawNoExpose = true; break }
+            offset += 32
+        }
+        XCTAssertTrue(sawNoExpose,
+                      "default-GC CopyArea (graphics-exposures=True) must emit NoExposure")
+    }
+
+    func testChangeProperty_AppendWithMismatchedFormatEmitsBadMatch() throws {
+        // Spec 10.10: BadMatch on Prepend/Append when request's format ≠
+        // existing entry's format. Pre-2026-05-15 we silently kept the
+        // existing format and concatenated bytes — corrupting the stored
+        // property since the count-of-units interpretation no longer
+        // matched the byte count.
+        let session = runningSession(byteOrder: .lsbFirst)
+        let root = ServerConfig.default.rootWindowId
+        // Use a custom atom for the property. WM_NAME=39 has its own
+        // bridge side-effect (title), so use something inert.
+        let propAtom: UInt32 = session.atoms.intern("SWIFT_X_TEST_PROP")
+        let typeAtom: UInt32 = 31    // STRING
+
+        // Store as format=8.
+        _ = session.feed(Request.changeProperty(ChangeProperty(
+            mode: .replace,
+            window: root, property: propAtom, type: typeAtom,
+            format: .format8, data: [0x41, 0x42]
+        )).encode(byteOrder: .lsbFirst))
+        _ = session.outbound.drain()
+
+        // Append with format=32. Must emit BadMatch.
+        let bytes = session.feed(Request.changeProperty(ChangeProperty(
+            mode: .append,
+            window: root, property: propAtom, type: typeAtom,
+            format: .format32, data: [0xDE, 0xAD, 0xBE, 0xEF]
+        )).encode(byteOrder: .lsbFirst))
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected BadMatch on format-mismatched Append, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.match.rawValue)
+        XCTAssertEqual(err.majorOpcode, ChangeProperty.opcode)
+    }
+
+    func testChangeProperty_AppendWithMismatchedTypeEmitsBadMatch() throws {
+        let session = runningSession(byteOrder: .lsbFirst)
+        let root = ServerConfig.default.rootWindowId
+        let propAtom: UInt32 = session.atoms.intern("SWIFT_X_TEST_PROP2")
+        let stringType: UInt32 = 31
+        let atomType: UInt32 = 4
+
+        _ = session.feed(Request.changeProperty(ChangeProperty(
+            mode: .replace,
+            window: root, property: propAtom, type: stringType,
+            format: .format8, data: [0x41]
+        )).encode(byteOrder: .lsbFirst))
+        _ = session.outbound.drain()
+
+        // Append with same format=8 but different TYPE atom.
+        let bytes = session.feed(Request.changeProperty(ChangeProperty(
+            mode: .append,
+            window: root, property: propAtom, type: atomType,
+            format: .format8, data: [0x42]
+        )).encode(byteOrder: .lsbFirst))
+
+        let msg = try ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst)
+        guard case .xError(let err) = msg else {
+            XCTFail("expected BadMatch on type-mismatched Append, got \(msg)")
+            return
+        }
+        XCTAssertEqual(err.errorCode, XErrorCode.match.rawValue)
+    }
+
+    func testChangeProperty_AppendOnNonExistentPropertySucceeds() throws {
+        // Per spec: Prepend/Append on a property that doesn't exist yet
+        // is equivalent to Replace — no existing type/format to mismatch
+        // against, so the request creates the property.
+        let session = runningSession(byteOrder: .lsbFirst)
+        let root = ServerConfig.default.rootWindowId
+        let propAtom: UInt32 = session.atoms.intern("SWIFT_X_TEST_PROP3")
+
+        let bytes = session.feed(Request.changeProperty(ChangeProperty(
+            mode: .append,
+            window: root, property: propAtom, type: 31,
+            format: .format8, data: [0x41]
+        )).encode(byteOrder: .lsbFirst))
+        // Should NOT be an XError. May emit PropertyNotify but not an error.
+        if !bytes.isEmpty,
+           let msg = try? ServerMessage.decodeOne(from: bytes, byteOrder: .lsbFirst),
+           case .xError(let err) = msg {
+            XCTFail("Append on nonexistent property must succeed; got error code \(err.errorCode)")
+        }
+    }
+
     func testCreateWindowOnUnknownParentEmitsBadWindow() throws {
         let session = runningSession(byteOrder: .lsbFirst)
         let bogusParent: UInt32 = 0xDEADBEEF

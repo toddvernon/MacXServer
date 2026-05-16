@@ -33,10 +33,16 @@ final class CapturedAppReplayTests: XCTestCase {
 
     // MARK: - Test cases
 
+    // Atoms baseline includes +4 from FONT_ASCENT / FONT_DESCENT /
+    // DEFAULT_CHAR / AVERAGE_WIDTH which QueryFont now interns when
+    // building the per-glyph CHARINFO reply (shipped 2026-05-15 in the
+    // post-audit sweep). Captures without a QueryFont call (xeyes,
+    // dtcalc, dthelpview, dticon) don't change.
+
     func testReplayXcalc() throws {
         try runReplay(capture: "xcalc.xtap", expecting: ReplayBaseline(
             windows: 53, colors: 25, pixmaps: 2, fonts: 3, gcs: 8,
-            atoms: 76, requests: 1448,
+            atoms: 80, requests: 1448,
             allowedExtensionOpcodes: [129] // SHAPE
         ))
     }
@@ -44,7 +50,7 @@ final class CapturedAppReplayTests: XCTestCase {
     func testReplayXterm() throws {
         try runReplay(capture: "xterm_session.xtap", expecting: ReplayBaseline(
             windows: 4, colors: 25, pixmaps: 1, fonts: 2, gcs: 4,
-            atoms: 82, requests: 752,
+            atoms: 86, requests: 752,
             allowedExtensionOpcodes: []
         ))
     }
@@ -52,7 +58,7 @@ final class CapturedAppReplayTests: XCTestCase {
     func testReplayXfontsel() throws {
         try runReplay(capture: "xfontsel-sun.xtap", expecting: ReplayBaseline(
             windows: 46, colors: 25, pixmaps: 1, fonts: 5, gcs: 15,
-            atoms: 80, requests: 661,
+            atoms: 84, requests: 661,
             allowedExtensionOpcodes: [135] // SolarisIA
         ))
     }
@@ -72,7 +78,7 @@ final class CapturedAppReplayTests: XCTestCase {
             // descendants were orphaned in the table when their parent
             // was destroyed.
             windows: 83, colors: 47, pixmaps: 57, fonts: 25, gcs: 52,
-            atoms: 82, requests: 8397,
+            atoms: 86, requests: 8397,
             allowedExtensionOpcodes: []
         ))
     }
@@ -80,7 +86,7 @@ final class CapturedAppReplayTests: XCTestCase {
     func testReplayDtcalc() throws {
         try runReplay(capture: "dtcalc-sun.xtap", expecting: ReplayBaseline(
             windows: 196, colors: 33, pixmaps: 14, fonts: 4, gcs: 35,
-            atoms: 83, requests: 2126,
+            atoms: 87, requests: 2126,
             allowedExtensionOpcodes: [135] // SolarisIA
         ))
     }
@@ -88,7 +94,7 @@ final class CapturedAppReplayTests: XCTestCase {
     func testReplayDtterm() throws {
         try runReplay(capture: "dtterm-sun.xtap", expecting: ReplayBaseline(
             windows: 21, colors: 25, pixmaps: 5, fonts: 5, gcs: 22,
-            atoms: 83, requests: 1106,
+            atoms: 87, requests: 1106,
             allowedExtensionOpcodes: [135] // SolarisIA
         ))
     }
@@ -96,7 +102,7 @@ final class CapturedAppReplayTests: XCTestCase {
     func testReplayDthelpview() throws {
         try runReplay(capture: "dthelpview-sun.xtap", expecting: ReplayBaseline(
             windows: 10, colors: 25, pixmaps: 5, fonts: 8, gcs: 21,
-            atoms: 76, requests: 841,
+            atoms: 80, requests: 841,
             allowedExtensionOpcodes: [135] // SolarisIA
         ))
     }
@@ -104,7 +110,7 @@ final class CapturedAppReplayTests: XCTestCase {
     func testReplayDticon() throws {
         try runReplay(capture: "dticon-sun.xtap", expecting: ReplayBaseline(
             windows: 88, colors: 82, pixmaps: 59, fonts: 4, gcs: 147,
-            atoms: 87, requests: 1601,
+            atoms: 91, requests: 1601,
             allowedExtensionOpcodes: [135] // SolarisIA
         ))
     }

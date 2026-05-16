@@ -1,5 +1,6 @@
 import Foundation
 import CoreText
+import Framer
 
 // XLFD / alias → Mac font + cell metrics resolver. Per the spec in
 // SERVER_RESOLUTION_SCALING_AND_FONTS.md.
@@ -245,6 +246,70 @@ public enum FontResolver {
         CTFontGetAdvancesForGlyphs(font, .horizontal, &glyphs, &advances, characters.count)
         let total = advances.reduce(CGFloat(0)) { $0 + $1.width }
         return Int32(total.rounded())
+    }
+
+    /// Per-glyph metrics over a UniChar range, in the format QueryFontReply's
+    /// CHARINFO array expects. Per X spec:
+    ///   - lsb: x-offset from origin to leftmost ink (signed; negative for
+    ///          italic glyphs that extend left of origin)
+    ///   - rsb: x-offset from origin to rightmost ink
+    ///   - characterWidth: horizontal advance to next glyph's origin
+    ///   - ascent / descent: ink-box height above / below baseline (positive)
+    /// Missing-glyph entries (CT returns glyph index 0) are reported as
+    /// all-zeros CharInfo per spec convention; `allExist` flips false when
+    /// any glyph is missing so the reply's allCharsExist bit reads correctly.
+    public struct GlyphMetricsPayload {
+        public var infos: [CharInfo]
+        public var allExist: Bool
+    }
+
+    public static func measureGlyphMetrics(_ resolved: ResolvedFont,
+                                           range: ClosedRange<UInt16>) -> GlyphMetricsPayload {
+        let count = Int(range.upperBound - range.lowerBound) + 1
+        let font = CTFontCreateWithName(
+            resolved.macFontName as CFString,
+            CGFloat(resolved.pointSize), nil
+        )
+        var chars: [UniChar] = []
+        chars.reserveCapacity(count)
+        for c in range { chars.append(c) }
+
+        var glyphs = [CGGlyph](repeating: 0, count: count)
+        CTFontGetGlyphsForCharacters(font, &chars, &glyphs, count)
+        var advances = [CGSize](repeating: .zero, count: count)
+        CTFontGetAdvancesForGlyphs(font, .horizontal, &glyphs, &advances, count)
+        var bboxes = [CGRect](repeating: .zero, count: count)
+        CTFontGetBoundingRectsForGlyphs(font, .horizontal, &glyphs, &bboxes, count)
+
+        var infos: [CharInfo] = []
+        infos.reserveCapacity(count)
+        var allExist = true
+        for i in 0..<count {
+            if glyphs[i] == 0 {
+                // Missing glyph — leave as zero CharInfo per spec convention.
+                infos.append(CharInfo(
+                    leftSideBearing: 0, rightSideBearing: 0,
+                    characterWidth: 0, ascent: 0, descent: 0, attributes: 0
+                ))
+                allExist = false
+                continue
+            }
+            let advance = Int(advances[i].width.rounded())
+            let bbox = bboxes[i]
+            let lsb = Int(bbox.origin.x.rounded(.down))
+            let rsb = Int((bbox.origin.x + bbox.size.width).rounded(.up))
+            let asc = max(0, Int((bbox.origin.y + bbox.size.height).rounded(.up)))
+            let desc = max(0, Int((-bbox.origin.y).rounded(.up)))
+            infos.append(CharInfo(
+                leftSideBearing: Int16(clamping: lsb),
+                rightSideBearing: Int16(clamping: rsb),
+                characterWidth: Int16(clamping: advance),
+                ascent: Int16(clamping: asc),
+                descent: Int16(clamping: desc),
+                attributes: 0
+            ))
+        }
+        return GlyphMetricsPayload(infos: infos, allExist: allExist)
     }
 
     /// Mac font name including bold/italic variants. We only emit names that

@@ -49,6 +49,14 @@ public struct GCState: Equatable, Sendable {
     public var dashes: [UInt8]?
     /// Dash phase offset, in pen-distance units along the path.
     public var dashOffset: UInt32 = 0
+    /// GC graphics-exposures bit. true = server emits GraphicsExpose /
+    /// NoExposure events for CopyArea / CopyPlane. Default true per X11
+    /// spec. When false (Xt sets this on many internal GCs), the server
+    /// MUST emit neither — pre-2026-05-15 we emitted NoExposure
+    /// unconditionally, which forced clients with graphicsExposures=False
+    /// to queue and discard an event they explicitly said they didn't
+    /// want.
+    public var graphicsExposures: Bool = true
 
     public init() {}
 
@@ -66,6 +74,7 @@ public struct GCState: Equatable, Sendable {
         if let v = entry.values[GCBits.font]       { state.font = v }
         if let v = entry.values[GCBits.dashOffset] { state.dashOffset = v }
         if let v = entry.values[GCBits.function]   { state.function = UInt8(truncatingIfNeeded: v) }
+        if let v = entry.values[GCBits.graphicsExposures] { state.graphicsExposures = (v != 0) }
         if let rects = entry.clipRectangles {
             let cox = Int16(bitPattern: UInt16(truncatingIfNeeded: entry.values[GCBits.clipXOrigin] ?? 0))
             let coy = Int16(bitPattern: UInt16(truncatingIfNeeded: entry.values[GCBits.clipYOrigin] ?? 0))
