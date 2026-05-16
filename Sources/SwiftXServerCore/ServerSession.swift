@@ -2565,12 +2565,27 @@ public final class ServerSession: @unchecked Sendable {
                 break
             }
             let mask = r.valueMask
-            let eventMask = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.eventMask, byteOrder: byteOrder) ?? 0
-            let backPixel = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.backPixel, byteOrder: byteOrder)
-            let borderPixel = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.borderPixel, byteOrder: byteOrder)
-            let cursor = ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.cursor, byteOrder: byteOrder)
-            let overrideRedirect =
-                (ValueListReader.read(valueList: r.valueList, mask: mask, bit: CW.overrideRedirect, byteOrder: byteOrder) ?? 0) != 0
+            let read = { (bit: UInt32) -> UInt32? in
+                ValueListReader.read(valueList: r.valueList, mask: mask, bit: bit, byteOrder: byteOrder)
+            }
+            let eventMask = read(CW.eventMask) ?? 0
+            let backPixel = read(CW.backPixel)
+            let borderPixel = read(CW.borderPixel)
+            let cursor = read(CW.cursor)
+            let overrideRedirect = (read(CW.overrideRedirect) ?? 0) != 0
+            // All the other CW* fields (synthesis #6 "ChangeWindowAttributes
+            // attribute drops"). Default values per X11 spec.
+            let bitGravity = UInt8(truncatingIfNeeded: read(CW.bitGravity) ?? 0)        // Forget
+            let winGravity = UInt8(truncatingIfNeeded: read(CW.winGravity) ?? 1)        // NorthWest
+            let backingStore = UInt8(truncatingIfNeeded: read(CW.backingStore) ?? 0)    // NotUseful
+            let backingPlanes = read(CW.backingPlanes) ?? ~UInt32(0)
+            let backingPixel = read(CW.backingPixel) ?? 0
+            let saveUnder = (read(CW.saveUnder) ?? 0) != 0
+            let colormapRaw = read(CW.colormap)
+            // CWColormap value 0 = CopyFromParent — store nil so the read
+            // path can fall back to the inherited / default cmap.
+            let colormap: UInt32? = (colormapRaw == 0) ? nil : colormapRaw
+            let doNotPropagateMask = UInt16(truncatingIfNeeded: read(CW.dontPropagate) ?? 0)
             let entry = WindowEntry(
                 id: r.wid, parent: r.parent, depth: r.depth,
                 x: r.x, y: r.y, width: r.width, height: r.height,
@@ -2580,7 +2595,15 @@ public final class ServerSession: @unchecked Sendable {
                 backPixel: backPixel,
                 borderPixel: borderPixel,
                 cursor: (cursor == 0) ? nil : cursor,
-                overrideRedirect: overrideRedirect
+                overrideRedirect: overrideRedirect,
+                bitGravity: bitGravity,
+                winGravity: winGravity,
+                backingStore: backingStore,
+                backingPlanes: backingPlanes,
+                backingPixel: backingPixel,
+                saveUnder: saveUnder,
+                colormap: colormap,
+                doNotPropagateMask: doNotPropagateMask
             )
             windows.insert(entry)
             // Link into parent's sibling chain at the TOP — newly created
@@ -2663,6 +2686,47 @@ public final class ServerSession: @unchecked Sendable {
                 // waiting for the next pointer move. xterm flips its
                 // top-level cursor mid-session via this path.
                 refreshCursorIfPointerAffected(by: r.window)
+            }
+            // Mid-life CW* attribute writes (synthesis #6 "ChangeWindowAttributes
+            // attribute drops" — shipped 2026-05-15). Each was previously
+            // silently dropped on the write side AND returned as zero on the
+            // read side. Now stored on the WindowEntry and echoed back by
+            // GetWindowAttributes. None of these drive a rendering pipeline
+            // change yet (backing-store, save-under, gravity, do-not-propagate
+            // are accept-and-store stubs); colormap and override-redirect
+            // mid-life flip are stored without invalidating dependent state.
+            let cwRead = { (bit: UInt32) -> UInt32? in
+                ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: bit, byteOrder: byteOrder)
+            }
+            if r.window != config.rootWindowId {
+                if let v = cwRead(CW.overrideRedirect) {
+                    windows.setOverrideRedirect(r.window, v != 0)
+                }
+                if let v = cwRead(CW.bitGravity) {
+                    windows.setBitGravity(r.window, UInt8(truncatingIfNeeded: v))
+                }
+                if let v = cwRead(CW.winGravity) {
+                    windows.setWinGravity(r.window, UInt8(truncatingIfNeeded: v))
+                }
+                if let v = cwRead(CW.backingStore) {
+                    windows.setBackingStore(r.window, UInt8(truncatingIfNeeded: v))
+                }
+                if let v = cwRead(CW.backingPlanes) {
+                    windows.setBackingPlanes(r.window, v)
+                }
+                if let v = cwRead(CW.backingPixel) {
+                    windows.setBackingPixel(r.window, v)
+                }
+                if let v = cwRead(CW.saveUnder) {
+                    windows.setSaveUnder(r.window, v != 0)
+                }
+                if let v = cwRead(CW.colormap) {
+                    // 0 == CopyFromParent sentinel.
+                    windows.setColormap(r.window, v == 0 ? nil : v)
+                }
+                if let v = cwRead(CW.dontPropagate) {
+                    windows.setDoNotPropagateMask(r.window, UInt16(truncatingIfNeeded: v))
+                }
             }
             // Per X11 spec: changing CWBackPixel / CWBorderPixel does NOT
             // trigger an automatic repaint. The new pixel takes effect on the
@@ -4298,21 +4362,36 @@ public final class ServerSession: @unchecked Sendable {
         // what's missing without dropping the connection.
         case .getWindowAttributes(let r):
             guard validateWindowOrRoot(r.window, majorOpcode: GetWindowAttributes.opcode) else { break }
-            // Synthesise a reply from the WindowEntry. Most fields are
-            // sensible defaults; the live ones xterm cares about are class,
-            // mapState, your-event-mask, and colormap.
+            // Synthesise a reply from the WindowEntry. Pre-2026-05-15 most
+            // fields returned zeros regardless of what was set — a lie on
+            // the wire flagged by the comparison study. Now reads back
+            // every CW* attribute the client wrote (synthesis #6).
             let entry = windows.get(r.window)
             let mapState: UInt8 = (entry?.mapped == true) ? 2 : 0   // Viewable / Unmapped
             let visualId = config.rootVisualId
             let cls: UInt16 = entry?.windowClass == .inputOnly ? 2 : 1
+            // Colormap: per-window override if set, else CopyFromParent
+            // (which collapses to the screen's default for our purposes —
+            // we don't yet walk the parent chain because no client we host
+            // sets per-window colormaps).
+            let cmap = entry?.colormap ?? config.defaultColormapId
             let reply = GetWindowAttributesReply(
                 sequenceNumber: sequenceNumber,
+                backingStore: entry?.backingStore ?? 0,
                 visualId: visualId,
                 windowClass: cls,
+                bitGravity: entry?.bitGravity ?? 0,
+                winGravity: entry?.winGravity ?? 1,
+                backingBitPlanes: entry?.backingPlanes ?? ~UInt32(0),
+                backingPixel: entry?.backingPixel ?? 0,
+                saveUnder: entry?.saveUnder ?? false,
+                mapInstalled: true,
                 mapState: mapState,
-                colormap: config.defaultColormapId,
+                overrideRedirect: entry?.overrideRedirect ?? false,
+                colormap: cmap,
                 allEventMasks: entry?.eventMask ?? 0,
-                yourEventMask: entry?.eventMask ?? 0
+                yourEventMask: entry?.eventMask ?? 0,
+                doNotPropagateMask: entry?.doNotPropagateMask ?? 0
             )
             outbound.append(reply.encode(byteOrder: byteOrder))
 

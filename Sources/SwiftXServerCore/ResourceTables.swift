@@ -39,6 +39,39 @@ public struct WindowEntry: Equatable, Sendable {
     /// Default false.
     public var overrideRedirect: Bool
 
+    // CW* attributes that we accept-and-store but don't (yet) drive any
+    // rendering pipeline. Round-tripped via GetWindowAttributes so clients
+    // that read back what they set see the correct values. Pre-2026-05-15
+    // these were silently dropped on the write side AND returned as zeros
+    // on the read side — an XError-honesty violation flagged by the
+    // comparison study (synthesis #6).
+
+    /// CWBitGravity: where existing pixels go when the window resizes
+    /// (Forget=0, NorthWest=1, North=2, NorthEast=3, West=4, Center=5,
+    /// East=6, SouthWest=7, South=8, SouthEast=9, Static=10).
+    /// Spec default ForgetGravity = 0.
+    public var bitGravity: UInt8
+    /// CWWinGravity: where this window moves when its parent resizes.
+    /// Same enum as bitGravity, plus Unmap=0. Spec default
+    /// NorthWestGravity = 1.
+    public var winGravity: UInt8
+    /// CWBackingStore: NotUseful=0 / WhenMapped=1 / Always=2. We don't
+    /// actually implement backing-store (see DECISIONS 2026-05-14); the
+    /// value is stored only so reads echo writes.
+    public var backingStore: UInt8
+    /// CWBackingPlanes. Spec default ~0 (all planes).
+    public var backingPlanes: UInt32
+    /// CWBackingPixel. Spec default 0.
+    public var backingPixel: UInt32
+    /// CWSaveUnder. Spec default false; not honored by our backing store.
+    public var saveUnder: Bool
+    /// CWColormap. Per-window colormap selection. nil = inherit from
+    /// parent (CopyFromParent sentinel handled at read time by walking up
+    /// or falling back to the screen's default colormap).
+    public var colormap: UInt32?
+    /// CWDontPropagate. 16-bit subset of event-mask bits. Spec default 0.
+    public var doNotPropagateMask: UInt16
+
     /// Visible region of the window's *interior* (excluding border) in
     /// top-level-local coordinates. Computed by ClipList.recomputeClips
     /// whenever the window tree mutates. Empty when the window is unmapped
@@ -92,6 +125,14 @@ public struct WindowEntry: Equatable, Sendable {
         borderPixel: UInt32? = nil,
         cursor: UInt32? = nil,
         overrideRedirect: Bool = false,
+        bitGravity: UInt8 = 0,                 // ForgetGravity
+        winGravity: UInt8 = 1,                 // NorthWestGravity
+        backingStore: UInt8 = 0,               // NotUseful
+        backingPlanes: UInt32 = ~UInt32(0),    // all planes
+        backingPixel: UInt32 = 0,
+        saveUnder: Bool = false,
+        colormap: UInt32? = nil,
+        doNotPropagateMask: UInt16 = 0,
         clipList: Region = .empty,
         borderClip: Region = .empty,
         lastVisibilityState: UInt8? = nil,
@@ -109,6 +150,14 @@ public struct WindowEntry: Equatable, Sendable {
         self.borderPixel = borderPixel
         self.cursor = cursor
         self.overrideRedirect = overrideRedirect
+        self.bitGravity = bitGravity
+        self.winGravity = winGravity
+        self.backingStore = backingStore
+        self.backingPlanes = backingPlanes
+        self.backingPixel = backingPixel
+        self.saveUnder = saveUnder
+        self.colormap = colormap
+        self.doNotPropagateMask = doNotPropagateMask
         self.clipList = clipList
         self.borderClip = borderClip
         self.lastVisibilityState = lastVisibilityState
@@ -179,6 +228,71 @@ public final class WindowTable: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
         w.cursor = cursor
+        _windows[id] = w
+    }
+
+    // MARK: - CW* attribute setters (added 2026-05-15)
+
+    public func setOverrideRedirect(_ id: UInt32, _ value: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.overrideRedirect = value
+        _windows[id] = w
+    }
+
+    public func setBitGravity(_ id: UInt32, _ value: UInt8) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.bitGravity = value
+        _windows[id] = w
+    }
+
+    public func setWinGravity(_ id: UInt32, _ value: UInt8) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.winGravity = value
+        _windows[id] = w
+    }
+
+    public func setBackingStore(_ id: UInt32, _ value: UInt8) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.backingStore = value
+        _windows[id] = w
+    }
+
+    public func setBackingPlanes(_ id: UInt32, _ value: UInt32) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.backingPlanes = value
+        _windows[id] = w
+    }
+
+    public func setBackingPixel(_ id: UInt32, _ value: UInt32) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.backingPixel = value
+        _windows[id] = w
+    }
+
+    public func setSaveUnder(_ id: UInt32, _ value: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.saveUnder = value
+        _windows[id] = w
+    }
+
+    public func setColormap(_ id: UInt32, _ value: UInt32?) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.colormap = value
+        _windows[id] = w
+    }
+
+    public func setDoNotPropagateMask(_ id: UInt32, _ value: UInt16) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.doNotPropagateMask = value
         _windows[id] = w
     }
 
