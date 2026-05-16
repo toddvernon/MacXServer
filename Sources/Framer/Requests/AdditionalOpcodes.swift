@@ -168,6 +168,66 @@ public struct SetCloseDownMode: Equatable, Sendable {
     }
 }
 
+// QueryTextExtents (op 48). Measures a character string against the
+// metrics of a previously-opened font. Motif's CascadeButton uses this
+// for menu-title widths during XmRowColumn layout; pre-2026-05-15 we
+// returned BadRequest and Motif fell back to a default-width estimate,
+// producing visibly-misaligned menu titles. Wire body is CHAR2B
+// (UTF-16, MSB first per X spec) padded to a 4-byte boundary; the
+// `oddLength` flag in the header's second byte signals whether the
+// trailing 2 padding bytes are part of the string or filler.
+public struct QueryTextExtents: Equatable, Sendable {
+    public static let opcode: UInt8 = 48
+    public var fid: UInt32
+    /// Raw CHAR2B bytes — two bytes per character, big-endian per X
+    /// (independent of the connection byte order). We keep the raw
+    /// bytes so the handler can decode to whatever it needs.
+    public var stringBytes: [UInt8]
+
+    public init(fid: UInt32, stringBytes: [UInt8]) {
+        self.fid = fid; self.stringBytes = stringBytes
+    }
+
+    public func encode(byteOrder: ByteOrder) -> [UInt8] {
+        // Each CHAR2B is 2 bytes. Length field counts whole 4-byte
+        // units; if the byte count isn't a multiple of 4 we need 2
+        // bytes of pad AND oddLength = 1.
+        let n = stringBytes.count
+        let totalBodyBytes = n + (n % 4 == 0 ? 0 : (4 - n % 4))
+        let lenIn4 = UInt16(2 + totalBodyBytes / 4)
+        let isOdd = (n / 2) % 2 != 0    // odd number of CHAR2B chars
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(Self.opcode)
+        w.writeUInt8(isOdd ? 1 : 0)
+        w.writeUInt16(lenIn4)
+        w.writeUInt32(fid)
+        w.writeBytes(stringBytes)
+        if n % 4 != 0 { w.writePadding(4 - n % 4) }
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> QueryTextExtents {
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        let op = try r.readUInt8()
+        guard op == Self.opcode else { throw FramerError.invalidOpcode(expected: Self.opcode, got: op) }
+        let oddLength = try r.readUInt8() != 0
+        let lenIn4 = Int(try r.readUInt16())
+        let fid = try r.readUInt32()
+        // Body: (lenIn4 - 2) * 4 bytes; the last 2 are padding when oddLength=1.
+        let bodyBytes = max(0, (lenIn4 - 2) * 4)
+        let raw = try r.readBytes(bodyBytes)
+        // Trim trailing 2 pad bytes when odd. Each CHAR2B is 2 bytes,
+        // so odd means the string had an odd number of CHAR2Bs.
+        let trimmed: [UInt8]
+        if oddLength && raw.count >= 2 {
+            trimmed = Array(raw[0..<(raw.count - 2)])
+        } else {
+            trimmed = raw
+        }
+        return QueryTextExtents(fid: fid, stringBytes: trimmed)
+    }
+}
+
 public struct CirculateWindow: Equatable, Sendable {
     public static let opcode: UInt8 = 13
     public var direction: UInt8         // 0 RaiseLowest, 1 LowerHighest

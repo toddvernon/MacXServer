@@ -225,6 +225,28 @@ public enum FontResolver {
         )
     }
 
+    /// Sum the Core Text horizontal advances for a sequence of UniChar
+    /// glyphs in the resolved font. Matches what PolyText8 / ImageText8
+    /// actually draw (per-glyph advances rather than snapped cellWidth),
+    /// so QueryTextExtents widths align with rendered widths — load-
+    /// bearing for proportional fonts (Helvetica, Times) where Motif's
+    /// menu-bar layout would otherwise allocate the wrong column widths.
+    /// Returns 0 for an empty character list.
+    public static func measureTextWidth(_ resolved: ResolvedFont, characters: [UniChar]) -> Int32 {
+        guard !characters.isEmpty else { return 0 }
+        let font = CTFontCreateWithName(
+            resolved.macFontName as CFString,
+            CGFloat(resolved.pointSize), nil
+        )
+        var glyphs = [CGGlyph](repeating: 0, count: characters.count)
+        var chars = characters
+        CTFontGetGlyphsForCharacters(font, &chars, &glyphs, characters.count)
+        var advances = [CGSize](repeating: .zero, count: characters.count)
+        CTFontGetAdvancesForGlyphs(font, .horizontal, &glyphs, &advances, characters.count)
+        let total = advances.reduce(CGFloat(0)) { $0 + $1.width }
+        return Int32(total.rounded())
+    }
+
     /// Mac font name including bold/italic variants. We only emit names that
     /// are known to exist on macOS — for italic where no real face exists
     /// (Monaco, Symbol), we drop the italic suffix; the caller is expected

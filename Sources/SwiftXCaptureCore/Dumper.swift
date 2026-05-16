@@ -391,6 +391,7 @@ public enum Dumper {
         case .storeColors:               return StoreColors.opcode
         case .storeNamedColor:           return StoreNamedColor.opcode
         case .circulateWindow:           return CirculateWindow.opcode
+        case .queryTextExtents:          return QueryTextExtents.opcode
         case .unknown(let op, _):        return op
         }
     }

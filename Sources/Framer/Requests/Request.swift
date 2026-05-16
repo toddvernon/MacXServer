@@ -92,6 +92,7 @@ public enum Request: Equatable, Sendable {
     case storeColors(StoreColors)
     case storeNamedColor(StoreNamedColor)
     case circulateWindow(CirculateWindow)
+    case queryTextExtents(QueryTextExtents)
     // Carries the full request bytes including the 4-byte header. Encode is a
     // pass-through and ignores the byteOrder argument since the bytes are already
     // in their original byte order.
@@ -192,6 +193,7 @@ public enum Request: Equatable, Sendable {
         case .storeColors(let r):               return r.encode(byteOrder: byteOrder)
         case .storeNamedColor(let r):           return r.encode(byteOrder: byteOrder)
         case .circulateWindow(let r):           return r.encode(byteOrder: byteOrder)
+        case .queryTextExtents(let r):          return r.encode(byteOrder: byteOrder)
         case .unknown(_, let bytes):            return bytes
         }
     }
@@ -398,6 +400,8 @@ public enum Request: Equatable, Sendable {
             return .storeNamedColor(try StoreNamedColor.decode(from: bytes, byteOrder: byteOrder))
         case CirculateWindow.opcode:
             return .circulateWindow(try CirculateWindow.decode(from: bytes, byteOrder: byteOrder))
+        case QueryTextExtents.opcode:
+            return .queryTextExtents(try QueryTextExtents.decode(from: bytes, byteOrder: byteOrder))
         default:
             return .unknown(opcode: opcode, bytes: Array(bytes[0..<expected]))
         }

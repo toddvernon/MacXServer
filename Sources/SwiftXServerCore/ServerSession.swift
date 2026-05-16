@@ -3450,6 +3450,47 @@ public final class ServerSession: @unchecked Sendable {
             let reply = makeQueryFontReply(resolved: entry.resolved, sequence: sequenceNumber)
             outbound.append(reply.encode(byteOrder: byteOrder))
 
+        case .queryTextExtents(let r):
+            // Motif's CascadeButton uses this to measure menu-title labels
+            // during XmRowColumn layout. Pre-2026-05-15 this fell through
+            // to BadRequest and Motif fell back to a default-width estimate
+            // that produced visibly-misaligned menu titles. Per spec,
+            // unknown font → BadFont.
+            guard let entry = fonts.get(r.fid) else {
+                emitError(.font, majorOpcode: QueryTextExtents.opcode, badResourceId: r.fid)
+                break
+            }
+            // CHAR2B chars are 2 bytes each, MSB first per X spec
+            // (independent of the connection byte-order). Decode to
+            // UniChar then ask Core Text for actual per-glyph advances —
+            // critical for proportional fonts (Helvetica, Times) where
+            // a per-char width is the wrong answer. Same code path
+            // PolyText8 / ImageText8 use to actually draw, so the
+            // reported width matches the rendered width.
+            var characters: [UniChar] = []
+            characters.reserveCapacity(r.stringBytes.count / 2)
+            var i = 0
+            while i + 1 < r.stringBytes.count {
+                let hi = UInt16(r.stringBytes[i])
+                let lo = UInt16(r.stringBytes[i + 1])
+                characters.append((hi << 8) | lo)
+                i += 2
+            }
+            let resolved = entry.resolved
+            let overallWidth = FontResolver.measureTextWidth(resolved, characters: characters)
+            let reply = QueryTextExtentsReply(
+                sequenceNumber: sequenceNumber,
+                drawDirection: 0,         // LeftToRight
+                fontAscent: Int16(truncatingIfNeeded: resolved.ascent),
+                fontDescent: Int16(truncatingIfNeeded: resolved.descent),
+                overallAscent: Int16(truncatingIfNeeded: resolved.ascent),
+                overallDescent: Int16(truncatingIfNeeded: resolved.descent),
+                overallWidth: overallWidth,
+                overallLeft: 0,
+                overallRight: overallWidth
+            )
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
         case .createPixmap(let r):
             // BadDrawable on bad drawable arg (per spec, drawable supplies
             // the pixmap's screen). Root is acceptable.
@@ -4717,6 +4758,7 @@ private func opcodeName(_ request: Request) -> String {
     case .storeColors: return "StoreColors"
     case .storeNamedColor: return "StoreNamedColor"
     case .circulateWindow: return "CirculateWindow"
+    case .queryTextExtents: return "QueryTextExtents"
     case .unknown(let op, _): return "unknown(\(op))"
     }
 }

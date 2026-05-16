@@ -399,6 +399,8 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext) -> String {
         body = "StoreNamedColor          cmap=0x\(String(r.cmap, radix: 16)) pixel=\(r.pixel) name=\"\(String(decoding: r.name, as: UTF8.self))\" flags=0x\(String(r.flags, radix: 16))"
     case .circulateWindow(let r):
         body = "CirculateWindow          window=0x\(String(r.window, radix: 16)) direction=\(r.direction == 0 ? "RaiseLowest" : "LowerHighest")"
+    case .queryTextExtents(let r):
+        body = "QueryTextExtents         fid=0x\(String(r.fid, radix: 16)) nChars=\(r.stringBytes.count / 2)"
     case .bell(let r):
         body = "Bell                     percent=\(r.percent)"
     case .unknown(let op, _):
@@ -588,6 +590,7 @@ func opcodeOf(_ req: Request) -> UInt8 {
     case .storeColors:               return StoreColors.opcode
     case .storeNamedColor:           return StoreNamedColor.opcode
     case .circulateWindow:           return CirculateWindow.opcode
+    case .queryTextExtents:          return QueryTextExtents.opcode
     case .createGlyphCursor:         return CreateGlyphCursor.opcode
     case .freeCursor:                return FreeCursor.opcode
     case .recolorCursor:             return RecolorCursor.opcode
