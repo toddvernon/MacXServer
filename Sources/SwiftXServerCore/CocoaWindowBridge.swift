@@ -375,8 +375,12 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 let parentTop = parentFrame.origin.y + parentFrame.size.height
                 let originY = parentTop - CGFloat(geometry.y) * CGFloat(scale) / backingScale - pointsH
                 contentRect = NSRect(x: originX, y: originY, width: pointsW, height: pointsH)
+                self.log?.log("  popup-placement 0x\(String(id, radix: 16)) geom=(\(geometry.x),\(geometry.y)) \(geometry.width)x\(geometry.height) keyWin=\(parentFrame) → contentRect=\(contentRect)")
             } else {
                 contentRect = NSRect(x: 100, y: 100, width: pointsW, height: pointsH)
+                if overrideRedirect {
+                    self.log?.log("  popup-placement 0x\(String(id, radix: 16)) geom=(\(geometry.x),\(geometry.y)) \(geometry.width)x\(geometry.height) keyWin=nil → fallback (100,100)")
+                }
             }
             let win: NSWindow
             if overrideRedirect {
