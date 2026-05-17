@@ -484,11 +484,32 @@ public struct PixmapEntry: Equatable, Sendable {
 
 public final class PixmapTable {
     private(set) public var pixmaps: [UInt32: PixmapEntry] = [:]
+    /// CGBitmapContext per pixmap, allocated eagerly at `allocate` and
+    /// freed at `remove`. Kept off `PixmapEntry` so the entry stays a
+    /// pure value (Equatable + Sendable). PixmapEntry without a buffer
+    /// is a temporary state that only exists if allocation failed
+    /// (effectively never for sane width/height).
+    private var buffers: [UInt32: PixelBuffer] = [:]
+
     public init() {}
 
-    public func insert(_ pixmap: PixmapEntry) { pixmaps[pixmap.id] = pixmap }
-    public func remove(_ id: UInt32) { pixmaps.removeValue(forKey: id) }
+    /// Record the pixmap and eagerly allocate its CGBitmapContext.
+    /// Replaces any pre-existing entry at the same id.
+    public func allocate(id: UInt32, drawable: UInt32, depth: UInt8, width: UInt16, height: UInt16) {
+        pixmaps[id] = PixmapEntry(id: id, drawable: drawable, depth: depth, width: width, height: height)
+        buffers[id] = PixelBuffer(width: Int(width), height: Int(height))
+    }
+
+    public func remove(_ id: UInt32) {
+        pixmaps.removeValue(forKey: id)
+        buffers.removeValue(forKey: id)
+    }
+
     public func get(_ id: UInt32) -> PixmapEntry? { pixmaps[id] }
+
+    /// Pixel buffer for the pixmap, nil if the pixmap doesn't exist or
+    /// allocation failed at create time.
+    public func buffer(for id: UInt32) -> PixelBuffer? { buffers[id] }
 
     public var count: Int { pixmaps.count }
 }

@@ -1694,23 +1694,23 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     /// Validate a drawable for a drawing request and resolve it to a render
-    /// target. Returns (topLevel, dx, dy) when the drawable is a renderable
-    /// window subtree; nil otherwise. For unknown drawable IDs, emits
-    /// BadDrawable referencing the bad ID. For valid-but-unrendererable
-    /// drawables (pixmaps and the root), silently drops with a log line — see
-    /// the "draws to pixmaps and root silently drop" entry in SHORTCUTS for
-    /// why this is a documented lie rather than BadImplementation today
-    /// (dt-apps draw into pixmaps as backing buffers, and emitting an error
-    /// would break a working flow we haven't gotten to rendering yet).
-    func validateDrawTarget(_ drawable: UInt32, majorOpcode: UInt8) -> (UInt32, Int16, Int16)? {
+    /// target — either a window subtree (with offsets into its top-level)
+    /// or a pixmap (with its X-side depth). Unknown drawable id emits
+    /// BadDrawable. The root window is still known-but-not-renderable
+    /// (we don't render into the root); silent-drop with a log line.
+    func validateDrawTarget(_ drawable: UInt32, majorOpcode: UInt8) -> DrawTarget? {
         if !isKnownDrawable(drawable) {
             emitError(.drawable, majorOpcode: majorOpcode, badResourceId: drawable)
             return nil
         }
-        if let target = topLevelAndOffset(for: drawable) {
-            return target
+        if let (top, dx, dy) = topLevelAndOffset(for: drawable) {
+            return .window(topLevel: top, offsetX: dx, offsetY: dy)
         }
-        log?.log("validateDrawTarget: drawable 0x\(String(drawable, radix: 16)) is known (pixmap or root) but not renderable; dropping op opcode=\(majorOpcode)")
+        if let pix = pixmaps.get(drawable) {
+            return .pixmap(id: drawable, depth: pix.depth)
+        }
+        // Known drawable but neither a window subtree nor a pixmap = root.
+        log?.log("validateDrawTarget: drawable 0x\(String(drawable, radix: 16)) is the root (not renderable); dropping op opcode=\(majorOpcode)")
         return nil
     }
 
@@ -2087,7 +2087,8 @@ public final class ServerSession: @unchecked Sendable {
     // MARK: - Drawing
 
     private func handlePolySegment(_ r: PolySegment, byteOrder: ByteOrder) {
-        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolySegment.opcode) else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolySegment.opcode),
+              case .window(let top, let dx, let dy) = target else { return }
         guard validateGC(r.gc, majorOpcode: PolySegment.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
@@ -2117,7 +2118,8 @@ public final class ServerSession: @unchecked Sendable {
     /// without going through the rectangle dispatch. Same coordinate-
     /// mode handling as PolyLine.
     private func handlePolyPoint(_ r: PolyPoint, byteOrder: ByteOrder) {
-        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyPoint.opcode) else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyPoint.opcode),
+              case .window(let top, let dx, let dy) = target else { return }
         guard validateGC(r.gc, majorOpcode: PolyPoint.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
@@ -2146,7 +2148,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyLine(_ r: PolyLine, byteOrder: ByteOrder) {
-        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyLine.opcode) else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyLine.opcode),
+              case .window(let top, let dx, let dy) = target else { return }
         guard validateGC(r.gc, majorOpcode: PolyLine.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
@@ -2179,7 +2182,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handleFillPoly(_ r: FillPoly, byteOrder: ByteOrder) {
-        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: FillPoly.opcode) else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: FillPoly.opcode),
+              case .window(let top, let dx, let dy) = target else { return }
         guard validateGC(r.gc, majorOpcode: FillPoly.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
@@ -2210,7 +2214,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyFillRectangle(_ r: PolyFillRectangle, byteOrder: ByteOrder) {
-        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyFillRectangle.opcode) else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyFillRectangle.opcode),
+              case .window(let top, let dx, let dy) = target else { return }
         guard validateGC(r.gc, majorOpcode: PolyFillRectangle.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
@@ -2230,7 +2235,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyRectangle(_ r: PolyRectangle, byteOrder: ByteOrder) {
-        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyRectangle.opcode) else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyRectangle.opcode),
+              case .window(let top, let dx, let dy) = target else { return }
         guard validateGC(r.gc, majorOpcode: PolyRectangle.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
@@ -2252,7 +2258,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyArc(_ r: PolyArc, byteOrder: ByteOrder) {
-        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyArc.opcode) else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyArc.opcode),
+              case .window(let top, let dx, let dy) = target else { return }
         guard validateGC(r.gc, majorOpcode: PolyArc.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
@@ -2275,7 +2282,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyFillArc(_ r: PolyFillArc, byteOrder: ByteOrder) {
-        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyFillArc.opcode) else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyFillArc.opcode),
+              case .window(let top, let dx, let dy) = target else { return }
         guard validateGC(r.gc, majorOpcode: PolyFillArc.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
@@ -2295,7 +2303,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handleImageText8(_ r: ImageText8, byteOrder: ByteOrder) {
-        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: ImageText8.opcode) else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: ImageText8.opcode),
+              case .window(let top, let dx, let dy) = target else { return }
         guard validateGC(r.gc, majorOpcode: ImageText8.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
@@ -2318,7 +2327,8 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyText8(_ r: PolyText8, byteOrder: ByteOrder) {
-        guard let (top, dx, dy) = validateDrawTarget(r.drawable, majorOpcode: PolyText8.opcode) else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyText8.opcode),
+              case .window(let top, let dx, let dy) = target else { return }
         guard validateGC(r.gc, majorOpcode: PolyText8.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
@@ -3625,7 +3635,7 @@ public final class ServerSession: @unchecked Sendable {
             }
             // BadIDChoice on pid out of client range or already in use.
             if emitBadIDChoiceIfInvalid(r.pid, majorOpcode: CreatePixmap.opcode) { break }
-            pixmaps.insert(PixmapEntry(id: r.pid, drawable: r.drawable, depth: r.depth, width: r.width, height: r.height))
+            pixmaps.allocate(id: r.pid, drawable: r.drawable, depth: r.depth, width: r.width, height: r.height)
 
         case .freePixmap(let r):
             guard pixmaps.get(r.pixmap) != nil else {
