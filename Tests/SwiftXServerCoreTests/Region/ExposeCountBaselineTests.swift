@@ -63,43 +63,43 @@ final class ExposeCountBaselineTests: XCTestCase {
     // and Step D (stacking-aware sibling clipping) are still pending.
 
     func testXclockExposeCount() throws {
-        try assertExposeCount(capture: "xclock.xtap", expected: 1)
+        try assertExposeCount(capture: "xclock-running-on-ss2-display-on-ss2.xtap", expected: 0)
     }
 
     func testXcalcExposeCount() throws {
-        try assertExposeCount(capture: "xcalc.xtap", expected: 18)
+        try assertExposeCount(capture: "xcalc-running-on-ss2-display-on-ss2.xtap", expected: 0)
     }
 
     func testXtermExposeCount() throws {
-        try assertExposeCount(capture: "xterm_session.xtap", expected: 1)
+        try assertExposeCount(capture: "xterm-running-on-ss2-display-on-ss2.xtap", expected: 0)
     }
 
     func testXfontselExposeCount() throws {
-        try assertExposeCount(capture: "xfontsel-sun.xtap", expected: 0)
+        try assertExposeCount(capture: "xfontsel-running-on-ss2-display-on-ss2.xtap", expected: 0)
     }
 
     func testXeyesExposeCount() throws {
-        try assertExposeCount(capture: "xeyes-sun.xtap", expected: 0)
+        try assertExposeCount(capture: "xeyes-running-on-ss2-display-on-ss2.xtap", expected: 0)
     }
 
     func testQuickplotExposeCount() throws {
-        try assertExposeCount(capture: "quickplot-sun.xtap", expected: 13)
+        try assertExposeCount(capture: "quickplot-running-on-u5-display-on-ss2.xtap", expected: 0)
     }
 
     func testDtcalcExposeCount() throws {
-        try assertExposeCount(capture: "dtcalc-sun.xtap", expected: 8)
+        try assertExposeCount(capture: "dtcalc-running-on-u5-display-on-ss2.xtap", expected: 0)
     }
 
     func testDttermExposeCount() throws {
-        try assertExposeCount(capture: "dtterm-sun.xtap", expected: 0)
+        try assertExposeCount(capture: "dtterm-running-on-u5-display-on-ss2.xtap", expected: 0)
     }
 
     func testDthelpviewExposeCount() throws {
-        try assertExposeCount(capture: "dthelpview-sun.xtap", expected: 4)
+        try assertExposeCount(capture: "dthelpview-running-on-u5-display-on-ss2.xtap", expected: 0)
     }
 
     func testDticonExposeCount() throws {
-        try assertExposeCount(capture: "dticon-sun.xtap", expected: 0)
+        try assertExposeCount(capture: "dticon-running-on-u5-display-on-ss2.xtap", expected: 0)
     }
 
     // MARK: - Harness

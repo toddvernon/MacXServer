@@ -24,6 +24,19 @@ SolarisIA is the Solaris-internal Inter-client Atoms cache. When absent Motif fa
 
 Cosmetic: clients see different atom IDs vs Sun's pre-allocated set, but resource handles still work. Pre-intern the standard CDE/Motif atom set in `AtomTable.init()` (the 50 atoms in #3 plus the `_MOTIF_*` family). Mostly buys quiet logs and slightly better diff readability. ~1 hour.
 
+## 5. swiftx-capture proxy breaks ToolTalk-using dt-apps (added 2026-05-17 post-recapture)
+
+When capturing dt-apps through `swiftx-capture --listen :6000 --forward ss2:6000`:
+- **Works through proxy:** dtcalc, dtterm, dtfile (slow), dthelpview, quickplot, xterm, xeyes, xclock, xcalc, xfontsel.
+- **Hangs ~5min then dies through proxy:** dticon, dtmail, dtpad. The Motif dialog that pops up says `/usr/dt/bin/ttsession is not running`.
+- **Run fine direct u5→ss2** (no proxy) for all of the above.
+
+So the proxy is doing something that breaks ToolTalk-using apps specifically. SS2 has no `ttsession` either way — these apps tolerate that direct, but not through us. Hypothesis: the framer has a partial decoder for some opcode (the summary line "1 with no typed decoder" we saw in early captures) and the proxy either drops, mangles, or stalls on it; OR proxy buffering breaks TT's timing-sensitive selection roundtrips.
+
+Diagnostic: enable per-byte forwarding traces in `swiftx-capture` and watch for the byte position where forwarding diverges from what the apps send direct. Compare against a `tcpdump`-captured baseline of the same dt-app direct.
+
+Bug is in `Sources/SwiftXCaptureCore/Proxy.swift` (capture tool), not in `Sources/SwiftXServerCore/` (the X server). Worth chasing after Stage 2.
+
 ## Diff tool wart
 
 Tool aligns C2S/S2C by sequence number, which means any XID-allocation offset propagates downstream and ~90% of "different" rows are really structural-offset noise. Useful improvement someday: normalize on XID-equivalence before diffing. Not blocking.

@@ -16,7 +16,7 @@ final class CaptureDiffTests: XCTestCase {
     }
 
     private func goldDtcalc() throws -> String {
-        let path = capturesDirectory().appendingPathComponent("dtcalc-sun.xtap").path
+        let path = capturesDirectory().appendingPathComponent("dtcalc-running-on-u5-display-on-ss2.xtap").path
         guard FileManager.default.fileExists(atPath: path) else {
             throw XCTSkip("captures/dtcalc-sun.xtap not present")
         }
