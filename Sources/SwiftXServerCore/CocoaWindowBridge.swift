@@ -706,21 +706,109 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     }
 
     public func copyArea(
-        topLevel: UInt32,
+        src: DrawTarget,
+        dst: DrawTarget,
         srcX: Int16, srcY: Int16,
         dstX: Int16, dstY: Int16,
         width: UInt16, height: UInt16,
         clipRectangles: [Framer.Rectangle]?
     ) {
-        // GC clip on CopyArea isn't honored for the same-window pixel-blit
-        // path because we copy pixels via direct bitmap memmove rather than
-        // through CGContext (the memcpy path is required for correct overlap
-        // handling). xterm's scroll case — the only place we currently see
-        // CopyArea — never sets clip rectangles. Logged so future divergence
-        // is visible. See SHORTCUTS for the planned fix.
-        if let rects = clipRectangles, !rects.isEmpty {
-            log?.log("  CopyArea: ignoring \(rects.count) clip rect(s) — bitmap path doesn't honor clip yet")
+        // Same-NSWindow fast path: bitmap memmove. xterm scroll lives here;
+        // skipping the CGImage snapshot+blit keeps the hot path tight.
+        // Clip is NOT honored on this path — the memmove can't easily
+        // scissor — but the only client that exercises same-window CopyArea
+        // (xterm) doesn't set clip. Logged when it does so future divergence
+        // is visible.
+        if case .window(let srcTop, _, _) = src,
+           case .window(let dstTop, _, _) = dst,
+           srcTop == dstTop {
+            if let rects = clipRectangles, !rects.isEmpty {
+                log?.log("  CopyArea: ignoring \(rects.count) clip rect(s) — bitmap memmove path doesn't honor clip")
+            }
+            sameWindowMemmoveCopyArea(topLevel: srcTop,
+                                      srcX: srcX, srcY: srcY,
+                                      dstX: dstX, dstY: dstY,
+                                      width: width, height: height)
+            return
         }
+
+        // All other cases (cross-NSWindow, pixmap↔window, pixmap↔pixmap):
+        // snapshot the source as a CGImage cropped to the source rect, then
+        // blit via CGContext.draw(image:in:) into dst's context. The image
+        // path handles overlap automatically (the snapshot is independent of
+        // the source memory) and honors GC clip for free via withDrawContext.
+        //
+        // Pixmap src: snapshot inline (no AppKit, no dispatch needed —
+        // protocolQueue serializes access to the pixmap CGBitmapContext).
+        // Window src: hop to main first (view.backing access must be on the
+        // main thread). withDrawContext handles its own main-dispatch when
+        // dst is a window.
+        switch src {
+        case .pixmap(let srcId, _):
+            guard let srcImage = self.pixmapBufferLookup?(srcId)?.context.makeImage() else { return }
+            blitCroppedImage(
+                srcImage, srcImageScale: 1.0,
+                srcX: srcX, srcY: srcY, dst: dst,
+                dstX: dstX, dstY: dstY,
+                width: width, height: height,
+                clipRectangles: clipRectangles
+            )
+        case .window(let srcTopLevel, _, _):
+            let scaleFactor = self.scaleFactor
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self,
+                      let srcImage = self.slot(srcTopLevel)?.view?.backing?.makeImage() else { return }
+                self.blitCroppedImage(
+                    srcImage, srcImageScale: scaleFactor,
+                    srcX: srcX, srcY: srcY, dst: dst,
+                    dstX: dstX, dstY: dstY,
+                    width: width, height: height,
+                    clipRectangles: clipRectangles
+                )
+            }
+        }
+    }
+
+    /// Shared blit body for the non-same-NSWindow CopyArea paths. Crops the
+    /// source image to (srcX,srcY,width,height) in IMAGE-pixel coords
+    /// (window: device-scaled; pixmap: 1:1 logical), then draws into dst's
+    /// CGContext via withDrawContext at the (dstX,dstY,width,height) rect
+    /// in dst's user-space coords (always LOGICAL — dst's CTM handles any
+    /// upscale for window targets).
+    private func blitCroppedImage(
+        _ srcImage: CGImage,
+        srcImageScale: Double,
+        srcX: Int16, srcY: Int16,
+        dst: DrawTarget,
+        dstX: Int16, dstY: Int16,
+        width: UInt16, height: UInt16,
+        clipRectangles: [Framer.Rectangle]?
+    ) {
+        let cropRect = CGRect(
+            x: CGFloat(Double(srcX) * srcImageScale),
+            y: CGFloat(Double(srcY) * srcImageScale),
+            width: CGFloat(Double(width) * srcImageScale),
+            height: CGFloat(Double(height) * srcImageScale)
+        )
+        guard let subImage = srcImage.cropping(to: cropRect) else { return }
+        let dstRect = CGRect(
+            x: CGFloat(dstX), y: CGFloat(dstY),
+            width: CGFloat(width), height: CGFloat(height)
+        )
+        withDrawContext(dst, clipRectangles: clipRectangles) { ctx in
+            ctx.draw(subImage, in: dstRect)
+        }
+    }
+
+    /// Same-NSWindow CopyArea: copies pixels in the bitmap directly via
+    /// memmove. Used by xterm's scroll. No clip honor (memmove can't scissor
+    /// per row without becoming much slower). Caller handles clip-logging.
+    private func sameWindowMemmoveCopyArea(
+        topLevel: UInt32,
+        srcX: Int16, srcY: Int16,
+        dstX: Int16, dstY: Int16,
+        width: UInt16, height: UInt16
+    ) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view,

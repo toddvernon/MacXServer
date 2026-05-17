@@ -482,7 +482,7 @@ public struct PixmapEntry: Equatable, Sendable {
     }
 }
 
-public final class PixmapTable {
+public final class PixmapTable: @unchecked Sendable {
     private(set) public var pixmaps: [UInt32: PixmapEntry] = [:]
     /// CGBitmapContext per pixmap, allocated eagerly at `allocate` and
     /// freed at `remove`. Kept off `PixmapEntry` so the entry stays a

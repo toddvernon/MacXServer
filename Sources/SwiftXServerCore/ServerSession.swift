@@ -2355,12 +2355,14 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handleCopyArea(_ r: CopyArea, byteOrder: ByteOrder) {
-        // Per XError-honesty policy: distinguish unknown drawables (BadDrawable
-        // referencing the offending ID) from valid-but-unimplemented cases
-        // (cross-window copies and pixmap source/dest are spec-legal, we just
-        // don't implement them yet — BadImplementation). Validation runs
-        // before the bridge guard so error semantics don't depend on whether
-        // we have a rendering target.
+        // BadDrawable check runs up front for both src and dst so unknown
+        // drawable IDs emit the spec-correct error regardless of any other
+        // condition (and the error references the offending ID).
+        // validateDrawTarget below resolves known drawables to a DrawTarget;
+        // it returns nil for the root drawable (known but not renderable —
+        // we don't keep a root pixel buffer), which CopyArea handles by
+        // emitting BadImplementation (spec lets us, and we don't take
+        // screenshots of root).
         if !isKnownDrawable(r.srcDrawable) {
             emitError(.drawable, majorOpcode: CopyArea.opcode, badResourceId: r.srcDrawable)
             return
@@ -2371,18 +2373,29 @@ public final class ServerSession: @unchecked Sendable {
         }
         guard validateGC(r.gc, majorOpcode: CopyArea.opcode) != nil else { return }
         guard let bridge = bridge else { return }
-        // Phase 1: same-window copies only (xterm's scrolling case).
-        guard let (srcTop, srcDX, srcDY) = topLevelAndOffset(for: r.srcDrawable),
-              let (dstTop, dstDX, dstDY) = topLevelAndOffset(for: r.dstDrawable),
-              srcTop == dstTop else {
-            log?.log("  CopyArea: cross-window or pixmap not supported yet (src=0x\(String(r.srcDrawable, radix: 16)) dst=0x\(String(r.dstDrawable, radix: 16)))")
+        guard let srcTarget = validateDrawTarget(r.srcDrawable, majorOpcode: CopyArea.opcode) else {
             emitError(.implementation, majorOpcode: CopyArea.opcode)
             return
         }
-        log?.log("  CopyArea top=0x\(String(srcTop, radix: 16)) src=(\(r.srcX),\(r.srcY)) dst=(\(r.dstX),\(r.dstY)) \(r.width)x\(r.height)")
+        guard let dstTarget = validateDrawTarget(r.dstDrawable, majorOpcode: CopyArea.opcode) else {
+            emitError(.implementation, majorOpcode: CopyArea.opcode)
+            return
+        }
+
+        // Spec requires BadMatch on src.depth != dst.depth. Not enforced
+        // here yet — window depth is often the CopyFromParent sentinel
+        // (0) which would generate spurious mismatches against pixmaps
+        // that carry an explicit depth. Motif and Athena always create
+        // pixmaps at root-depth so depth mismatches don't actually
+        // happen in practice for the clients we host. Tracked as a
+        // follow-up: resolve sentinel depths before comparing.
+        let (srcDX, srcDY) = srcTarget.windowOffset
+        let (dstDX, dstDY) = dstTarget.windowOffset
+        log?.log("  CopyArea src=\(srcTarget) dst=\(dstTarget) srcXY=(\(r.srcX),\(r.srcY)) dstXY=(\(r.dstX),\(r.dstY)) \(r.width)x\(r.height)")
         let state = gcState(r.gc, byteOrder: byteOrder)
         bridge.copyArea(
-            topLevel: srcTop,
+            src: srcTarget,
+            dst: dstTarget,
             srcX: r.srcX &+ srcDX, srcY: r.srcY &+ srcDY,
             dstX: r.dstX &+ dstDX, dstY: r.dstY &+ dstDY,
             width: r.width, height: r.height,

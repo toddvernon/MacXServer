@@ -245,13 +245,19 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// xeyes fills the white sclera of each eye via this opcode.
     func drawPolyFillArc(target: DrawTarget, foreground: RGB16, arcs: [Arc], clipRectangles: [Rectangle]?)
     func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16)
-    /// In-window CopyArea: copies a rectangular region of pixels from
-    /// (srcX, srcY, w, h) to (dstX, dstY, w, h) within the same top-level
-    /// X window's backing context. Used by xterm for scrolling. CopyArea
-    /// honors GC clip just like the draw ops — clients can copy through a
-    /// clip mask.
+    /// CopyArea: copies a rectangular region of pixels from `src` to `dst`.
+    /// All five spec-supported variants resolve via DrawTarget: window→window
+    /// (same NSWindow uses a bitmap memmove fast path that xterm scroll
+    /// depends on; cross-NSWindow snapshots src as CGImage and blits via
+    /// CGContext.draw(image:in:)), window→pixmap, pixmap→window,
+    /// pixmap→pixmap (all four non-fast-path cases go through the CGImage
+    /// path). Coordinates are in each target's local coord space — for
+    /// window targets the caller has already added the windowOffset; for
+    /// pixmap targets coords ARE pixmap-local. GC clip honored on every
+    /// path except the same-window memmove (xterm doesn't set clip there).
     func copyArea(
-        topLevel: UInt32,
+        src: DrawTarget,
+        dst: DrawTarget,
         srcX: Int16, srcY: Int16,
         dstX: Int16, dstY: Int16,
         width: UInt16, height: UInt16,
@@ -381,7 +387,8 @@ public extension WindowBridge {
     func stopCrossWindowDragTracking() {}
     func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16) {}
     func copyArea(
-        topLevel: UInt32,
+        src: DrawTarget,
+        dst: DrawTarget,
         srcX: Int16, srcY: Int16,
         dstX: Int16, dstY: Int16,
         width: UInt16, height: UInt16,
