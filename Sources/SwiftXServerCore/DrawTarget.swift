@@ -21,4 +21,16 @@ public enum DrawTarget: Equatable, Sendable {
     /// `depth` is the X-side depth (1 / 8 / 24 / 32) so handlers can
     /// reject depth-mismatched ops with BadMatch.
     case pixmap(id: UInt32, depth: UInt8)
+
+    /// (dx, dy) to add to drawable-local coordinates to reach the
+    /// coordinate space the bridge draws in. For window targets that's
+    /// the top-level NSWindow's backing-context coords (positive when
+    /// the drawable is a descendant inset from the top-level). For
+    /// pixmap targets it's (0, 0) — pixmap-local IS the bridge's coord
+    /// space. Lets handlers translate input geometry unconditionally
+    /// instead of branching per case.
+    public var windowOffset: (Int16, Int16) {
+        if case .window(_, let dx, let dy) = self { return (dx, dy) }
+        return (0, 0)
+    }
 }

@@ -39,10 +39,12 @@ private final class RecordingBridge: WindowBridge, @unchecked Sendable {
     func destroyTopLevel(id: UInt32, byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {}
     func setTopLevelTitle(id: UInt32, title: String) {}
 
-    func drawPolySegment(topLevel: UInt32, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
+    func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
+        guard case .window(let topLevel, _, _) = target else { return }
         polySegments.append(PolySegmentCall(topLevel: topLevel, foreground: foreground, lineWidth: lineWidth, segments: segments))
     }
-    func drawFillPoly(topLevel: UInt32, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Framer.Rectangle]?) {
+    func drawFillPoly(target: DrawTarget, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Framer.Rectangle]?) {
+        guard case .window(let topLevel, _, _) = target else { return }
         fillPolys.append(FillPolyCall(topLevel: topLevel, foreground: foreground, points: points, evenOdd: evenOdd))
     }
     func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16) {

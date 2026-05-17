@@ -257,6 +257,12 @@ public final class ServerSession: @unchecked Sendable {
             qos: .userInitiated,
             target: DispatchQueue.global(qos: .userInitiated)
         )
+        // Hand the bridge a closure that resolves pixmap ids to PixelBuffers
+        // from THIS session's PixmapTable. withDrawContext(.pixmap) uses
+        // this to find the CGBitmapContext for pixmap-targeted draws. See
+        // setPixmapBufferLookup doc in WindowBridge.swift for the
+        // multi-session caveat (most-recently-set lookup wins).
+        bridge?.setPixmapBufferLookup { [weak self] id in self?.pixmaps.buffer(for: id) }
         // All AppKit-side callbacks hop onto protocolQueue, run the handler,
         // and flush any bytes the handler appended to outbound. Since
         // protocolQueue is the only writer, no lock is needed at the socket.
@@ -2087,11 +2093,11 @@ public final class ServerSession: @unchecked Sendable {
     // MARK: - Drawing
 
     private func handlePolySegment(_ r: PolySegment, byteOrder: ByteOrder) {
-        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolySegment.opcode),
-              case .window(let top, let dx, let dy) = target else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolySegment.opcode) else { return }
         guard validateGC(r.gc, majorOpcode: PolySegment.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
+        let (dx, dy) = target.windowOffset
         let translated = r.segments.map {
             LineSegment(
                 x1: $0.x1 &+ dx, y1: $0.y1 &+ dy,
@@ -2099,7 +2105,7 @@ public final class ServerSession: @unchecked Sendable {
             )
         }
         bridge.drawPolySegment(
-            topLevel: top,
+            target: target,
             foreground: resolveColor(state.foreground),
             lineWidth: state.lineWidth,
             segments: translated,
@@ -2118,11 +2124,11 @@ public final class ServerSession: @unchecked Sendable {
     /// without going through the rectangle dispatch. Same coordinate-
     /// mode handling as PolyLine.
     private func handlePolyPoint(_ r: PolyPoint, byteOrder: ByteOrder) {
-        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyPoint.opcode),
-              case .window(let top, let dx, let dy) = target else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyPoint.opcode) else { return }
         guard validateGC(r.gc, majorOpcode: PolyPoint.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
+        let (dx, dy) = target.windowOffset
         var rects: [Rectangle] = []
         rects.reserveCapacity(r.points.count)
         var lastX: Int16 = 0
@@ -2139,7 +2145,7 @@ public final class ServerSession: @unchecked Sendable {
             rects.append(Rectangle(x: absX &+ dx, y: absY &+ dy, width: 1, height: 1))
         }
         bridge.drawPolyFillRectangle(
-            topLevel: top,
+            target: target,
             foreground: resolveColor(state.foreground),
             function: state.function,
             rectangles: rects,
@@ -2148,11 +2154,11 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyLine(_ r: PolyLine, byteOrder: ByteOrder) {
-        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyLine.opcode),
-              case .window(let top, let dx, let dy) = target else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyLine.opcode) else { return }
         guard validateGC(r.gc, majorOpcode: PolyLine.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
+        let (dx, dy) = target.windowOffset
         // CoordinateMode.previous means each subsequent point is a delta from
         // the prior absolute position; we accumulate to get all-absolute.
         var points: [DrawPoint] = []
@@ -2171,7 +2177,7 @@ public final class ServerSession: @unchecked Sendable {
             points.append(DrawPoint(x: absX &+ dx, y: absY &+ dy))
         }
         bridge.drawPolyLine(
-            topLevel: top,
+            target: target,
             foreground: resolveColor(state.foreground),
             lineWidth: state.lineWidth,
             points: points,
@@ -2182,11 +2188,11 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handleFillPoly(_ r: FillPoly, byteOrder: ByteOrder) {
-        guard let target = validateDrawTarget(r.drawable, majorOpcode: FillPoly.opcode),
-              case .window(let top, let dx, let dy) = target else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: FillPoly.opcode) else { return }
         guard validateGC(r.gc, majorOpcode: FillPoly.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
+        let (dx, dy) = target.windowOffset
         var points: [DrawPoint] = []
         points.reserveCapacity(r.points.count)
         var lastX: Int16 = 0
@@ -2205,7 +2211,7 @@ public final class ServerSession: @unchecked Sendable {
         // Per X11 spec: Convex/Nonconvex use the GC's fill-rule for shape; for
         // Complex it also uses fill-rule. We just pass the GC state's fill-rule.
         bridge.drawFillPoly(
-            topLevel: top,
+            target: target,
             foreground: resolveColor(state.foreground),
             points: points,
             evenOdd: state.fillRuleEvenOdd,
@@ -2214,11 +2220,11 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyFillRectangle(_ r: PolyFillRectangle, byteOrder: ByteOrder) {
-        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyFillRectangle.opcode),
-              case .window(let top, let dx, let dy) = target else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyFillRectangle.opcode) else { return }
         guard validateGC(r.gc, majorOpcode: PolyFillRectangle.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
+        let (dx, dy) = target.windowOffset
         let translated = r.rectangles.map {
             Rectangle(
                 x: $0.x &+ dx, y: $0.y &+ dy,
@@ -2226,7 +2232,7 @@ public final class ServerSession: @unchecked Sendable {
             )
         }
         bridge.drawPolyFillRectangle(
-            topLevel: top,
+            target: target,
             foreground: resolveColor(state.foreground),
             function: state.function,
             rectangles: translated,
@@ -2235,11 +2241,11 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyRectangle(_ r: PolyRectangle, byteOrder: ByteOrder) {
-        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyRectangle.opcode),
-              case .window(let top, let dx, let dy) = target else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyRectangle.opcode) else { return }
         guard validateGC(r.gc, majorOpcode: PolyRectangle.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
+        let (dx, dy) = target.windowOffset
         let translated = r.rectangles.map {
             Rectangle(
                 x: $0.x &+ dx, y: $0.y &+ dy,
@@ -2247,7 +2253,7 @@ public final class ServerSession: @unchecked Sendable {
             )
         }
         bridge.drawPolyRectangle(
-            topLevel: top,
+            target: target,
             foreground: resolveColor(state.foreground),
             lineWidth: state.lineWidth,
             rectangles: translated,
@@ -2258,11 +2264,11 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyArc(_ r: PolyArc, byteOrder: ByteOrder) {
-        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyArc.opcode),
-              case .window(let top, let dx, let dy) = target else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyArc.opcode) else { return }
         guard validateGC(r.gc, majorOpcode: PolyArc.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
+        let (dx, dy) = target.windowOffset
         let translated = r.arcs.map {
             Arc(
                 x: $0.x &+ dx, y: $0.y &+ dy,
@@ -2271,7 +2277,7 @@ public final class ServerSession: @unchecked Sendable {
             )
         }
         bridge.drawPolyArc(
-            topLevel: top,
+            target: target,
             foreground: resolveColor(state.foreground),
             lineWidth: state.lineWidth,
             arcs: translated,
@@ -2282,11 +2288,11 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyFillArc(_ r: PolyFillArc, byteOrder: ByteOrder) {
-        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyFillArc.opcode),
-              case .window(let top, let dx, let dy) = target else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyFillArc.opcode) else { return }
         guard validateGC(r.gc, majorOpcode: PolyFillArc.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
+        let (dx, dy) = target.windowOffset
         let translated = r.arcs.map {
             Arc(
                 x: $0.x &+ dx, y: $0.y &+ dy,
@@ -2295,7 +2301,7 @@ public final class ServerSession: @unchecked Sendable {
             )
         }
         bridge.drawPolyFillArc(
-            topLevel: top,
+            target: target,
             foreground: resolveColor(state.foreground),
             arcs: translated,
             clipRectangles: state.clipRectangles
@@ -2303,11 +2309,11 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handleImageText8(_ r: ImageText8, byteOrder: ByteOrder) {
-        guard let target = validateDrawTarget(r.drawable, majorOpcode: ImageText8.opcode),
-              case .window(let top, let dx, let dy) = target else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: ImageText8.opcode) else { return }
         guard validateGC(r.gc, majorOpcode: ImageText8.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
+        let (dx, dy) = target.windowOffset
         // Pull the GC's font; fall back to "fixed" if no font set.
         let resolvedFont: ResolvedFont
         if let entry = fonts.get(state.font) {
@@ -2316,7 +2322,7 @@ public final class ServerSession: @unchecked Sendable {
             resolvedFont = FontResolver.resolve(name: "fixed")
         }
         bridge.drawImageText8(
-            topLevel: top,
+            target: target,
             foreground: resolveColor(state.foreground),
             background: resolveColor(state.background),
             font: resolvedFont,
@@ -2327,11 +2333,11 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     private func handlePolyText8(_ r: PolyText8, byteOrder: ByteOrder) {
-        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyText8.opcode),
-              case .window(let top, let dx, let dy) = target else { return }
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyText8.opcode) else { return }
         guard validateGC(r.gc, majorOpcode: PolyText8.opcode) != nil else { return }
         guard let bridge = bridge else { return }
         let state = gcState(r.gc, byteOrder: byteOrder)
+        let (dx, dy) = target.windowOffset
         let resolvedFont: ResolvedFont
         if let entry = fonts.get(state.font) {
             resolvedFont = entry.resolved
@@ -2339,7 +2345,7 @@ public final class ServerSession: @unchecked Sendable {
             resolvedFont = FontResolver.resolve(name: "fixed")
         }
         bridge.drawPolyText8(
-            topLevel: top,
+            target: target,
             foreground: resolveColor(state.foreground),
             font: resolvedFont,
             x: r.x &+ dx, y: r.y &+ dy,
