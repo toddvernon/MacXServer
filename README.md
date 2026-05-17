@@ -5,10 +5,10 @@ infrastructure to display X applications from real vintage Sun workstations
 on the Mac with proper modern rendering. The Swift package is internally
 called `swift-x`.
 
-This repo currently holds Phase 1 of the project: a passive capture tool
-that records and decodes X11 traffic between two Sun workstations on a LAN,
-plus a typed Swift decoder for the X11 wire protocol. The decoder library
-will be reused later by the actual X server.
+The project has two pieces: a passive capture tool that records and decodes
+X11 traffic between two Sun workstations on a LAN, and a Swift X server on
+the Mac that real X clients can connect to. They share a typed Swift wire
+decoder (the framer).
 
 ## What's here
 
@@ -82,7 +82,7 @@ swift test
 
 The full project context lives in markdown at the repo root:
 
-- `PROJECT.md` — what we're building, the four-product plan, explicit non-goals
+- `PROJECT.md` — what we're building, the two-product plan, explicit non-goals
 - `ARCHITECTURE.md` — how the components fit together
 - `DECISIONS.md` — architectural choices with reasoning, append-only
 - `PRODUCT_1_CAPTURE.md` — scope and order-of-work for the capture tool
@@ -91,16 +91,13 @@ The full project context lives in markdown at the repo root:
 
 ## Status
 
-**Phase 1** (capture tool + framer): functionally complete. All requests
-from the captured Sun sessions decode by typed name. The framer covers ~60%
-of the X11 spec but 100% of the opcodes any of these vintage apps actually
-use. SHAPE extension calls pass through correctly but are not yet typed.
-Capture, dump, summary, and replay subcommands all work.
+**Capture tool + framer**: functionally complete. All requests from the
+captured Sun sessions decode by typed name. The framer covers ~60% of the
+X11 spec but 100% of the opcodes any of these vintage apps actually use.
+SHAPE extension calls pass through correctly but are not yet typed. Capture,
+dump, summary, and replay subcommands all work.
 
-**Phase 2** (Sun-to-Sun bridge over CrossFeed via a Raspberry Pi pair):
-not started.
-
-**Phase 3** (the Swift X server itself, the headline of the project): not
-started. This is what reuses the framer.
-
-**Phase 4** (Swift X server + Pi + CrossFeed end-to-end): not started.
+**Swift X server**: in progress; M1–M3 green, live xterm / xcalc / quickplot
+from a real Sun working, CDE dt-apps booting. See `PRODUCT_2_SERVER.md` for
+milestones and `OPCODE_STATUS.md` / `SHORTCUTS.md` for what's shipped vs
+stubbed.

@@ -96,7 +96,6 @@ Things still on the list (most of Beyond-M3 from earlier drafts has shipped — 
 - XErrors for bad requests / unknown resources (today's server is forgiving — see `SHORTCUTS.md`)
 - Honour CWBackPixmap and CWBitGravity (today only CWBackPixel and CWBorderPixel are read)
 - SHAPE and BIG-REQUESTS extensions
-- Transport selectability for Product 4 (CrossFeed)
 - CLIPBOARD selection (today only PRIMARY is wired)
 - INCR transfer for selections larger than the request-size limit
 
