@@ -351,12 +351,79 @@ Real backing-store servers maintain a save-under buffer: stash parent pixels bef
 
 ---
 
+## 2026-05-16: Project scope cut to two products — drop CrossFeed, Pi bridge, WAN entirely
+
+**Chosen**: The project is the capture utility and the Swift X server, full stop. LAN-only. Suns and Mac on
+the same network. No remote / internet operation, no Raspberry Pi bridge daemon, no CrossFeed transport.
+
+**Rejected** (i.e. supersedes earlier intent): the four-product plan in prior versions of `PROJECT.md` and
+`ARCHITECTURE.md` that included Product 3 (Pi-pair CrossFeed bridge) and Product 4 (Swift X server +
+Pi + CrossFeed end-to-end). Those products are out of scope now and not deferred — they're cut.
+
+**Why**:
+
+- Hobby project. The LAN use case (vintage Sun in the shop, Mac on the same network, X app on screen with
+	modern rendering) is the actual itch. The "Motif app from Broomfield onto my laptop in a coffee shop"
+	scenario was always stretch; it isn't worth carrying the architectural weight of CrossFeed / Pi / TLS /
+	NAT traversal through every doc, decision, and design conversation when the core LAN goal already keeps
+	the server work busy for the foreseeable future.
+- Scope discipline. Every doc that mentioned "selectable transport for Product 4" was a tiny tax on every
+	architecture decision and a slow drift toward designing for a use case I wasn't going to build. Cutting
+	it now makes the remaining work easier to reason about.
+- The earlier "Pi as front-end" decisions (2026-05-05 entries above) are preserved as historical record of
+	why we considered them and what tradeoffs they involved; they're no longer the architecture.
+
+**What this changes in the repo**:
+
+- `PROJECT.md`, `ARCHITECTURE.md`, `README.md`, `CLAUDE.md`, `PRODUCT_2_SERVER.md` updated to two-product
+	scope. Remote / WAN moved to non-goals.
+- No code changes. The server's `Transport/` directory was always TCP-only in practice; the "selectable
+	listener" never got built.
+- The prior CrossFeed-related entries in this file (2026-05-05) remain in place as historical record.
+	They were valid decisions at the time. This entry supersedes them on scope.
+
+**What's still in scope, just to be unambiguous**:
+
+- Product 1: capture utility (done)
+- Product 2: Swift X server over plain TCP on the LAN (in progress)
+- Framer library shared between them
+
+---
+
+## 2026-05-16: Anti-aliasing off for all drawing primitives except text glyphs
+
+**Chosen**: Every drawing primitive in `CocoaWindowBridge` runs with `setShouldAntialias(false)` and `interpolationQuality = .none`. The only exception is glyph rasterization inside `ImageText8` / `PolyText8`, which explicitly re-enables AA for the glyph fill. Enforced via the `withClip` helper, which every non-text primitive now flows through.
+
+**Why**:
+
+X11 is a pixel-aligned protocol. Clients send integer coordinates. The spec defines exactly which pixels each primitive covers — lines via Bresenham-style coverage, rects via half-open `[x, x+w) × [y, y+h)` interiors, arcs via specific scanline rules. Real X servers produce sharp aliased output. Vintage clients (Athena, Motif, Xt) were designed assuming that crispness — they draw and erase pixel-exact rectangles, expect adjacent fills to tile seamlessly, and rely on `XFillArc` / `XDrawArc` to clear back to exact pixel coverage.
+
+Anti-aliasing breaks the contract in three observable ways we've hit:
+
+1. **Halo accumulation on erase-then-redraw loops.** xclock's hands and xeyes' pupils both run "erase old position with bg color, draw new position with fg color" tick loops. AA leaves a partially-opaque fringe on the previous draw that the next erase only partially covers. Each tick deposits more AA residue; over minutes it reads as a halo around the moving element.
+2. **Tile-seam blending.** Quickplot tiles `XClearArea(0, 0, W, 50)` and `XClearArea(0, 50, W, M)` edge-to-edge. With AA on and a fractional CTM, the y=50 boundary blends both fills with whatever's underneath the backing — which is the desk's blue when the page is selected. Manifests as a thin blue line at y=50.
+3. **Sub-pixel positioning drift.** Stroke primitives at AA-on land on fractional pixel positions; CG's stroke-center convention pushes 1-pixel lines into 2-pixel soft bands, inconsistent across runs.
+
+**Text is the deliberate exception.** Core X text drawing (PolyText8 / ImageText8) was bitmap, aliased. But we substitute scalable Core Text fonts (the original Sun bitmap fonts don't exist on the Mac), so turning AA off on glyph rasterization gives stair-stepped vector glyphs that look worse than the original bitmaps did on a 1990 Sun monitor. AA on for text is what makes the substitution defensible — covered by `SERVER_RESOLUTION_SCALING_AND_FONTS.md`'s quality bar.
+
+**Why the +0.5 stroke offset (in `applyStrokePlane`) stays.** Without it, CG with AA off picks one of two adjacent pixel rows arbitrarily — flips between runs. With the +0.5 offset, every horizontal/vertical X-pixel-address stroke lands deterministically on its nominal row. Diagonals stair-step rather than smooth, which is the correct X11 behavior.
+
+**Alternatives considered**:
+
+1. **AA on everywhere with smarter erase logic.** Have the server track AA fringes and over-erase. Massively complex; the fringe shape depends on the path geometry. Rejected as YAGNI — accepting "correct X11" output is honest and trivial.
+2. **AA on except for fills.** Half-measure. Fixes tile-seam blending but leaves halo accumulation on strokes (xclock hands). Inconsistent rule, harder to remember.
+3. **User-tunable per-primitive AA via a settings table + config dialog** (Todd's idea). Right shape if we had multiple rendering knobs, but right now we have one knob with one exception. Premature abstraction. Revisit when we have 3+ user-tunable rendering settings.
+
+**Honest cost**: xclock's hands and xeyes' eyeballs now have stair-stepped diagonal edges. That's accurate to what a Sun monitor produced in 1992. We're trying to be a Sun X server, so correct wins over modern smooth.
+
+**Enforcement**: bake the AA-off into the `withClip` helper rather than relying on each call site to do it. New drawing primitives that flow through `withClip` get the right behavior for free. Text sites opt out explicitly inside the body. Any new primitive that bypasses `withClip` is a code-review red flag.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
 
-- Bridge daemon language: C, Go, or Rust? Probably Go for ease of CrossFeed integration, but TBD.
-- Capture file format: custom binary frames, or a sidecar metadata + raw byte log? Leaning toward the latter for simplicity.
 - Whether to support multiple simultaneous client connections in the X server v1 (yes, but worth flagging that the auth and resource ID allocation per connection is a real piece of work).
 - Whether the rendering backend is Core Graphics, Metal, or a switchable abstraction. Leaning Core Graphics first, Metal as optimization.
 - Whether cursor rendering goes through the X cursor font (boring, easy) or substitutes modern crisp cursors (more interesting, more work). `SERVER_RESOLUTION_SCALING_AND_FONTS.md` leans toward NSCursor substitution but that's not yet a hard commitment.

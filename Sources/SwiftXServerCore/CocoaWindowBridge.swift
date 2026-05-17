@@ -571,16 +571,38 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// shift puts every X11 pixel-address stroke entirely inside its
     /// nominal cell rect.
     ///
-    /// AA stays on; the alignment is enough to get crisp strokes without
-    /// giving up CG's diagonal-line smoothing (xclock's hands).
-    /// Run `body` with the X GC clip-rectangles applied to `ctx`. nil = no
-    /// clip (unbounded draw); empty array = clip-everything (skip the body
-    /// entirely per X spec); non-empty = clip to the union of the rectangles.
-    /// Wraps in saveGState/restoreGState so the clip doesn't leak. Replaces
-    /// the prior pattern of explicit save/restore in each draw method.
+    /// AA is off (set by `withClip`); the +0.5 alignment is still required
+    /// because without it, CG with AA off picks an adjacent pixel row
+    /// arbitrarily — flips between runs and produces inconsistent stroke
+    /// position. With AA off + the +0.5 offset, every horizontal/vertical
+    /// X-pixel-address stroke lands deterministically on its nominal row/
+    /// column. Diagonals stair-step rather than smooth, which is the
+    /// correct X11 behavior — see DECISIONS for the rationale on
+    /// AA-off-everywhere-except-text.
+    /// Run `body` with X11-protocol-correct rendering settings:
+    ///   - AA off (X11 is a pixel-aligned protocol; clients send integer
+    ///     coords and expect crisp output; AA produces halo artifacts on
+    ///     erase-then-redraw loops like xclock hands, xeyes pupils, and
+    ///     the quickplot y=50 seam)
+    ///   - Image interpolation .none (belt and suspenders against any
+    ///     CG-internal resampling at the backing-context layer)
+    ///   - GC clip rectangles applied
+    ///
+    /// All non-text drawing primitives use this wrapper. Text-glyph
+    /// rendering (ImageText8 / PolyText8) calls `ctx.setShouldAntialias(true)`
+    /// inside the body to re-enable AA just for glyph rasterization —
+    /// we render scalable Core Text fonts and pixelated glyphs would
+    /// look worse than the Sun bitmap fonts they're substituting for.
+    ///
+    /// Clip semantics: nil = no clip (unbounded draw); empty array =
+    /// clip-everything (skip the body entirely per X spec); non-empty =
+    /// clip to the union of the rectangles. Wraps in saveGState /
+    /// restoreGState so nothing leaks.
     private func withClip(_ ctx: CGContext, _ clipRects: [Framer.Rectangle]?, _ body: () -> Void) {
         if let rects = clipRects, rects.isEmpty { return }
         ctx.saveGState()
+        ctx.setShouldAntialias(false)
+        ctx.interpolationQuality = .none
         if let rects = clipRects {
             ctx.clip(to: rects.map {
                 CGRect(x: CGFloat($0.x), y: CGFloat($0.y),
@@ -639,18 +661,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
-            ctx.saveGState()
-            // AA off + interp none so rect fills cover exact integer pixels.
-            // Adjacent ClearArea calls (e.g., quickplot's header at (0,0,W,50)
-            // and plot-erase at (0,50,W,M)) must tile seamlessly; with AA on
-            // and fractional CTM, the y=50 seam blends with whatever was in
-            // the backing — which is the desk's blue when the page is
-            // selected. Suspected source of the y=50 blue-line artifact.
-            ctx.setShouldAntialias(false)
-            ctx.interpolationQuality = .none
-            applyFill(ctx, background)
-            ctx.fill(CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height)))
-            ctx.restoreGState()
+            self.withClip(ctx, nil) {
+                applyFill(ctx, background)
+                ctx.fill(CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height)))
+            }
             view.setNeedsDisplay(view.bounds)
         }
     }
@@ -1041,18 +1055,13 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
-            ctx.saveGState()
-            // AA off + interp none — see clearArea for rationale. Window
-            // bg + border rects are pixel-aligned by construction; AA
-            // softens the border ring against the parent backing.
-            ctx.setShouldAntialias(false)
-            ctx.interpolationQuality = .none
-            for r in rects {
-                applyFill(ctx, r.color)
-                ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
-                                width: CGFloat(r.width), height: CGFloat(r.height)))
+            self.withClip(ctx, nil) {
+                for r in rects {
+                    applyFill(ctx, r.color)
+                    ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
+                                    width: CGFloat(r.width), height: CGFloat(r.height)))
+                }
             }
-            ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
     }
