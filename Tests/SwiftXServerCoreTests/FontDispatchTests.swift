@@ -100,15 +100,23 @@ final class FontDispatchTests: XCTestCase {
                        "monospace property: constant advance")
         XCTAssertEqual(reply.minBounds.characterWidth, 6, "Monaco 10pt cell width")
         XCTAssertEqual(reply.fontAscent + reply.fontDescent, 13, "Monaco 10pt cell height")
-        XCTAssertTrue(reply.allCharsExist, "all printable ASCII present in Monaco")
         XCTAssertEqual(reply.minCharOrByte2, 32)
-        XCTAssertEqual(reply.maxCharOrByte2, 126)
-        XCTAssertEqual(reply.charInfos.count, 126 - 32 + 1,
-                       "one CHARINFO per char in range; monospace can't elide because descenders vary")
-        // Per-glyph descent varies (descenders); per-glyph advance does not.
-        let descentValues = Set(reply.charInfos.map { $0.descent })
-        let widthValues = Set(reply.charInfos.map { $0.characterWidth })
-        XCTAssertEqual(widthValues.count, 1, "monospace: one distinct advance")
+        // ISO-8859-1 range as of 2026-05-17: 32...255 (224 chars), required
+        // so Motif's XCreateFontSet can build a usable FontSet for the C
+        // locale. Aliases like "7x14" default to iso8859-1.
+        XCTAssertEqual(reply.maxCharOrByte2, 255)
+        XCTAssertEqual(reply.charInfos.count, 255 - 32 + 1,
+                       "one CHARINFO per char in ISO-8859-1 range; monospace can't elide because descenders vary")
+        // Per-glyph descent varies (descenders); per-glyph advance is
+        // constant for ASCII glyphs. Restrict the spot-check to the ASCII
+        // range — 0x80-0x9F are C1 controls with no glyphs and chars
+        // 0xA0-0xFF rendering depends on Monaco having ISO-Latin-1
+        // coverage which Core Text generally provides but the test
+        // doesn't strictly assert.
+        let asciiCharInfos = Array(reply.charInfos[0..<(126 - 32 + 1)])
+        let widthValues = Set(asciiCharInfos.map { $0.characterWidth })
+        XCTAssertEqual(widthValues.count, 1, "monospace ASCII: one distinct advance")
+        let descentValues = Set(asciiCharInfos.map { $0.descent })
         XCTAssertGreaterThanOrEqual(descentValues.count, 1,
                                     "at least one distinct descent (descenders may or may not differ from ascenders depending on font)")
     }
@@ -138,10 +146,11 @@ final class FontDispatchTests: XCTestCase {
                           "Helvetica is proportional: min advance < max advance")
         // Per spec, an empty charInfos[] requires min == max across all six
         // fields. Since min < max in characterWidth alone, charInfos MUST
-        // be populated.
+        // be populated. ISO-8859-1 range 32...255 (224 chars) as of
+        // 2026-05-17 — wildcard charset in the XLFD resolves to iso8859-1.
         XCTAssertFalse(reply.charInfos.isEmpty,
                        "proportional font requires per-glyph CHARINFO array")
-        XCTAssertEqual(reply.charInfos.count, 126 - 32 + 1)
+        XCTAssertEqual(reply.charInfos.count, 255 - 32 + 1)
 
         // Spot-check: 'M' (code 77 → index 77-32 = 45) is wider than 'i'
         // (code 105 → index 73).
@@ -150,10 +159,53 @@ final class FontDispatchTests: XCTestCase {
         XCTAssertGreaterThan(charInfoM.characterWidth, charInfoI.characterWidth,
                              "'M' advance > 'i' advance in Helvetica")
 
-        // FONTPROPS now populated (was empty pre-fix). Look for the four
-        // we emit: FONT_ASCENT, FONT_DESCENT, DEFAULT_CHAR, AVERAGE_WIDTH.
-        XCTAssertGreaterThanOrEqual(reply.properties.count, 4,
-                                    "at least the four integer FONTPROPS we emit")
+        // FONTPROPS: integer metrics (FONT_ASCENT, FONT_DESCENT,
+        // DEFAULT_CHAR, AVERAGE_WIDTH) plus charset atoms (CHARSET_REGISTRY,
+        // CHARSET_ENCODING) = 6 minimum.
+        XCTAssertGreaterThanOrEqual(reply.properties.count, 6,
+                                    "at least the six FONTPROPS we emit")
+    }
+
+    func testQueryFontReplyEmitsCharsetRegistryAndEncodingFontProps() throws {
+        // Regression guard for the 2026-05-17 charset fix. Without
+        // CHARSET_REGISTRY / CHARSET_ENCODING FONTPROPS pointing at
+        // properly-interned atom IDs that match the font's XLFD-declared
+        // charset, Motif's XCreateFontSet can't find a per-charset match
+        // and falls through to "Cannot convert string to type FontSet" —
+        // widgets end up with no usable font and button labels render
+        // blank (the dt-Motif invisible-text bug Todd hit pre-fix).
+        let session = ServerSession()
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+
+        let xlfd = "-dt-interface user-medium-r-normal-s*-*-*-*-*-*-*-ISO8859-1"
+        _ = session.feed(OpenFont(fid: 0x4400007, name: Array(xlfd.utf8))
+            .encode(byteOrder: .lsbFirst))
+        _ = session.outbound.drain()
+
+        let bytes = session.feed(QueryFont(font: 0x4400007)
+            .encode(byteOrder: .lsbFirst))
+        let reply = try QueryFontReply.decode(from: bytes, byteOrder: .lsbFirst)
+
+        // ISO-8859-1 reply must cover 32...255 (224 chars) so Motif's
+        // FontSet builder accepts it as the matching variant for C locale.
+        XCTAssertEqual(reply.minCharOrByte2, 32)
+        XCTAssertEqual(reply.maxCharOrByte2, 255)
+        XCTAssertEqual(reply.charInfos.count, 224)
+
+        // Atom IDs for the property names we expect to see.
+        let registryName = session.atoms.intern("CHARSET_REGISTRY")
+        let encodingName = session.atoms.intern("CHARSET_ENCODING")
+        let iso8859Atom  = session.atoms.intern("ISO8859")
+        let oneAtom      = session.atoms.intern("1")
+
+        let registryProp = reply.properties.first { $0.name == registryName }
+        let encodingProp = reply.properties.first { $0.name == encodingName }
+        XCTAssertNotNil(registryProp, "CHARSET_REGISTRY FONTPROP must be present")
+        XCTAssertNotNil(encodingProp, "CHARSET_ENCODING FONTPROP must be present")
+        XCTAssertEqual(registryProp?.value, iso8859Atom,
+                       "CHARSET_REGISTRY value must be atom('ISO8859')")
+        XCTAssertEqual(encodingProp?.value, oneAtom,
+                       "CHARSET_ENCODING value must be atom('1')")
     }
 
     func testImageText8DispatchesWithGCFontMetadata() {

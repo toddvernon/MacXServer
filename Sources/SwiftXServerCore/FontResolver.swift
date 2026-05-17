@@ -41,6 +41,14 @@ public struct ResolvedFont: Equatable, Sendable {
     /// True when italic was requested but the Mac font has no real italic
     /// face — renderer should apply a 12° skew transform.
     public var skewItalic: Bool
+    /// Charset registry (last-but-one XLFD field), e.g. "iso8859", "adobe",
+    /// "jisx0201". Defaults to "iso8859" for aliases that don't specify.
+    /// Used by QueryFont to decide the reported character range and to
+    /// emit CHARSET_REGISTRY FONTPROPS that Motif's XCreateFontSet reads.
+    public var charsetRegistry: String
+    /// Charset encoding (last XLFD field), e.g. "1" for iso8859-1,
+    /// "fontspecific" for adobe-fontspecific. Defaults to "1".
+    public var charsetEncoding: String
 }
 
 public enum FontResolver {
@@ -107,12 +115,20 @@ public enum FontResolver {
         let ascent = max(1, Int(ceil(CTFontGetAscent(actual))))
         let descent = max(1, cellHeight - ascent)
 
+        // Charset: take whatever the XLFD requested, lowercased. Wildcards
+        // ("*") fall back to iso8859-1 — Motif's XCreateFontSet for C
+        // locale needs a real iso8859-1 match in the FontSet, so a
+        // wildcard charset that resolves to iso8859-1 satisfies it.
+        let registry = xlfd.charsetRegistry == "*" ? "iso8859" : xlfd.charsetRegistry.lowercased()
+        let encoding = xlfd.charsetEncoding == "*" ? "1"       : xlfd.charsetEncoding.lowercased()
+
         return ResolvedFont(
             macFontName: fontName,
             pointSize: pointSize,
             cellWidth: cellWidth, cellHeight: cellHeight,
             ascent: ascent, descent: descent,
-            isMonospace: isMono, bold: bold, skewItalic: skew
+            isMonospace: isMono, bold: bold, skewItalic: skew,
+            charsetRegistry: registry, charsetEncoding: encoding
         )
     }
 
@@ -190,7 +206,8 @@ public enum FontResolver {
             pointSize: pointSize,
             cellWidth: cellWidth, cellHeight: cellHeight,
             ascent: ascent, descent: descent,
-            isMonospace: true, bold: bold, skewItalic: skewItalic
+            isMonospace: true, bold: bold, skewItalic: skewItalic,
+            charsetRegistry: "iso8859", charsetEncoding: "1"
         )
     }
 

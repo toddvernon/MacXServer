@@ -42,7 +42,7 @@ final class CapturedAppReplayTests: XCTestCase {
     func testReplayXcalc() throws {
         try runReplay(capture: "xcalc-running-on-ss2-display-on-ss2.xtap", expecting: ReplayBaseline(
             windows: 2, colors: 25, pixmaps: 0, fonts: 3, gcs: 0,
-            atoms: 80, requests: 1415,
+            atoms: 84, requests: 1415,
             allowedExtensionOpcodes: [128]
         ))
     }
@@ -50,7 +50,7 @@ final class CapturedAppReplayTests: XCTestCase {
     func testReplayXterm() throws {
         try runReplay(capture: "xterm-running-on-ss2-display-on-ss2.xtap", expecting: ReplayBaseline(
             windows: 2, colors: 25, pixmaps: 0, fonts: 2, gcs: 0,
-            atoms: 80, requests: 91,
+            atoms: 84, requests: 91,
             allowedExtensionOpcodes: []
         ))
     }
@@ -58,7 +58,7 @@ final class CapturedAppReplayTests: XCTestCase {
     func testReplayXfontsel() throws {
         try runReplay(capture: "xfontsel-running-on-ss2-display-on-ss2.xtap", expecting: ReplayBaseline(
             windows: 2, colors: 25, pixmaps: 0, fonts: 4, gcs: 0,
-            atoms: 83, requests: 391,
+            atoms: 87, requests: 391,
             allowedExtensionOpcodes: []
         ))
     }
@@ -74,7 +74,7 @@ final class CapturedAppReplayTests: XCTestCase {
     func testReplayQuickplot() throws {
         try runReplay(capture: "quickplot-running-on-u5-display-on-ss2.xtap", expecting: ReplayBaseline(
             windows: 2, colors: 48, pixmaps: 0, fonts: 24, gcs: 0,
-            atoms: 86, requests: 3595,
+            atoms: 90, requests: 3595,
             allowedExtensionOpcodes: [133]
         ))
     }
@@ -82,7 +82,7 @@ final class CapturedAppReplayTests: XCTestCase {
     func testReplayDtcalc() throws {
         try runReplay(capture: "dtcalc-running-on-u5-display-on-ss2.xtap", expecting: ReplayBaseline(
             windows: 2, colors: 25, pixmaps: 0, fonts: 3, gcs: 0,
-            atoms: 88, requests: 2047,
+            atoms: 92, requests: 2047,
             allowedExtensionOpcodes: [133]
         ))
     }
@@ -90,7 +90,7 @@ final class CapturedAppReplayTests: XCTestCase {
     func testReplayDtterm() throws {
         try runReplay(capture: "dtterm-running-on-u5-display-on-ss2.xtap", expecting: ReplayBaseline(
             windows: 2, colors: 25, pixmaps: 0, fonts: 4, gcs: 0,
-            atoms: 92, requests: 862,
+            atoms: 96, requests: 862,
             allowedExtensionOpcodes: [133]
         ))
     }
@@ -98,7 +98,7 @@ final class CapturedAppReplayTests: XCTestCase {
     func testReplayDthelpview() throws {
         try runReplay(capture: "dthelpview-running-on-u5-display-on-ss2.xtap", expecting: ReplayBaseline(
             windows: 2, colors: 27, pixmaps: 0, fonts: 8, gcs: 0,
-            atoms: 85, requests: 414,
+            atoms: 89, requests: 414,
             allowedExtensionOpcodes: [133]
         ))
     }
@@ -115,7 +115,7 @@ final class CapturedAppReplayTests: XCTestCase {
     func testReplayDticon() throws {
         try runReplay(capture: "dticon-running-on-u5-display-on-ss2.xtap", expecting: ReplayBaseline(
             windows: 2, colors: 70, pixmaps: 0, fonts: 3, gcs: 0,
-            atoms: 96, requests: 1502,
+            atoms: 100, requests: 1502,
             allowedExtensionOpcodes: [133]
         ))
     }

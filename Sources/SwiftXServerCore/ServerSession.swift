@@ -1993,7 +1993,19 @@ public final class ServerSession: @unchecked Sendable {
     ///     DEFAULT_CHAR, AVERAGE_WIDTH. All are integer-valued, so we
     ///     don't need to intern atom-string values.
     private func makeQueryFontReply(resolved: ResolvedFont, sequence: UInt16) -> QueryFontReply {
-        let range: ClosedRange<UInt16> = 32...126
+        // ISO-8859-1 covers 32...255 (224 chars including the 0x80-0x9F
+        // C1-control gap rendered as missing-glyph zero CharInfos). This
+        // is what Motif's XCreateFontSet expects to find for the C locale
+        // — without 224 chars, the FontSet builder rejects the font and
+        // widgets end up with no usable font → button labels render blank.
+        // Other charsets (adobe-fontspecific, jisx0201, sunolcursor-1,
+        // sunolglyph-1) stay at 32...126 ASCII because we don't have real
+        // glyphs for those ranges anyway; the CHARSET_REGISTRY/ENCODING
+        // FONTPROPS below make XCreateFontSet accept them as the matching
+        // variant for their charset, and dt-app text uses iso8859-1 in
+        // practice.
+        let isISO8859: Bool = (resolved.charsetRegistry == "iso8859")
+        let range: ClosedRange<UInt16> = isISO8859 ? 32...255 : 32...126
         let payload = FontResolver.measureGlyphMetrics(resolved, range: range)
         let infos = payload.infos
 
@@ -2042,9 +2054,16 @@ public final class ServerSession: @unchecked Sendable {
         // == maxBounds. Populate iff they differ (proportional fonts).
         let charInfos: [CharInfo] = (minBounds == maxBounds) ? [] : infos
 
-        // FONTPROPS the integer-valued subset most clients consult. Atom-
-        // valued ones (FAMILY_NAME, FOUNDRY, etc.) need atom-string interns
-        // we don't yet wire here.
+        // FONTPROPS: integer-valued metrics plus the two atom-valued
+        // charset props that Motif's XCreateFontSet REQUIRES — without
+        // those, the FontSet builder can't match a per-charset variant
+        // and falls through to "no usable fontset" (visible as the
+        // "Cannot convert string ... to type FontSet" Xt warning). The
+        // values are atom IDs interned from the charset registry/encoding
+        // strings we got from the OpenFont XLFD's last two fields. Real
+        // Sun returns ~21 FONTPROPS including FAMILY_NAME / FOUNDRY /
+        // WEIGHT_NAME etc.; the four metric props + two charset props
+        // here cover what dt-Motif / Athena widget layout actually reads.
         let props: [FontProp] = [
             FontProp(name: atoms.intern("FONT_ASCENT"),  value: UInt32(resolved.ascent)),
             FontProp(name: atoms.intern("FONT_DESCENT"), value: UInt32(resolved.descent)),
@@ -2052,6 +2071,12 @@ public final class ServerSession: @unchecked Sendable {
             // AVERAGE_WIDTH per XLFD convention is in 1/10 pixel units.
             FontProp(name: atoms.intern("AVERAGE_WIDTH"),
                      value: UInt32(maxBounds.characterWidth) * 10),
+            // Charset registry/encoding — atom IDs of the charset strings.
+            // These are what Motif's per-charset FontSet probe reads.
+            FontProp(name: atoms.intern("CHARSET_REGISTRY"),
+                     value: atoms.intern(resolved.charsetRegistry.uppercased())),
+            FontProp(name: atoms.intern("CHARSET_ENCODING"),
+                     value: atoms.intern(resolved.charsetEncoding)),
         ]
 
         return QueryFontReply(
