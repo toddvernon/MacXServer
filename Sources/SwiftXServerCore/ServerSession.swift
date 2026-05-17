@@ -423,23 +423,25 @@ public final class ServerSession: @unchecked Sendable {
             value: mwmInfoBytes
         )
 
-        // Minimal RESOURCE_MANAGER on root. In a real CDE session, xrdb
-        // merges user + system Xresources here, and Xt-based apps consult it
-        // before falling back to app-defaults. We have nothing real to put
-        // here, but a CDE-aware *customization: -color line tells Xt to look
-        // for the -color flavored app-defaults files (e.g. Dtterm-color),
-        // which is what dt apps expect under a colour CDE session. Empty
-        // RESOURCE_MANAGER means apps load the plain-monochrome variants.
+        // RESOURCE_MANAGER on root, pre-populated with u5's captured CDE
+        // resource database (3910 bytes; dtcalc-sun.xtap seq=3 GetProperty
+        // reply, verified live against u5 xrdb -query 2026-05-17). Xt-based
+        // clients (Motif, Athena) consult this on startup to pick fonts,
+        // colors, widget defaults, and Motif feature flags. Without it,
+        // Motif falls back to `Fixed` instead of the `-dt-interface ...`
+        // XLFDs, widget geometry computes from default metrics, and the
+        // client interns ~50 CDE atoms manually upfront. The fixture lives
+        // in CDEResourceManagerFixture so the source of ServerSession stays
+        // readable. See FOLLOWUPS_FROM_DTCALC_DIFF_2026-05-17.md.
         let resourceManagerAtom: UInt32 = 23   // predefined RESOURCE_MANAGER
         let stringAtom: UInt32 = 31            // predefined STRING
-        let resourceManagerText = "*customization:\t-color\n"
         properties.change(
             window: config.rootWindowId,
             property: resourceManagerAtom,
             type: stringAtom,
             format: 8,
             mode: 0,
-            value: Array(resourceManagerText.utf8)
+            value: CDEResourceManagerFixture.bytes
         )
 
         // CDE customization daemon impersonation. See SelectionMediator
