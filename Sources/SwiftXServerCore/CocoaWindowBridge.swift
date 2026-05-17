@@ -640,6 +640,14 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
             ctx.saveGState()
+            // AA off + interp none so rect fills cover exact integer pixels.
+            // Adjacent ClearArea calls (e.g., quickplot's header at (0,0,W,50)
+            // and plot-erase at (0,50,W,M)) must tile seamlessly; with AA on
+            // and fractional CTM, the y=50 seam blends with whatever was in
+            // the backing — which is the desk's blue when the page is
+            // selected. Suspected source of the y=50 blue-line artifact.
+            ctx.setShouldAntialias(false)
+            ctx.interpolationQuality = .none
             applyFill(ctx, background)
             ctx.fill(CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height)))
             ctx.restoreGState()
@@ -1034,6 +1042,11 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
             ctx.saveGState()
+            // AA off + interp none — see clearArea for rationale. Window
+            // bg + border rects are pixel-aligned by construction; AA
+            // softens the border ring against the parent backing.
+            ctx.setShouldAntialias(false)
+            ctx.interpolationQuality = .none
             for r in rects {
                 applyFill(ctx, r.color)
                 ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
