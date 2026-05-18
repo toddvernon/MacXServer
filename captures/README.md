@@ -65,7 +65,19 @@ What we learned from the re-baseline:
 - Some dt-apps (`dticon`, `dtmail`, `dtpad`) hang on ToolTalk timeout
   (~5min) when run through our `swiftx-capture` proxy — but they run
   fine direct u5→ss2 without the proxy. That's a proxy-layer bug, not
-  a server-layer bug. See `FOLLOWUPS_FROM_DTCALC_DIFF_2026-05-17.md`.
+  a server-layer bug.
+
+  The Motif dialog these apps pop up reads `/usr/dt/bin/ttsession is
+  not running`. SS2 has no `ttsession` either way, and the same apps
+  tolerate that direct — so the proxy is doing something specifically
+  bad to ToolTalk-using sessions. Hypothesis: the framer has a partial
+  decoder for some opcode (the summary line "1 with no typed decoder"
+  we saw in early captures) and the proxy either drops, mangles, or
+  stalls on it; or proxy buffering breaks TT's timing-sensitive
+  selection roundtrips. Diagnostic: enable per-byte forwarding traces
+  in `swiftx-capture` and watch for the byte position where forwarding
+  diverges from a `tcpdump`-baselined direct run. Bug lives in
+  `Sources/SwiftXCaptureCore/Proxy.swift`, not in the server.
 
 ## Recapturing
 
