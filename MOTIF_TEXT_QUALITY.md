@@ -72,15 +72,15 @@ Strategy is widget-class defaults, not per-app overrides. Motif's cascade handle
 A minimal curated set:
 
 ```
-*XmText.fontList:           -adobe-helvetica-medium-r-normal--14-*-*-*-*-p-*-iso8859-1
-*XmTextField.fontList:      -adobe-helvetica-medium-r-normal--12-*-*-*-*-p-*-iso8859-1
-*XmLabel.fontList:          -adobe-helvetica-medium-r-normal--12-*-*-*-*-p-*-iso8859-1
-*XmList.fontList:           -adobe-helvetica-medium-r-normal--12-*-*-*-*-p-*-iso8859-1
-*XmCascadeButton.fontList:  -adobe-helvetica-bold-r-normal--12-*-*-*-*-p-*-iso8859-1
-*XmPushButton.fontList:     -adobe-helvetica-medium-r-normal--12-*-*-*-*-p-*-iso8859-1
+*XmText.fontList:           -adobe-helvetica-medium-r-normal--14-*-*-*-p-*-iso8859-1
+*XmTextField.fontList:      -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
+*XmLabel.fontList:          -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
+*XmList.fontList:           -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
+*XmCascadeButton.fontList:  -adobe-helvetica-bold-r-normal--12-*-*-*-p-*-iso8859-1
+*XmPushButton.fontList:     -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
 
 ! Per-app overrides only when needed
-Dtpad*XmText.fontList:      -adobe-courier-medium-r-normal--14-*-*-*-*-m-*-iso8859-1
+Dtpad*XmText.fontList:      -adobe-courier-medium-r-normal--14-*-*-*-m-*-iso8859-1
 ```
 
 The exact XLFDs are tuning material — they're picked for "this looks tasteful on retina" rather than fidelity to any particular Solaris CDE skin. Helvetica → Helvetica Neue, Courier → Courier New, Times → Times New Roman via the existing substitution table.

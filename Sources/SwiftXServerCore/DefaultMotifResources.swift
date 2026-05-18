@@ -31,13 +31,20 @@ enum DefaultMotifResources {
 
     private static let text = """
     ! swift-x Tier 1 Motif widget defaults. See MOTIF_TEXT_QUALITY.md.
-    *XmText.fontList:           -adobe-helvetica-medium-r-normal--14-*-*-*-*-p-*-iso8859-1
-    *XmTextField.fontList:      -adobe-helvetica-medium-r-normal--12-*-*-*-*-p-*-iso8859-1
-    *XmLabel.fontList:          -adobe-helvetica-medium-r-normal--12-*-*-*-*-p-*-iso8859-1
-    *XmList.fontList:           -adobe-helvetica-medium-r-normal--12-*-*-*-*-p-*-iso8859-1
-    *XmCascadeButton.fontList:  -adobe-helvetica-bold-r-normal--12-*-*-*-*-p-*-iso8859-1
-    *XmPushButton.fontList:     -adobe-helvetica-medium-r-normal--12-*-*-*-*-p-*-iso8859-1
+    *XmText.fontList:           -adobe-helvetica-medium-r-normal--14-*-*-*-p-*-iso8859-1
+    *XmTextField.fontList:      -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
+    *XmLabel.fontList:          -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
+    *XmList.fontList:           -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
+    *XmCascadeButton.fontList:  -adobe-helvetica-bold-r-normal--12-*-*-*-p-*-iso8859-1
+    *XmPushButton.fontList:     -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
+    ! DtEditor (the compound widget dtpad/dtmail use) exposes its text
+    ! font via a separate resource name: textFontList, not fontList.
+    ! When unset, DtEditor leaves XmNfontList alone on its inner XmText,
+    ! but in practice the inner XmText still falls back to "fixed" —
+    ! so we have to set the wrapper resource explicitly.
+    *DtEditor.textFontList:     -adobe-courier-medium-r-normal--14-*-*-*-m-*-iso8859-1
     ! Per-app overrides
-    Dtpad*XmText.fontList:      -adobe-courier-medium-r-normal--14-*-*-*-*-m-*-iso8859-1
+    Dtpad*XmText.fontList:      -adobe-courier-medium-r-normal--14-*-*-*-m-*-iso8859-1
+    Dtpad*textFontList:         -adobe-courier-medium-r-normal--14-*-*-*-m-*-iso8859-1
     """
 }
