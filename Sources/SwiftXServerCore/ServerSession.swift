@@ -429,6 +429,24 @@ public final class ServerSession: @unchecked Sendable {
             value: mwmInfoBytes
         )
 
+        // EXPERIMENT 2026-05-18: both the RESOURCE_MANAGER fixture and the
+        // CDE customization daemon impersonation are disabled while we test
+        // the "be SS2-with-mwm, not SS2-with-CDE" hypothesis. SS2's gold
+        // capture (dtcalc-running-on-u5-display-on-ss2.xtap) shows SS2
+        // publishes neither: no Delphinium-flavored RESOURCE_MANAGER, no
+        // Customize Data:0 owner, no SDT Pixel Set. dt-apps on u5 display
+        // correctly to SS2 anyway because Motif falls back to its built-in
+        // defaults (the "ugly blue" look). Our previous wedge diagnosis for
+        // the customization daemon was wrong — the actual wedge was the
+        // MATCH_SELECT time-field bug (now fixed in ConvertSelection).
+        //
+        // What we kept: _MOTIF_DRAG_WINDOW and _MOTIF_WM_INFO above, since
+        // SS2 with mwm running publishes both of those.
+        //
+        // If the dt-apps regress (especially toward looking-for-ToolTalk
+        // behavior), revisit; the original code is preserved below so it
+        // can be re-enabled by removing the comment marks.
+
         // RESOURCE_MANAGER on root, pre-populated with u5's captured CDE
         // resource database (3910 bytes; dtcalc-sun.xtap seq=3 GetProperty
         // reply, verified live against u5 xrdb -query 2026-05-17). Xt-based
@@ -439,20 +457,20 @@ public final class ServerSession: @unchecked Sendable {
         // client interns ~50 CDE atoms manually upfront. The fixture lives
         // in CDEResourceManagerFixture so the source of ServerSession stays
         // readable. See FOLLOWUPS_FROM_DTCALC_DIFF_2026-05-17.md.
-        let resourceManagerAtom: UInt32 = 23   // predefined RESOURCE_MANAGER
-        let stringAtom: UInt32 = 31            // predefined STRING
-        properties.change(
-            window: config.rootWindowId,
-            property: resourceManagerAtom,
-            type: stringAtom,
-            format: 8,
-            mode: 0,
-            value: CDEResourceManagerFixture.bytes
-        )
+//        let resourceManagerAtom: UInt32 = 23   // predefined RESOURCE_MANAGER
+//        let stringAtom: UInt32 = 31            // predefined STRING
+//        properties.change(
+//            window: config.rootWindowId,
+//            property: resourceManagerAtom,
+//            type: stringAtom,
+//            format: 8,
+//            mode: 0,
+//            value: CDEResourceManagerFixture.bytes
+//        )
 
         // CDE customization daemon impersonation. See SelectionMediator
         // for the rationale + the captured-from-u5 SDT Pixel Set bytes.
-        selectionMediator.installCDECustomizationDaemonImpersonation()
+//        selectionMediator.installCDECustomizationDaemonImpersonation()
     }
 
     /// User asked to close one of our NSWindows (red traffic-light button,

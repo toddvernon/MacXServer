@@ -38,67 +38,73 @@ final class CapturedAppReplayTests: XCTestCase {
     // building the per-glyph CHARINFO reply (shipped 2026-05-15 in the
     // post-audit sweep). Captures without a QueryFont call (xeyes,
     // dtcalc, dthelpview, dticon) don't change.
+    //
+    // Baselines rebased 2026-05-18 after retiring the CDE customization
+    // daemon impersonation and the RESOURCE_MANAGER fixture. Each app
+    // dropped one window (the 0xFFFE_0003 stub) and 1-2 atoms (Customize
+    // Data:0 and SDT Pixel Set, depending on whether the app itself
+    // interned them over the wire).
 
     func testReplayXcalc() throws {
         try runReplay(capture: "xcalc-running-on-ss2-display-on-ss2.xtap", expecting: ReplayBaseline(
-            windows: 2, colors: 25, pixmaps: 0, fonts: 3, gcs: 0,
-            atoms: 84, requests: 1415,
+            windows: 1, colors: 25, pixmaps: 0, fonts: 3, gcs: 0,
+            atoms: 82, requests: 1415,
             allowedExtensionOpcodes: [128]
         ))
     }
 
     func testReplayXterm() throws {
         try runReplay(capture: "xterm-running-on-ss2-display-on-ss2.xtap", expecting: ReplayBaseline(
-            windows: 2, colors: 25, pixmaps: 0, fonts: 2, gcs: 0,
-            atoms: 84, requests: 91,
+            windows: 1, colors: 25, pixmaps: 0, fonts: 2, gcs: 0,
+            atoms: 82, requests: 91,
             allowedExtensionOpcodes: []
         ))
     }
 
     func testReplayXfontsel() throws {
         try runReplay(capture: "xfontsel-running-on-ss2-display-on-ss2.xtap", expecting: ReplayBaseline(
-            windows: 2, colors: 25, pixmaps: 0, fonts: 4, gcs: 0,
-            atoms: 87, requests: 391,
+            windows: 1, colors: 25, pixmaps: 0, fonts: 4, gcs: 0,
+            atoms: 85, requests: 391,
             allowedExtensionOpcodes: []
         ))
     }
 
     func testReplayXeyes() throws {
         try runReplay(capture: "xeyes-running-on-ss2-display-on-ss2.xtap", expecting: ReplayBaseline(
-            windows: 2, colors: 25, pixmaps: 0, fonts: 0, gcs: 0,
-            atoms: 76, requests: 300,
+            windows: 1, colors: 25, pixmaps: 0, fonts: 0, gcs: 0,
+            atoms: 74, requests: 300,
             allowedExtensionOpcodes: [128]
         ))
     }
 
     func testReplayQuickplot() throws {
         try runReplay(capture: "quickplot-running-on-u5-display-on-ss2.xtap", expecting: ReplayBaseline(
-            windows: 2, colors: 48, pixmaps: 0, fonts: 24, gcs: 0,
-            atoms: 90, requests: 3595,
+            windows: 1, colors: 48, pixmaps: 0, fonts: 24, gcs: 0,
+            atoms: 89, requests: 3595,
             allowedExtensionOpcodes: [133]
         ))
     }
 
     func testReplayDtcalc() throws {
         try runReplay(capture: "dtcalc-running-on-u5-display-on-ss2.xtap", expecting: ReplayBaseline(
-            windows: 2, colors: 25, pixmaps: 0, fonts: 3, gcs: 0,
-            atoms: 92, requests: 2047,
+            windows: 1, colors: 25, pixmaps: 0, fonts: 3, gcs: 0,
+            atoms: 91, requests: 2047,
             allowedExtensionOpcodes: [133]
         ))
     }
 
     func testReplayDtterm() throws {
         try runReplay(capture: "dtterm-running-on-u5-display-on-ss2.xtap", expecting: ReplayBaseline(
-            windows: 2, colors: 25, pixmaps: 0, fonts: 4, gcs: 0,
-            atoms: 96, requests: 862,
+            windows: 1, colors: 25, pixmaps: 0, fonts: 4, gcs: 0,
+            atoms: 95, requests: 862,
             allowedExtensionOpcodes: [133]
         ))
     }
 
     func testReplayDthelpview() throws {
         try runReplay(capture: "dthelpview-running-on-u5-display-on-ss2.xtap", expecting: ReplayBaseline(
-            windows: 2, colors: 27, pixmaps: 0, fonts: 8, gcs: 0,
-            atoms: 89, requests: 414,
+            windows: 1, colors: 27, pixmaps: 0, fonts: 8, gcs: 0,
+            atoms: 88, requests: 414,
             allowedExtensionOpcodes: [133]
         ))
     }
@@ -114,8 +120,8 @@ final class CapturedAppReplayTests: XCTestCase {
     // each, mostly InternAtom traffic).
     func testReplayDticon() throws {
         try runReplay(capture: "dticon-running-on-u5-display-on-ss2.xtap", expecting: ReplayBaseline(
-            windows: 2, colors: 70, pixmaps: 0, fonts: 3, gcs: 0,
-            atoms: 100, requests: 1502,
+            windows: 1, colors: 70, pixmaps: 0, fonts: 3, gcs: 0,
+            atoms: 99, requests: 1502,
             allowedExtensionOpcodes: [133]
         ))
     }

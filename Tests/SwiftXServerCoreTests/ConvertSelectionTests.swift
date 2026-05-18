@@ -101,22 +101,16 @@ final class ConvertSelectionTests: XCTestCase {
     }
 
     func testSelectionMediatorDispatchesCorrectly() {
-        // White-box: poke the mediator directly to verify the three-way
-        // dispatch (stub / real client / no owner). The ServerSession
+        // White-box: poke the mediator directly to verify the routing
+        // dispatch (real client / no owner). The ServerSession
         // ConvertSelection case is a thin shell over this; the routing
-        // policy lives here now.
+        // policy lives here now. The stub-owner case is covered by
+        // testStubDaemonReturnsEmptySelectionNotify above, which manually
+        // installs a stub owner — the production server no longer
+        // auto-installs one (CDE customization daemon impersonation
+        // retired 2026-05-18).
         let session = runningSession()
         let primary: UInt32 = 1
-        let customize = session.atoms.intern("Customize Data:0")
-        // Pre-installed by the mediator at init time → stub owner.
-        let stubResult = session.selectionMediator.convertSelection(ConvertSelection(
-            requestor: 0xABC, selection: customize, target: 31, property: 5, time: 1
-        ))
-        if case .stubOwnerReplyEmpty(let win) = stubResult {
-            XCTAssertEqual(win, 0xFFFE_0003, "CDE customization daemon stub")
-        } else {
-            XCTFail("expected stubOwnerReplyEmpty, got \(stubResult)")
-        }
 
         // Register a real-client owner and check forwarding path.
         session.coordinator.setSelectionOwner(primary, window: 0x4400_0010, time: 7)

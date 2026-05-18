@@ -418,6 +418,33 @@ Anti-aliasing breaks the contract in three observable ways we've hit:
 
 **Enforcement**: bake the AA-off into the `withClip` helper rather than relying on each call site to do it. New drawing primitives that flow through `withClip` get the right behavior for free. Text sites opt out explicitly inside the body. Any new primitive that bypasses `withClip` is a code-review red flag.
 
+## 2026-05-18 — Retire the CDE customization daemon impersonation and CDE-flavored RESOURCE_MANAGER fixture
+
+**Chosen**: stop pre-publishing the `Customize Data:0` selection ownership + `SDT Pixel Set` property + 3910-byte CDE-flavored `RESOURCE_MANAGER` fixture at session init. `GetProperty(RESOURCE_MANAGER)` now returns the spec-correct empty (`type=None, format=0`) like SS2 does. Selection ownership of `Customize Data:0` is left unowned, so dt-apps' `ConvertSelection` probe gets a spec-correct `SelectionNotify(property=None)` reply.
+
+Retires both pieces: the 2026-05-10 decision above (customization daemon impersonation) and the 2026-05-17 RESOURCE_MANAGER fixture commit `aa5a674` (not a formal DECISIONS entry at the time but closed here).
+
+**What stays**: `_MOTIF_DRAG_WINDOW` and `_MOTIF_WM_INFO` on root — both predate CDE and match what an SS2 box running plain `mwm` publishes. The 2026-05-09 quickplot-SIGSEGV rationale for `_MOTIF_DRAG_WINDOW` still applies. `ColorTable`'s pre-seeded CDE palette (pixels 1-23) remains in code but dormant now that no SDT Pixel Set indirection routes through it; deletion deferred until we confirm nothing else references those pixels by index.
+
+**Why the 2026-05-10 rationale no longer applies**:
+
+The "dt-apps wedge indefinitely after `SelectionNotify(property=None)`" diagnosis was wrong. The real wedge was our own `MATCH_SELECT`-time bug — we substituted `serverTime` for the request's `time` field on `SelectionNotify`, and `Xt`'s `MATCH_SELECT` macro silently dropped events where `event->time != info->time` (`reference/X11R6/xc/lib/Xt/SelectionI.h:165`). That bug was fixed separately. Once `time` round-trips verbatim, dt-apps tolerate `SelectionNotify(property=None)` exactly as the spec promises.
+
+**Evidence the cut is safe**:
+
+1. SS2 gold capture (`captures/dtcalc-running-on-u5-display-on-ss2.xtap`) shows SS2 publishes none of these: no Delphinium-flavored `RESOURCE_MANAGER`, no `Customize Data:0` owner, no `SDT Pixel Set`. ASCII-keyword search across the entire 37 KB S2C stream yields zero hits for `background`, `foreground`, `color`, `delphinium`, `palette`. dt-apps render correctly to SS2 anyway — they fall through to Motif built-in widget defaults (the "ugly blue" look).
+
+2. Smoke-tested 2026-05-18 u5 → swiftx with the cuts applied:
+   - dtcalc: full SS2 visual parity (Motif fallback blue panel + crisp white labels on every button — fixes the invisible-grey-label and white-on-white-LCD bugs from 2026-05-17 STATUS in one cut)
+   - dtterm: terminal renders, normal usage works (separate BadRequest on opcode 93 surfaced via Motif Help menu — unrelated CreateCursor gap, stubbed)
+   - quickplot, dthelpview, dticon, dtpad, dtmail: unchanged from pre-cut behavior. dtpad/dtmail/dticon still misbehave through swiftx the same way they misbehave through the `swiftx-capture` proxy when forwarding to SS2 (which they don't, when going u5→ss2 direct) — suggesting a Framer-shared bug, separate from this cut.
+
+3. The "cutting CDE signals might unmask a hidden ToolTalk dependency" worry did not materialize. All apps that present render correctly; apps that don't present misbehave for the same reason they misbehaved through the capture proxy.
+
+**Framing that makes this right**: the goal is "behave like SS2 running plain mwm, no CDE." mwm-era signals stay; CDE-only signals go. dt-apps falling back to Motif built-in widget defaults is exactly what they look like on a real SS2 with mwm — spec-correct, contrast-correct, visually consistent with the gold display.
+
+**Code state**: `installCDECustomizationDaemonImpersonation` and the `CDEResourceManagerFixture.bytes` publish are commented out in `ServerSession.swift` rather than deleted. Re-enabling is a comment-strip if a future dt-app surprises us. Plan to delete the dead code (and the `CDEResourceManagerFixture` source file) after another round of dt-app testing confirms no regression.
+
 ---
 
 ## Decisions still to make
