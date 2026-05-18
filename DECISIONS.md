@@ -445,6 +445,19 @@ The "dt-apps wedge indefinitely after `SelectionNotify(property=None)`" diagnosi
 
 **Code state**: `installCDECustomizationDaemonImpersonation` and the `CDEResourceManagerFixture.bytes` publish are commented out in `ServerSession.swift` rather than deleted. Re-enabling is a comment-strip if a future dt-app surprises us. Plan to delete the dead code (and the `CDEResourceManagerFixture` source file) after another round of dt-app testing confirms no regression.
 
+## 2026-05-18 — Publish curated Tier 1 `RESOURCE_MANAGER` (Motif widget defaults)
+
+**Chosen**: bake a 7-line hand-curated `*XmText.fontList:` / `*XmLabel.fontList:` / etc. set into `Sources/SwiftXServerCore/DefaultMotifResources.swift` and publish it as `RESOURCE_MANAGER` on root at session init. Different in purpose and content from the morning's retirement: we're not impersonating CDE, we're steering Motif's widget-class defaults toward `-adobe-helvetica-*` and `-adobe-courier-*` XLFDs that route cleanly through `FontResolver`'s substitution table to Mac fonts (Helvetica Neue, Courier New) that render nicely at retina.
+
+Tier 1 is the first of three staged delivery tiers laid out in `MOTIF_TEXT_QUALITY.md`:
+- Tier 1 (this): hardcoded in Swift source, identical per session.
+- Tier 2: user-editable Xresources file in app support.
+- Tier 3: macOS settings panel.
+
+**Why this isn't a reversal of the morning's retirement**: the morning's cut removed CDE-flavored content (Delphinium palette, `-dt-interface` XLFDs, dtwm + OpenWindows resources, 3910 bytes of stuff a non-CDE server has no business publishing). Tier 1 is ~250 bytes of widget-class font defaults — strictly the control surface from the playbook, no CDE-flavored content. The morning's "be SS2 with mwm" framing still holds: SS2 with no xrdb loaded publishes nothing, but SS2 with `xrdb $HOME/.Xresources` loaded publishes whatever the user put there. Tier 1 is "the user has a curated default `.Xresources`, baked in."
+
+**Pairs with the same-day MOTIF_TEXT_QUALITY invariant fix**: now that `FontResolver.integerAdvances` is the single source of truth for both reported CHARINFO widths and rendered glyph positions, Tier 1's XLFDs route through a pipeline where what we say is what we draw. The two pieces compound — Tier 1 alone would render against the prior float-drift bug, the invariant alone would have nothing to render with.
+
 ---
 
 ## Decisions still to make
