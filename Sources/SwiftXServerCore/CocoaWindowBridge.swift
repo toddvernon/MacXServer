@@ -1066,15 +1066,14 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // length(1) + delta(1 signed) + length glyph bytes. Pen advances
             // by delta + sum-of-glyph-advances after each run.
             //
-            // Position glyphs by the CTFont's actual advances rather than
-            // the resolved-font cellWidth: PolyText8 has no bg fill, so
-            // there's no benefit to cell-snapping, and using true advances
-            // closes the visible gaps that show up when our reported cell
-            // width is wider than the substituted Mac font's glyph box.
-            // (The Phase-1.5 metrics-tightening work in CHATGPT_REVIEW.md
-            // covers the principled fix; this is the local minimum.)
+            // Positions come from FontResolver.integerAdvances — the same
+            // path that fills CHARINFO.characterWidth and answers
+            // QueryTextExtents. The MOTIF_TEXT_QUALITY invariant: reported
+            // advance === rendered advance, every glyph, integer pixels.
+            // Motif positions runs by summing CHARINFO; we draw at exactly
+            // those positions, no Core Text natural-advance drift.
             let baseX = Int(x)
-            var penX: CGFloat = CGFloat(baseX)
+            var penX: Int = baseX
             let baseY = Int(y)
 
             guard let ctFont = self?.ctFont(for: font) else { return }
@@ -1092,25 +1091,23 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 if n == 0 { i += 1; continue }
                 guard i + 2 + n <= items.count else { break }
                 let delta = Int8(bitPattern: items[i + 1])
-                penX += CGFloat(delta)
+                penX += Int(delta)
 
                 var unichars = [UniChar](repeating: 0, count: n)
                 for j in 0..<n { unichars[j] = UniChar(items[i + 2 + j]) }
-                var glyphs = [CGGlyph](repeating: 0, count: n)
-                CTFontGetGlyphsForCharacters(ctFont, &unichars, &glyphs, n)
 
-                var advances = [CGSize](repeating: .zero, count: n)
-                CTFontGetAdvancesForGlyphs(ctFont, .horizontal, &glyphs, &advances, n)
+                let (glyphsImm, advances) = FontResolver.integerAdvances(font, characters: unichars)
+                var glyphs = glyphsImm
 
                 var positions = [CGPoint](repeating: .zero, count: n)
-                var localX: CGFloat = 0
+                var localX: Int = 0
                 for j in 0..<n {
-                    positions[j] = CGPoint(x: localX, y: 0)
-                    localX += advances[j].width
+                    positions[j] = CGPoint(x: CGFloat(localX), y: 0)
+                    localX += advances[j]
                 }
 
                 ctx.saveGState()
-                ctx.translateBy(x: penX, y: CGFloat(baseY))
+                ctx.translateBy(x: CGFloat(penX), y: CGFloat(baseY))
                 ctx.scaleBy(x: 1, y: -1)
                 CTFontDrawGlyphs(ctFont, &glyphs, &positions, n, ctx)
                 ctx.restoreGState()

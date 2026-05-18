@@ -243,26 +243,62 @@ public enum FontResolver {
         )
     }
 
-    /// Sum the Core Text horizontal advances for a sequence of UniChar
-    /// glyphs in the resolved font. Matches what PolyText8 / ImageText8
-    /// actually draw (per-glyph advances rather than snapped cellWidth),
-    /// so QueryTextExtents widths align with rendered widths — load-
-    /// bearing for proportional fonts (Helvetica, Times) where Motif's
-    /// menu-bar layout would otherwise allocate the wrong column widths.
-    /// Returns 0 for an empty character list.
-    public static func measureTextWidth(_ resolved: ResolvedFont, characters: [UniChar]) -> Int32 {
-        guard !characters.isEmpty else { return 0 }
+    /// Per-glyph integer advance for a UniChar sequence in the resolved
+    /// font. THE single source of truth for the MOTIF_TEXT_QUALITY
+    /// invariant: every caller that reports a glyph's width (CHARINFO,
+    /// QueryTextExtents) or positions a glyph for drawing (PolyText8
+    /// renderer) must read from here, so reported widths === rendered
+    /// positions, byte for byte.
+    ///
+    /// Two playbooks, dispatched on isMonospace:
+    ///   - Monospace (xterm/dtterm): every glyph reports `resolved.cellWidth`.
+    ///     drawImageText8 positions at `i*cellW` and CHARINFO must agree —
+    ///     cell IS the advance, single number. (CT's per-glyph natural
+    ///     advance for Monaco can drift up by ~1px from the cell metrics
+    ///     ratio if we ceil naively, which would break the xterm grid.)
+    ///   - Proportional (Helvetica/Times/etc): per-glyph ceil of the
+    ///     natural CT advance. drawPolyText8 sums these for positioning.
+    ///     Ceil is the side that can't go wrong: under-reporting causes
+    ///     visible overlap, over-reporting leaves sub-pixel gaps no
+    ///     client notices.
+    ///
+    /// Missing glyphs (CT returns glyph 0) always report 0 to match the
+    /// zero CharInfo emitted for missing glyphs in QueryFont.
+    public static func integerAdvances(_ resolved: ResolvedFont,
+                                       characters: [UniChar])
+        -> (glyphs: [CGGlyph], advances: [Int])
+    {
+        let n = characters.count
+        guard n > 0 else { return ([], []) }
         let font = CTFontCreateWithName(
             resolved.macFontName as CFString,
             CGFloat(resolved.pointSize), nil
         )
-        var glyphs = [CGGlyph](repeating: 0, count: characters.count)
+        var glyphs = [CGGlyph](repeating: 0, count: n)
         var chars = characters
-        CTFontGetGlyphsForCharacters(font, &chars, &glyphs, characters.count)
-        var advances = [CGSize](repeating: .zero, count: characters.count)
-        CTFontGetAdvancesForGlyphs(font, .horizontal, &glyphs, &advances, characters.count)
-        let total = advances.reduce(CGFloat(0)) { $0 + $1.width }
-        return Int32(total.rounded())
+        CTFontGetGlyphsForCharacters(font, &chars, &glyphs, n)
+
+        var advances = [Int](repeating: 0, count: n)
+        if resolved.isMonospace {
+            for i in 0..<n {
+                advances[i] = glyphs[i] == 0 ? 0 : resolved.cellWidth
+            }
+        } else {
+            var ctAdvances = [CGSize](repeating: .zero, count: n)
+            CTFontGetAdvancesForGlyphs(font, .horizontal, &glyphs, &ctAdvances, n)
+            for i in 0..<n {
+                advances[i] = glyphs[i] == 0 ? 0 : Int(ceil(ctAdvances[i].width))
+            }
+        }
+        return (glyphs, advances)
+    }
+
+    /// Sum of per-glyph integer advances. Returned width matches
+    /// `Σ integerAdvances(...).advances` exactly, which is what the
+    /// renderer lays down. Used by QueryTextExtents.
+    public static func measureTextWidth(_ resolved: ResolvedFont, characters: [UniChar]) -> Int32 {
+        let (_, advances) = integerAdvances(resolved, characters: characters)
+        return Int32(clamping: advances.reduce(0, +))
     }
 
     /// Per-glyph metrics over a UniChar range, in the format QueryFontReply's
@@ -283,27 +319,28 @@ public enum FontResolver {
     public static func measureGlyphMetrics(_ resolved: ResolvedFont,
                                            range: ClosedRange<UInt16>) -> GlyphMetricsPayload {
         let count = Int(range.upperBound - range.lowerBound) + 1
-        let font = CTFontCreateWithName(
-            resolved.macFontName as CFString,
-            CGFloat(resolved.pointSize), nil
-        )
         var chars: [UniChar] = []
         chars.reserveCapacity(count)
         for c in range { chars.append(c) }
 
-        var glyphs = [CGGlyph](repeating: 0, count: count)
-        CTFontGetGlyphsForCharacters(font, &chars, &glyphs, count)
-        var advances = [CGSize](repeating: .zero, count: count)
-        CTFontGetAdvancesForGlyphs(font, .horizontal, &glyphs, &advances, count)
+        // characterWidth comes from the shared integerAdvances path so
+        // reporters and renderer can't drift. lsb/rsb/asc/desc are
+        // bbox-derived ink metrics, unrelated to the advance invariant.
+        let (glyphs, advances) = integerAdvances(resolved, characters: chars)
+
+        let font = CTFontCreateWithName(
+            resolved.macFontName as CFString,
+            CGFloat(resolved.pointSize), nil
+        )
         var bboxes = [CGRect](repeating: .zero, count: count)
-        CTFontGetBoundingRectsForGlyphs(font, .horizontal, &glyphs, &bboxes, count)
+        var glyphsForBbox = glyphs
+        CTFontGetBoundingRectsForGlyphs(font, .horizontal, &glyphsForBbox, &bboxes, count)
 
         var infos: [CharInfo] = []
         infos.reserveCapacity(count)
         var allExist = true
         for i in 0..<count {
             if glyphs[i] == 0 {
-                // Missing glyph — leave as zero CharInfo per spec convention.
                 infos.append(CharInfo(
                     leftSideBearing: 0, rightSideBearing: 0,
                     characterWidth: 0, ascent: 0, descent: 0, attributes: 0
@@ -311,7 +348,6 @@ public enum FontResolver {
                 allExist = false
                 continue
             }
-            let advance = Int(advances[i].width.rounded())
             let bbox = bboxes[i]
             let lsb = Int(bbox.origin.x.rounded(.down))
             let rsb = Int((bbox.origin.x + bbox.size.width).rounded(.up))
@@ -320,7 +356,7 @@ public enum FontResolver {
             infos.append(CharInfo(
                 leftSideBearing: Int16(clamping: lsb),
                 rightSideBearing: Int16(clamping: rsb),
-                characterWidth: Int16(clamping: advance),
+                characterWidth: Int16(clamping: advances[i]),
                 ascent: Int16(clamping: asc),
                 descent: Int16(clamping: desc),
                 attributes: 0

@@ -1,4 +1,5 @@
 import XCTest
+import CoreText
 @testable import SwiftXServerCore
 
 final class FontResolverTests: XCTestCase {
@@ -188,6 +189,67 @@ final class FontResolverTests: XCTestCase {
                            "ascent+descent invariant broken for \(name)")
             XCTAssertEqual(r.pointSize.rounded(), r.pointSize,
                            "pointSize for \(name) must be integer, got \(r.pointSize)")
+        }
+    }
+
+    // MARK: - MOTIF_TEXT_QUALITY invariant
+
+    func testIntegerAdvancesEqualReportedCharInfoWidths() {
+        // The load-bearing invariant: for every glyph the renderer will
+        // draw, the characterWidth a client reads back via QueryFont is
+        // the same integer the renderer uses to position the next glyph.
+        // Proven by funneling both through the same integerAdvances
+        // helper — if a future refactor splits the paths, this test
+        // catches the drift.
+        let xlfd = XLFD(family: "helvetica", pixelSize: 14, spacing: "p")
+        let r = FontResolver.resolve(xlfd: xlfd)
+        let range: ClosedRange<UInt16> = 32...127
+        let payload = FontResolver.measureGlyphMetrics(r, range: range)
+        let chars: [UniChar] = (range).map { $0 }
+        let (_, advances) = FontResolver.integerAdvances(r, characters: chars)
+        XCTAssertEqual(advances.count, payload.infos.count)
+        for i in 0..<advances.count {
+            XCTAssertEqual(Int(payload.infos[i].characterWidth), advances[i],
+                           "CHARINFO.characterWidth[\(i)] must equal integerAdvances[\(i)]")
+        }
+    }
+
+    func testMeasureTextWidthEqualsSumOfReportedCharInfoWidths() {
+        // The QueryTextExtents reply must equal Σ CHARINFO.characterWidth
+        // for the same glyphs, or Motif's menu-bar layout (which sums
+        // CHARINFO) disagrees with what we promise QueryTextExtents.
+        let xlfd = XLFD(family: "helvetica", pixelSize: 14, spacing: "p")
+        let r = FontResolver.resolve(xlfd: xlfd)
+        let s = "File Edit View Help"
+        let chars: [UniChar] = s.unicodeScalars.map { UniChar($0.value) }
+        let reported = FontResolver.measureTextWidth(r, characters: chars)
+        let payload = FontResolver.measureGlyphMetrics(r, range: 32...127)
+        let summed = chars.reduce(Int32(0)) { acc, c in
+            acc + Int32(payload.infos[Int(c) - 32].characterWidth)
+        }
+        XCTAssertEqual(reported, summed,
+                       "measureTextWidth must equal Σ CHARINFO.characterWidth")
+    }
+
+    func testIntegerAdvancesAreCeilNotRound() {
+        // Ceil is the side of the integer that can't go wrong: under-
+        // reporting causes visible overlap, over-reporting leaves gaps
+        // small enough no client notices. Confirm none of the reported
+        // widths are below the natural CT advance.
+        let xlfd = XLFD(family: "helvetica", pixelSize: 14, spacing: "p")
+        let r = FontResolver.resolve(xlfd: xlfd)
+        let chars: [UniChar] = Array(32...127)
+        let (glyphs, advances) = FontResolver.integerAdvances(r, characters: chars)
+        let font = CTFontCreateWithName(r.macFontName as CFString,
+                                        CGFloat(r.pointSize), nil)
+        var ctSizes = [CGSize](repeating: .zero, count: chars.count)
+        var glyphsCopy = glyphs
+        CTFontGetAdvancesForGlyphs(font, .horizontal, &glyphsCopy, &ctSizes, chars.count)
+        for i in 0..<chars.count where glyphs[i] != 0 {
+            XCTAssertGreaterThanOrEqual(CGFloat(advances[i]), ctSizes[i].width,
+                                        "advance[\(i)] (=\(advances[i])) must be ≥ natural CT advance \(ctSizes[i].width)")
+            XCTAssertLessThan(CGFloat(advances[i]) - ctSizes[i].width, 1.0,
+                              "ceil overshoot must be <1px for char \(i)")
         }
     }
 }

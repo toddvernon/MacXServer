@@ -27,21 +27,29 @@ X11 `characterWidth` is INT16 — integer pixels, no sub-pixel. Both reported an
 
 Two-sided enforcement:
 
+Both sides funnel through `FontResolver.integerAdvances(_:characters:)`, which dispatches on `resolved.isMonospace`:
+
+- **Monospace** (Monaco, Courier, anything with spacing `m`/`c`): every glyph reports `resolved.cellWidth`. That's the round-of-natural-advance value the resolver computed when picking a Mac point size to fit the requested cell. drawImageText8 also positions on `cellWidth`, so the xterm cell-grid playbook stays self-consistent and Motif/Xt clients that read CHARINFO for the same font still see one constant width per glyph.
+- **Proportional** (Helvetica, Times, Charter): per-glyph `Int(ceil(CTFontGetAdvancesForGlyphs(...)))`. Ceil is the side of the integer that can't go wrong — under-reporting causes visible overlap, over-reporting leaves sub-pixel gaps no client breaks on.
+
 ### Reporting side — `FontResolver.measureGlyphMetrics`
 
 For each glyph in the requested character range:
-1. Query Core Text for the glyph's natural advance at the resolved pointSize.
-2. Snap to integer via `Int(ceil(naturalAdvance))`. Ceil (not round) because under-reporting causes visible overlap; over-reporting leaves imperceptible gaps no client breaks on. Pick the side of the integer that can't go wrong.
-3. Pack into the CHARINFO record. For a proportional font, every character gets its own snapped value. For a monospace font, every character gets the same snapped value.
-4. QueryFont's `min_bounds` / `max_bounds.characterWidth` derive from the population: `min` and `max` of the per-glyph values.
+1. Use `integerAdvances` for `characterWidth`. Missing glyphs (CT glyph index 0) report 0.
+2. lsb / rsb / ascent / descent come from `CTFontGetBoundingRectsForGlyphs` — these are ink-box metrics unrelated to the advance invariant.
+3. QueryFont's `min_bounds` / `max_bounds.characterWidth` derive from the population: `min` and `max` of the per-glyph values.
 
-### Rendering side — `CocoaWindowBridge.drawPolyText8` / `drawImageText8`
+### Rendering side — `CocoaWindowBridge.drawPolyText8`
 
 For each glyph in a draw call:
-1. Compute the position as the cumulative sum of the *integer* `characterWidth` values from the resolved font's per-glyph metrics. Do NOT use Core Text's natural cumulative advance.
-2. Draw using `CGContext.showGlyphs(at: positions)` (or `CTFontDrawGlyphs(_:_:positions:_:)`) with those positions. Do NOT use `CGContextShowText` / `CTLineDraw` / any API that lets Core Text walk advances on its own — those re-introduce the mismatch we're trying to prevent.
+1. Compute positions as the cumulative sum of `integerAdvances` values — the same call the reporter makes. Do NOT call `CTFontGetAdvancesForGlyphs` directly or sum floats locally; that re-introduces the drift we're preventing.
+2. Draw using `CTFontDrawGlyphs(_:_:positions:_:)` with those positions. Do NOT use `CGContextShowText` / `CTLineDraw` / any API that lets Core Text walk advances on its own.
 
 The client positions character N at `Σ(reported_advances[0..N-1])` and we draw character N at the same coordinate.
+
+### Rendering side — `CocoaWindowBridge.drawImageText8` (xterm playbook)
+
+drawImageText8 is the cell-grid path. It positions glyphs at `i * cellWidth` and fills a bg rect of `n * cellWidth × cellHeight`. Because `integerAdvances` returns `cellWidth` for monospace, CHARINFO and drawImageText8 agree numerically by construction.
 
 ## What this costs
 
