@@ -55,6 +55,46 @@ final class StartupRepliesTests: XCTestCase {
         XCTAssertEqual(reply.names.count, 5)
     }
 
+    func testListFontsEchoesXLFDPatternWithConcreteCharset() throws {
+        // Echo-fallback path (added 2026-05-17): when the synth list has
+        // no match AND the pattern is XLFD-shaped with a concrete
+        // CHARSET_REGISTRY-CHARSET_ENCODING suffix, ListFonts returns the
+        // pattern itself as a single match. Required by Motif's
+        // XCreateFontSet — its check_charset (omGeneric.c:91-114) does
+        // suffix-compare against the returned name, so an iso8859-1
+        // probe needs at least one returned name ending in iso8859-1.
+        // Pattern below has a -dt-interface family we don't synthesize.
+        let session = ServerSession()
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        _ = session.outbound.drain()
+
+        let pattern = "-dt-interface system-medium-r-normal-s*-*-*-*-*-*-*-iso8859-1"
+        let req = ListFonts(maxNames: 1, pattern: Array(pattern.utf8))
+        let bytes = session.feed(req.encode(byteOrder: .lsbFirst))
+        let reply = try ListFontsReply.decode(from: bytes, byteOrder: .lsbFirst)
+        XCTAssertEqual(reply.names.count, 1, "echo-fallback must return one match")
+        XCTAssertEqual(String(decoding: reply.names[0], as: UTF8.self), pattern,
+                       "echoed name must equal the requested pattern")
+    }
+
+    func testListFontsDoesNotEchoWildcardCharsetPattern() throws {
+        // Echo is gated by "concrete charset suffix" — wildcard charset
+        // (the typical xfontsel-style enumeration probe) returns nothing
+        // for an unknown family pattern, NOT the pattern itself. This
+        // keeps the synth list the source of truth for honest enumerators.
+        let session = ServerSession()
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        _ = session.outbound.drain()
+
+        // -dt-interface family we don't synthesize + wildcard charset.
+        let pattern = "-dt-interface system-medium-r-normal-s*-*-*-*-*-*-*-*-*"
+        let req = ListFonts(maxNames: 10, pattern: Array(pattern.utf8))
+        let bytes = session.feed(req.encode(byteOrder: .lsbFirst))
+        let reply = try ListFontsReply.decode(from: bytes, byteOrder: .lsbFirst)
+        XCTAssertEqual(reply.names.count, 0,
+                       "wildcard-charset pattern must not echo — preserves enumerator honesty")
+    }
+
     func testGetKeyboardMappingReturnsKeysymsForRequestedRange() throws {
         let session = ServerSession()
         _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())

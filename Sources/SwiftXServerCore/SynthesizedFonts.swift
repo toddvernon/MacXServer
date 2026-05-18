@@ -40,19 +40,85 @@ public enum SynthesizedFonts {
     }()
 
     /// Filter `phase1Names` by an X-style pattern. The pattern uses `*` and
-    /// `?` wildcards; we do a simple lowercase fnmatch-style match. Empty
-    /// pattern (or `"*"`) returns everything.
+    /// `?` wildcards; we do a simple lowercase fnmatch-style match.
+    ///
+    /// Three-layer lookup, in order:
+    ///
+    ///   1. **Overrides** (curated). The `overrides` table maps a wildcard
+    ///      pattern to a hand-picked list of names. Used when a specific
+    ///      X client needs a specific X-protocol font response we'd
+    ///      otherwise not produce. Starts empty; entries get added with a
+    ///      `// app:` comment naming the app they unblock. Override
+    ///      matches are checked FIRST so curated entries always win.
+    ///   2. **Synthesized list**. The Phase-1 names — cell aliases plus
+    ///      our substitution-table families at common sizes. The "truth"
+    ///      tier: what we'd report to an honest enumerator (xfontsel).
+    ///   3. **Echo fallback**. If neither of the above matched AND the
+    ///      pattern has a concrete (non-wildcard) CHARSET_REGISTRY-
+    ///      CHARSET_ENCODING suffix, return the pattern itself as a
+    ///      single match. Motif's `XCreateFontSet` does suffix-compare
+    ///      on the returned name against the required charset; with the
+    ///      echo, dt-Motif `-dt-interface ...-iso8859-1` probes find a
+    ///      match and the FontSet builder accepts it. Our OpenFont/
+    ///      QueryFont accept any XLFD shape, so OpenFonting the echoed
+    ///      name yields a sensible substituted CTFont. Without this,
+    ///      Motif emits "Cannot convert string ... to type FontSet"
+    ///      warnings and widgets render with no usable font (button
+    ///      labels invisible). Bounded by the "concrete charset suffix"
+    ///      gate so wildcard enumerators (xfontsel pattern="*") still
+    ///      see the honest synth list.
     public static func match(pattern: String, max: Int) -> [[UInt8]] {
         let trimmed = pattern.trimmingCharacters(in: .whitespaces)
+        let lowerPattern = trimmed.lowercased()
+
+        // Layer 1: curated overrides.
+        for ov in overrides where wildcardMatch(pattern: ov.pattern.lowercased(), string: lowerPattern) {
+            let names = ov.names.prefix(max).map { Array($0.utf8) }
+            return Array(names)
+        }
+
+        // Layer 2: synthesized list. The "*" or empty pattern is the
+        // enumerate-everything case — return phase1Names directly.
         if trimmed.isEmpty || trimmed == "*" {
             return Array(phase1Names.prefix(max))
         }
-        let lowerPattern = trimmed.lowercased()
-        let result = phase1Names.compactMap { bytes -> [UInt8]? in
+        let synth = phase1Names.compactMap { bytes -> [UInt8]? in
             let s = String(decoding: bytes, as: UTF8.self).lowercased()
             return wildcardMatch(pattern: lowerPattern, string: s) ? bytes : nil
         }
-        return Array(result.prefix(max))
+        if !synth.isEmpty {
+            return Array(synth.prefix(max))
+        }
+
+        // Layer 3: echo fallback. Only kicks in for XLFD-shaped patterns
+        // with concrete charset suffix. Returns the pattern itself.
+        if patternHasConcreteCharsetSuffix(trimmed) {
+            return [Array(trimmed.utf8)]
+        }
+        return []
+    }
+
+    /// Curated override entries. Each entry maps a wildcard pattern to a
+    /// list of names that a specific X client needs to find in ListFonts.
+    /// Add with a `// app:` comment naming the app and why. Starts empty.
+    /// Policy: only add when the echo-fallback path doesn't satisfy a
+    /// client AND the client is one we host.
+    private static let overrides: [(pattern: String, names: [String])] = [
+        // (Future entries go here.)
+    ]
+
+    /// True when an XLFD pattern's last two fields (CHARSET_REGISTRY-
+    /// CHARSET_ENCODING) are concrete strings rather than `*` wildcards.
+    /// Used by the echo-fallback layer to avoid lying to wildcard
+    /// enumerators while still answering Motif's per-charset probes.
+    private static func patternHasConcreteCharsetSuffix(_ pattern: String) -> Bool {
+        guard pattern.hasPrefix("-") else { return false }
+        let parts = pattern.dropFirst().split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 14 else { return false }
+        let registry = parts[12]
+        let encoding = parts[13]
+        return !registry.contains("*") && !encoding.contains("*")
+            && !registry.isEmpty && !encoding.isEmpty
     }
 
     // MARK: - Tables
