@@ -490,14 +490,22 @@ public final class PixmapTable: @unchecked Sendable {
     /// is a temporary state that only exists if allocation failed
     /// (effectively never for sane width/height).
     private var buffers: [UInt32: PixelBuffer] = [:]
+    /// Logical-to-device scale, applied to every PixelBuffer we allocate.
+    /// Pixmaps store at device scale so CopyArea round-trips with the
+    /// (same-scale) window backing are pixel-lossless, which is what
+    /// Motif's caret save-under needs to avoid eroding glyph AA edges
+    /// every blink. See PixelBuffer.scaleFactor for the full rationale.
+    private let scaleFactor: Double
 
-    public init() {}
+    public init(scaleFactor: Double = 1) {
+        self.scaleFactor = scaleFactor
+    }
 
     /// Record the pixmap and eagerly allocate its CGBitmapContext.
     /// Replaces any pre-existing entry at the same id.
     public func allocate(id: UInt32, drawable: UInt32, depth: UInt8, width: UInt16, height: UInt16) {
         pixmaps[id] = PixmapEntry(id: id, drawable: drawable, depth: depth, width: width, height: height)
-        buffers[id] = PixelBuffer(width: Int(width), height: Int(height))
+        buffers[id] = PixelBuffer(width: Int(width), height: Int(height), scaleFactor: scaleFactor)
     }
 
     public func remove(_ id: UInt32) {

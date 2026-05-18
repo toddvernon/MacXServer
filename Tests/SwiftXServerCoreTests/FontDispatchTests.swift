@@ -46,7 +46,7 @@ private final class RecBridge: WindowBridge, @unchecked Sendable {
             x: x, y: y, string: string
         ))
     }
-    func drawPolyFillRectangle(target: DrawTarget, foreground: RGB16, function: UInt8, rectangles: [Framer.Rectangle], clipRectangles: [Framer.Rectangle]?) {
+    func drawPolyFillRectangle(target: DrawTarget, foreground: RGB16, background: RGB16, function: UInt8, fillStyle: UInt8, stipple: UInt32, tile: UInt32, stippleOriginX: Int16, stippleOriginY: Int16, rectangles: [Framer.Rectangle], clipRectangles: [Framer.Rectangle]?) {
         guard case .window(let topLevel, _, _) = target else { return }
         fillRectsCalls.append(FillRectsCall(
             topLevel: topLevel, foreground: foreground, rectangles: rectangles

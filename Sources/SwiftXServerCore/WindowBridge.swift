@@ -56,6 +56,12 @@ public struct DescendantSnapshot: Equatable, Sendable {
 }
 
 public protocol WindowBridge: AnyObject, Sendable {
+    /// Logical-to-device scale of the window backings the bridge owns.
+    /// 1 X-logical pixel = `scaleFactor` device pixels. PixmapTable
+    /// allocates pixmap backings at this same scale so CopyArea round
+    /// trips between window and pixmap stay pixel-lossless.
+    var scaleFactor: Double { get }
+
     /// The client created a new top-level window (parent = root). The bridge
     /// records geometry; the actual NSWindow is created lazily on map.
     func registerTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32)
@@ -229,7 +235,20 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// PolyFillRectangle. `function` is the X GC drawing function — primarily
     /// 3 (GXcopy, overwrite) or 6 (GXxor, toggle). XOR is what Athena/Motif
     /// menu-item highlights use; non-XOR fills destroy text underneath.
-    func drawPolyFillRectangle(target: DrawTarget, foreground: RGB16, function: UInt8, rectangles: [Rectangle], clipRectangles: [Rectangle]?)
+    /// `fillStyle` selects FillSolid (0) / FillTiled (1) / FillStippled (2) /
+    /// FillOpaqueStippled (3). Solid uses only `foreground`; stippled paths
+    /// read the `stipple` pixmap (1-bit pattern) and mask the fill to its
+    /// set bits — Motif's XmText caret needs this or it draws a solid block.
+    /// Tiled paths read `tile` (depth-N pixmap, currently unimplemented).
+    func drawPolyFillRectangle(
+        target: DrawTarget,
+        foreground: RGB16, background: RGB16,
+        function: UInt8,
+        fillStyle: UInt8,
+        stipple: UInt32, tile: UInt32,
+        stippleOriginX: Int16, stippleOriginY: Int16,
+        rectangles: [Rectangle], clipRectangles: [Rectangle]?
+    )
     /// PolyRectangle: stroke the perimeter of each rect (vs PolyFillRectangle
     /// which fills). Used by Athena Command for the highlight border that
     /// appears when the pointer enters the widget.
@@ -358,6 +377,9 @@ public struct WindowBackgroundRect: Equatable, Sendable {
 }
 
 public extension WindowBridge {
+    /// Default scale factor for bridges that don't override (test mocks,
+    /// stubs). Real bridges (`CocoaWindowBridge`) provide a stored value.
+    var scaleFactor: Double { 1 }
     func descendantResized(id: UInt32, parent: UInt32, geometry: TopLevelGeometry) {}
     func drawingTarget(for drawable: UInt32) -> Any? { nil }
     func setOnTopLevelResize(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {}
@@ -378,7 +400,15 @@ public extension WindowBridge {
     func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
     func drawPolyLine(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
     func drawFillPoly(target: DrawTarget, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Rectangle]?) {}
-    func drawPolyFillRectangle(target: DrawTarget, foreground: RGB16, function: UInt8, rectangles: [Rectangle], clipRectangles: [Rectangle]?) {}
+    func drawPolyFillRectangle(
+        target: DrawTarget,
+        foreground: RGB16, background: RGB16,
+        function: UInt8,
+        fillStyle: UInt8,
+        stipple: UInt32, tile: UInt32,
+        stippleOriginX: Int16, stippleOriginY: Int16,
+        rectangles: [Rectangle], clipRectangles: [Rectangle]?
+    ) {}
     func drawPolyRectangle(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, rectangles: [Rectangle], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
     func drawPolyArc(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, arcs: [Arc], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
     func drawPolyFillArc(target: DrawTarget, foreground: RGB16, arcs: [Arc], clipRectangles: [Rectangle]?) {}

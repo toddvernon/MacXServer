@@ -77,6 +77,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         self.pixmapBufferLookup = lookup
     }
 
+
     public init(scaleFactor: Double = 1, log: ServerLogSink? = nil) {
         self.scaleFactor = scaleFactor
         self.log = log
@@ -114,10 +115,24 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 }
                 view.setNeedsDisplay(view.bounds)
             }
-        case .pixmap(let id, _):
+        case .pixmap(let id, let depth):
             guard let buffer = self.pixmapBufferLookup?(id) else { return }
             self.withClip(buffer.context, clipRectangles) {
-                body(buffer.context)
+                if depth == 1 {
+                    // Depth-1 pixmaps are usually stipple sources.
+                    // FillStippled's bit reader treats a pixel as "set"
+                    // only when it's fully black; AA-soft edges between
+                    // PolySegment carves would shrink the readable set
+                    // bits to nothing, leaving Motif's caret looking
+                    // like dots rather than a proper I-beam.
+                    buffer.context.saveGState()
+                    buffer.context.setShouldAntialias(false)
+                    buffer.context.setAllowsAntialiasing(false)
+                    body(buffer.context)
+                    buffer.context.restoreGState()
+                } else {
+                    body(buffer.context)
+                }
             }
         }
     }
@@ -745,17 +760,43 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         // dst is a window.
         switch src {
         case .pixmap(let srcId, _):
-            guard let srcImage = self.pixmapBufferLookup?(srcId)?.context.makeImage() else { return }
+            guard let buffer = self.pixmapBufferLookup?(srcId),
+                  let srcImage = buffer.context.makeImage() else { return }
+            // Pixmap backings are stored at device scale (see PixelBuffer);
+            // the resulting CGImage is `width*scaleFactor × height*scaleFactor`
+            // device pixels, not the logical X dimensions. Pass the buffer's
+            // scale so blitCroppedImage's crop math reads at the right rect.
             blitCroppedImage(
-                srcImage, srcImageScale: 1.0,
+                srcImage, srcImageScale: buffer.scaleFactor,
                 srcX: srcX, srcY: srcY, dst: dst,
                 dstX: dstX, dstY: dstY,
                 width: width, height: height,
                 clipRectangles: clipRectangles
             )
         case .window(let srcTopLevel, _, _):
+            // SYNCHRONOUS to main: window→pixmap CopyArea is Motif's
+            // save-under for the XmText caret. Snapshotting the window
+            // backing must happen on main (view.backing lives there) AND
+            // the pixmap write must complete before the protocol queue
+            // processes the next request — otherwise a subsequent
+            // pixmap→window restore (req N+1) reads the save pixmap on
+            // the protocol thread while main is still writing into it,
+            // producing the classic cursor-bleed artifact (fragments of
+            // the previous character carried into the new cursor area).
+            //
+            // XQuartz solves the same race with xp_lock_window (kernel-
+            // private, see hw/xquartz/xpr/xprFrame.c:xprStartDrawing) so
+            // its server-thread can safely read AND write the window
+            // bytes. We don't have xp_lock_window; dispatch_sync is the
+            // cheapest equivalent — protocol queue blocks until main
+            // completes the read+write, mirroring the lock-bounded
+            // exclusive-access window.
+            //
+            // No deadlock risk: bridge→protocolQueue callbacks (mouse,
+            // key, focus) all use queue.async, so main never sync-waits
+            // on the protocol queue.
             let scaleFactor = self.scaleFactor
-            DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.sync { [weak self] in
                 guard let self = self,
                       let srcImage = self.slot(srcTopLevel)?.view?.backing?.makeImage() else { return }
                 self.blitCroppedImage(
@@ -887,7 +928,41 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
-    public func drawPolyFillRectangle(target: DrawTarget, foreground: RGB16, function: UInt8, rectangles: [Framer.Rectangle], clipRectangles: [Framer.Rectangle]?) {
+    public func drawPolyFillRectangle(
+        target: DrawTarget,
+        foreground: RGB16, background: RGB16,
+        function: UInt8,
+        fillStyle: UInt8,
+        stipple: UInt32, tile: UInt32,
+        stippleOriginX: Int16, stippleOriginY: Int16,
+        rectangles: [Framer.Rectangle], clipRectangles: [Framer.Rectangle]?
+    ) {
+        if let r = rectangles.first {
+            log?.log("  drawPolyFillRectangle target=\(target) fn=\(function) fillStyle=\(fillStyle) stipple=0x\(String(stipple, radix: 16)) stipOrig=(\(stippleOriginX),\(stippleOriginY)) fg=(\(foreground.red >> 8),\(foreground.green >> 8),\(foreground.blue >> 8)) n=\(rectangles.count) first=(\(r.x),\(r.y),\(r.width)x\(r.height))")
+        }
+
+        // Stippled / opaque-stippled: rasterise the fill against the bit
+        // pattern in the 1-bit stipple pixmap. Without this, Motif's
+        // XmText caret (a tiny pixmap with an I-beam carved into a solid
+        // block) renders as the solid block and obscures the character
+        // under the cursor.
+        if (fillStyle == 2 || fillStyle == 3), stipple != 0,
+           let stippleBuf = pixmapBufferLookup?(stipple),
+           let stippleBitGrid = StippleBitGrid(buffer: stippleBuf) {
+            let opaque = (fillStyle == 3)
+            withDrawContext(target, clipRectangles: clipRectangles) { [weak self] ctx in
+                self?.fillStippled(
+                    ctx: ctx, rects: rectangles,
+                    foreground: foreground, background: background,
+                    opaque: opaque,
+                    stipple: stippleBitGrid,
+                    originX: Int(stippleOriginX), originY: Int(stippleOriginY),
+                    function: function
+                )
+            }
+            return
+        }
+
         withDrawContext(target, clipRectangles: clipRectangles) { ctx in
             // X GC function = 6 (GXxor): XOR fill toggles destination
             // pixels. Athena's menu-item highlight relies on this — first
@@ -905,6 +980,107 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             for r in rectangles {
                 ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
                                 width: CGFloat(r.width), height: CGFloat(r.height)))
+            }
+        }
+    }
+
+    /// Sendable snapshot of a stipple pixmap's bit pattern, lifted out
+    /// of `PixelBuffer` (which can't cross @Sendable closure boundaries
+    /// because CGContext isn't Sendable) before drawing begins. Cheap:
+    /// stipples are small (Motif's caret is 5×14 = 70 bytes copied).
+    private struct StippleBitGrid: Sendable {
+        let width: Int
+        let height: Int
+        let bits: [Bool]      // row-major; bits[y*width + x]
+        init?(buffer: PixelBuffer) {
+            let w = buffer.width
+            let h = buffer.height
+            guard w > 0, h > 0, let raw = buffer.context.data else { return nil }
+            let bpr = buffer.context.bytesPerRow
+            let bytes = raw.assumingMemoryBound(to: UInt8.self)
+            var bits = [Bool](repeating: false, count: w * h)
+            // ARGB premultipliedFirst + byteOrder32Little = BGRA in
+            // memory. For a depth-1 stipple, a SET bit (pixel value 1)
+            // = blackPixel = RGB(0,0,0) in our 32-bit storage; a CLEAR
+            // bit (pixel value 0) = whitePixel = RGB(255,255,255). This
+            // is the X11 paper/ink convention also reflected in our
+            // ServerConfig (whitePixel=0, blackPixel=1, matching real
+            // u5 Xsun). Motif builds caret stipples by filling white
+            // (= clear) and then drawing the I-beam with PolySegment in
+            // black (= set), so the carved line shape is what gets
+            // painted by FillStippled.
+            //
+            // Pixmaps store at the bridge's device scale (see
+            // PixelBuffer.scaleFactor), so each logical pixel covers a
+            // scale×scale block of device pixels. We sample the centre
+            // of each block; for the 1-logical-pixel-wide I-beam strokes
+            // Motif carves, the centre device pixel always falls within
+            // the rasterised line, so the resulting bit pattern matches
+            // the logical I-beam shape.
+            let scale = max(1, Int(buffer.scaleFactor.rounded()))
+            let centerOffset = scale / 2
+            for y in 0..<h {
+                let deviceRow = y * scale + centerOffset
+                let rowBase = deviceRow * bpr
+                for x in 0..<w {
+                    let deviceCol = x * scale + centerOffset
+                    bits[y * w + x] = bytes[rowBase + deviceCol * 4 + 2] == 0
+                }
+            }
+            self.width = w
+            self.height = h
+            self.bits = bits
+        }
+    }
+
+    /// Rasterise a stippled fill: for each destination pixel inside
+    /// `rects`, look up the corresponding stipple bit (with toroidal
+    /// tiling from `originX, originY`). Set bits paint `foreground`;
+    /// clear bits leave the destination alone (FillStippled) or paint
+    /// `background` (FillOpaqueStippled). Built for small stipples
+    /// (Motif's text caret is 5×14); fine for those, slow if anything
+    /// ever asks us to stipple-fill a window-sized rect — revisit when
+    /// that case shows up.
+    private func fillStippled(
+        ctx: CGContext, rects: [Framer.Rectangle],
+        foreground: RGB16, background: RGB16,
+        opaque: Bool,
+        stipple: StippleBitGrid,
+        originX: Int, originY: Int,
+        function: UInt8
+    ) {
+        let sw = stipple.width
+        let sh = stipple.height
+        let bits = stipple.bits
+
+        @inline(__always) func stippleBit(_ x: Int, _ y: Int) -> Bool {
+            let sx = ((x - originX) % sw + sw) % sw
+            let sy = ((y - originY) % sh + sh) % sh
+            return bits[sy * sw + sx]
+        }
+
+        if function == 6 {  // GXxor
+            ctx.setBlendMode(.difference)
+        }
+
+        for r in rects {
+            let x0 = Int(r.x), x1 = Int(r.x) + Int(r.width)
+            let y0 = Int(r.y), y1 = Int(r.y) + Int(r.height)
+            for y in y0..<y1 {
+                var runStart = x0
+                var runForeground = stippleBit(x0, y)
+                for x in (x0 + 1)...x1 {
+                    let set = (x < x1) ? stippleBit(x, y) : !runForeground
+                    if set != runForeground {
+                        if runForeground || opaque {
+                            applyFill(ctx, runForeground ? foreground : background)
+                            ctx.fill(CGRect(x: CGFloat(runStart), y: CGFloat(y),
+                                            width: CGFloat(x - runStart), height: 1))
+                        }
+                        runStart = x
+                        runForeground = set
+                    }
+                }
             }
         }
     }
@@ -1043,6 +1219,21 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         items: [UInt8],
         clipRectangles: [Framer.Rectangle]?
     ) {
+        // Decode preview: TEXTITEM8 = length(1) + delta(1) + chars... runs.
+        var preview: [UInt8] = []
+        var pi = 0
+        while pi < items.count && preview.count < 32 {
+            let nb = items[pi]
+            if nb == 0xFF { pi += 5; continue }
+            let nn = Int(nb)
+            if nn == 0 { pi += 1; continue }
+            guard pi + 2 + nn <= items.count else { break }
+            for k in 0..<nn { preview.append(items[pi + 2 + k]) }
+            pi += 2 + nn
+        }
+        let pstr = String(decoding: preview, as: UTF8.self).replacingOccurrences(of: "\n", with: "\\n")
+        log?.log("  drawPolyText8 target=\(target) font=\(font.macFontName) cell=\(font.cellWidth)x\(font.cellHeight) mono=\(font.isMonospace) at (\(x),\(y)) str=\"\(pstr)\"")
+
         withDrawContext(target, clipRectangles: clipRectangles) { [weak self] ctx in
             applyFill(ctx, foreground)
             ctx.setShouldAntialias(true)

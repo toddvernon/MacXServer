@@ -58,7 +58,7 @@ public final class ServerSession: @unchecked Sendable {
     public let colors = ColorTable()
     public let windows = WindowTable()
     public let gcs = GCTable()
-    public let pixmaps = PixmapTable()
+    public let pixmaps: PixmapTable
     public let fonts = FontTable()
     public let cursors = CursorTable()
     public let properties = PropertyTable()
@@ -243,6 +243,11 @@ public final class ServerSession: @unchecked Sendable {
         self.coordinator = coordinator
         self.clipboardPrefs = clipboardPrefs
         self.log = log
+        // Pixmaps allocate at the bridge's logical-to-device scale so
+        // window↔pixmap CopyArea is pixel-lossless (Motif caret save-under
+        // would otherwise erode glyph AA edges every blink — see
+        // PixelBuffer.scaleFactor for the full rationale).
+        self.pixmaps = PixmapTable(scaleFactor: bridge?.scaleFactor ?? 1)
         self.selectionMediator = SelectionMediator(
             atoms: coordinator.atoms,
             coordinator: coordinator,
@@ -2168,7 +2173,12 @@ public final class ServerSession: @unchecked Sendable {
         bridge.drawPolyFillRectangle(
             target: target,
             foreground: resolveColor(state.foreground),
+            background: resolveColor(state.background),
             function: state.function,
+            fillStyle: state.fillStyle,
+            stipple: state.stipple, tile: state.tile,
+            stippleOriginX: state.tileStippleXOrigin &+ Int16(truncatingIfNeeded: dx),
+            stippleOriginY: state.tileStippleYOrigin &+ Int16(truncatingIfNeeded: dy),
             rectangles: rects,
             clipRectangles: state.clipRectangles
         )
@@ -2255,7 +2265,19 @@ public final class ServerSession: @unchecked Sendable {
         bridge.drawPolyFillRectangle(
             target: target,
             foreground: resolveColor(state.foreground),
+            background: resolveColor(state.background),
             function: state.function,
+            fillStyle: state.fillStyle,
+            stipple: state.stipple, tile: state.tile,
+            // Translate the stipple origin by the same window offset we
+            // applied to the rectangle. Without this, the stipple grid
+            // shifts relative to the fill rect by exactly the window's
+            // offset within its top-level — and Motif's text caret
+            // (origin set per-paint to the cursor's window-local top
+            // left) decodes as a scrambled fragment instead of the
+            // I-beam stipple pattern.
+            stippleOriginX: state.tileStippleXOrigin &+ Int16(truncatingIfNeeded: dx),
+            stippleOriginY: state.tileStippleYOrigin &+ Int16(truncatingIfNeeded: dy),
             rectangles: translated,
             clipRectangles: state.clipRectangles
         )
@@ -3560,6 +3582,7 @@ public final class ServerSession: @unchecked Sendable {
             }
             let reply: GetPropertyReply
             let existing = properties.get(window: r.window, property: r.property)
+            log?.log("  GetProperty win=0x\(String(r.window, radix: 16)) prop=\(r.property) (\(atoms.name(for: r.property) ?? "?")) → \(existing.map { "\($0.value.count) bytes" } ?? "empty")")
             if let entry = existing {
                 reply = GetPropertyReply(
                     sequenceNumber: sequenceNumber,

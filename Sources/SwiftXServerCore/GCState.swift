@@ -57,6 +57,22 @@ public struct GCState: Equatable, Sendable {
     /// to queue and discard an event they explicitly said they didn't
     /// want.
     public var graphicsExposures: Bool = true
+    /// GC fill-style. 0 = FillSolid (default; fg fills everywhere),
+    /// 1 = FillTiled (fg-channel comes from `tile` pixmap, replicated),
+    /// 2 = FillStippled (fg only where `stipple` bit is 1; dest unchanged
+    /// elsewhere), 3 = FillOpaqueStippled (fg where 1, bg where 0).
+    /// Motif's XmText caret uses FillStippled with a small depth-1 pixmap
+    /// to render the I-beam; without honoring this we draw a solid block.
+    public var fillStyle: UInt8 = 0
+    /// Pixmap ID for the stipple pattern. 0 = unset.
+    public var stipple: UInt32 = 0
+    /// Pixmap ID for the tile pattern. 0 = unset.
+    public var tile: UInt32 = 0
+    /// Pattern origin (CWStippleXOrigin / CWStippleYOrigin). The stipple
+    /// tiles starting from this point so toolkits can keep the pattern
+    /// phase-aligned with a parent's pattern across redraws.
+    public var tileStippleXOrigin: Int16 = 0
+    public var tileStippleYOrigin: Int16 = 0
 
     public init() {}
 
@@ -75,6 +91,15 @@ public struct GCState: Equatable, Sendable {
         if let v = entry.values[GCBits.dashOffset] { state.dashOffset = v }
         if let v = entry.values[GCBits.function]   { state.function = UInt8(truncatingIfNeeded: v) }
         if let v = entry.values[GCBits.graphicsExposures] { state.graphicsExposures = (v != 0) }
+        if let v = entry.values[GCBits.fillStyle]  { state.fillStyle = UInt8(truncatingIfNeeded: v) }
+        if let v = entry.values[GCBits.stipple]    { state.stipple = v }
+        if let v = entry.values[GCBits.tile]       { state.tile = v }
+        if let v = entry.values[GCBits.tileStippleXOrigin] {
+            state.tileStippleXOrigin = Int16(bitPattern: UInt16(truncatingIfNeeded: v))
+        }
+        if let v = entry.values[GCBits.tileStippleYOrigin] {
+            state.tileStippleYOrigin = Int16(bitPattern: UInt16(truncatingIfNeeded: v))
+        }
         if let rects = entry.clipRectangles {
             let cox = Int16(bitPattern: UInt16(truncatingIfNeeded: entry.values[GCBits.clipXOrigin] ?? 0))
             let coy = Int16(bitPattern: UInt16(truncatingIfNeeded: entry.values[GCBits.clipYOrigin] ?? 0))
