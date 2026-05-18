@@ -348,6 +348,8 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext) -> String {
         body = "QueryColors              cmap=\(windowDisplay(r.cmap)) pixels=\(r.pixels.count)"
     case .lookupColor(let r):
         body = "LookupColor              cmap=\(windowDisplay(r.cmap)) name=\"\(String(decoding: r.name, as: UTF8.self))\""
+    case .createCursor(let r):
+        body = "CreateCursor             cid=\(windowDisplay(r.cid)) source=\(windowDisplay(r.source)) mask=\(windowDisplay(r.mask)) hotspot=(\(r.x),\(r.y))"
     case .createGlyphCursor(let r):
         body = "CreateGlyphCursor        cid=\(windowDisplay(r.cid)) sourceFont=\(windowDisplay(r.sourceFont)) char=\(r.sourceChar)"
     case .freeCursor(let r):
@@ -594,6 +596,7 @@ func opcodeOf(_ req: Request) -> UInt8 {
     case .circulateWindow:           return CirculateWindow.opcode
     case .queryTextExtents:          return QueryTextExtents.opcode
     case .polyPoint:                 return PolyPoint.opcode
+    case .createCursor:              return CreateCursor.opcode
     case .createGlyphCursor:         return CreateGlyphCursor.opcode
     case .freeCursor:                return FreeCursor.opcode
     case .recolorCursor:             return RecolorCursor.opcode

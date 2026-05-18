@@ -3935,6 +3935,26 @@ public final class ServerSession: @unchecked Sendable {
 
         // Silent no-ops: requests xclock or other apps may issue that we
         // don't yet wire to rendering. Add real handlers as needed.
+        case .createCursor(let r):
+            // Pixmap-source cursor. Spec requires source (and mask if non-zero)
+            // to be valid 1-bit-depth pixmaps; we validate existence but not
+            // depth (we don't synthesize the actual cursor bitmap anyway —
+            // NSCursor renders as the macOS arrow for pixmap cursors). Hotspot
+            // and fg/bg colors are ignored. The cursor ID still has to live in
+            // the table so subsequent CWCursor references and FreeCursor work.
+            // Sentinel sourceGlyph=0xFFFF means "no X cursor-font glyph — fall
+            // back to NSCursor.arrow at crossing time."
+            guard pixmaps.get(r.source) != nil else {
+                emitError(.pixmap, majorOpcode: CreateCursor.opcode, badResourceId: r.source)
+                break
+            }
+            if r.mask != 0, pixmaps.get(r.mask) == nil {
+                emitError(.pixmap, majorOpcode: CreateCursor.opcode, badResourceId: r.mask)
+                break
+            }
+            cursors.insert(CursorEntry(id: r.cid, sourceGlyph: 0xFFFF))
+            log?.log("  CreateCursor cid=0x\(String(r.cid, radix: 16)) source=0x\(String(r.source, radix: 16)) mask=0x\(String(r.mask, radix: 16)) hotspot=(\(r.x),\(r.y)) [NSCursor.arrow fallback]")
+
         case .createGlyphCursor(let r):
             // Source and mask fonts must be valid per spec. We don't actually
             // use them (NSCursor substitution by sourceChar), but a client
@@ -4928,6 +4948,7 @@ private func opcodeName(_ request: Request) -> String {
     case .queryBestSize: return "QueryBestSize"
     case .queryExtension: return "QueryExtension"
     case .bell: return "Bell"
+    case .createCursor: return "CreateCursor"
     case .createGlyphCursor: return "CreateGlyphCursor"
     case .freeCursor: return "FreeCursor"
     case .recolorCursor: return "RecolorCursor"

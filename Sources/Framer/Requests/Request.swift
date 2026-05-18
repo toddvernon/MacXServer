@@ -67,6 +67,7 @@ public enum Request: Equatable, Sendable {
     case queryBestSize(QueryBestSize)
     case queryExtension(QueryExtension)
     case bell(Bell)
+    case createCursor(CreateCursor)
     case createGlyphCursor(CreateGlyphCursor)
     case freeCursor(FreeCursor)
     case recolorCursor(RecolorCursor)
@@ -169,6 +170,7 @@ public enum Request: Equatable, Sendable {
         case .queryBestSize(let r):             return r.encode(byteOrder: byteOrder)
         case .queryExtension(let r):            return r.encode(byteOrder: byteOrder)
         case .bell(let r):                      return r.encode(byteOrder: byteOrder)
+        case .createCursor(let r):              return r.encode(byteOrder: byteOrder)
         case .createGlyphCursor(let r):         return r.encode(byteOrder: byteOrder)
         case .freeCursor(let r):                return r.encode(byteOrder: byteOrder)
         case .recolorCursor(let r):             return r.encode(byteOrder: byteOrder)
@@ -352,6 +354,8 @@ public enum Request: Equatable, Sendable {
             return .queryExtension(try QueryExtension.decode(from: bytes, byteOrder: byteOrder))
         case Bell.opcode:
             return .bell(try Bell.decode(from: bytes, byteOrder: byteOrder))
+        case CreateCursor.opcode:
+            return .createCursor(try CreateCursor.decode(from: bytes, byteOrder: byteOrder))
         case CreateGlyphCursor.opcode:
             return .createGlyphCursor(try CreateGlyphCursor.decode(from: bytes, byteOrder: byteOrder))
         case FreeCursor.opcode:

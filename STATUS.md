@@ -1,174 +1,174 @@
-# Status 2026-05-17 — End of day
+# Status 2026-05-18 — End of day
 
-Big day. Nine commits: pixmap-render arc landed, capture re-baseline,
-font-charset work, plus a late-day docs hygiene pass that absorbed the
-2026-05-14/15 audit + comparison research into the live ledger and set
-up a rolling-STATUS convention. dt-Motif chrome now renders 3D with
-correct CDE-grey colors against our server. Visible-text gap remains
-the headline open issue for tomorrow.
+Big day for a different reason than yesterday. The dt-Motif color bug
+yesterday looked like a chase through pixel-color resolution and
+glyph rendering, and we walked into the diag-log session this morning
+expecting to instrument PolyText8 and trace which slot was wrong. The
+diag *did* fire and concretely pin the wrong color (fg=(172,172,180),
+matching `ColorTable[0x0D]`), but the real win came from stepping back
+and asking what Motif was even *doing* listening to a CDE-customization
+indirection on a server that isn't actually CDE. The fix landed by
+deletion, not by debugging.
 
-## Commits today (in landing order)
+## Headline
 
-| # | sha | what landed |
+**Retired the CDE customization daemon impersonation and the
+3910-byte CDE-flavored RESOURCE_MANAGER fixture.** Both were
+introduced earlier (2026-05-10 and 2026-05-17 respectively) to push
+dt-apps past an Xt-wedge symptom that turned out to be our own
+MATCH_SELECT-time bug, fixed separately. SS2 publishes neither
+(verified against `dtcalc-running-on-u5-display-on-ss2.xtap` —
+zero ASCII hits for `background`/`foreground`/`color`/`delphinium`
+in the 37 KB S2C stream). With both cut, dtcalc + dtterm + quickplot
+all render with full SS2-with-mwm visual parity: Motif fallback blue
+panels with crisp white labels on every button. Both yesterday's
+headline bugs (invisible grey-on-grey button labels, white-on-white
+LCD digits) are gone in one commit.
+
+What stayed: `_MOTIF_DRAG_WINDOW` and `_MOTIF_WM_INFO` — both
+pre-CDE mwm-era signals that an SS2-with-mwm session would publish.
+The framing that justifies the cut: **be SS2 running plain mwm, not
+SS2 running CDE.** mwm-era signals stay; CDE-only signals go.
+
+## Smoke results across the dt-app suite
+
+| App | Result | Versus pre-cut |
 |---|---|---|
-| 1 | `aa5a674` | RESOURCE_MANAGER fixture — bake u5's 3910-byte CDE resource database into root window properties. Was a 23-byte placeholder; now Xt-based clients see real font lists and Motif feature flags. |
-| 2 | `91761a6` | Pixmap-render foundation — `PixelBuffer` (CGBitmapContext per pixmap), `PixmapTable.allocate(...)`, `DrawTarget` enum, `validateDrawTarget` returns `DrawTarget?`. No behavior change yet; type plumbing only. |
-| 3 | `4af04de` | Pixmap Stage 1b — bridge `withDrawContext(target, clipRectangles, body)` helper, 9 `drawXxx` methods refactored to take `target: DrawTarget`, all 10 handler call sites updated. Pixmap-targeted draws actually write pixels into the PixelBuffer.context. |
-| 4 | `262c105` | Capture re-baseline on SS2 — moved 16 legacy `*-sun.xtap` files to `captures/archive/`, recaptured all dt-apps from u5 and classic X apps from SS2, both displaying on SS2's X Consortium R6 sample server (the cleanest spec-compliant baseline available). 8 replay tests rebaselined; broader badId tolerance in replay-test harness. `captures/README.md` documents the scheme. |
-| 5 | `cef3912` | Pixmap Stage 2 — `bridge.copyArea(src: DrawTarget, dst: DrawTarget, ...)`. Same-NSWindow path keeps the bitmap memmove fast path (xterm scroll). All other 4 cases (cross-NSWindow, pixmap→window, window→pixmap, pixmap→pixmap) snapshot src as CGImage cropped to source rect, draw via CGContext.draw(image:in:) through withDrawContext. Honors GC clip on every path except memmove. |
-| 6 | `268d612` | QueryFont charset awareness — `ResolvedFont` gains `charsetRegistry`/`charsetEncoding` fields populated from XLFD's last two fields. `makeQueryFontReply` returns `chars=224` (range 32...255) for iso8859 fonts, `chars=95` (32...126) for others. Added `CHARSET_REGISTRY` + `CHARSET_ENCODING` atom-valued FONTPROPS. Required because Motif's `XCreateFontSet` reads these atoms to match per-charset font variants. |
-| 7 | `c204536` | ListFonts override + echo fallback — three-layer `SynthesizedFonts.match()`: (1) curated overrides (starts empty, policy comment), (2) synth list (existing), (3) echo: if no synth match AND pattern has concrete CHARSET_REGISTRY-CHARSET_ENCODING suffix, return the pattern itself as a single match. Motif's `XCreateFontSet` does suffix-compare on the returned name (`omGeneric.c:91-114` check_charset) so echo unblocks the per-charset probe. Bounded to concrete-charset patterns so wildcard enumerators (xfontsel) still get the honest synth list. |
-| 8 | `350cdf9` | Docs cleanup — 8 superseded docs + `audit/` + `comparison/` research forks moved to `archive/` (39 renames preserving git history). 14 actionable findings promoted into SHORTCUTS (CWBackPixmap/Border, CWBorderWidth, ReparentWindow Unmap/Map pair, SetSelectionOwner time gate, GetProperty type filter, GetPointerMapping [1..5], substructure-redirect events, RotateProperties, the remaining kbd/pointer BadRequest opcodes, no-auth on TCP listener, motionBufferSize lie, CDE atom pre-intern, SolarisIA, Expose-vs-ConfigureNotify cascade) each citing its archive path. `captures/README.md` absorbed the ToolTalk-proxy detail from the archived FOLLOWUPS doc. CLAUDE.md routes XTERM_FONT_QUALITY for terminal-text and notes the archive convention. |
-| 9 | `0388406` | Rolling STATUS.md convention — `STATUS_2026-05-17.md` → `STATUS.md`, overwritten end-of-day rather than accumulating dated snapshots. Rule documented in CLAUDE.md Working Conventions. |
+| dtcalc | Renders correctly, full SS2 parity | invisible labels → readable; LCD digits show |
+| dtterm | Terminal renders + works | unchanged (separate CreateCursor crash on Help menu, fixed below) |
+| quickplot | Renders, known issues persist | unchanged |
+| dthelpview | Window up, no text content | unchanged (pre-existing font issue) |
+| dticon | Partial render + TT error | unchanged (same as via capture proxy) |
+| dtpad | No display, TT error | unchanged (same as via capture proxy) |
+| dtmail | TT dialog | unchanged (same as via capture proxy) |
 
-**526 tests pass, 4 documented skips, 0 failures.** Working tree:
-one uncommitted diag log line in `drawPolyText8` (added late-day for
-debugging the invisible-text mystery; decide tomorrow whether to keep).
-The two pre-existing working-tree changes from earlier today
-(`CocoaWindowBridge.swift` and `connection.json`) are still uncommitted.
+No dt-app regressed. The "cutting CDE signals might unmask hidden
+ToolTalk dependencies" worry did not materialize.
 
-## What's working visually on u5 + dt-Motif now
+## New thread surfaced — Framer-shared bug
 
-End of day, running `dtcalc` from u5 with DISPLAY → swiftx:0:
+dtpad / dtmail / dticon all work **direct u5 → SS2**. They all
+misbehave the same way through **swiftx-capture proxy → SS2** AND
+through **swiftx-server**. The only common code between the proxy
+and our server is the `Framer` module. So whatever is making these
+dt-apps go down a ToolTalk-aware or otherwise-broken code path is
+in shared framing logic, not server-only.
 
-- Boots end-to-end (no abort, clean disconnect on quit)
-- 3D button chrome renders with correct CDE shadow lines
-- Panel background is CDE-grey (`#C800C800C800`) — RESOURCE_MANAGER fixture
-- LCD area is white with black border — matches u5 behavior
-- Quit button label renders correctly
-- Console clean — no Motif font warnings (was a flood pre-c204536)
+Working hypothesis: some opcode's encoding or decoding through Framer
+is subtly wrong in a way these specific dt-apps notice but dtcalc /
+dtterm / quickplot don't. Likely investigation: capture the same
+small dt-app session both direct u5→ss2 and u5→capture→ss2, then
+`swiftx-capture diff` the byte streams. Any divergence is the bug.
 
-## What's broken / open puzzles
+This is probably the next real blocker. Higher impact than the
+Motif text-spacing issues remaining elsewhere.
 
-### 1. Most digit/operator button labels are invisible
+## CreateCursor (opcode 93) stubbed
 
-The Quit button label renders. The 0-9 digits, +, =, sqrt etc. don't.
-Todd confirmed Quit is just another Motif PushButton, NOT a title-bar
-widget — same widget class, different result.
+dtterm crashed on Help-menu open with
+`BadRequest: opcode 93 (X_CreateCursor)`. We never had a Framer
+decoder for it (CreateGlyphCursor=94 and FreeCursor=95 were there;
+93 was the gap). Added `CreateCursor` struct in
+`Sources/Framer/Requests/CreateCursor.swift`, wired the dispatch in
+`Request.swift` (case + decode + encode), updated both dumper switches
+(`ChronoDumper`, `Dumper`), and added a handler in
+`ServerSession.swift` that validates source/mask pixmaps (BadPixmap
+on unknown), records the cursor ID in `CursorTable` with sentinel
+sourceGlyph=`0xFFFF` so crossing-time NSCursor lookup falls back to
+`.arrow`. Custom-pixmap cursor bitmaps are NOT rendered — the cosmetic
+cost is that Motif menu resize / busy / drag cursors all show as the
+macOS arrow rather than their custom shapes. Documented in SHORTCUTS
+and OPCODE_STATUS.
 
-Hypotheses to test tomorrow, ranked:
+## Ledger updates landed today
 
-- **GC foreground color resolves to invisible.** Different buttons may
-  use different GCs (the wire trace shows GCs 0x4400010, 0x440009C,
-  0x44000A5, 0x440003F all used for PolyText8). If digit buttons'
-  GC has foreground pixel pointing at a colormap index we resolve to
-  grey-on-grey, text is rendered but invisible. The diag log added
-  to `drawPolyText8` today (uncommitted in working tree) will report
-  the fg RGB for each call.
-- **GC clip rect excludes the text region.** Less likely (would
-  affect chrome too) but possible if clip is being set per-text-call.
-- **Font reference (state.font) on those GCs resolves to a font that
-  has no usable glyphs for the digit characters.** Even less likely
-  (Quit's "Quit" string uses the same ASCII chars).
+- `DECISIONS.md`: new 2026-05-18 entry that retires the 2026-05-10
+  customization-daemon decision and the 2026-05-17 RESOURCE_MANAGER
+  fixture (the latter wasn't a formal DECISIONS entry at the time,
+  closed here).
+- `SHORTCUTS.md`: three CDE entries (fake daemon, hardcoded palette,
+  hardcoded SDT Pixel Set) moved to **Closed**. The RESOURCE_MANAGER
+  entry reworded — no longer publishing a minimal lie; now returns
+  spec-correct empty like SS2. New stub-cursor caveat appended to
+  the existing cursor entry.
+- `OPCODE_STATUS.md`: CreateCursor (op 93) added as impl-stub.
 
-### 2. LCD digits now render as .notdef boxes (REGRESSION)
+## Test rebaseline
 
-The LCD numeric display USED to render digits correctly pre-today.
-After today's changes, the LCD shows weird square boxes — the classic
-.notdef glyph signal.
+9 `CapturedAppReplayTests` baselines updated: each app's window
+count dropped by 1 (the `0xFFFE_0003` daemon stub window is no
+longer installed) and atom count dropped by 1 or 2 (depending on
+whether the app itself interned `Customize Data:0` / `SDT Pixel Set`
+over the wire). `ConvertSelectionTests.testSelectionMediatorDispatchesCorrectly`
+had its stub-owner sub-check removed — the production server no
+longer auto-installs a stub at init, and the same routing case is
+already covered by `testStubDaemonReturnsEmptySelectionNotify` which
+manually installs a stub.
 
-This is a real regression caused by today's work. Most likely culprit:
-`268d612` (chars=224 range for iso8859 fonts) OR `c204536` (echo
-fallback may resolve LCD's font to a wildcard XLFD that picks up
-different metrics than before).
+**526 tests pass, 4 documented skips, 0 failures.**
 
-Possible mechanism:
-- LCD widget queries a specific bitmap-ish font
-- Pre-today: that font resolved to Monaco 7x14 (or similar), all
-  ASCII glyphs present, digits render fine
-- Post-today: maybe the font now resolves via the echo path with
-  different size/family wildcards expanded → Monaco at a different
-  pointsize → CTFontGetGlyphsForCharacters returns 0 for digit
-  codepoints? Or the chars=224 reply changes how the widget builds
-  its glyph cache, hitting a path that doesn't work?
+## Working tree at end of day
 
-To investigate:
-- Capture dtcalc post-today, diff OpenFont names against
-  `captures/dtcalc-u5-on-ss2.xtap` gold. Look at what font the LCD
-  opens.
-- Compare QueryFont reply for the LCD's font on swiftx vs SS2.
+Files changed but not committed:
+- `Sources/SwiftXServerCore/ServerSession.swift` (CDE cuts, CreateCursor handler, name switch)
+- `Sources/SwiftXServerCore/CocoaWindowBridge.swift` (diag log line reverted — yesterday's instrumentation no longer needed)
+- `Sources/Framer/Requests/CreateCursor.swift` (NEW)
+- `Sources/Framer/Requests/Request.swift` (case + decode + encode)
+- `Sources/SwiftXCaptureCore/ChronoDumper.swift` (2 switches)
+- `Sources/SwiftXCaptureCore/Dumper.swift` (1 switch)
+- `Tests/SwiftXServerCoreTests/CapturedAppReplayTests.swift` (9 baselines)
+- `Tests/SwiftXServerCoreTests/ConvertSelectionTests.swift` (stub-case removed)
+- `DECISIONS.md`, `SHORTCUTS.md`, `OPCODE_STATUS.md`
+- `STATUS.md` (this file)
 
-### 3. Motif text-entry fields got WORSE today (REGRESSION)
+Reasonable to split into two commits: one for the CDE retirement,
+one for the CreateCursor stub. They're independent.
 
-Todd's observation. Probably same root cause as the LCD regression —
-both involve text rendering through some shared Motif path that broke
-between yesterday and today.
+Stray artifacts (decide tomorrow):
+- `captures/dtcalc-u5-on-swiftx-v3.xtap` + `.json` — captured this
+  morning against the pre-cut server. The grey-palette baseline.
+  Probably want a fresh v4 against the post-cut server before
+  deleting v3.
+- `connection.json` working-tree mod is leftover from earlier
+  capture-proxy configuration; check and revert if not needed.
 
-### 4. ToolTalk-through-proxy bug (unchanged from prior days)
+## Tomorrow's recommended starting points, in priority order
 
-`dticon`, `dtmail`, `dtpad` work direct u5→ss2 but timeout after ~5min
-through `swiftx-capture` proxy. Detail now lives in
-`captures/README.md` (absorbed from the archived FOLLOWUPS doc during
-today's docs hygiene pass). Proxy bug, not server bug. Not blocking —
-those apps' captures from earlier today are partial but usable.
+1. **Framer-shared bug investigation.** Compare `dtpad` or `dtmail`
+   captures: direct u5→ss2 vs u5→capture→ss2. Any byte-level
+   divergence in the C2S or S2C stream is the bug. This is probably
+   the real next blocker — the framing layer is silently corrupting
+   *something* for these specific apps.
 
-### 5. SelectionMediator daemon impersonation may be over-engineered
+2. **Capture a fresh `dtcalc-u5-on-swiftx-v4.xtap`** against the
+   post-cut server for the new gold baseline, then delete v3.
 
-Earlier diagnostic (working with the dtcalc-u5-on-ss2 capture)
-established that dt-apps issue `ConvertSelection(Customize Data:0)`
-on any server but tolerate `SelectionNotify(property=None)` gracefully.
-Our `SelectionMediator.installCDECustomizationDaemonImpersonation`
-might be a workaround for a bug in our own ConvertSelection handler,
-not a structural dt-app requirement. Worth investigating after the
-visible-text problems are resolved.
+3. **Delete the dormant `CDE palette` seeding in `ColorTable.swift`**
+   (pixels 1-23) once a few more dt-app smoke runs confirm nothing
+   silently still hits those pixel indices.
 
-## Tomorrow's recommended starting point
+4. **Delete the commented-out impersonation code** in
+   `ServerSession.swift` and the `CDEResourceManagerFixture.swift`
+   source file after another round of validation. Currently kept
+   commented so re-enabling is a comment-strip.
 
-**One run, two answers:** rebuild swiftx with today's working tree
-(includes the uncommitted `drawPolyText8` diag log), launch dtcalc on
-u5, click a digit or two, look at the server log.
+5. **Motif text-entry / text-widget character spacing.** Lower
+   priority than the framer thread; the visible cost is small.
 
-The diag log entries will show foreground RGB for each PolyText8 call.
-If digit-button calls come back with `fg=(200,200,200)` (or close), it's
-a color/colormap issue → next step is tracing GC foreground pixel
-resolution. If they come back with `fg=(0,0,0)` (proper black), the
-issue is downstream — clip or glyph lookup. Either answer narrows
-sharply.
+## Reflection
 
-Same run's log + a fresh capture (`dtcalc-u5-on-swiftx-v4.xtap`)
-gives us:
-- LCD font name + QueryFont reply structure (to chase the regression)
-- Text-entry widget's font + render path (the second regression)
-- Wire diff against `dtcalc-u5-on-ss2.xtap` gold to spot any other
-  drift introduced by today's changes
+Yesterday's STATUS predicted today would be a focused chase on
+foreground-color resolution. The diag log fired exactly as expected
+and pointed at pixel 0x0D as the wrong slot. But the path forward
+wasn't to fix the slot — it was to step back and ask why Motif was
+indirecting through *any* CDE palette on a server that isn't CDE.
+The right fix was deletion: stop pretending to be CDE, let Motif
+fall back to its built-in defaults, end up looking exactly like SS2.
 
-After that, plan emerges naturally:
-- If color: probably 1 commit to fix GC pixel resolution or seed a
-  better palette entry.
-- If LCD regression: revert the regression-causing line (probably
-  in 268d612 or c204536), iterate.
-- If text-entry: likely same root as LCD; one fix addresses both.
-
-## Files that may need attention tomorrow
-
-- `Sources/SwiftXServerCore/CocoaWindowBridge.swift` — `drawPolyText8`
-  (diag log line in working tree; decide keep vs revert based on
-  whether color is the issue)
-- `Sources/SwiftXServerCore/ServerSession.swift` — `makeQueryFontReply`
-  (charset-aware range; check if LCD regression traces here)
-- `Sources/SwiftXServerCore/SynthesizedFonts.swift` — echo fallback
-  (check if LCD's font resolution path is going through echo
-  incorrectly)
-- `Sources/SwiftXServerCore/FontResolver.swift` — `resolve(xlfd:)` and
-  `defaultMonacoFont` (the wildcards-to-Monaco path)
-- `Sources/SwiftXServerCore/ColorTable.swift` — CDE pixel palette
-  (if foreground color resolves to grey, this is where to fix)
-
-## How far we've come today
-
-Pre-today: dtcalc died on the LCD-digit-swap CopyArea burst, never
-got to draw chrome.
-
-End of today: dtcalc fully boots, renders Motif chrome with correct
-CDE shadows + colors, only the LAST domino (text legibility) remains.
-
-The hard parts of the pixmap-render arc (Stages 1b + 2 + the capture
-re-baseline that made debugging tractable) are all shipped and locked
-in by tests. Tomorrow is a focused chase on one specific symptom.
-
-Also: the docs tree is back in shape. SHORTCUTS is now the single
-ledger again — the audit + comparison research lives in `archive/`
-with their actionable findings promoted to SHORTCUTS entries that
-cite back. CLAUDE.md routes correctly for terminal-text work. After
-the text-legibility chase tomorrow, the SHORTCUTS open list has a
-much richer set of "next things to pick" than it did this morning.
+The architectural framing "be SS2 with mwm, not SS2 with CDE" is
+the keeper from today. It explains why we keep `_MOTIF_DRAG_WINDOW`
+and `_MOTIF_WM_INFO` (mwm-era), why we cut the customization daemon
+and SDT Pixel Set (CDE-only), and why we publish nothing for
+RESOURCE_MANAGER (SS2 doesn't either). It should guide future "do
+we need to fake X to make Y happy?" calls — only if SS2-with-mwm
+would have faked it, no.

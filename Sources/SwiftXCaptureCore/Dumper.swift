@@ -366,6 +366,7 @@ public enum Dumper {
         case .queryBestSize:             return QueryBestSize.opcode
         case .queryExtension:            return QueryExtension.opcode
         case .bell:                      return Bell.opcode
+        case .createCursor:              return CreateCursor.opcode
         case .createGlyphCursor:         return CreateGlyphCursor.opcode
         case .freeCursor:                return FreeCursor.opcode
         case .recolorCursor:             return RecolorCursor.opcode
