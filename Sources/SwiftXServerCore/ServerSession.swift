@@ -3620,6 +3620,7 @@ public final class ServerSession: @unchecked Sendable {
             let nameStr = String(decoding: r.name, as: UTF8.self)
             let resolved = FontResolver.resolve(name: nameStr)
             fonts.insert(FontEntry(id: r.fid, name: r.name, resolved: resolved))
+            log?.log("  OpenFont fid=0x\(String(r.fid, radix: 16)) \"\(nameStr)\" → \(resolved.macFontName) cell=\(resolved.cellWidth)x\(resolved.cellHeight) charset=\(resolved.charsetRegistry)-\(resolved.charsetEncoding)")
 
         case .closeFont(let r):
             guard fonts.get(r.font) != nil else {
