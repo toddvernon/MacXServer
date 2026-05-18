@@ -1,9 +1,11 @@
 # Status 2026-05-17 — End of day
 
-Big day. Seven commits, pixmap-render arc landed, capture re-baseline,
-font-charset work. dt-Motif chrome now renders 3D with correct CDE-grey
-colors against our server. Visible-text gap remains the headline open
-issue.
+Big day. Nine commits: pixmap-render arc landed, capture re-baseline,
+font-charset work, plus a late-day docs hygiene pass that absorbed the
+2026-05-14/15 audit + comparison research into the live ledger and set
+up a rolling-STATUS convention. dt-Motif chrome now renders 3D with
+correct CDE-grey colors against our server. Visible-text gap remains
+the headline open issue for tomorrow.
 
 ## Commits today (in landing order)
 
@@ -16,10 +18,14 @@ issue.
 | 5 | `cef3912` | Pixmap Stage 2 — `bridge.copyArea(src: DrawTarget, dst: DrawTarget, ...)`. Same-NSWindow path keeps the bitmap memmove fast path (xterm scroll). All other 4 cases (cross-NSWindow, pixmap→window, window→pixmap, pixmap→pixmap) snapshot src as CGImage cropped to source rect, draw via CGContext.draw(image:in:) through withDrawContext. Honors GC clip on every path except memmove. |
 | 6 | `268d612` | QueryFont charset awareness — `ResolvedFont` gains `charsetRegistry`/`charsetEncoding` fields populated from XLFD's last two fields. `makeQueryFontReply` returns `chars=224` (range 32...255) for iso8859 fonts, `chars=95` (32...126) for others. Added `CHARSET_REGISTRY` + `CHARSET_ENCODING` atom-valued FONTPROPS. Required because Motif's `XCreateFontSet` reads these atoms to match per-charset font variants. |
 | 7 | `c204536` | ListFonts override + echo fallback — three-layer `SynthesizedFonts.match()`: (1) curated overrides (starts empty, policy comment), (2) synth list (existing), (3) echo: if no synth match AND pattern has concrete CHARSET_REGISTRY-CHARSET_ENCODING suffix, return the pattern itself as a single match. Motif's `XCreateFontSet` does suffix-compare on the returned name (`omGeneric.c:91-114` check_charset) so echo unblocks the per-charset probe. Bounded to concrete-charset patterns so wildcard enumerators (xfontsel) still get the honest synth list. |
+| 8 | `350cdf9` | Docs cleanup — 8 superseded docs + `audit/` + `comparison/` research forks moved to `archive/` (39 renames preserving git history). 14 actionable findings promoted into SHORTCUTS (CWBackPixmap/Border, CWBorderWidth, ReparentWindow Unmap/Map pair, SetSelectionOwner time gate, GetProperty type filter, GetPointerMapping [1..5], substructure-redirect events, RotateProperties, the remaining kbd/pointer BadRequest opcodes, no-auth on TCP listener, motionBufferSize lie, CDE atom pre-intern, SolarisIA, Expose-vs-ConfigureNotify cascade) each citing its archive path. `captures/README.md` absorbed the ToolTalk-proxy detail from the archived FOLLOWUPS doc. CLAUDE.md routes XTERM_FONT_QUALITY for terminal-text and notes the archive convention. |
+| 9 | `0388406` | Rolling STATUS.md convention — `STATUS_2026-05-17.md` → `STATUS.md`, overwritten end-of-day rather than accumulating dated snapshots. Rule documented in CLAUDE.md Working Conventions. |
 
 **526 tests pass, 4 documented skips, 0 failures.** Working tree:
 one uncommitted diag log line in `drawPolyText8` (added late-day for
 debugging the invisible-text mystery; decide tomorrow whether to keep).
+The two pre-existing working-tree changes from earlier today
+(`CocoaWindowBridge.swift` and `connection.json`) are still uncommitted.
 
 ## What's working visually on u5 + dt-Motif now
 
@@ -91,10 +97,10 @@ between yesterday and today.
 ### 4. ToolTalk-through-proxy bug (unchanged from prior days)
 
 `dticon`, `dtmail`, `dtpad` work direct u5→ss2 but timeout after ~5min
-through `swiftx-capture` proxy. Tracked in
-`FOLLOWUPS_FROM_DTCALC_DIFF_2026-05-17.md`. Proxy bug, not server bug.
-Not blocking — those apps' captures from earlier today are partial but
-usable.
+through `swiftx-capture` proxy. Detail now lives in
+`captures/README.md` (absorbed from the archived FOLLOWUPS doc during
+today's docs hygiene pass). Proxy bug, not server bug. Not blocking —
+those apps' captures from earlier today are partial but usable.
 
 ### 5. SelectionMediator daemon impersonation may be over-engineered
 
@@ -159,3 +165,10 @@ CDE shadows + colors, only the LAST domino (text legibility) remains.
 The hard parts of the pixmap-render arc (Stages 1b + 2 + the capture
 re-baseline that made debugging tractable) are all shipped and locked
 in by tests. Tomorrow is a focused chase on one specific symptom.
+
+Also: the docs tree is back in shape. SHORTCUTS is now the single
+ledger again — the audit + comparison research lives in `archive/`
+with their actionable findings promoted to SHORTCUTS entries that
+cite back. CLAUDE.md routes correctly for terminal-text work. After
+the text-legibility chase tomorrow, the SHORTCUTS open list has a
+much richer set of "next things to pick" than it did this morning.
