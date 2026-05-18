@@ -99,6 +99,39 @@ Things still on the list (most of Beyond-M3 from earlier drafts has shipped — 
 - CLIPBOARD selection (today only PRIMARY is wired)
 - INCR transfer for selections larger than the request-size limit
 
+## dt-app coverage matrix (as of 2026-05-18)
+
+Built from the local CDE source (`reference/cde/cde/`) by grepping each
+app's main entry and TT init code paths. The split between "works on
+swiftx" and "doesn't" tracks how each app handles ToolTalk init failure,
+not anything about our X server's protocol coverage — for the apps that
+present, our protocol implementation is sufficient.
+
+| App | TT dependency | Bypass available? | Status on swiftx |
+|---|---|---|---|
+| dtcalc | None | N/A | Works (verified 2026-05-18) |
+| dthelpview | None | N/A | Works (font rendering issue separate) |
+| dthello | None | N/A | Untested, expected to work |
+| dtaction | None | N/A | Untested, expected to work |
+| dtterm | Optional | `-standAlone` flag; default-fresh launches also bypass via `attrs.serverId` check (`DtTermMain.c:432,799,1311`) | Works (verified 2026-05-18) |
+| dtpad | Default-fatal | `-standAlone` flag (`main.c:178,205`; `fileCB.c:644,787`) | Works with `-standAlone` (verified 2026-05-18) |
+| dtfile | Optional-graceful | No flag, but `ToolTalkError` in `dtfile/ToolTalk.c:191` has explicit `case TT_ERR_NOMP` that removes the TT input handler and continues. Works iff ttsession's RPC roundtrip returns NOMP rather than PROCID. | Untested; likely works if ttsession returns the right error code |
+| dticon | Fatal-on-failure | None — `main.c:304-306` calls `DieFromToolTalkError(..., "Exiting ...")` | Cannot bypass |
+| dtmail | Fatal-on-failure | None — `RoamApp.C:429,567,1231,1267` calls `dieFromTtError(...)` | Cannot bypass |
+| dtsession | Fatal — IS the session manager | N/A | Not a target (we don't host it) |
+
+Bottom line for project scope:
+
+- **In scope, working today**: dtcalc, dthelpview, dthello, dtaction, dtterm, dtpad (with `-standAlone`)
+- **In scope, plausibly fixable**: dtfile (the path exists; depends on the u5-side ttsession RPC behavior, which is mostly out of our hands)
+- **Out of scope, written off**: dticon, dtmail (no bypass in source; would require running `ttsession` on the Mac, which is huge scope for a feature the project doesn't actually need)
+
+Two interesting things falling out of this:
+
+1. **dtterm doesn't actually need `-standAlone` for fresh-launch.** The source check is `if (attrs.standAlone || !attrs.serverId)` — without a server-mode invocation (`-server` flag), the second branch fires anyway. Today's smoke-test where dtterm worked without any flag is consistent with this.
+
+2. **dtfile is the surprise.** It has a real `TT_ERR_NOMP` graceful-degradation branch. The reason it currently fails (or might) on swiftx isn't anything about our X server — it's downstream in the RPC handshake between u5's ttsession and dtpad/dtfile/etc.
+
 ## Resource design (as shipped)
 
 These are the X11 resource types the server models. All six required for the PoC are in place; rows describe what landed.
