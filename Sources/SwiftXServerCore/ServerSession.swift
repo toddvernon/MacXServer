@@ -3136,11 +3136,30 @@ public final class ServerSession: @unchecked Sendable {
                 // ExposureMask. Step E1: emit per-clipList-rect (in
                 // window-local coords) instead of one full-rect event —
                 // fully-covered descendants emit nothing.
+                //
+                // We also have to cascade Expose to the subtree under
+                // r.window: when r.window becomes viewable, every
+                // already-mapped descendant also transitions from
+                // "mapped but not viewable" to "viewable" simultaneously
+                // (viewability requires the WHOLE ancestor chain to be
+                // mapped, per spec). Dthelpview hits this — it maps
+                // children (DisplayArea, scrollbars) BEFORE mapping its
+                // shell wrapper, so without the descendant cascade the
+                // DisplayArea never gets the Expose it's waiting on and
+                // the man-page content area renders blank.
                 if let entry = windows.get(r.window),
                    entry.eventMask & (1 << 15) != 0 {
                     let rects = exposeRectsForWindow(r.window)
                     MockWindowBridge.emitExposesForRects(
                         window: r.window, rects: rects,
+                        byteOrder: byteOrder, sequence: sequenceNumber,
+                        outbound: outbound
+                    )
+                }
+                for d in mappedDescendantSnapshots(of: r.window)
+                where d.eventMask & MockWindowBridge.exposureMask != 0 {
+                    MockWindowBridge.emitExposesForRects(
+                        window: d.id, rects: d.exposeRects,
                         byteOrder: byteOrder, sequence: sequenceNumber,
                         outbound: outbound
                     )

@@ -43,8 +43,31 @@ enum DefaultMotifResources {
     ! but in practice the inner XmText still falls back to "fixed" —
     ! so we have to set the wrapper resource explicitly.
     *DtEditor.textFontList:     -adobe-courier-medium-r-normal--14-*-*-*-m-*-iso8859-1
+    ! DtHelp's DisplayArea inherits its parent's background by default,
+    ! which under Motif fallback is the panel-blue color — illegible for
+    ! man-page body text. The pattern below is verbatim from CDE's shared
+    ! `Dt.ad` file (lib/DtSvc/DtUtil2/Dt.ad lines 54-63). The comment
+    ! there explains the duplication: "The resources are complex because
+    ! they have to override the standard color resources in all cases."
+    ! Generic `*DisplayArea.background` doesn't win the Xrm specificity
+    ! contest against parent-bg propagation.
+    *XmDialogShell.DtHelpDialog*DisplayArea.background:                White
+    *XmDialogShell*XmDialogShell.DtHelpDialog*DisplayArea.background:  White
+    *XmDialogShell.DtHelpDialog*DisplayArea.foreground:                Black
+    *XmDialogShell*XmDialogShell.DtHelpDialog*DisplayArea.foreground:  Black
+    *XmDialogShell.DtHelpQuickDialog*DisplayArea.background:           White
+    *XmDialogShell*XmDialogShell.DtHelpQuickDialog*DisplayArea.background: White
+    *XmDialogShell.DtHelpQuickDialog*DisplayArea.foreground:           Black
+    *XmDialogShell*XmDialogShell.DtHelpQuickDialog*DisplayArea.foreground: Black
     ! Per-app overrides
     Dtpad*XmText.fontList:      -adobe-courier-medium-r-normal--14-*-*-*-m-*-iso8859-1
     Dtpad*textFontList:         -adobe-courier-medium-r-normal--14-*-*-*-m-*-iso8859-1
+    ! dthelpview's manBox is a DtHelpQuickDialog instance; its rows/columns
+    ! determine the dialog's initial aspect ratio. 32x80 matches u5's
+    ! installed app-defaults (Dthelpview source line 43-44).
+    Dthelpview*manBox.rows:     32
+    Dthelpview*manBox.columns:  80
+    Dthelpview*fileBox.rows:    32
+    Dthelpview*fileBox.columns: 80
     """
 }

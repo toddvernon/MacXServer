@@ -12,6 +12,26 @@ XmText widget sets clip rects on its drawing GC). Likely also closes
 the about-dialog animation artifact (open issue #4 in
 project_motif_quickplot_status memory); pending re-verification.
 
+**Late-evening bonus**: dthelpview's man-page content renders now too.
+This was a separate bug from the clip-rect issue — when a non-top-level
+window is mapped, our server only emitted Expose for the immediately-
+mapped window, not for already-mapped descendants whose viewability also
+changes. dthelpview maps its children (DisplayArea, scrollbars) BEFORE
+its shell wrapper, so without the descendant cascade the DisplayArea
+never got the Expose it was waiting on. Fix in ServerSession's non-top-
+level MapWindow branch walks the subtree under the newly-mapped window
+and emits Expose for each mapped descendant with ExposureMask.
+
+Two cosmetic dthelpview issues remain open: the content area renders on
+the Motif fallback blue instead of white, and the window aspect is
+wider than SS2's. I added the CDE-canonical resource overrides from the
+shared `Dt.ad` (`*XmDialogShell.DtHelpQuickDialog*DisplayArea.background:
+White` etc.) to Tier 1, but they didn't take effect — likely because
+dthelpview's `-manPage` mode flattens the widget hierarchy and the
+`XmDialogShell.DtHelpQuickDialog` path doesn't match. Worth chasing
+tomorrow with a capture-diff against SS2 to see the actual widget
+hierarchy and the matching resource path.
+
 
 Root cause was that `SetClipRectangles`' rects (in drawable-local coords)
 were being handed to `CGContext.clip(...)` at top-level coords without
