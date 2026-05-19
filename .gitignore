@@ -16,7 +16,10 @@ xcuserdata/
 # Re-fetchable with reference/fetch.sh.
 reference/
 
-# Per-user Claude Code memory. Lives in Dropbox so both machines share it,
-# kept out of git because it's user-specific working state. Symlinked from
-# ~/.claude/projects/-Users-toddvernon-Dropbox-dev-X/memory on each machine.
-.claude-memory/
+# Cross-machine Claude Code memory now lives IN the git tree as
+# .claude-memory/ — was previously gitignored and Dropbox-synced, which
+# caused sync-delay friction and occasional conflict copies during
+# desktop↔laptop hand-offs. Tracking it in git means a `git pull`
+# brings memory along with code. Each Mac still needs the one-time
+# symlink from ~/.claude/projects/-Users-...-X/memory → .claude-memory/
+# (see "Cross-machine Claude memory" in CLAUDE.md).
