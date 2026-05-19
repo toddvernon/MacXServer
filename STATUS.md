@@ -1,162 +1,182 @@
 # Status 2026-05-19 — End of day
 
-dtcalc's LCD now renders text correctly. The fix took two real bug
-closes and one wrong-diagnosis detour through ColorTable. The wrong
-diagnosis still produced a worthwhile cleanup, so it stays.
+Three real X-server bugs closed, one cosmetic gap left open with a
+clear diagnostic path for tomorrow. dtcalc, dthelpview, and
+quickplot all visibly better than this morning.
 
 ## Headline
 
-**dtcalc LCD shows "0.00" + typed digits, full visual parity with SS2.**
-Same fix also unblocked quickplot's text entry fields (same root cause —
-XmText widget sets clip rects on its drawing GC). Likely also closes
-the about-dialog animation artifact (open issue #4 in
-project_motif_quickplot_status memory); pending re-verification.
+**Three closes:**
+1. **dtcalc LCD shows "0.00" + typed digits**, full visual parity with SS2.
+   Root cause: `SetClipRectangles` rects (in drawable-local coords) were
+   handed to `CGContext.clip(...)` at top-level coords without translating
+   by the widget's `windowOffset`. dtcalc's XmText LCD sets a `(5,5,25,15)`
+   clip rect; without translation that clip landed in the top-left corner
+   of the calculator's NSWindow and excluded every glyph. Fix centralized
+   in `CocoaWindowBridge.withDrawContext`.
 
-**Late-evening bonus**: dthelpview's man-page content renders now too.
-This was a separate bug from the clip-rect issue — when a non-top-level
-window is mapped, our server only emitted Expose for the immediately-
-mapped window, not for already-mapped descendants whose viewability also
-changes. dthelpview maps its children (DisplayArea, scrollbars) BEFORE
-its shell wrapper, so without the descendant cascade the DisplayArea
-never got the Expose it was waiting on. Fix in ServerSession's non-top-
-level MapWindow branch walks the subtree under the newly-mapped window
-and emits Expose for each mapped descendant with ExposureMask.
+2. **Quickplot text entry fields work** — same root cause as #1 (any
+   XmText widget that sets clip rects on its drawing GC). The 2026-05-10
+   "weird spacing" diagnosis was wrong; text was rendering correctly into
+   a clipped-out region.
 
-Two cosmetic dthelpview issues remain open: the content area renders on
-the Motif fallback blue instead of white, and the window aspect is
-wider than SS2's. I added the CDE-canonical resource overrides from the
-shared `Dt.ad` (`*XmDialogShell.DtHelpQuickDialog*DisplayArea.background:
-White` etc.) to Tier 1, but they didn't take effect — likely because
-dthelpview's `-manPage` mode flattens the widget hierarchy and the
-`XmDialogShell.DtHelpQuickDialog` path doesn't match. Worth chasing
-tomorrow with a capture-diff against SS2 to see the actual widget
-hierarchy and the matching resource path.
+3. **dthelpview man-page area renders.** Different bug: when a
+   non-top-level window maps and its parent chain was already viewable,
+   every already-mapped descendant also becomes viewable simultaneously
+   and needs Expose. Our non-top-level MapWindow handler only emitted
+   Expose for the directly-mapped window. dthelpview maps DisplayArea +
+   scrollbars BEFORE the wrapper shell, so without the cascade the
+   DisplayArea never got Expose. Fix in `ServerSession.handleMapWindow`
+   non-top-level branch — walk `mappedDescendantSnapshots(of: r.window)`
+   and emit Expose for each with ExposureMask.
 
+**One cosmetic remaining (open for tomorrow):**
+- dthelpview man-page content area renders on Motif fallback blue
+  instead of white, and the window aspect is wider than SS2's.
+- Canonical CDE Dt.ad resource overrides added to Tier 1 but didn't
+  take effect on `-manPage` mode. Full diagnostic path in the dedicated
+  memory note `project_dthelpview_cosmetic_open`. Short version: read
+  the DisplayArea's CreateWindow bytes via fresh capture, don't guess
+  at resource paths.
 
-Root cause was that `SetClipRectangles`' rects (in drawable-local coords)
-were being handed to `CGContext.clip(...)` at top-level coords without
-translating by the widget's `windowOffset`. dtcalc's XmText display
-widget sets a (5,5,25,15) clip rect; without the translation, that clip
-landed in the top-left corner of the calculator's NSWindow — far from
-the LCD widget at (273, 37) — and excluded every glyph the client drew.
-Buttons didn't trip this because their GCs never had SetClipRectangles
-called on them. Comment on `GCState.clipRectangles` even claimed the
-rects were already in top-level coords, but only `clipXOrigin`/`Yorigin`
-were folded in. Fix is centralized in `CocoaWindowBridge.withDrawContext`:
-when the target is a window, translate the clip rectangles by the
-target's `(dx, dy)` before passing to `withClip`. Pixmap targets pass
-through unchanged.
+## What landed (with file pointers)
 
-## What landed
+### Clip-rectangle translation (the dtcalc / quickplot fix)
+
+- `Sources/SwiftXServerCore/CocoaWindowBridge.swift` `withDrawContext` —
+  translates `clipRectangles` by `(dx, dy)` when target is `.window`.
+  Pixmap path unchanged.
+- `Sources/SwiftXServerCore/GCState.swift` line ~45 — corrected
+  misleading comment ("already top-level coords" → "drawable-local;
+  bridge translates").
+- New test `Tests/SwiftXServerCoreTests/FontDispatchTests.swift`
+  `testPolyText8PassesClipRectanglesInDrawableLocalCoords` — locks in
+  the handler→bridge contract (drawable-local rects; translation in
+  withDrawContext).
+
+### Descendant Expose cascade on MapWindow (the dthelpview fix)
+
+- `Sources/SwiftXServerCore/ServerSession.swift` MapWindow non-top-level
+  branch (search for "every already-mapped descendant also transitions")
+  — after the existing per-window Expose, walks the mapped subtree and
+  emits Expose for each descendant with ExposureMask. Mirrors what
+  `emitMapSequence` does for the top-level path.
+- No replay-test baselines moved (existing fixtures don't exercise the
+  "children-mapped-before-wrapper" pattern). Would surface if we add a
+  dthelpview replay test.
 
 ### ColorTable becomes server-global; AllocColor honors shared cells
 
-- `ColorTable` moved from `ServerSession.colors` to
-  `ServerCoordinator.colors` (parallel to `atoms`). Thread-safe via
-  `NSLock`. Sessions read through a passthrough property so call sites
-  stay unchanged.
-- `allocate(...)` now does shared-cell RGB matching: if the requested
-  RGB is already in the table, returns the existing pixel rather than
-  allocating a new one. `whitePixel` (0), `blackPixel` (1), and the
-  defensive `0xFFFFFF` are pinned at init with lowest-pixel-wins
-  canonicalisation. `AllocColor(white)` now returns 0 as a real X
-  server does.
-- Dormant 22-pixel CDE palette pre-seed deleted (was kept as a safety
-  net after 2026-05-18 CDE retirement; with shared-cell matching it
-  became strictly harmful — coincidental RGB hits would land on the
-  dormant indices).
-- This was originally pitched as the LCD fix. It turned out the LCD
-  bug was elsewhere (see above), but the ColorTable cleanup stands —
-  it's real X-spec correctness, retires SHORTCUTS:32, and unblocks the
-  per-session-vs-global cleanup that DECISIONS.md 2026-05-18 line 470
-  flagged as step (1) of any future CDE re-add path.
+- `Sources/SwiftXServerCore/ColorTable.swift` — thread-safe, `rgbToPixel`
+  reverse map, `allocate()` checks for existing-RGB match before
+  allocating new. `whitePixel` (0), `blackPixel` (1), and defensive
+  `0xFFFFFF` are pinned at init with lowest-pixel-wins canonicalisation.
+  `AllocColor(rgb=white)` now returns `whitePixel` like a real X server.
+- `Sources/SwiftXServerCore/ServerCoordinator.swift` — `public let colors`
+  added next to `atoms`.
+- `Sources/SwiftXServerCore/ServerSession.swift` — `colors` is now a
+  passthrough property to `coordinator.colors`.
+- Dormant 22-pixel CDE palette pre-seed deleted.
+- New test `Tests/SwiftXServerCoreTests/ColorTableTests.swift` (7 cases).
+- Originally pitched as the LCD fix; turned out NOT to be (capture-diff
+  showed wire-level identity with SS2 regardless). Still a real X-spec
+  correctness fix, still retires SHORTCUTS:32 cleanly.
 
-### Clip-rectangle translation (the actual LCD fix)
+### Tier 1 RESOURCE_MANAGER additions
 
-- `CocoaWindowBridge.withDrawContext` now translates `clipRectangles`
-  by `(dx, dy)` when the target is `.window`. Pixmap path unchanged.
-- Misleading comment in `GCState.clipRectangles` ("already top-level
-  coords") corrected — rects are drawable-local; bridge translates.
-- Capture-diff tooling improvement: `ChronoDumper` now decodes
-  `CreateGC` / `ChangeGC` value lists for foreground / background and
-  prints them inline (`[fg=0x1 bg=0x0]`). Made the wire-level diagnosis
-  tractable. Permanent addition, not a debug scaffold.
-- Bridge-log improvement: `drawPolyText8` now includes the foreground
-  RGB and the clip-rectangle list in its log line, so a future class-of-bug
-  ("wire matches gold but rendering is wrong") gets diagnosed in one log
-  pass instead of three rounds of "let me add another print."
+- `Sources/SwiftXServerCore/DefaultMotifResources.swift` — added CDE
+  Dt.ad's canonical DisplayArea bg/fg overrides + `Dthelpview*manBox.rows/columns`.
+  Publishes cleanly (GetProperty reply grew 1911→2598 bytes) but doesn't
+  fix the dthelpview cosmetic gaps (see open item).
+
+### Tooling improvements (permanent, not debug scaffolds)
+
+- `Sources/SwiftXCaptureCore/ChronoDumper.swift` — `CreateGC` and
+  `ChangeGC` now decode value lists and print `[fg=0x1 bg=0x0]` inline.
+  Made the wire-level dtcalc diagnosis tractable in one capture run.
+- `Sources/SwiftXServerCore/CocoaWindowBridge.swift` `drawPolyText8` log
+  line — now includes `fg=` and `clip=`.
+
+### Docs / ledgers
+
+- `SHORTCUTS.md` — two Closed entries (clip-rect translation, MapWindow
+  descendant Expose cascade); one Open entry (dthelpview cosmetic gaps
+  with diagnostic path).
+- `OPCODE_STATUS.md` — `AllocColor` (entry 84) raised to high confidence
+  + shared-cell text. `MapWindow` (entry 8) updated with the descendant
+  cascade.
+- `DECISIONS.md` — entry for the ColorTable coordinator move +
+  postscript noting it wasn't the LCD fix.
+- Memory updates: `project_motif_quickplot_status` (open issue #2
+  closed; #4 likely closed pending re-verification),
+  `project_dt_apps_status` (today's three closes summarized),
+  `project_dthelpview_cosmetic_open` (NEW — focused handoff for
+  tomorrow's first task), `feedback_wire_matches_gold` (NEW — diagnostic
+  lesson learned).
 
 ### Tests
+541 tests pass, 4 skipped, 0 failures. 8 new tests today (7
+ColorTable + 1 clip-translation regression).
 
-541 tests pass, 4 skipped, 0 failures.
+## What's still open (tomorrow's queue)
 
-- New `ColorTableTests.swift` (7 cases): whitePixel/blackPixel canonical
-  IDs, repeated-RGB shared-cell hit, distinct-RGB distinctness, RGB
-  round-trip, cross-session sharing via the coordinator.
-- New `FontDispatchTests.testPolyText8PassesClipRectanglesInDrawableLocalCoords`:
-  locks in the contract that handlers pass drawable-local rects and
-  the bridge does the translation.
-- `CapturedAppReplayTests` baselines rebased twice: once for the
-  ColorTable change (lower per-app `colors` counts post-shared-cells +
-  deleted-CDE-palette), once for the fresh dtcalc gold capture the
-  user retook today (1918 requests vs prior 2047 — different
-  pre-CDE-retirement era).
+1. **dthelpview cosmetic** (TOP PRIORITY — fresh in our heads). See
+   `project_dthelpview_cosmetic_open` memory for the full diagnostic
+   path. Short version: take a fresh `dthelpview -manPage` capture vs
+   SS2 gold; read the DisplayArea's CreateWindow `valueMask` to check
+   whether CWBackPixmap=ParentRelative (=1) or CWBackPixel resolves
+   blue. Don't guess at resource paths first — read the bytes.
 
-## What didn't land today
+2. **Smoke other dt-apps for clip-rect regressions.** dtcalc was the
+   visibly-affected case; with the fix in we should sanity-check
+   dthelpview text widget interactions, dtterm if it sets clip,
+   anywhere XmText is used. Most likely already-fixed by the same
+   commit; just want to confirm.
 
-- **dt-Motif widget chrome (button shadows + labels)** — still
-  unresolved from 2026-05-18. dt-app smoke is now mostly clean; the
-  remaining cosmetic gap is the deep button-hierarchy chrome.
-- **`PutImage` to depth-1 pixmaps is still silent-dropped** per the
-  long-standing SHORTCUTS entry. Surfaced today as "dtcalc's caret
-  stipple pixmap (0x44000ef) gets all-zero bits, so the caret is
-  invisible." Not blocking the LCD-text fix; queued for the next
-  depth-1-PutImage real-implementation pass.
-- **Framer-shared bug investigation** (deferred again from 2026-05-18).
+3. **`PutImage` to depth-1 pixmaps silent-drop.** Surfaced today as
+   "dtcalc's caret stipple pixmap gets all-zero bits, so the LCD caret
+   is invisible." Same shape would affect any XmText-style blinking
+   cursor. Long-standing SHORTCUTS entry. Cosmetic but easy to fix.
+
+4. **dt-Motif button chrome from 2026-05-18.** Still parked. With LCD
+   text + dthelpview content + quickplot text fields all working, the
+   visual gap to SS2 is narrowing; this is the last big item.
+
+5. **Framer-shared bug investigation** (deferred again).
 
 ## Working tree at end of day
 
-All implementation changes committed-pending. Untracked / modified:
+Two commits today on `main`:
+- `a8729d1` — dtcalc LCD: translate clip rects by widget windowOffset
+  (also bundles ColorTable cleanup, ChronoDumper improvements, fresh
+  captures, CLAUDE.md preflight fix)
+- `9291950` — dthelpview: cascade Expose to descendants when wrapper
+  shell maps (also bundles partial CDE resource additions + STATUS update)
 
-- `connection.json` — set today for the u5→capture→swiftx capture run,
-  output points at `dtcalc-running-on-u5-display-on-swiftx.xtap`.
-- `captures/dtcalc-running-on-u5-display-on-ss2.xtap` +
-  `.json` — fresh gold capture the user retook today.
-- `captures/dtcalc-running-on-u5-display-on-swiftx.xtap` +
-  `.json` — fresh swiftx capture from after the ColorTable fix
-  (pre-clip fix, so still has the invisible-LCD-text symptom).
-
-## Tomorrow's recommended starting points
-
-1. **Smoke other dt-apps for LCD-style clip regressions.** Now that
-   we know SetClipRectangles + sub-window draws was broken for over
-   a week with nobody noticing (only dtcalc tripped it visibly), it's
-   worth a smoke pass: quickplot (which uses XmText for plot labels
-   maybe?), dthelpview's text area, dtterm if it sets clip anywhere.
-2. **The depth-1 `PutImage` silent-drop.** Today's diagnosis surfaced
-   that dtcalc's LCD caret stipple pixmap is all-zero because we drop
-   the `PutImage` that should populate it. Caret is invisible (small
-   cosmetic gap, but worth fixing — needed for any XmText-style
-   blinking-cursor app to look right).
-3. **dt-Motif widget chrome from 2026-05-18.** Still parked; with LCD
-   text working the visual delta against gold is narrowing.
+Plus this STATUS rewrite (pending commit, not yet staged).
 
 ## Reflection
 
-Two lessons from the day. First: the diagnosis-by-capture-diff path
-worked exactly as the project conventions promise. When the wire was
-identical between SS2 and swiftx for the LCD widget — same opcodes,
-same pixel values, same order — the bug had to be in our rendering.
-Adding `fg=…` to the dumper's `ChangeGC` output and adding clip-rect
-logging to the bridge made the bug visible in one capture run.
+Two lessons from the day worth remembering:
 
-Second: I went down a wrong-diagnosis path early ("Motif fallback
-gives pixels[6].bg = near-white, so white-on-white invisible") that
-was internally consistent with the dtcalc source but didn't actually
-match the wire. Todd's question — "on SS2 the LCD text is black, how
-can that be?" — was the right counter. The hypothesis I had didn't
-predict what real SS2 does. When that gap appears, the right move is
-to stop speculating and take a capture, not to add another layer of
-"maybe also..." reasoning. The ColorTable cleanup still landed and is
-worth having, but I should have caught earlier that it wasn't going to
-fix the visible bug.
+**Capture first, speculate second.** I went deep on the wrong
+diagnosis for the dtcalc LCD ("Motif fallback gives pixels[6].bg =
+near-white, so white-on-white invisible"). It was internally consistent
+with dtcalc's source but didn't actually match the wire. Todd's pushback
+— "on SS2 the LCD text is black, how can that be?" — was the right
+counter. A capture-diff took five minutes and pointed straight at
+the clip-rect bug. Memory `feedback_wire_matches_gold` captures this
+specifically.
+
+**The ColorTable cleanup landed anyway.** Wrong diagnosis still
+produced real correctness work — coordinator-owned colormap, shared
+cells, retires SHORTCUTS:32. The wrong-path cost was the time spent on
+it; the output stands on its own merits.
+
+**Centralized translation > per-handler fixes.** The clip-rect fix
+landed in one place (`withDrawContext`) and instantly fixed three
+visible bugs (dtcalc LCD, quickplot text fields, probably
+quickplot about-dialog animations). Same shape for the MapWindow
+descendant cascade — one helper (`mappedDescendantSnapshots`) reused
+in two places. Both fixes are roughly 8 lines each, but only because
+the right factoring already existed in the codebase.
