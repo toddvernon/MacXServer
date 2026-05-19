@@ -55,7 +55,13 @@ public final class ServerSession: @unchecked Sendable {
     /// the same way they always did.
     public var atoms: AtomTable { coordinator.atoms }
 
-    public let colors = ColorTable()
+    /// Default colormap — delegated to coordinator. X11 colormaps are
+    /// server-global resources; pixel 17 means the same RGB to every
+    /// session. Pre-2026-05-19 this lived on the session, which let two
+    /// clients allocate the same pixel ID with different RGB values
+    /// (SHORTCUTS:32, retired with the coordinator move).
+    public var colors: ColorTable { coordinator.colors }
+
     public let windows = WindowTable()
     public let gcs = GCTable()
     public let pixmaps: PixmapTable

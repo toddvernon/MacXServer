@@ -105,12 +105,30 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         body: @escaping @Sendable (CGContext) -> Void
     ) {
         switch target {
-        case .window(let topLevel, _, _):
+        case .window(let topLevel, let dx, let dy):
+            // Translate clip rectangles from widget-local to top-level coords.
+            // Per X11 spec, SetClipRectangles rects are in the GC's clip-
+            // coordinate system (relative to the drawable the GC draws to).
+            // We draw into the top-level NSWindow's backing using top-level
+            // coords (handlers already add (dx, dy) to draw positions), so the
+            // clip rects need the same translation or they end up in the
+            // wrong place — visible as "LCD widget text gets clipped to the
+            // top-left corner of the calculator window and disappears."
+            // 2026-05-19: this was the dtcalc LCD invisible-text bug. The
+            // comment in GCState.materialise at the time claimed the rects
+            // were already top-level coords but only clipXOrigin/Yorigin
+            // were folded in.
+            let translatedClip = clipRectangles?.map { r in
+                Framer.Rectangle(
+                    x: r.x &+ dx, y: r.y &+ dy,
+                    width: r.width, height: r.height
+                )
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self = self,
                       let view = self.slot(topLevel)?.view,
                       let ctx = view.backing else { return }
-                self.withClip(ctx, clipRectangles) {
+                self.withClip(ctx, translatedClip) {
                     body(ctx)
                 }
                 view.setNeedsDisplay(view.bounds)
@@ -1232,7 +1250,12 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             pi += 2 + nn
         }
         let pstr = String(decoding: preview, as: UTF8.self).replacingOccurrences(of: "\n", with: "\\n")
-        log?.log("  drawPolyText8 target=\(target) font=\(font.macFontName) cell=\(font.cellWidth)x\(font.cellHeight) mono=\(font.isMonospace) at (\(x),\(y)) str=\"\(pstr)\"")
+        let clipDesc: String = {
+            guard let rs = clipRectangles else { return "nil" }
+            if rs.isEmpty { return "EMPTY (no draws)" }
+            return rs.map { "(\($0.x),\($0.y),\($0.width)x\($0.height))" }.joined(separator: ",")
+        }()
+        log?.log("  drawPolyText8 target=\(target) font=\(font.macFontName) cell=\(font.cellWidth)x\(font.cellHeight) mono=\(font.isMonospace) at (\(x),\(y)) fg=(\(foreground.red >> 8),\(foreground.green >> 8),\(foreground.blue >> 8)) clip=\(clipDesc) str=\"\(pstr)\"")
 
         withDrawContext(target, clipRectangles: clipRectangles) { [weak self] ctx in
             applyFill(ctx, foreground)
@@ -1296,7 +1319,6 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                     positions[j] = CGPoint(x: CGFloat(localX), y: 0)
                     localX += advances[j]
                 }
-
                 ctx.saveGState()
                 ctx.translateBy(x: CGFloat(penX), y: CGFloat(baseY))
                 ctx.scaleBy(x: 1, y: -1)

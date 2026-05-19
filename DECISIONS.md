@@ -458,6 +458,27 @@ Tier 1 is the first of three staged delivery tiers laid out in `MOTIF_TEXT_QUALI
 
 **Pairs with the same-day MOTIF_TEXT_QUALITY invariant fix**: now that `FontResolver.integerAdvances` is the single source of truth for both reported CHARINFO widths and rendered glyph positions, Tier 1's XLFDs route through a pipeline where what we say is what we draw. The two pieces compound — Tier 1 alone would render against the prior float-drift bug, the invariant alone would have nothing to render with.
 
+## 2026-05-19 — ColorTable becomes server-global; AllocColor honors shared cells
+
+**Chosen**: Move `ColorTable` from `ServerSession` to `ServerCoordinator` (parallel to `atoms`), add thread-safe `NSLock`-guarded `rgbToPixel` reverse map, and rewrite `allocate(...)` to return the existing pixel when the requested RGB is already in the table (shared read-only cells, per X11 spec). Delete the 22-pixel CDE-palette pre-seed left dormant by the 2026-05-18 retirement; only whitePixel (0), blackPixel (1), and 0xFFFFFF=white stay pinned at init.
+
+**Trigger**: dtcalc's LCD widget was rendering white-on-white. Diagnosis traced through dtcalc/motif.c lines 735-760: when `colorSrv=True && BlackWhite=False`, the LCD's foreground is hardcoded to `white_pixel` and its background to `pixels[6].bg`. On real SS2, Motif's no-color-server fallback walks the `BlackWhite=True` branch instead, because `AllocColor(rgb=65535,65535,65535)` returns `whitePixel` (0) — which the equality check `pixels[0].bg == white_pixel` then satisfies. Our `ColorTable.allocate(...)` was purely monotonic — every call returned a fresh pixel, even for an RGB that matched a pinned entry — so the equality check failed, BlackWhite stayed False, and the LCD landed on the white-on-near-white branch.
+
+**Alternatives rejected**:
+
+1. *One-line RGB-match in the per-session table.* Closes the visible bug but leaves SHORTCUTS:32's structural half — two sessions still allocate "the same" pixel value 16 and get different colors, and whoever draws last wins. Half-fix that masks the remaining bug.
+2. *Re-publish a curated SDT Pixel Set under a stub-owned `Customize Data:0` selection.* Would fix dtcalc by giving Motif a real pixel-set source. But this is step (3) of the DECISIONS.md 2026-05-18 "Whether and how to re-add CDE support" path, which intentionally puts it AFTER (1) per-session-vs-global cleanup and (2) Xrm-aware RESOURCE_MANAGER. Sequencing matters; this fix advances (1) for ColorTable while leaving (2) and the SDT story for follow-ups.
+3. *Make whitePixel resolve to a dark color in our palette.* Breaks every legitimate use of WhitePixel everywhere. Non-starter.
+4. *Keep the dormant CDE palette as a safety net.* Pre-seeding pixels 1-23 with greys means that with shared-cell matching, any client allocating one of those RGBs by coincidence would land on a CDE-palette index — conflating dormant CDE state with new live allocations. Cleaner to delete now that the SDT indirection is gone.
+
+**What's still missing on the colormap (deliberately, scoped follow-up)**: a `FreeColors` round-trip (so pixel slots can be reclaimed), `AllocColorCells` for read-write cells, `StoreColors` to update RGB on an already-allocated pixel, and a 256-cell cap to honor the depth-8 visual we advertise. Tracked in the rewritten SHORTCUTS entry.
+
+**Validation**: 540 tests pass (7 new `ColorTableTests` cover whitePixel/blackPixel canonical IDs, repeated-RGB sharing, distinct-RGB distinctness, cross-session sharing via the coordinator). `CapturedAppReplayTests` baselines rebased — each app's `colors` count drops by 22 (deleted CDE palette) plus any shared-cell deduplication.
+
+This entry advances step (1) of DECISIONS 2026-05-18 line 470 for the colormap. Properties scoping (the other half of step 1) is still open — see SHORTCUTS for that entry.
+
+**Postscript**: this fix turned out not to be the dtcalc-LCD-invisible-text bug after all — same-day capture+diff showed wire-level identity with SS2 (same opcodes, same pixel values, fg=0x1 black on bg=0x0 white). The actual LCD bug was a separate `SetClipRectangles`-translation bug closed later the same day (see SHORTCUTS Closed 2026-05-19 "SetClipRectangles' rects weren't translated by the widget windowOffset"). The ColorTable fix is still a real X-spec correctness improvement and the SHORTCUTS:32 retirement still stands — it just wasn't the LCD's bug.
+
 ---
 
 ## Decisions still to make

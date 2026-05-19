@@ -18,6 +18,12 @@ public final class ServerCoordinator: @unchecked Sendable {
     /// get the same 69). Lives here, not on the session.
     public let atoms = AtomTable()
 
+    /// Shared default colormap. X11 colormaps are server resources; every
+    /// client on the same screen sees the same default. If xterm allocates
+    /// pixel 17 = green, xcalc reading pixel 17 must also see green. Lives
+    /// on the coordinator for the same reason atoms do.
+    public let colors = ColorTable()
+
     /// Per-selection (owner window, time). Reads/writes are guarded by
     /// `lock`. PRIMARY (atom 1) is the only selection that matters in the
     /// xterm-on-u5 era; all selections are tracked anyway.

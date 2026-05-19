@@ -42,7 +42,7 @@ public enum ChronoDumper {
                         if case .queryExtension(let qe) = req {
                             ctx.seqToQueryExtensionName[seq] = String(decoding: qe.name, as: UTF8.self)
                         }
-                        out += format(timestamp: ts, direction: "→", line: formatRequest(req, seq: seq, ctx: ctx))
+                        out += format(timestamp: ts, direction: "→", line: formatRequest(req, seq: seq, ctx: ctx, byteOrder: byteOrder))
                     }
                 }
             case .serverToClient:
@@ -215,7 +215,7 @@ func windowDisplay(_ w: UInt32) -> String {
     return String(format: "0x%X", w)
 }
 
-func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext) -> String {
+func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: ByteOrder = .msbFirst) -> String {
     let seqStr = String(format: "[seq=%-4d]", seq)
     let body: String
     switch req {
@@ -306,9 +306,15 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext) -> String {
     case .freePixmap(let r):
         body = "FreePixmap               pixmap=\(windowDisplay(r.pixmap))"
     case .createGC(let r):
-        body = "CreateGC                 cid=\(windowDisplay(r.cid)) drawable=\(windowDisplay(r.drawable)) mask=0x\(String(r.valueMask, radix: 16))"
+        body = "CreateGC                 cid=\(windowDisplay(r.cid)) drawable=\(windowDisplay(r.drawable)) mask=0x\(String(r.valueMask, radix: 16))\(decodeGCFgBg(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))"
     case .changeGC(let r):
-        body = "ChangeGC                 gc=\(windowDisplay(r.gc)) mask=0x\(String(r.valueMask, radix: 16))"
+        body = "ChangeGC                 gc=\(windowDisplay(r.gc)) mask=0x\(String(r.valueMask, radix: 16))\(decodeGCFgBg(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))"
+    // The fg/bg annotation above is intentional and load-bearing: it's how
+    // we tell whether a Motif client wrote whitePixel vs blackPixel into
+    // its drawing GC. Useful for the dtcalc-LCD class of bugs where the
+    // wire pattern is identical to gold but the rendered output diverges;
+    // diff'ing fg/bg on each ChangeGC narrows the bug to either the
+    // server's GC update path or its rendering path.
     case .freeGC(let r):
         body = "FreeGC                   gc=\(windowDisplay(r.gc))"
     case .setDashes(let r):
@@ -603,6 +609,38 @@ func opcodeOf(_ req: Request) -> UInt8 {
     case .bell:                      return Bell.opcode
     case .unknown(let op, _):        return op
     }
+}
+
+// X11 GC value-list decoder for foreground (bit 2 = 0x4) and background
+// (bit 3 = 0x8). Values are 4-byte aligned, listed in bit-order (lowest bit
+// first), in connection byte order. Used by the dumper to show what pixel
+// values dtcalc et al. write into their drawing GCs.
+func decodeGCFgBg(mask: UInt32, values: [UInt8], byteOrder: ByteOrder) -> String {
+    var pieces: [String] = []
+    var offset = 0
+    for bit in 0..<23 {
+        let bitMask: UInt32 = 1 << bit
+        guard mask & bitMask != 0 else { continue }
+        if offset + 4 > values.count { break }
+        let v: UInt32 = {
+            let b = values[offset..<offset+4]
+            if byteOrder == .msbFirst {
+                return (UInt32(b[b.startIndex]) << 24)
+                     | (UInt32(b[b.startIndex+1]) << 16)
+                     | (UInt32(b[b.startIndex+2]) << 8)
+                     |  UInt32(b[b.startIndex+3])
+            } else {
+                return  UInt32(b[b.startIndex])
+                     | (UInt32(b[b.startIndex+1]) << 8)
+                     | (UInt32(b[b.startIndex+2]) << 16)
+                     | (UInt32(b[b.startIndex+3]) << 24)
+            }
+        }()
+        if bitMask == 0x4 { pieces.append("fg=0x\(String(v, radix: 16))") }
+        else if bitMask == 0x8 { pieces.append("bg=0x\(String(v, radix: 16))") }
+        offset += 4
+    }
+    return pieces.isEmpty ? "" : " [\(pieces.joined(separator: " "))]"
 }
 
 func previewBytes(_ data: [UInt8], format: PropertyFormat) -> String {

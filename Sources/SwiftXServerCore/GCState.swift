@@ -42,8 +42,10 @@ public struct GCState: Equatable, Sendable {
     /// preserved underneath. Without honoring this, Athena/Motif menus
     /// destroy item text on mouse-over because we paint solid over it.
     public var function: UInt8 = 3
-    /// Translated clip rectangles in top-level coords (clipXOrigin/Yorigin
-    /// already applied). nil = no clip; empty = clip-everything.
+    /// Clip rectangles in DRAWABLE-LOCAL coords (clipXOrigin/Yorigin already
+    /// folded in). The bridge's `withDrawContext` translates these to
+    /// top-level coords for window targets (using the target's windowOffset);
+    /// pixmap targets use them as-is. nil = no clip; empty = clip-everything.
     public var clipRectangles: [Rectangle]?
     /// Dash on/off lengths (first byte = on). nil = solid line.
     public var dashes: [UInt8]?

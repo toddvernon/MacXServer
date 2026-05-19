@@ -1,129 +1,142 @@
-# Status 2026-05-18 — End of day
+# Status 2026-05-19 — End of day
 
-Long day chasing one symptom — text damage near the cursor in
-dtpad's editor — through four layers of bugs, each unmasking the
-next as it was fixed. Final state: Motif's XmText caret renders as
-a crisp I-beam, doesn't damage characters it passes over, and the
-text widget is fully usable. dtpad is now a real editor.
+dtcalc's LCD now renders text correctly. The fix took two real bug
+closes and one wrong-diagnosis detour through ColorTable. The wrong
+diagnosis still produced a worthwhile cleanup, so it stays.
 
 ## Headline
 
-**Motif XmText caret renders correctly in dtpad** — the four bugs
-were 15-field XLFDs (parser rejected → Monaco fallback), DtEditor's
-`textFontList` resource (not `fontList`), missing GC `fillStyle` /
-`stipple` / origin support (caret rendered as solid block, not
-I-beam), and pixmaps stored at logical scale on a 3× backing
-(CopyArea save-under eroded glyph AA edges every blink). See
-SHORTCUTS.md Closed list 2026-05-18 entry for the full breakdown.
+**dtcalc LCD shows "0.00" + typed digits, full visual parity with SS2.**
+Same fix also unblocked quickplot's text entry fields (same root cause —
+XmText widget sets clip rects on its drawing GC). Likely also closes
+the about-dialog animation artifact (open issue #4 in
+project_motif_quickplot_status memory); pending re-verification.
+
+
+Root cause was that `SetClipRectangles`' rects (in drawable-local coords)
+were being handed to `CGContext.clip(...)` at top-level coords without
+translating by the widget's `windowOffset`. dtcalc's XmText display
+widget sets a (5,5,25,15) clip rect; without the translation, that clip
+landed in the top-left corner of the calculator's NSWindow — far from
+the LCD widget at (273, 37) — and excluded every glyph the client drew.
+Buttons didn't trip this because their GCs never had SetClipRectangles
+called on them. Comment on `GCState.clipRectangles` even claimed the
+rects were already in top-level coords, but only `clipXOrigin`/`Yorigin`
+were folded in. Fix is centralized in `CocoaWindowBridge.withDrawContext`:
+when the target is a window, translate the clip rectangles by the
+target's `(dx, dy)` before passing to `withClip`. Pixmap targets pass
+through unchanged.
 
 ## What landed
 
-### Font path (dtpad opens Courier 14 for its editor)
+### ColorTable becomes server-global; AllocColor honors shared cells
 
-- `MOTIF_TEXT_QUALITY.md` and `DefaultMotifResources.swift` Tier 1
-  XLFDs corrected to 14 fields (one stray wildcard between
-  RESOLUTION_Y and SPACING removed in each XLFD). `XLFD.parse`
-  rejects 15-field strings; the fixture was failing to parse so
-  every Motif `OpenFont` fell through to Monaco.
-- `DefaultMotifResources.swift` now also publishes
-  `*DtEditor.textFontList` and `Dtpad*textFontList`, the resource
-  CDE's `DtEditor` widget actually reads. With those set, dtpad's
-  editor opens `-adobe-courier-medium-r-normal--14-*-*-*-m-*-iso8859-1`
-  → resolves to Courier New 12pt cell=7×14 monospace.
+- `ColorTable` moved from `ServerSession.colors` to
+  `ServerCoordinator.colors` (parallel to `atoms`). Thread-safe via
+  `NSLock`. Sessions read through a passthrough property so call sites
+  stay unchanged.
+- `allocate(...)` now does shared-cell RGB matching: if the requested
+  RGB is already in the table, returns the existing pixel rather than
+  allocating a new one. `whitePixel` (0), `blackPixel` (1), and the
+  defensive `0xFFFFFF` are pinned at init with lowest-pixel-wins
+  canonicalisation. `AllocColor(white)` now returns 0 as a real X
+  server does.
+- Dormant 22-pixel CDE palette pre-seed deleted (was kept as a safety
+  net after 2026-05-18 CDE retirement; with shared-cell matching it
+  became strictly harmful — coincidental RGB hits would land on the
+  dormant indices).
+- This was originally pitched as the LCD fix. It turned out the LCD
+  bug was elsewhere (see above), but the ColorTable cleanup stands —
+  it's real X-spec correctness, retires SHORTCUTS:32, and unblocks the
+  per-session-vs-global cleanup that DECISIONS.md 2026-05-18 line 470
+  flagged as step (1) of any future CDE re-add path.
 
-### Caret rendering (FillStippled + device-scale pixmaps)
+### Clip-rectangle translation (the actual LCD fix)
 
-- `GCState` carries `fillStyle`, `stipple`, `tile`, `tileStippleXOrigin/YOrigin`
-  now (bits were defined in `GCBits` but never materialised).
-  `GCState.materialise` reads them; `WindowBridge.drawPolyFillRectangle`
-  signature carries them through to the bridge.
-- `CocoaWindowBridge.fillStippled` implements per-pixel rasterisation
-  for FillStippled (2) and FillOpaqueStippled (3) — runs of set
-  stipple bits paint `foreground`, runs of clear bits leave the
-  destination unchanged (FillStippled) or paint `background`
-  (FillOpaqueStippled). FillTiled (1) falls through to solid for now.
-- `withDrawContext` disables AA when drawing into depth-1 pixmaps
-  so Motif's `PolySegment` carve of the I-beam into its stipple
-  pixmap produces crisp 0-or-fg bits, not AA-soft edges that the
-  bit reader rejects.
-- `handlePolyFillRectangle` translates the stipple origin by the
-  same window offset it applies to the rectangle. Motif sets the
-  origin per-paint to the cursor's window-local top-left; without
-  translating both together, the toroidal-tile math anchors to the
-  wrong dest pixel and the I-beam pattern fragments.
-- `PixelBuffer` allocates at device scale (`width*scale × height*scale`
-  pixels) with a CTM matching `FlippedXView.resizeBacking`. Pixmaps
-  are now lossless round-trip partners for the window backing — the
-  Motif caret save-under no longer erodes glyph AA edges on each
-  blink. `PixmapTable` carries the scale; `WindowBridge` protocol
-  adds `scaleFactor`; `StippleBitGrid` samples the centre device
-  pixel per logical bit.
-- `CocoaWindowBridge.copyArea` window-source branch uses `dispatch_sync`
-  rather than `dispatch_async`. The cursor save-under happens on
-  the protocol queue but reads the window backing on main; without
-  the sync, the protocol queue would proceed to a subsequent
-  pixmap read while main was still writing the pixmap. XQuartz
-  uses `xp_lock_window` (kernel-private, see hw/xquartz/xpr/xprFrame.c)
-  for the same race; dispatch_sync is our equivalent.
+- `CocoaWindowBridge.withDrawContext` now translates `clipRectangles`
+  by `(dx, dy)` when the target is `.window`. Pixmap path unchanged.
+- Misleading comment in `GCState.clipRectangles` ("already top-level
+  coords") corrected — rects are drawable-local; bridge translates.
+- Capture-diff tooling improvement: `ChronoDumper` now decodes
+  `CreateGC` / `ChangeGC` value lists for foreground / background and
+  prints them inline (`[fg=0x1 bg=0x0]`). Made the wire-level diagnosis
+  tractable. Permanent addition, not a debug scaffold.
+- Bridge-log improvement: `drawPolyText8` now includes the foreground
+  RGB and the clip-rectangle list in its log line, so a future class-of-bug
+  ("wire matches gold but rendering is wrong") gets diagnosed in one log
+  pass instead of three rounds of "let me add another print."
 
 ### Tests
 
-533 tests pass, 4 skipped, 0 failures.
-`Tests/SwiftXServerCoreTests/FontDispatchTests.swift` updated to
-match the new `drawPolyFillRectangle` signature (background, fillStyle,
-stipple, tile, stippleOrigin args).
+541 tests pass, 4 skipped, 0 failures.
+
+- New `ColorTableTests.swift` (7 cases): whitePixel/blackPixel canonical
+  IDs, repeated-RGB shared-cell hit, distinct-RGB distinctness, RGB
+  round-trip, cross-session sharing via the coordinator.
+- New `FontDispatchTests.testPolyText8PassesClipRectanglesInDrawableLocalCoords`:
+  locks in the contract that handlers pass drawable-local rects and
+  the bridge does the translation.
+- `CapturedAppReplayTests` baselines rebased twice: once for the
+  ColorTable change (lower per-app `colors` counts post-shared-cells +
+  deleted-CDE-palette), once for the fresh dtcalc gold capture the
+  user retook today (1918 requests vs prior 2047 — different
+  pre-CDE-retirement era).
 
 ## What didn't land today
 
-- **dt-Motif widget chrome (button shadows + labels)** still not
-  rendering. Four hypotheses closed in code (region steps E0–E2 +
-  the visibility-state-from-clipList fix) but unverified against
-  u5. With caret now working, the next session can revisit dtpad's
-  text widget visually then move on to button chrome.
-- **Smoke against other dt-apps**: dtcalc, quickplot, xfontsel all
-  use FillStippled for various widgets (button greying, scroll
-  thumb hatching, focus rings). The stipple support landing today
-  should make those look right; not yet verified.
+- **dt-Motif widget chrome (button shadows + labels)** — still
+  unresolved from 2026-05-18. dt-app smoke is now mostly clean; the
+  remaining cosmetic gap is the deep button-hierarchy chrome.
+- **`PutImage` to depth-1 pixmaps is still silent-dropped** per the
+  long-standing SHORTCUTS entry. Surfaced today as "dtcalc's caret
+  stipple pixmap (0x44000ef) gets all-zero bits, so the caret is
+  invisible." Not blocking the LCD-text fix; queued for the next
+  depth-1-PutImage real-implementation pass.
+- **Framer-shared bug investigation** (deferred again from 2026-05-18).
 
 ## Working tree at end of day
 
-All implementation changes committed. Stray untracked artifacts:
+All implementation changes committed-pending. Untracked / modified:
 
-- `captures/dtcalc-u5-on-swiftx-v3.xtap` + `.json` — yesterday's
-  pre-CDE-retirement capture. Can delete; superseded by the
-  baseline that landed in `262c105`.
-- `blog/*scratch*` — zero-byte file from May 11, not ours.
-- `connection.json` working-tree mod — leftover from earlier
-  capture-proxy work; revert when convenient.
+- `connection.json` — set today for the u5→capture→swiftx capture run,
+  output points at `dtcalc-running-on-u5-display-on-swiftx.xtap`.
+- `captures/dtcalc-running-on-u5-display-on-ss2.xtap` +
+  `.json` — fresh gold capture the user retook today.
+- `captures/dtcalc-running-on-u5-display-on-swiftx.xtap` +
+  `.json` — fresh swiftx capture from after the ColorTable fix
+  (pre-clip fix, so still has the invisible-LCD-text symptom).
 
 ## Tomorrow's recommended starting points
 
-1. **Smoke other dt-apps with stipple support landed.** dtcalc
-   button greying, quickplot menu separators, xfontsel scrollbar
-   thumb should all look better. Capture before/after if anything
-   regresses.
-2. **dt-Motif button chrome (shadows + labels).** Last visible gap
-   in the dt-app suite. Hypothesis pool was at four-closed, pending
-   u5 verification. With caret done, this is the next thing to
-   trace.
-3. **Framer-shared bug investigation** (deferred from 2026-05-18).
-   dtpad / dtmail / dticon misbehave the same way through proxy and
-   server but work direct u5→ss2. Whatever the Framer is corrupting
-   is shared between the two paths; capture + diff is the next move.
+1. **Smoke other dt-apps for LCD-style clip regressions.** Now that
+   we know SetClipRectangles + sub-window draws was broken for over
+   a week with nobody noticing (only dtcalc tripped it visibly), it's
+   worth a smoke pass: quickplot (which uses XmText for plot labels
+   maybe?), dthelpview's text area, dtterm if it sets clip anywhere.
+2. **The depth-1 `PutImage` silent-drop.** Today's diagnosis surfaced
+   that dtcalc's LCD caret stipple pixmap is all-zero because we drop
+   the `PutImage` that should populate it. Caret is invisible (small
+   cosmetic gap, but worth fixing — needed for any XmText-style
+   blinking-cursor app to look right).
+3. **dt-Motif widget chrome from 2026-05-18.** Still parked; with LCD
+   text working the visual delta against gold is narrowing.
 
 ## Reflection
 
-The most valuable lesson today: when Todd reports a visual artifact
-and the gold reference (real Sun) doesn't show the same artifact,
-the answer is "we're doing something wrong on the wire," not
-"that's just how the protocol works." I tried twice to write off
-residual artifacts as inherent behavior; both times Todd's pushback
-was right and the further investigation found a real bug. Memory
-entry [Visual artifacts vs gold = real bug] now captures that.
+Two lessons from the day. First: the diagnosis-by-capture-diff path
+worked exactly as the project conventions promise. When the wire was
+identical between SS2 and swiftx for the LCD widget — same opcodes,
+same pixel values, same order — the bug had to be in our rendering.
+Adding `fg=…` to the dumper's `ChangeGC` output and adding clip-rect
+logging to the bridge made the bug visible in one capture run.
 
-Second lesson: the X11 cursor model has multiple layers
-(pointer-cursor via `XCreatePixmapCursor` with source+mask+save-under,
-vs. text-widget caret via `FillStippled` + `CopyArea` save/restore).
-Conflating them led to a wrong-shaped fix attempt; reading the
-LessTif `TextOut.c` source got us aligned. Memory entry
-[X11 cursor model] captures both.
+Second: I went down a wrong-diagnosis path early ("Motif fallback
+gives pixels[6].bg = near-white, so white-on-white invisible") that
+was internally consistent with the dtcalc source but didn't actually
+match the wire. Todd's question — "on SS2 the LCD text is black, how
+can that be?" — was the right counter. The hypothesis I had didn't
+predict what real SS2 does. When that gap appears, the right move is
+to stop speculating and take a capture, not to add another layer of
+"maybe also..." reasoning. The ColorTable cleanup still landed and is
+worth having, but I should have caught earlier that it wasn't going to
+fix the visible bug.

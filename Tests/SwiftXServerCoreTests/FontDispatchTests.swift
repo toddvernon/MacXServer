@@ -22,9 +22,18 @@ private final class RecBridge: WindowBridge, @unchecked Sendable {
         var foreground: RGB16
         var rectangles: [Framer.Rectangle]
     }
+    struct PolyText8Call: Equatable {
+        var topLevel: UInt32
+        var foreground: RGB16
+        var x: Int16
+        var y: Int16
+        var items: [UInt8]
+        var clipRectangles: [Framer.Rectangle]?
+    }
 
     var imageText8Calls: [ImageText8Call] = []
     var fillRectsCalls: [FillRectsCall] = []
+    var polyText8Calls: [PolyText8Call] = []
 
     func registerTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32) {}
     func mapTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32, topLevelExposeRects: [BoxRec], descendants: [DescendantSnapshot], overrideRedirect: Bool, byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {}
@@ -44,6 +53,17 @@ private final class RecBridge: WindowBridge, @unchecked Sendable {
             fontName: font.macFontName, pointSize: font.pointSize,
             cellWidth: font.cellWidth, cellHeight: font.cellHeight,
             x: x, y: y, string: string
+        ))
+    }
+    func drawPolyText8(
+        target: DrawTarget, foreground: RGB16,
+        font: ResolvedFont, x: Int16, y: Int16, items: [UInt8],
+        clipRectangles: [Framer.Rectangle]?
+    ) {
+        guard case .window(let topLevel, _, _) = target else { return }
+        polyText8Calls.append(PolyText8Call(
+            topLevel: topLevel, foreground: foreground,
+            x: x, y: y, items: items, clipRectangles: clipRectangles
         ))
     }
     func drawPolyFillRectangle(target: DrawTarget, foreground: RGB16, background: RGB16, function: UInt8, fillStyle: UInt8, stipple: UInt32, tile: UInt32, stippleOriginX: Int16, stippleOriginY: Int16, rectangles: [Framer.Rectangle], clipRectangles: [Framer.Rectangle]?) {
@@ -355,6 +375,78 @@ final class FontDispatchTests: XCTestCase {
             Framer.Rectangle(x: 13, y: 23, width: 1, height: 1),
             Framer.Rectangle(x: 15, y: 24, width: 1, height: 1),
             Framer.Rectangle(x: 14, y: 28, width: 1, height: 1),
+        ])
+    }
+
+    /// Regression test for the dtcalc-LCD-invisible-text bug fixed 2026-05-19.
+    ///
+    /// X11 SetClipRectangles puts rects in the GC's clip-coordinate system,
+    /// which is relative to the drawable the GC draws to (widget-local for
+    /// sub-windows). The bridge translates those rects to top-level coords
+    /// in `CocoaWindowBridge.withDrawContext` using the target's windowOffset,
+    /// so the contract from handlers to the bridge is: pass clipRectangles
+    /// in DRAWABLE-LOCAL coords (only clipXOrigin/Yorigin applied). Pre-fix,
+    /// the bridge consumed them as-is and applied them in top-level coords,
+    /// which clipped dtcalc's LCD text to a tiny rect in the top-left corner
+    /// of the calculator window.
+    func testPolyText8PassesClipRectanglesInDrawableLocalCoords() {
+        let bridge = RecBridge()
+        let session = ServerSession(bridge: bridge)
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        let root = ServerConfig.default.rootWindowId
+
+        // Top-level window
+        _ = session.feed(CreateWindow(
+            depth: 0, wid: 0xA0001, parent: root,
+            x: 0, y: 0, width: 200, height: 100, borderWidth: 0,
+            windowClass: .inputOutput, visual: 0,
+            valueMask: 0, valueList: []
+        ).encode(byteOrder: .lsbFirst))
+
+        // Sub-window inside top-level at offset (50, 50). Same shape as
+        // dtcalc's XmText display widget inside its parent panel.
+        _ = session.feed(CreateWindow(
+            depth: 0, wid: 0xA0002, parent: 0xA0001,
+            x: 50, y: 50, width: 100, height: 30, borderWidth: 0,
+            windowClass: .inputOutput, visual: 0,
+            valueMask: 0, valueList: []
+        ).encode(byteOrder: .lsbFirst))
+
+        _ = session.feed(OpenFont(fid: 0x4400005, name: Array("9x15".utf8))
+            .encode(byteOrder: .lsbFirst))
+
+        let fontBytes = encodeUInt32(0x4400005, byteOrder: .lsbFirst)
+        _ = session.feed(CreateGC(
+            cid: 0xB0001, drawable: 0xA0002,
+            valueMask: GCBits.font, valueList: fontBytes
+        ).encode(byteOrder: .lsbFirst))
+
+        // Clip the GC to (5, 5, 25, 15) in widget-local coords. With
+        // clipXOrigin/Yorigin = 0 there's no per-GC offset to fold in.
+        _ = session.feed(SetClipRectangles(
+            ordering: .unsorted, gc: 0xB0001,
+            clipXOrigin: 0, clipYOrigin: 0,
+            rectangles: [Framer.Rectangle(x: 5, y: 5, width: 25, height: 15)]
+        ).encode(byteOrder: .lsbFirst))
+
+        // PolyText8 to the sub-window at widget-local (10, 20). The handler
+        // adds windowOffset to position before dispatching to the bridge.
+        // TEXTITEM8 wire format: 1-byte length, 1-byte delta, then chars.
+        let textItem: [UInt8] = [2, 0, 0x48, 0x69]  // length=2, delta=0, "Hi"
+        _ = session.feed(PolyText8(
+            drawable: 0xA0002, gc: 0xB0001,
+            x: 10, y: 20, items: textItem
+        ).encode(byteOrder: .lsbFirst))
+
+        XCTAssertEqual(bridge.polyText8Calls.count, 1)
+        let call = bridge.polyText8Calls[0]
+        // Position arrives in top-level coords (handler added (50,50)).
+        XCTAssertEqual(call.x, 60)
+        XCTAssertEqual(call.y, 70)
+        // Clip rects arrive in DRAWABLE-LOCAL coords. The translation to
+        // top-level happens in withDrawContext, not at this layer.
+        XCTAssertEqual(call.clipRectangles, [
+            Framer.Rectangle(x: 5, y: 5, width: 25, height: 15)
         ])
     }
 
