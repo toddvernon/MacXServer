@@ -1,182 +1,201 @@
 # Status 2026-05-19 — End of day
 
-Three real X-server bugs closed, one cosmetic gap left open with a
-clear diagnostic path for tomorrow. dtcalc, dthelpview, and
-quickplot all visibly better than this morning.
+The X server's bg-paint contract is now honored end-to-end. Three big
+visible fixes plus a tooling boost that paid for itself the day it
+landed. dthelpview, xterm, and most of quickplot's open plot-window
+artifacts all unstuck by a single architectural correction.
 
 ## Headline
 
 **Three closes:**
-1. **dtcalc LCD shows "0.00" + typed digits**, full visual parity with SS2.
-   Root cause: `SetClipRectangles` rects (in drawable-local coords) were
-   handed to `CGContext.clip(...)` at top-level coords without translating
-   by the widget's `windowOffset`. dtcalc's XmText LCD sets a `(5,5,25,15)`
-   clip rect; without translation that clip landed in the top-left corner
-   of the calculator's NSWindow and excluded every glyph. Fix centralized
-   in `CocoaWindowBridge.withDrawContext`.
 
-2. **Quickplot text entry fields work** — same root cause as #1 (any
-   XmText widget that sets clip rects on its drawing GC). The 2026-05-10
-   "weird spacing" diagnosis was wrong; text was rendering correctly into
-   a clipped-out region.
+1. **dthelpview renders with proper white DisplayArea and blue form
+   border, no leftover blue rectangles after expand.** Root cause was
+   two-part: (a) draw ops weren't clipped to the window's visible region
+   (`clipList`) so a parent's bg paint or Motif's `ClearArea` on the
+   form bled right through descendant windows; (b) `handleConfigureWindow`
+   updated geometry + emitted Expose but never painted the descendant's
+   bg into newly-claimed pixels, so the form's L-shape of new pixels
+   after expand stayed as fresh-bitmap-white.
 
-3. **dthelpview man-page area renders.** Different bug: when a
-   non-top-level window maps and its parent chain was already viewable,
-   every already-mapped descendant also becomes viewable simultaneously
-   and needs Expose. Our non-top-level MapWindow handler only emitted
-   Expose for the directly-mapped window. dthelpview maps DisplayArea +
-   scrollbars BEFORE the wrapper shell, so without the cascade the
-   DisplayArea never got Expose. Fix in `ServerSession.handleMapWindow`
-   non-top-level branch — walk `mappedDescendantSnapshots(of: r.window)`
-   and emit Expose for each with ExposureMask.
+2. **xterm `-bg black -fg cyan` renders correctly black with cyan text
+   on black cells.** `GCState.background` default was `0xFFFFFF`, which
+   resolved to whitePixel after the 2026-05-19 (earlier today) ColorTable
+   canonicalization. xterm relies on the spec default for GC bg
+   (background=1 = blackPixel per X11 spec); we were handing it white.
+   One-line fix to GCState; verified live.
 
-**One cosmetic remaining (open for tomorrow):**
-- dthelpview man-page content area renders on Motif fallback blue
-  instead of white, and the window aspect is wider than SS2's.
-- Canonical CDE Dt.ad resource overrides added to Tier 1 but didn't
-  take effect on `-manPage` mode. Full diagnostic path in the dedicated
-  memory note `project_dthelpview_cosmetic_open`. Short version: read
-  the DisplayArea's CreateWindow bytes via fresh capture, don't guess
-  at resource paths.
+3. **Quickplot's plot-window drawing artifacts mostly resolved as a
+   bonus.** Todd reports today's bg-paint-contract fixes closed "a lot
+   if not all" of quickplot's open plot-window issues. Most likely the
+   blue-line-at-y=50 artifact on selected pages (open issue #5 in
+   `project_motif_quickplot_status`) — textbook "parent's bg paints into
+   descendant area" which is exactly what the new clipList composite-clip
+   prevents. Re-verify and formally close next session.
+
+**One architectural unlock:** Todd's "Athena widgets just *were* a
+color" observation. Once stated, it became the lens for both fixes
+(server owns bg paint on every visibility transition; widgets just
+declare bg via CWBackPixel). Memorized as `reference_x11_server_owns_bg_paint`
+so future "white where bg should be" bugs route to "find the missing
+paint, not the wrong color."
 
 ## What landed (with file pointers)
 
-### Clip-rectangle translation (the dtcalc / quickplot fix)
+### Bridge-layer visible-region clipping (the dthelpview-content fix)
 
-- `Sources/SwiftXServerCore/CocoaWindowBridge.swift` `withDrawContext` —
-  translates `clipRectangles` by `(dx, dy)` when target is `.window`.
-  Pixmap path unchanged.
-- `Sources/SwiftXServerCore/GCState.swift` line ~45 — corrected
-  misleading comment ("already top-level coords" → "drawable-local;
-  bridge translates").
-- New test `Tests/SwiftXServerCoreTests/FontDispatchTests.swift`
-  `testPolyText8PassesClipRectanglesInDrawableLocalCoords` — locks in
-  the handler→bridge contract (drawable-local rects; translation in
-  withDrawContext).
+- `Sources/SwiftXServerCore/DrawTarget.swift` — `.window` case now
+  carries `id` alongside `topLevel`/`offsetX`/`offsetY` so the bridge
+  can look up per-window clipList.
+- `Sources/SwiftXServerCore/CocoaWindowBridge.swift` —
+  `windowClipLookup` closure (set by session, mirrors `pixmapBufferLookup`);
+  `withDrawContext` for `.window` targets calls the lookup and sets
+  `CGContext.clip` to the clipList rects BEFORE the GC user-clip, per
+  X.org `mi/migc.c:miComputeCompositeClip`. New `withClip` overload
+  takes both window- and GC-clip args. `clearArea` bridge signature
+  changed from single-rect to `rects: [Rectangle]` (session does the
+  intersection now).
+- `Sources/SwiftXServerCore/ServerSession.swift` — `handleClearArea`
+  intersects request rect with `entry.clipList`, passes surviving
+  rects to bridge. `paintRectsForWindow` clips inner bg rect to the
+  window's clipList. Session registers `windowClipLookup` on the
+  bridge at init.
+- `Sources/SwiftXServerCore/WindowBridge.swift` — protocol updates for
+  new `clearArea` shape + `setWindowClipLookup`. MockWindowBridge
+  default-impls updated.
 
-### Descendant Expose cascade on MapWindow (the dthelpview fix)
+### Paint-on-grow for descendant ConfigureWindow (the dthelpview-form fix)
 
-- `Sources/SwiftXServerCore/ServerSession.swift` MapWindow non-top-level
-  branch (search for "every already-mapped descendant also transitions")
-  — after the existing per-window Expose, walks the mapped subtree and
-  emits Expose for each descendant with ExposureMask. Mirrors what
-  `emitMapSequence` does for the top-level path.
-- No replay-test baselines moved (existing fixtures don't exercise the
-  "children-mapped-before-wrapper" pattern). Would surface if we add a
-  dthelpview replay test.
+- `Sources/SwiftXServerCore/ServerSession.swift` `handleConfigureWindow`
+  — when descendant grows or moves, calls `paintRectsForWindow` on the
+  descendant and emits via `paintWindowRects`, so its bg lands in its
+  new visible region before the Expose. Mirrors the X server's
+  contract per `reference_x11_server_owns_bg_paint`.
+- `handleTopLevelResize` reordered: `recomputeClips` now runs BEFORE
+  `mappedBackgroundPaints` (correctness no-op so the top-level's paint
+  sees its fresh clipList).
+- New `descendantBgPaints(of:byteOrder:)` helper — mirrors the 2026-05-19
+  Expose cascade for the non-top-level MapWindow path so the dthelpview
+  "children mapped before wrapper shell" pattern paints each descendant's
+  bg as the subtree becomes viewable.
 
-### ColorTable becomes server-global; AllocColor honors shared cells
+### GCState bg default (the xterm fix)
 
-- `Sources/SwiftXServerCore/ColorTable.swift` — thread-safe, `rgbToPixel`
-  reverse map, `allocate()` checks for existing-RGB match before
-  allocating new. `whitePixel` (0), `blackPixel` (1), and defensive
-  `0xFFFFFF` are pinned at init with lowest-pixel-wins canonicalisation.
-  `AllocColor(rgb=white)` now returns `whitePixel` like a real X server.
-- `Sources/SwiftXServerCore/ServerCoordinator.swift` — `public let colors`
-  added next to `atoms`.
-- `Sources/SwiftXServerCore/ServerSession.swift` — `colors` is now a
-  passthrough property to `coordinator.colors`.
-- Dormant 22-pixel CDE palette pre-seed deleted.
-- New test `Tests/SwiftXServerCoreTests/ColorTableTests.swift` (7 cases).
-- Originally pitched as the LCD fix; turned out NOT to be (capture-diff
-  showed wire-level identity with SS2 regardless). Still a real X-spec
-  correctness fix, still retires SHORTCUTS:32 cleanly.
+- `Sources/SwiftXServerCore/GCState.swift` — `background: UInt32 = 1`
+  (was `0xFFFFFF`). Spec default per X11 protocol §7. The 0xFFFFFF
+  sentinel was harmless until the 2026-05-19 ColorTable change pinned
+  it to whitePixel.
 
-### Tier 1 RESOURCE_MANAGER additions
+### ChronoDumper value-list decoders (the tooling that made today fast)
 
-- `Sources/SwiftXServerCore/DefaultMotifResources.swift` — added CDE
-  Dt.ad's canonical DisplayArea bg/fg overrides + `Dthelpview*manBox.rows/columns`.
-  Publishes cleanly (GetProperty reply grew 1911→2598 bytes) but doesn't
-  fix the dthelpview cosmetic gaps (see open item).
-
-### Tooling improvements (permanent, not debug scaffolds)
-
-- `Sources/SwiftXCaptureCore/ChronoDumper.swift` — `CreateGC` and
-  `ChangeGC` now decode value lists and print `[fg=0x1 bg=0x0]` inline.
-  Made the wire-level dtcalc diagnosis tractable in one capture run.
-- `Sources/SwiftXServerCore/CocoaWindowBridge.swift` `drawPolyText8` log
-  line — now includes `fg=` and `clip=`.
+- `Sources/SwiftXCaptureCore/ChronoDumper.swift` — three new inline
+  decoders:
+  - `decodeWindowAttrs(mask:values:)` for `CreateWindow` +
+    `ChangeWindowAttributes` value-lists. Surfaces `bg-pixmap`,
+    `bg-px`, `border-px`, `bit-grav`, `win-grav`, `override`,
+    `save-under`. The smoking gun decoder — killed three wrong
+    hypotheses for the DisplayArea bg in five minutes.
+  - `decodeConfigureWindow(mask:values:)` for `ConfigureWindow`'s
+    `x`/`y`/`w`/`h`/`bw`/`sibling`/`stack-mode` value-list.
+  - `AllocColor` / `AllocNamedColor` reply pixel value formatting
+    (`→ pixel=0x10 rgb=(...)`) so we never have to mentally count
+    allocations to figure out what pixel `0x13` is.
 
 ### Docs / ledgers
 
-- `SHORTCUTS.md` — two Closed entries (clip-rect translation, MapWindow
-  descendant Expose cascade); one Open entry (dthelpview cosmetic gaps
-  with diagnostic path).
-- `OPCODE_STATUS.md` — `AllocColor` (entry 84) raised to high confidence
-  + shared-cell text. `MapWindow` (entry 8) updated with the descendant
-  cascade.
-- `DECISIONS.md` — entry for the ColorTable coordinator move +
-  postscript noting it wasn't the LCD fix.
-- Memory updates: `project_motif_quickplot_status` (open issue #2
-  closed; #4 likely closed pending re-verification),
-  `project_dt_apps_status` (today's three closes summarized),
-  `project_dthelpview_cosmetic_open` (NEW — focused handoff for
-  tomorrow's first task), `feedback_wire_matches_gold` (NEW — diagnostic
-  lesson learned).
+- `SHORTCUTS.md` — three new Closed entries (clipping, paint-on-grow,
+  GCState bg default). dthelpview cosmetic open entry rewritten —
+  bg+aspect-ratio gaps separated; bg now closed, aspect-ratio remains.
+  Two new Open entries: `subWindowMode=IncludeInferiors` untracked;
+  border-ring rect not clipped to borderClip.
+- New memory `reference_x11_server_owns_bg_paint.md` — the
+  architectural principle behind both fixes. Linked from MEMORY.md.
+- `project_motif_quickplot_status` — 2026-05-19 stamp noting today's
+  fixes likely closed open issue #5 (and possibly #4); re-verify next
+  session before formally closing.
 
 ### Tests
-541 tests pass, 4 skipped, 0 failures. 8 new tests today (7
-ColorTable + 1 clip-translation regression).
 
-## What's still open (tomorrow's queue)
+- New `DrawingDispatchTests.testClearAreaClippedByMappedChildren`
+  locks in parent-ClearArea-clipped-by-children invariant. Existing
+  `testClearAreaUsesWindowBackground` updated (post-fix, unmapped
+  windows have empty clipList so the test now maps the window first).
+- `CapturedAppReplayTests.testReplayDthelpview` baseline rebased to
+  843 requests for the fresh `-manPage`-mode capture taken today
+  (previous was 414 pre-`-manPage`; intermediate was 875 from an
+  earlier capture).
+- 294 server tests pass, 4 skipped, 0 failures.
 
-1. **dthelpview cosmetic** (TOP PRIORITY — fresh in our heads). See
-   `project_dthelpview_cosmetic_open` memory for the full diagnostic
-   path. Short version: take a fresh `dthelpview -manPage` capture vs
-   SS2 gold; read the DisplayArea's CreateWindow `valueMask` to check
-   whether CWBackPixmap=ParentRelative (=1) or CWBackPixel resolves
-   blue. Don't guess at resource paths first — read the bytes.
+## What's still open (next session's queue)
 
-2. **Smoke other dt-apps for clip-rect regressions.** dtcalc was the
-   visibly-affected case; with the fix in we should sanity-check
-   dthelpview text widget interactions, dtterm if it sets clip,
-   anywhere XmText is used. Most likely already-fixed by the same
-   commit; just want to confirm.
+1. **Verify quickplot fixes formally.** Open issues #4 (about-dialog
+   animations) and #5 (blue-line-at-y=50 plot artifact) likely closed
+   by today's clipping + paint-on-grow work, but unverified
+   end-to-end. Should be the first thing — quick visual check on the
+   live app, formally close the memory entries if confirmed.
 
-3. **`PutImage` to depth-1 pixmaps silent-drop.** Surfaced today as
-   "dtcalc's caret stipple pixmap gets all-zero bits, so the LCD caret
-   is invisible." Same shape would affect any XmText-style blinking
-   cursor. Long-standing SHORTCUTS entry. Cosmetic but easy to fix.
+2. **dthelpview aspect ratio wider than SS2.** Width comes out wider
+   by ~80px. Likely font cell-width metric divergence
+   (`manBox.columns=80` × cell width feeds the dialog's preferred
+   width). Diff OpenFont/QueryFont calls between captures.
 
-4. **dt-Motif button chrome from 2026-05-18.** Still parked. With LCD
-   text + dthelpview content + quickplot text fields all working, the
-   visual gap to SS2 is narrowing; this is the last big item.
+3. **Smoke other dt-apps and Motif clients post-clipping.** dtcalc,
+   dtterm, dticon — quickplot got bonus fixes, others probably did too.
+   Walk through each, note what's improved, what's still off.
 
-5. **Framer-shared bug investigation** (deferred again).
+4. **Motif button chrome on Expose / resize.** Still parked from
+   2026-05-18. Today's button-bar buttons in dthelpview look thinner
+   after resize than before — might be a related re-paint-on-grow
+   gap, or might be the original parked issue. Worth re-checking with
+   today's clipping in place.
+
+5. **`SwiftXCaptureCoreTests` build break on MacOSX26.2 SDK.**
+   `FileManager.temporaryDirectory` and `NSString.lastPathComponent`
+   missing in the test-target compilation. Pre-existing on clean
+   tree; env-level, not project. Blocks `swift test` overall.
+
+6. **Framer-shared bug investigation.** Deferred again. Still open.
 
 ## Working tree at end of day
 
 Two commits today on `main`:
-- `a8729d1` — dtcalc LCD: translate clip rects by widget windowOffset
-  (also bundles ColorTable cleanup, ChronoDumper improvements, fresh
-  captures, CLAUDE.md preflight fix)
-- `9291950` — dthelpview: cascade Expose to descendants when wrapper
-  shell maps (also bundles partial CDE resource additions + STATUS update)
 
-Plus this STATUS rewrite (pending commit, not yet staged).
+- `ef0d6eb` — Honor X server bg-paint contract: clip draws + paint on
+  grow + fix GC bg default (the big one — clipping + paint-on-grow +
+  GCState + ChronoDumper value-list decoders + 1 new regression test)
+- `44f30ea` — quickplot memory: note that bg-paint-contract fixes
+  resolved plot-window artifacts
+
+Six commits ahead of `origin/main` total.
 
 ## Reflection
 
-Two lessons from the day worth remembering:
+Three lessons from the day worth keeping:
 
-**Capture first, speculate second.** I went deep on the wrong
-diagnosis for the dtcalc LCD ("Motif fallback gives pixels[6].bg =
-near-white, so white-on-white invisible"). It was internally consistent
-with dtcalc's source but didn't actually match the wire. Todd's pushback
-— "on SS2 the LCD text is black, how can that be?" — was the right
-counter. A capture-diff took five minutes and pointed straight at
-the clip-rect bug. Memory `feedback_wire_matches_gold` captures this
-specifically.
+**Tooling pays back disproportionately when it surfaces "what's
+actually on the wire?".** The `CreateWindow` value-list decode was 50
+lines added to ChronoDumper and immediately killed three hours of
+hypothesis-spinning. Yesterday's GC fg/bg decode did the same for the
+dtcalc LCD bug. Pattern: when a draw-related bug class shows up,
+spend 30 minutes adding the relevant decoder before going deeper —
+the diagnosis time saved is huge. Added two more decoders proactively
+today (ConfigureWindow value-list, AllocColor/AllocNamedColor reply
+pixel) on the same theory. Stopping there per "add when we hit the
+same bug shape twice."
 
-**The ColorTable cleanup landed anyway.** Wrong diagnosis still
-produced real correctness work — coordinator-owned colormap, shared
-cells, retires SHORTCUTS:32. The wrong-path cost was the time spent on
-it; the output stands on its own merits.
+**Capture-first / screenshot-diff-first beats speculation every
+time.** I went down two wrong paths today (ParentRelative hypothesis;
+"the remaining blue strips are correct-by-spec"). Both got killed by
+data Todd produced — the swiftx capture for the first, the
+SS2/swiftx side-by-side for the second. `feedback_wire_matches_gold`
+keeps being right. When I can't explain a pixel, ask for a comparison
+shot or a capture before guessing.
 
-**Centralized translation > per-handler fixes.** The clip-rect fix
-landed in one place (`withDrawContext`) and instantly fixed three
-visible bugs (dtcalc LCD, quickplot text fields, probably
-quickplot about-dialog animations). Same shape for the MapWindow
-descendant cascade — one helper (`mappedDescendantSnapshots`) reused
-in two places. Both fixes are roughly 8 lines each, but only because
-the right factoring already existed in the codebase.
+**One architectural lens can unify N seemingly-unrelated bugs.**
+Todd's "Athena widgets just *were* a color" observation didn't just
+explain dthelpview — it instantly told me where the xterm
+white-text-bg bug had to be (broken GC bg default; not a paint path
+issue). And it predicted quickplot's plot-window artifacts would
+close as a side effect. The right lens is force-multiplying; the
+memory entry preserves it for the next session that hits a
+"wrong-color-where-bg-should-be" symptom.
