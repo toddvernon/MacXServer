@@ -30,8 +30,16 @@ public enum GCBits {
 // Materialised GC state. Per RENDERING_DESIGN.md item 4: each drawing request
 // applies fresh — we don't try to hold "current" state on the CGContext.
 public struct GCState: Equatable, Sendable {
-    public var foreground: UInt32 = 0       // pixel value
-    public var background: UInt32 = 0xFFFFFF
+    // X11 protocol-spec GC defaults: foreground=0, background=1 (both pixel
+    // values, interpreted via the screen's whitePixel/blackPixel mapping
+    // advertised in SetupAccepted). Our server pins whitePixel=0 and
+    // blackPixel=1 so the defaults resolve as fg=white, bg=black. Clients
+    // that only set foreground (xterm -fg cyan with default bg) rely on
+    // bg defaulting to blackPixel; the prior 0xFFFFFF default resolved to
+    // whitePixel after the 2026-05-19 ColorTable canonicalization, breaking
+    // ImageText8 cell-fill for any GC that didn't override bg.
+    public var foreground: UInt32 = 0       // pixel value (= whitePixel)
+    public var background: UInt32 = 1       // pixel value (= blackPixel)
     public var lineWidth: UInt32 = 0        // 0 = 1px thin line per X11 spec
     public var fillRuleEvenOdd: Bool = true
     public var font: UInt32 = 0             // X font id; 0 = none set

@@ -116,9 +116,12 @@ final class CapturedAppReplayTests: XCTestCase {
     }
 
     func testReplayDthelpview() throws {
+        // Capture re-recorded 2026-05-20 with -manPage mode + shrink/expand
+        // gesture so the corpus exercises the resize + descendant-Expose +
+        // bg-clipping paths. Old baseline (414 requests) was pre-`-manPage`.
         try runReplay(capture: "dthelpview-running-on-u5-display-on-ss2.xtap", expecting: ReplayBaseline(
             windows: 1, colors: 9, pixmaps: 0, fonts: 8, gcs: 0,
-            atoms: 88, requests: 414,
+            atoms: 88, requests: 843,
             allowedExtensionOpcodes: [133]
         ))
     }

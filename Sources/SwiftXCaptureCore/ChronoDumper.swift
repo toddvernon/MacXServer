@@ -220,9 +220,9 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
     let body: String
     switch req {
     case .createWindow(let r):
-        body = "CreateWindow             wid=\(windowDisplay(r.wid)) parent=\(windowDisplay(r.parent)) \(r.width)x\(r.height) at (\(r.x),\(r.y)) class=\(r.windowClass) mask=0x\(String(r.valueMask, radix: 16))"
+        body = "CreateWindow             wid=\(windowDisplay(r.wid)) parent=\(windowDisplay(r.parent)) \(r.width)x\(r.height) at (\(r.x),\(r.y)) class=\(r.windowClass) mask=0x\(String(r.valueMask, radix: 16))\(decodeWindowAttrs(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))"
     case .changeWindowAttributes(let r):
-        body = "ChangeWindowAttributes   window=\(windowDisplay(r.window)) mask=0x\(String(r.valueMask, radix: 16))"
+        body = "ChangeWindowAttributes   window=\(windowDisplay(r.window)) mask=0x\(String(r.valueMask, radix: 16))\(decodeWindowAttrs(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))"
     case .getWindowAttributes(let r):
         body = "GetWindowAttributes      window=\(windowDisplay(r.window))"
     case .destroyWindow(let r):
@@ -240,7 +240,7 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
     case .unmapSubwindows(let r):
         body = "UnmapSubwindows          window=\(windowDisplay(r.window))"
     case .configureWindow(let r):
-        body = "ConfigureWindow          window=\(windowDisplay(r.window)) mask=0x\(String(r.valueMask, radix: 16))"
+        body = "ConfigureWindow          window=\(windowDisplay(r.window)) mask=0x\(String(r.valueMask, radix: 16))\(decodeConfigureWindow(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))"
     case .getGeometry(let r):
         body = "GetGeometry              drawable=\(windowDisplay(r.drawable))"
     case .queryTree(let r):
@@ -444,6 +444,20 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
                     detail = " ascent/descent=\(parsed.fontAscent)/\(parsed.fontDescent) chars=\(parsed.charInfos.count) properties=\(parsed.properties.count)"
                 }
             }
+            // AllocColor / AllocNamedColor reply pixel value. Without this
+            // we constantly have to mentally count prior allocations to
+            // figure out "what RGB is pixel 0x13?" — that question came up
+            // four times in the 2026-05-20 dthelpview diagnosis.
+            if op == AllocColor.opcode {
+                if let parsed = try? AllocColorReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    detail = " → pixel=0x\(String(parsed.pixel, radix: 16)) rgb=(\(parsed.red),\(parsed.green),\(parsed.blue))"
+                }
+            }
+            if op == AllocNamedColor.opcode {
+                if let parsed = try? AllocNamedColorReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    detail = " → pixel=0x\(String(parsed.pixel, radix: 16)) exact=(\(parsed.exactRed),\(parsed.exactGreen),\(parsed.exactBlue))"
+                }
+            }
         }
         return "[seq=\(seq)] Reply (\(opName))\(detail)"
     case .event(let e):
@@ -615,6 +629,135 @@ func opcodeOf(_ req: Request) -> UInt8 {
 // (bit 3 = 0x8). Values are 4-byte aligned, listed in bit-order (lowest bit
 // first), in connection byte order. Used by the dumper to show what pixel
 // values dtcalc et al. write into their drawing GCs.
+// CreateWindow / ChangeWindowAttributes value-list decoder. Surfaces the
+// fields that matter for window-background and resize-paint bugs:
+// bg-pixmap (so we can spot ParentRelative=1 vs solid-pixel), bg-pixel,
+// border-pixel, bit-gravity, win-gravity, override-redirect, save-under.
+// Event-mask and dont-propagate are intentionally elided here — they're
+// noisy and rarely the answer to "why is this region the wrong color."
+//
+// Spec ordering (X11 protocol §10): the value-list is emitted in
+// ascending bit order, one 4-byte slot per set bit, regardless of the
+// actual field width. So we walk bits 0..14 in order.
+func decodeWindowAttrs(mask: UInt32, values: [UInt8], byteOrder: ByteOrder) -> String {
+    func read32(at offset: Int) -> UInt32 {
+        let b = values[offset..<offset+4]
+        if byteOrder == .msbFirst {
+            return (UInt32(b[b.startIndex]) << 24)
+                 | (UInt32(b[b.startIndex+1]) << 16)
+                 | (UInt32(b[b.startIndex+2]) << 8)
+                 |  UInt32(b[b.startIndex+3])
+        } else {
+            return  UInt32(b[b.startIndex])
+                 | (UInt32(b[b.startIndex+1]) << 8)
+                 | (UInt32(b[b.startIndex+2]) << 16)
+                 | (UInt32(b[b.startIndex+3]) << 24)
+        }
+    }
+
+    func gravityName(_ v: UInt32, isWin: Bool) -> String {
+        // X11 bit-gravity: 0=Forget. X11 win-gravity: 0=Unmap. Rest match.
+        switch v {
+        case 0:  return isWin ? "Unmap" : "Forget"
+        case 1:  return "NorthWest"
+        case 2:  return "North"
+        case 3:  return "NorthEast"
+        case 4:  return "West"
+        case 5:  return "Center"
+        case 6:  return "East"
+        case 7:  return "SouthWest"
+        case 8:  return "South"
+        case 9:  return "SouthEast"
+        case 10: return "Static"
+        default: return "?\(v)"
+        }
+    }
+
+    var pieces: [String] = []
+    var offset = 0
+    for bit in 0..<15 {
+        let bitMask: UInt32 = 1 << bit
+        guard mask & bitMask != 0 else { continue }
+        if offset + 4 > values.count { break }
+        let v = read32(at: offset)
+        switch bitMask {
+        case 0x0001: // CWBackPixmap
+            let s: String
+            if v == 0 { s = "None" }
+            else if v == 1 { s = "ParentRelative" }
+            else { s = "0x\(String(v, radix: 16))" }
+            pieces.append("bg-pixmap=\(s)")
+        case 0x0002: // CWBackPixel
+            pieces.append("bg-px=0x\(String(v, radix: 16))")
+        case 0x0004: // CWBorderPixmap
+            let s = (v == 0) ? "CopyFromParent" : "0x\(String(v, radix: 16))"
+            pieces.append("border-pixmap=\(s)")
+        case 0x0008: // CWBorderPixel
+            pieces.append("border-px=0x\(String(v, radix: 16))")
+        case 0x0010: // CWBitGravity
+            pieces.append("bit-grav=\(gravityName(v, isWin: false))")
+        case 0x0020: // CWWinGravity
+            pieces.append("win-grav=\(gravityName(v, isWin: true))")
+        case 0x0200: // CWOverrideRedirect
+            pieces.append("override=\(v != 0)")
+        case 0x0400: // CWSaveUnder
+            pieces.append("save-under=\(v != 0)")
+        default:
+            break
+        }
+        offset += 4
+    }
+    return pieces.isEmpty ? "" : " [\(pieces.joined(separator: " "))]"
+}
+
+// ConfigureWindow value-list decoder. Geometry/stack changes are the main
+// thing we read these for; the prior dump only showed "mask=0xc" which
+// required cross-referencing the resulting ConfigureNotify to know what
+// actually changed. Now we get inline "x=10 y=20 w=800 h=600".
+//
+// Spec ordering (X11 protocol §10): value-list is in ascending bit order,
+// one 4-byte slot per set bit, regardless of field width.
+func decodeConfigureWindow(mask: UInt16, values: [UInt8], byteOrder: ByteOrder) -> String {
+    func read32(at offset: Int) -> UInt32 {
+        let b = values[offset..<offset+4]
+        if byteOrder == .msbFirst {
+            return (UInt32(b[b.startIndex]) << 24)
+                 | (UInt32(b[b.startIndex+1]) << 16)
+                 | (UInt32(b[b.startIndex+2]) << 8)
+                 |  UInt32(b[b.startIndex+3])
+        } else {
+            return  UInt32(b[b.startIndex])
+                 | (UInt32(b[b.startIndex+1]) << 8)
+                 | (UInt32(b[b.startIndex+2]) << 16)
+                 | (UInt32(b[b.startIndex+3]) << 24)
+        }
+    }
+    var pieces: [String] = []
+    var offset = 0
+    for bit in 0..<7 {
+        let bitMask: UInt16 = 1 << bit
+        guard mask & bitMask != 0 else { continue }
+        if offset + 4 > values.count { break }
+        let v = read32(at: offset)
+        switch bitMask {
+        case 0x01: pieces.append("x=\(Int16(bitPattern: UInt16(v & 0xFFFF)))")
+        case 0x02: pieces.append("y=\(Int16(bitPattern: UInt16(v & 0xFFFF)))")
+        case 0x04: pieces.append("w=\(UInt16(v & 0xFFFF))")
+        case 0x08: pieces.append("h=\(UInt16(v & 0xFFFF))")
+        case 0x10: pieces.append("bw=\(UInt16(v & 0xFFFF))")
+        case 0x20: pieces.append("sibling=0x\(String(v, radix: 16))")
+        case 0x40:
+            // Stack-mode: 0=Above 1=Below 2=TopIf 3=BottomIf 4=Opposite
+            let names = ["Above", "Below", "TopIf", "BottomIf", "Opposite"]
+            let n = Int(v & 0xFF)
+            pieces.append("stack=\(n < names.count ? names[n] : "?\(n)")")
+        default: break
+        }
+        offset += 4
+    }
+    return pieces.isEmpty ? "" : " [\(pieces.joined(separator: " "))]"
+}
+
 func decodeGCFgBg(mask: UInt32, values: [UInt8], byteOrder: ByteOrder) -> String {
     var pieces: [String] = []
     var offset = 0

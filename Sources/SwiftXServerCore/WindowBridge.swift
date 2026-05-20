@@ -263,7 +263,21 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// (default arc-mode=PieSlice; chord mode unhandled per OPCODE_STATUS).
     /// xeyes fills the white sclera of each eye via this opcode.
     func drawPolyFillArc(target: DrawTarget, foreground: RGB16, arcs: [Arc], clipRectangles: [Rectangle]?)
-    func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16)
+    /// ClearArea: fill the rectangles (in top-level coords) with the window's
+    /// background pixel. Per X11 spec the X server clips to the window's
+    /// visible region (clipList) before painting; the session performs that
+    /// intersection and passes the surviving sub-rects here. Empty `rects` =
+    /// no-op (window fully obscured or request fully outside visible region).
+    /// Spec ref: mi/miwindow.c:miClearToBackground.
+    func clearArea(topLevel: UInt32, rects: [Rectangle], background: RGB16)
+
+    /// Register a closure that maps a window id → its clipList rects (visible
+    /// region in top-level coords). The bridge consults this in
+    /// `withDrawContext` for window targets to set CGContext.clip to the
+    /// composite clip = window clipList ∩ GC user clip. Spec ref:
+    /// mi/migc.c:miComputeCompositeClip. Session registers once on init.
+    func setWindowClipLookup(_ lookup: @escaping @Sendable (UInt32) -> [Rectangle])
+
     /// CopyArea: copies a rectangular region of pixels from `src` to `dst`.
     /// All five spec-supported variants resolve via DrawTarget: window→window
     /// (same NSWindow uses a bitmap memmove fast path that xterm scroll
@@ -415,7 +429,8 @@ public extension WindowBridge {
     func bell() {}
     func startCrossWindowDragTracking() {}
     func stopCrossWindowDragTracking() {}
-    func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16) {}
+    func clearArea(topLevel: UInt32, rects: [Rectangle], background: RGB16) {}
+    func setWindowClipLookup(_ lookup: @escaping @Sendable (UInt32) -> [Rectangle]) {}
     func copyArea(
         src: DrawTarget,
         dst: DrawTarget,

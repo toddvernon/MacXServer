@@ -21,7 +21,7 @@ private final class RecordingBridge: WindowBridge, @unchecked Sendable {
     }
     struct ClearAreaCall: Equatable {
         var topLevel: UInt32
-        var x: Int16; var y: Int16; var width: UInt16; var height: UInt16
+        var rects: [Framer.Rectangle]
         var background: RGB16
     }
 
@@ -40,15 +40,15 @@ private final class RecordingBridge: WindowBridge, @unchecked Sendable {
     func setTopLevelTitle(id: UInt32, title: String) {}
 
     func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
-        guard case .window(let topLevel, _, _) = target else { return }
+        guard case .window(_, let topLevel, _, _) = target else { return }
         polySegments.append(PolySegmentCall(topLevel: topLevel, foreground: foreground, lineWidth: lineWidth, segments: segments))
     }
     func drawFillPoly(target: DrawTarget, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Framer.Rectangle]?) {
-        guard case .window(let topLevel, _, _) = target else { return }
+        guard case .window(_, let topLevel, _, _) = target else { return }
         fillPolys.append(FillPolyCall(topLevel: topLevel, foreground: foreground, points: points, evenOdd: evenOdd))
     }
-    func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16) {
-        clearAreas.append(ClearAreaCall(topLevel: topLevel, x: x, y: y, width: width, height: height, background: background))
+    func clearArea(topLevel: UInt32, rects: [Framer.Rectangle], background: RGB16) {
+        clearAreas.append(ClearAreaCall(topLevel: topLevel, rects: rects, background: background))
     }
 }
 
@@ -135,6 +135,10 @@ final class DrawingDispatchTests: XCTestCase {
             valueMask: CW.backPixel, valueList: backPixel
         )
         _ = session.feed(createWin.encode(byteOrder: .lsbFirst))
+        // Map so the window has a non-empty clipList; without this, the
+        // post-2026-05-20 ClearArea-clipped-by-visible-region semantics
+        // give zero clipped rects (unmapped windows are fully obscured).
+        _ = session.feed(Request.mapWindow(MapWindow(window: 0xA0001)).encode(byteOrder: .lsbFirst))
 
         let req = ClearArea(exposures: false, window: 0xA0001, x: 5, y: 5, width: 50, height: 50)
         _ = session.feed(req.encode(byteOrder: .lsbFirst))
@@ -143,8 +147,75 @@ final class DrawingDispatchTests: XCTestCase {
         let call = bridge.clearAreas[0]
         XCTAssertEqual(call.topLevel, 0xA0001)
         XCTAssertEqual(call.background, RGB16(red: 0x8000, green: 0x4000, blue: 0x2000))
-        XCTAssertEqual(call.width, 50)
-        XCTAssertEqual(call.height, 50)
+        // Single rect; window is unobscured so clipList ∩ request = request.
+        // Request is (5,5,50,50) in window-local coords; window is the
+        // top-level so window-local == top-level coords.
+        XCTAssertEqual(call.rects.count, 1)
+        XCTAssertEqual(call.rects[0].x, 5)
+        XCTAssertEqual(call.rects[0].y, 5)
+        XCTAssertEqual(call.rects[0].width, 50)
+        XCTAssertEqual(call.rects[0].height, 50)
+    }
+
+    /// Regression: ClearArea on a parent must be clipped to the parent's
+    /// visible region. Without this, the parent's bg pixel paints right
+    /// through any mapped descendant whose clipList would mask the parent
+    /// — the dthelpview 2026-05-19 "leftover blue button rectangles inside
+    /// the white DisplayArea on expand" bug.
+    func testClearAreaClippedByMappedChildren() {
+        let bridge = RecordingBridge()
+        let session = ServerSession(bridge: bridge)
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        let root = ServerConfig.default.rootWindowId
+
+        let backPixel = encodeUInt32(0, byteOrder: .lsbFirst)
+        let parentCW = CreateWindow(
+            depth: 0, wid: 0xA0001, parent: root,
+            x: 0, y: 0, width: 200, height: 200, borderWidth: 0,
+            windowClass: .inputOutput, visual: 0,
+            valueMask: CW.backPixel, valueList: backPixel
+        )
+        _ = session.feed(parentCW.encode(byteOrder: .lsbFirst))
+        // Child covering the middle (50,50)-(150,150) of the parent.
+        let childCW = CreateWindow(
+            depth: 0, wid: 0xA0002, parent: 0xA0001,
+            x: 50, y: 50, width: 100, height: 100, borderWidth: 0,
+            windowClass: .inputOutput, visual: 0,
+            valueMask: CW.backPixel, valueList: backPixel
+        )
+        _ = session.feed(childCW.encode(byteOrder: .lsbFirst))
+        _ = session.feed(Request.mapWindow(MapWindow(window: 0xA0001)).encode(byteOrder: .lsbFirst))
+        _ = session.feed(Request.mapWindow(MapWindow(window: 0xA0002)).encode(byteOrder: .lsbFirst))
+        bridge.clearAreas.removeAll()
+
+        // ClearArea on the PARENT, asking for the full window area. Spec
+        // says clip to parent's visible region — i.e., everywhere the
+        // child doesn't cover.
+        let req = ClearArea(exposures: false, window: 0xA0001, x: 0, y: 0, width: 200, height: 200)
+        _ = session.feed(req.encode(byteOrder: .lsbFirst))
+
+        XCTAssertEqual(bridge.clearAreas.count, 1)
+        let rects = bridge.clearAreas[0].rects
+        // The parent has visible area = 200*200 - 100*100 = 30000 sq pixels.
+        let totalArea = rects.reduce(0) { $0 + Int($1.width) * Int($1.height) }
+        XCTAssertEqual(totalArea, 200 * 200 - 100 * 100,
+                       "clipped rect union should equal parent area minus child area")
+
+        // No clipped rect should contain a point inside the child's region.
+        // (100,100) is the dead center of the child window.
+        for r in rects {
+            let xs = Int(r.x), xe = xs + Int(r.width)
+            let ys = Int(r.y), ye = ys + Int(r.height)
+            XCTAssertFalse((100 >= xs && 100 < xe) && (100 >= ys && 100 < ye),
+                           "rect \(r) overlaps the child's covered area")
+        }
+        // Corner (10,10) is in the parent's visible region — at least one
+        // rect should cover it.
+        XCTAssertTrue(rects.contains { r in
+            let xs = Int(r.x), xe = xs + Int(r.width)
+            let ys = Int(r.y), ye = ys + Int(r.height)
+            return 10 >= xs && 10 < xe && 10 >= ys && 10 < ye
+        }, "expected at least one rect to cover the (10,10) corner of the parent")
     }
 
     // MARK: - Helpers

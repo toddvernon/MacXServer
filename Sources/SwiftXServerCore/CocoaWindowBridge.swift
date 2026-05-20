@@ -77,6 +77,20 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         self.pixmapBufferLookup = lookup
     }
 
+    /// Closure that maps a window id → its visible-region rects (clipList,
+    /// in top-level coords). Set by the session via `setWindowClipLookup`.
+    /// nil during early bring-up / tests that don't wire up the session;
+    /// `withDrawContext` falls back to "no window clip" in that case so
+    /// existing tests that draw via DrawTarget without a real window tree
+    /// still render. Real X-server behavior requires this to be set —
+    /// without it, draw ops aren't clipped to the window's visible region
+    /// and a parent's bg paint will bleed through descendant windows.
+    private var windowClipLookup: (@Sendable (UInt32) -> [Framer.Rectangle])?
+
+    public func setWindowClipLookup(_ lookup: @escaping @Sendable (UInt32) -> [Framer.Rectangle]) {
+        self.windowClipLookup = lookup
+    }
+
 
     public init(scaleFactor: Double = 1, log: ServerLogSink? = nil) {
         self.scaleFactor = scaleFactor
@@ -105,7 +119,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         body: @escaping @Sendable (CGContext) -> Void
     ) {
         switch target {
-        case .window(let topLevel, let dx, let dy):
+        case .window(let windowId, let topLevel, let dx, let dy):
             // Translate clip rectangles from widget-local to top-level coords.
             // Per X11 spec, SetClipRectangles rects are in the GC's clip-
             // coordinate system (relative to the drawable the GC draws to).
@@ -124,11 +138,21 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                     width: r.width, height: r.height
                 )
             }
+            // Composite clip = window clipList ∩ GC user clip. Per X.org
+            // mi/migc.c:miComputeCompositeClip, every per-op draw on a
+            // window drawable is clipped to the window's visible region
+            // BEFORE the GC's user clip applies. We look up the clipList
+            // (in top-level coords) once here and pass it through to
+            // withClip alongside the translated GC clip. Empty clipList =
+            // window fully obscured — withClip short-circuits and the
+            // body never runs. Lookup nil = test/bring-up path; degrade
+            // to GC-clip-only so legacy tests still pass.
+            let windowClip = self.windowClipLookup?(windowId)
             DispatchQueue.main.async { [weak self] in
                 guard let self = self,
                       let view = self.slot(topLevel)?.view,
                       let ctx = view.backing else { return }
-                self.withClip(ctx, translatedClip) {
+                self.withClip(ctx, windowClip: windowClip, gcClip: translatedClip) {
                     body(ctx)
                 }
                 view.setNeedsDisplay(view.bounds)
@@ -672,12 +696,31 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// clip-everything (skip the body entirely per X spec); non-empty =
     /// clip to the union of the rectangles. Wraps in saveGState /
     /// restoreGState so nothing leaks.
-    private func withClip(_ ctx: CGContext, _ clipRects: [Framer.Rectangle]?, _ body: () -> Void) {
-        if let rects = clipRects, rects.isEmpty { return }
+    /// Two-clip overload used by the window-target draw path. Applies the
+    /// window's clipList FIRST (matches X.org's miComputeCompositeClip
+    /// order: window region then GC user clip), then the GC user clip.
+    /// CGContext.clip(to:) intersects with the current clip path so the
+    /// composite is the intersection of both. Either may be nil (no clip
+    /// from that side); both empty arrays short-circuit the body per X
+    /// spec ("clip-to-nothing skips the op entirely").
+    private func withClip(
+        _ ctx: CGContext,
+        windowClip: [Framer.Rectangle]?,
+        gcClip: [Framer.Rectangle]?,
+        _ body: () -> Void
+    ) {
+        if let r = windowClip, r.isEmpty { return }
+        if let r = gcClip, r.isEmpty { return }
         ctx.saveGState()
         ctx.setShouldAntialias(false)
         ctx.interpolationQuality = .none
-        if let rects = clipRects {
+        if let rects = windowClip {
+            ctx.clip(to: rects.map {
+                CGRect(x: CGFloat($0.x), y: CGFloat($0.y),
+                       width: CGFloat($0.width), height: CGFloat($0.height))
+            })
+        }
+        if let rects = gcClip {
             ctx.clip(to: rects.map {
                 CGRect(x: CGFloat($0.x), y: CGFloat($0.y),
                        width: CGFloat($0.width), height: CGFloat($0.height))
@@ -685,6 +728,13 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
         body()
         ctx.restoreGState()
+    }
+
+    /// GC-clip-only overload — pixmap drawing (no window region) and the
+    /// ClearArea path (window region already intersected by the session)
+    /// route here. Equivalent to the pre-2026-05-20 `withClip` shape.
+    private func withClip(_ ctx: CGContext, _ clipRects: [Framer.Rectangle]?, _ body: () -> Void) {
+        withClip(ctx, windowClip: nil, gcClip: clipRects, body)
     }
 
     /// Apply the GC's SetDashes pattern to the context. nil / empty pattern =
@@ -726,13 +776,17 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
-    public func clearArea(topLevel: UInt32, x: Int16, y: Int16, width: UInt16, height: UInt16, background: RGB16) {
+    public func clearArea(topLevel: UInt32, rects: [Framer.Rectangle], background: RGB16) {
+        if rects.isEmpty { return }
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
             self.withClip(ctx, nil) {
                 applyFill(ctx, background)
-                ctx.fill(CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height)))
+                for r in rects {
+                    ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
+                                    width: CGFloat(r.width), height: CGFloat(r.height)))
+                }
             }
             view.setNeedsDisplay(view.bounds)
         }
@@ -752,8 +806,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         // scissor — but the only client that exercises same-window CopyArea
         // (xterm) doesn't set clip. Logged when it does so future divergence
         // is visible.
-        if case .window(let srcTop, _, _) = src,
-           case .window(let dstTop, _, _) = dst,
+        if case .window(_, let srcTop, _, _) = src,
+           case .window(_, let dstTop, _, _) = dst,
            srcTop == dstTop {
             if let rects = clipRectangles, !rects.isEmpty {
                 log?.log("  CopyArea: ignoring \(rects.count) clip rect(s) — bitmap memmove path doesn't honor clip")
@@ -791,7 +845,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 width: width, height: height,
                 clipRectangles: clipRectangles
             )
-        case .window(let srcTopLevel, _, _):
+        case .window(_, let srcTopLevel, _, _):
             // SYNCHRONOUS to main: window→pixmap CopyArea is Motif's
             // save-under for the XmText caret. Snapshotting the window
             // backing must happen on main (view.backing lives there) AND

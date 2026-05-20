@@ -274,6 +274,24 @@ public final class ServerSession: @unchecked Sendable {
         // setPixmapBufferLookup doc in WindowBridge.swift for the
         // multi-session caveat (most-recently-set lookup wins).
         bridge?.setPixmapBufferLookup { [weak self] id in self?.pixmaps.buffer(for: id) }
+        // Hand the bridge a closure that resolves window ids to their
+        // current clipList rects (visible region in top-level coords).
+        // withDrawContext for window targets uses this to set CGContext.clip
+        // to the composite clip = window clipList ∩ GC user clip. Spec
+        // ref: mi/migc.c:miComputeCompositeClip. Without this the parent's
+        // bg paint bleeds through descendant windows — the dthelpview
+        // 2026-05-19 "leftover blue rectangles on expand" bug.
+        bridge?.setWindowClipLookup { [weak self] id -> [Framer.Rectangle] in
+            guard let self = self, let entry = self.windows.get(id) else { return [] }
+            return entry.clipList.rects.map { box in
+                Framer.Rectangle(
+                    x: Int16(clamping: box.x1),
+                    y: Int16(clamping: box.y1),
+                    width: UInt16(clamping: box.x2 - box.x1),
+                    height: UInt16(clamping: box.y2 - box.y1)
+                )
+            }
+        }
         // All AppKit-side callbacks hop onto protocolQueue, run the handler,
         // and flush any bytes the handler appended to outbound. Since
         // protocolQueue is the only writer, no lock is needed at the socket.
@@ -1565,6 +1583,17 @@ public final class ServerSession: @unchecked Sendable {
         )
         outbound.append(event.encode(byteOrder: order))
 
+        // Top-level dimensions changed — refresh clip regions for the
+        // whole subtree BEFORE the bg paint AND before emitting descendant
+        // Exposes. paintRectsForWindow keys off entry.clipList (added
+        // 2026-05-20 for the dthelpview clipping work); recomputing first
+        // means the top-level's paint sees its newly-larger clipList
+        // instead of the stale pre-resize value. Descendant geometries
+        // are still old at this point (the client hasn't sent
+        // ConfigureWindow on them yet — that's handled per-descendant in
+        // handleConfigureWindow's grow-paint block).
+        ClipListEngine.recomputeClips(forTopLevel: id, in: windows)
+
         // FlippedXView.resizeBacking allocates a fresh bitmap and fills it
         // with white as a placeholder. For windows whose CWBackPixel isn't
         // white (e.g., xterm with `-bg black`), the newly-exposed pixels
@@ -1576,10 +1605,6 @@ public final class ServerSession: @unchecked Sendable {
             bridge?.paintWindowRects(topLevel: id, rects: paints)
         }
 
-        // Top-level dimensions changed — refresh clip regions for the
-        // whole subtree BEFORE emitting descendant Exposes so the new
-        // clipList drives the rect-list each Expose carries.
-        ClipListEngine.recomputeClips(forTopLevel: id, in: windows)
         emitVisibilityChanges(forTopLevel: id)
 
         // The outer's resize means descendants' visible region changed
@@ -1717,7 +1742,7 @@ public final class ServerSession: @unchecked Sendable {
             return nil
         }
         if let (top, dx, dy) = topLevelAndOffset(for: drawable) {
-            return .window(topLevel: top, offsetX: dx, offsetY: dy)
+            return .window(id: drawable, topLevel: top, offsetX: dx, offsetY: dy)
         }
         if let pix = pixmaps.get(drawable) {
             return .pixmap(id: drawable, depth: pix.depth)
@@ -1927,6 +1952,29 @@ public final class ServerSession: @unchecked Sendable {
         return out
     }
 
+    /// Walk the mapped subtree under `ancestorId` (exclusive) and return
+    /// the clipped bg-paint rect set for each descendant that has a
+    /// backPixel or border. Used by the non-top-level MapWindow path to
+    /// catch the case where the subtree was mapped before the ancestor
+    /// (dthelpview's manBox / DisplayArea / scrollbars all map before
+    /// their wrapper shell, then the shell maps and the entire subtree
+    /// becomes viewable at once). Mirrors the Expose-cascade shape added
+    /// 2026-05-19 — same traversal, different per-window action.
+    private func descendantBgPaints(of ancestorId: UInt32, byteOrder: ByteOrder) -> [WindowBackgroundRect] {
+        var out: [WindowBackgroundRect] = []
+        var queue: [UInt32] = [ancestorId]
+        while !queue.isEmpty {
+            let id = queue.removeFirst()
+            for (childId, w) in windows.windows where w.parent == id && w.mapped {
+                queue.append(childId)
+                guard w.backPixel != nil || (w.borderPixel != nil && w.borderWidth > 0),
+                      let (_, dx, dy) = topLevelAndOffset(for: childId) else { continue }
+                out.append(contentsOf: paintRectsForWindow(entry: w, dx: dx, dy: dy, byteOrder: byteOrder))
+            }
+        }
+        return out
+    }
+
     /// Build the paint list for a newly-mapped top-level: the top-level's own
     /// background fill plus one rect-pair per already-mapped descendant
     /// (border ring + interior bg). Order is parent-then-children so
@@ -1954,9 +2002,21 @@ public final class ServerSession: @unchecked Sendable {
 
     /// Produce the paint rects for a single window. With borderWidth > 0,
     /// emits an OUTER rect (the border ring; size = w + 2*bw, h + 2*bw) drawn
-    /// in borderPixel, then an INNER rect (the content area) in backPixel.
-    /// The inner-on-top-of-outer ordering leaves only the ring visible. With
-    /// borderWidth == 0, emits the single bg rect.
+    /// in borderPixel, then a set of INNER rects (the content area, clipped
+    /// to the window's visible region) in backPixel. The inner-on-top-of-
+    /// outer ordering leaves only the ring visible. With borderWidth == 0,
+    /// emits only the clipped bg rects.
+    ///
+    /// Inner-rect clipping (added 2026-05-20) follows X.org's miPaintWindow
+    /// invariant: bg fills only the window's visible interior (clipList).
+    /// Without it, a parent's bg paint at MapWindow time bleeds through
+    /// descendant windows — the dthelpview "form blue painted over white
+    /// DisplayArea" path that produces image 1's all-blue look.
+    ///
+    /// Border-ring clipping is NOT yet applied — the outer rect still
+    /// paints unclipped over the (logical) border area. Almost no Motif
+    /// widgets use borders (bw=0 everywhere we've seen), so this hasn't
+    /// surfaced visibly. SHORTCUTS entry tracks the gap.
     ///
     /// `(dx, dy)` is the window's content top-left in top-level pixel coords
     /// (already includes any ancestor offsets).
@@ -1972,10 +2032,22 @@ public final class ServerSession: @unchecked Sendable {
             ))
         }
         if entry.backPixel != nil {
-            out.append(WindowBackgroundRect(
-                x: dx, y: dy, width: entry.width, height: entry.height,
-                color: windowBackground(entry.id, byteOrder: byteOrder)
-            ))
+            let bg = windowBackground(entry.id, byteOrder: byteOrder)
+            // Clip the bg rect to the window's visible region (clipList).
+            // clipList is already in top-level coords. Empty clipList =
+            // window fully obscured (or unmapped) — emit no inner rects.
+            for box in entry.clipList.rects {
+                let w = box.x2 - box.x1
+                let h = box.y2 - box.y1
+                guard w > 0, h > 0 else { continue }
+                out.append(WindowBackgroundRect(
+                    x: Int16(clamping: box.x1),
+                    y: Int16(clamping: box.y1),
+                    width: UInt16(clamping: w),
+                    height: UInt16(clamping: h),
+                    color: bg
+                ))
+            }
         }
         return out
     }
@@ -2484,17 +2556,43 @@ public final class ServerSession: @unchecked Sendable {
         let fillW = r.width == 0 ? UInt16(max(0, Int(entry.width) - Int(r.x))) : r.width
         let fillH = r.height == 0 ? UInt16(max(0, Int(entry.height) - Int(r.y))) : r.height
         log?.log("  ClearArea window=0x\(String(r.window, radix: 16)) at (\(r.x),\(r.y)) \(fillW)x\(fillH) (req w=\(r.width) h=\(r.height) win=\(entry.width)x\(entry.height) exposures=\(r.exposures))")
-        bridge.clearArea(
-            topLevel: top,
-            x: r.x &+ dx, y: r.y &+ dy,
-            width: fillW, height: fillH,
-            background: bg
+        // X11 spec (mi/miwindow.c:miClearToBackground): the request rect is
+        // built in screen coords (drawable.x + r.x ...), then intersected
+        // with pWin->clipList. Only the surviving sub-rects are painted.
+        // Without this, a ClearArea on a parent paints the parent's bg
+        // pixel right through any descendant windows whose clipList ought
+        // to mask them — the dthelpview 2026-05-19 "leftover blue button
+        // rectangles inside the white DisplayArea on expand" bug.
+        let reqBox = BoxRec(
+            x1: Int32(r.x) + Int32(dx), y1: Int32(r.y) + Int32(dy),
+            x2: Int32(r.x) + Int32(dx) + Int32(fillW),
+            y2: Int32(r.y) + Int32(dy) + Int32(fillH)
         )
+        let clippedRects: [Framer.Rectangle]
+        if reqBox.isEmpty {
+            clippedRects = []
+        } else {
+            let clipped = entry.clipList.intersected(with: Region(box: reqBox))
+            clippedRects = clipped.rects.map { box in
+                Framer.Rectangle(
+                    x: Int16(clamping: box.x1),
+                    y: Int16(clamping: box.y1),
+                    width: UInt16(clamping: box.x2 - box.x1),
+                    height: UInt16(clamping: box.y2 - box.y1)
+                )
+            }
+        }
+        bridge.clearArea(topLevel: top, rects: clippedRects, background: bg)
         // X11 spec: if `exposures` is True, the server sends an Expose event
         // for the cleared region (so the client can redraw on top). xcalc's
         // LCD update sequence is "ClearArea + wait for Expose + draw digits"
-        // — without this we cleared the LCD but xcalc never redrew.
-        if r.exposures, entry.eventMask & (1 << 15) != 0 {
+        // — without this we cleared the LCD but xcalc never redrew. The
+        // Expose event reports the REQUESTED rect (in window-local coords),
+        // not the clipped sub-rects — clients expect the rect they asked
+        // for. The X server emits Expose for the visible-region intersection
+        // (multiple Expose events for a multi-band region); we simplify by
+        // emitting the bounding rect when the intersection is non-empty.
+        if r.exposures, entry.eventMask & (1 << 15) != 0, !clippedRects.isEmpty {
             let expose = ExposeEvent(
                 sequenceNumber: sequenceNumber, window: r.window,
                 x: UInt16(bitPattern: r.x), y: UInt16(bitPattern: r.y),
@@ -3108,7 +3206,22 @@ public final class ServerSession: @unchecked Sendable {
             } else {
                 if let (top, dx, dy) = topLevelAndOffset(for: r.window),
                    let entry = windows.get(r.window) {
-                    let rects = paintRectsForWindow(entry: entry, dx: dx, dy: dy, byteOrder: byteOrder)
+                    var rects = paintRectsForWindow(entry: entry, dx: dx, dy: dy, byteOrder: byteOrder)
+                    // Cascade bg-paint to mapped descendants of r.window.
+                    // When a non-top-level maps and its subtree was already
+                    // mapped (the dthelpview pattern: children mapped before
+                    // wrapper shell), the whole subtree transitions from
+                    // "mapped but not viewable" to "viewable" simultaneously.
+                    // Each newly-viewable descendant needs its bg painted —
+                    // mirrors the 2026-05-19 Expose cascade. Without this,
+                    // descendant areas show the fresh-bitmap default or
+                    // whatever the bridge happened to paint previously,
+                    // which only works by accident when the descendant's
+                    // bg happens to match the default. The post-2026-05-20
+                    // paintRectsForWindow already clips each window's bg
+                    // to its clipList, so descendant paints land cleanly
+                    // and never bleed into sub-descendants.
+                    rects.append(contentsOf: descendantBgPaints(of: r.window, byteOrder: byteOrder))
                     if !rects.isEmpty {
                         bridge?.paintWindowRects(topLevel: top, rects: rects)
                     }
@@ -3460,13 +3573,37 @@ public final class ServerSession: @unchecked Sendable {
                     }
                 }
 
+                // Per X11 server contract (mi/mfb): when a window grows or
+                // moves, the server paints the window's bg-pixel into the
+                // newly-claimed visible region BEFORE the client gets the
+                // Expose. The client only paints content on top; the bg
+                // is the server's responsibility on every visibility
+                // transition. Without this, the newly-claimed pixels stay
+                // as whatever the bitmap had — the dthelpview 2026-05-20
+                // bug where the form's bg was blue but the L-shape of
+                // grown pixels stayed fresh-bitmap-white because we never
+                // painted them. Phase 1 paints the FULL new clipList
+                // (matches bit-grav=Forget semantics); for bit-grav=
+                // NorthWest windows with content this over-paints, but
+                // the subsequent Expose triggers the client to redraw on
+                // top. Step F (when it lands) will refine to paint only
+                // the (new clipList - old clipList) delta.
+                let sizeGrew = new.width > old.width || new.height > old.height
+                if sizeGrew || posChanged {
+                    if let (top, dx, dy) = topLevelAndOffset(for: r.window),
+                       let postEntry = windows.get(r.window) {
+                        let rects = paintRectsForWindow(entry: postEntry, dx: dx, dy: dy, byteOrder: byteOrder)
+                        if !rects.isEmpty {
+                            bridge?.paintWindowRects(topLevel: top, rects: rects)
+                        }
+                    }
+                }
                 // E2: emit Expose using clipList rects when the window's
                 // size grew. clipList ∩ (new - old) would be exact; using
                 // clipList alone is a defensible over-emit (already-
                 // painted pixels get re-Exposed but clients redraw
                 // idempotently). Step F refines this with proper region
                 // delta math.
-                let sizeGrew = new.width > old.width || new.height > old.height
                 if sizeGrew && (entry.eventMask & MockWindowBridge.exposureMask != 0) {
                     log?.log("  → emit Expose on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height)")
                     let rects = exposeRectsForWindow(r.window)

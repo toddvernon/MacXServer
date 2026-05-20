@@ -47,7 +47,7 @@ private final class RecBridge: WindowBridge, @unchecked Sendable {
         font: ResolvedFont, x: Int16, y: Int16, string: [UInt8],
         clipRectangles: [Framer.Rectangle]?
     ) {
-        guard case .window(let topLevel, _, _) = target else { return }
+        guard case .window(_, let topLevel, _, _) = target else { return }
         imageText8Calls.append(ImageText8Call(
             topLevel: topLevel, foreground: foreground, background: background,
             fontName: font.macFontName, pointSize: font.pointSize,
@@ -60,14 +60,14 @@ private final class RecBridge: WindowBridge, @unchecked Sendable {
         font: ResolvedFont, x: Int16, y: Int16, items: [UInt8],
         clipRectangles: [Framer.Rectangle]?
     ) {
-        guard case .window(let topLevel, _, _) = target else { return }
+        guard case .window(_, let topLevel, _, _) = target else { return }
         polyText8Calls.append(PolyText8Call(
             topLevel: topLevel, foreground: foreground,
             x: x, y: y, items: items, clipRectangles: clipRectangles
         ))
     }
     func drawPolyFillRectangle(target: DrawTarget, foreground: RGB16, background: RGB16, function: UInt8, fillStyle: UInt8, stipple: UInt32, tile: UInt32, stippleOriginX: Int16, stippleOriginY: Int16, rectangles: [Framer.Rectangle], clipRectangles: [Framer.Rectangle]?) {
-        guard case .window(let topLevel, _, _) = target else { return }
+        guard case .window(_, let topLevel, _, _) = target else { return }
         fillRectsCalls.append(FillRectsCall(
             topLevel: topLevel, foreground: foreground, rectangles: rectangles
         ))
