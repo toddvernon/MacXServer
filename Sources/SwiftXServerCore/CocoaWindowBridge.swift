@@ -48,6 +48,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     // closures (weak-self no-ops) kept firing on every AppKit event.
     private let handlerLock = NSLock()
     private var resizeHandlers: [(UInt64, @Sendable (UInt32, UInt16, UInt16) -> Void)] = []
+    private var moveHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16) -> Void)] = []
     private var keyHandlers: [(UInt64, @Sendable (UInt32, UInt8, UInt, Bool) -> Void)] = []
     private var focusHandlers: [(UInt64, @Sendable (UInt32, Bool) -> Void)] = []
     private var mouseHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void)] = []
@@ -183,6 +184,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         handlerLock.lock(); resizeHandlers.append((token, handler)); handlerLock.unlock()
     }
 
+    public func setOnTopLevelMove(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {
+        handlerLock.lock(); moveHandlers.append((token, handler)); handlerLock.unlock()
+    }
+
     public func setOnKey(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {
         handlerLock.lock(); keyHandlers.append((token, handler)); handlerLock.unlock()
     }
@@ -229,6 +234,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     public func removeHandlers(token: UInt64) {
         handlerLock.lock(); defer { handlerLock.unlock() }
         resizeHandlers.removeAll              { $0.0 == token }
+        moveHandlers.removeAll                { $0.0 == token }
         keyHandlers.removeAll                 { $0.0 == token }
         focusHandlers.removeAll               { $0.0 == token }
         mouseHandlers.removeAll               { $0.0 == token }
@@ -244,8 +250,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// Total registered handler count across every list. Test affordance.
     public var totalHandlerCount: Int {
         handlerLock.lock(); defer { handlerLock.unlock() }
-        return resizeHandlers.count + keyHandlers.count + focusHandlers.count
-             + mouseHandlers.count + mouseDraggedHandlers.count
+        return resizeHandlers.count + moveHandlers.count + keyHandlers.count
+             + focusHandlers.count + mouseHandlers.count + mouseDraggedHandlers.count
              + pointerMovedHandlers.count + pointerEnteredViewHandlers.count
              + pointerExitedViewHandlers.count + pasteHandlers.count
              + copyHandlers.count + closeHandlers.count
@@ -259,6 +265,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private func fireResize(id: UInt32, w: UInt16, h: UInt16) {
         handlerLock.lock(); let snap = resizeHandlers; handlerLock.unlock()
         for (_, handler) in snap { handler(id, w, h) }
+    }
+    private func fireMove(id: UInt32, x: Int16, y: Int16) {
+        handlerLock.lock(); let snap = moveHandlers; handlerLock.unlock()
+        for (_, handler) in snap { handler(id, x, y) }
     }
     private func fireKey(id: UInt32, code: UInt8, mods: UInt, isDown: Bool) {
         handlerLock.lock(); let snap = keyHandlers; handlerLock.unlock()
@@ -1479,6 +1489,42 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         fireResize(id: id, w: UInt16(min(newLogicalW, 65535)), h: UInt16(min(newLogicalH, 65535)))
     }
 
+    /// Called by the NSWindowDelegate after the user drags an NSWindow to a
+    /// new screen position. Reverses the placement formula from createWindow
+    /// (X-root → NSScreen with Y-flip and scale conversion) to recover the
+    /// new X-root coords, then fires the session move handler so it can
+    /// update WindowEntry.x/y and emit a synthetic ConfigureNotify per
+    /// ICCCM 4.1.5. Without this, Motif's cached widget root coords stay at
+    /// the original placement and menu popups land where the window used
+    /// to be.
+    ///
+    /// Skips override-redirect popups — the X client positioned those itself
+    /// via ConfigureWindow and we'd loop sending back a synthetic notify it
+    /// doesn't expect. We don't currently let the user drag those either
+    /// (panel level=popUpMenu, no title bar), so windowDidMove on them would
+    /// only fire via programmatic AppKit repositioning we don't do.
+    @MainActor
+    fileprivate func handleNSWindowMove(id: UInt32) {
+        guard let slot = slot(id), let win = slot.window else { return }
+        guard !(win is NSPanel) else { return }   // override-redirect
+        let backingScale = win.backingScaleFactor
+        let screenH = NSScreen.main?.frame.size.height ?? 1080
+        // Window's content-rect origin in NSScreen coords. NSWindow.frame
+        // includes title bar; contentRect(forFrameRect:) strips it back to
+        // the inner content area, matching what we passed at createWindow
+        // time. Y-flip against main screen height to get X-root y.
+        let contentRect = win.contentRect(forFrameRect: win.frame)
+        let originX = contentRect.origin.x
+        let originY = contentRect.origin.y
+        let pointsH = contentRect.size.height
+        let newRootX = Int((originX * backingScale / CGFloat(scaleFactor)).rounded())
+        let newRootY = Int(((screenH - originY - pointsH) * backingScale / CGFloat(scaleFactor)).rounded())
+        let clampedX = Int16(max(Int(Int16.min), min(Int(Int16.max), newRootX)))
+        let clampedY = Int16(max(Int(Int16.min), min(Int(Int16.max), newRootY)))
+        log?.log("  windowDidMove id=0x\(String(id, radix: 16)) NSScreen origin=(\(originX),\(originY))pt → X-root=(\(clampedX),\(clampedY))")
+        fireMove(id: id, x: clampedX, y: clampedY)
+    }
+
     /// Called by the NSWindowDelegate when a live-resize gesture ends. We
     /// deferred BOTH the bitmap resize and the ConfigureNotify until now;
     /// catch up here using the view's current bounds.
@@ -1520,6 +1566,10 @@ private final class XWindowDelegate: NSObject, NSWindowDelegate {
 
     func windowDidEndLiveResize(_ notification: Notification) {
         bridge?.handleNSWindowDidEndLiveResize(id: windowId)
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        bridge?.handleNSWindowMove(id: windowId)
     }
 
     func windowDidBecomeKey(_ notification: Notification) {

@@ -119,6 +119,15 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// Always invoked on the main thread.
     func setOnTopLevelResize(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void)
 
+    /// Called by the session at startup. Bridge invokes this when the user
+    /// drags a top-level NSWindow to a new screen position. Args: (top-level
+    /// X window id, new X-root x, new X-root y). The session updates its
+    /// WindowTable and emits a SYNTHETIC ConfigureNotify per ICCCM 4.1.5 so
+    /// toolkits (Xt, Motif) update their cached widget root coords — without
+    /// it, menu popups and similar root-coord-sensitive geometry stays at
+    /// the original placement. Always invoked on the main thread.
+    func setOnTopLevelMove(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void)
+
     /// Called by the session at startup. The bridge stores the closure and
     /// invokes it on every keyDown / keyUp NSEvent in any of its NSWindows.
     /// Args: (top-level X window id, macOS virtual keyCode, raw modifierFlags,
@@ -397,6 +406,7 @@ public extension WindowBridge {
     func descendantResized(id: UInt32, parent: UInt32, geometry: TopLevelGeometry) {}
     func drawingTarget(for drawable: UInt32) -> Any? { nil }
     func setOnTopLevelResize(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {}
+    func setOnTopLevelMove(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {}
     func setOnKey(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {}
     func setOnFocus(token: UInt64, _ handler: @escaping @Sendable (UInt32, Bool) -> Void) {}
     func setOnMouse(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void) {}

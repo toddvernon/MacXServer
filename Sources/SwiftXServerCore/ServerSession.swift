@@ -319,6 +319,12 @@ public final class ServerSession: @unchecked Sendable {
                 self?.flushOutbound()
             }
         }
+        bridge?.setOnTopLevelMove(token: token) { [weak self] id, x, y in
+            queue.async {
+                self?.handleTopLevelMove(id: id, x: x, y: y)
+                self?.flushOutbound()
+            }
+        }
         bridge?.setOnKey(token: token) { [weak self] topLevel, macKeyCode, modifierFlags, isDown in
             queue.async {
                 self?.handleKeyEvent(
@@ -1602,6 +1608,34 @@ public final class ServerSession: @unchecked Sendable {
             }
         }
         return windows.get(topLevel) != nil ? topLevel : nil
+    }
+
+    /// Called by the bridge from main thread when the user drags an NSWindow
+    /// to a new screen position. Updates the X tracking and emits a
+    /// SYNTHETIC ConfigureNotify per ICCCM 4.1.5 so toolkits update their
+    /// cached widget root coords. Without this, Motif menus pop up at the
+    /// window's ORIGINAL placement after a move (the toolkit hit-tests
+    /// against stale rectangles cached at realization time).
+    ///
+    /// Moves don't change pixel content, so we don't repaint, don't recompute
+    /// clipLists (those are in top-level-local coords, unaffected by an
+    /// outer position change), and don't emit descendant Exposes.
+    public func handleTopLevelMove(id: UInt32, x: Int16, y: Int16) {
+        guard let entry = windows.get(id), !entry.overrideRedirect else { return }
+        guard entry.x != x || entry.y != y else { return }
+        guard let result = windows.resize(id, width: nil, height: nil, x: x, y: y) else { return }
+        let (_, new) = result
+        guard let order = byteOrder else { return }
+        log?.log("  → synthetic ConfigureNotify on 0x\(String(id, radix: 16)) at (\(new.x),\(new.y)) (moved, ICCCM 4.1.5)")
+        let synth = ConfigureNotifyEvent(
+            sequenceNumber: sequenceNumber,
+            event: id, window: id, aboveSibling: 0,
+            x: new.x, y: new.y,
+            width: new.width, height: new.height,
+            borderWidth: new.borderWidth,
+            overrideRedirect: false
+        )
+        outbound.append(synth.encode(byteOrder: order, synthetic: true))
     }
 
     /// Called by the bridge from main thread when the user resizes an
