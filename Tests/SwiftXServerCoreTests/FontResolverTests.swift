@@ -136,6 +136,25 @@ final class FontResolverTests: XCTestCase {
         XCTAssertTrue(r.skewItalic, "Monaco needs skew for italic")
     }
 
+    func testBoldRequestForMonacoStaysOnMonaco() {
+        // Regression: asking CTFontCreateWithName for "Monaco Bold" silently
+        // falls back to Helvetica (proportional, ~2× wider 'M' advance),
+        // which broke dthelpview's DisplayArea width — libDtHelp reads the
+        // bold font's AVERAGE_WIDTH for its `manBox.columns × charWidth`
+        // sizing, and 80 × Helvetica's advance ≈ 960 px vs the expected
+        // 80 × Monaco's ≈ 480 px. Resolver must stay on the Monaco face for
+        // bold; visual bold synthesis is a separate concern.
+        let xlfd = XLFD(family: "*", weight: "bold", slant: "r",
+                        pixelSize: 0, pointSize: 120, spacing: "m")
+        let r = FontResolver.resolve(xlfd: xlfd)
+        XCTAssertEqual(r.macFontName, "Monaco")
+        XCTAssertTrue(r.bold, "bold flag still reports the request honestly")
+        // 80 columns × cellWidth must match SS2's ~480 px ballpark, not the
+        // Helvetica-fallback ~960 px.
+        XCTAssertLessThan(80 * r.cellWidth, 600,
+                          "80 cols at Monaco cellWidth should be ~480, not ~960")
+    }
+
     func testBoldItalicCombo() {
         let xlfd = XLFD(family: "times", weight: "bold", slant: "i", pixelSize: 14, spacing: "p")
         let r = FontResolver.resolve(xlfd: xlfd)

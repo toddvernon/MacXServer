@@ -94,11 +94,17 @@ public enum FontResolver {
     /// Resolve a fully-decoded XLFD.
     public static func resolve(xlfd: XLFD) -> ResolvedFont {
         let (familyName, isMono) = resolveFamily(family: xlfd.family, spacing: xlfd.spacing)
-        let bold = xlfd.weight.lowercased() == "bold"
+        let boldRequested = xlfd.weight.lowercased() == "bold"
         let italic = xlfd.slant.lowercased() == "i" || xlfd.slant.lowercased() == "o"
         let skew = italic && !hasRealItalic(family: familyName)
+        // Bold faces that don't actually exist on macOS would silently fall
+        // back to a different family (CTFontCreateWithName("Monaco Bold")
+        // resolves to Helvetica), which corrupts cell metrics. Mirror the
+        // hasRealItalic guard: emit the bold name only when a real face
+        // exists; otherwise report bold but render with the regular face.
+        let boldFace = boldRequested && hasRealBold(family: familyName)
         let pixelHeight = xlfd.pixelSize > 0 ? xlfd.pixelSize : 14
-        let fontName = renderFontName(family: familyName, bold: bold, italic: italic && !skew)
+        let fontName = renderFontName(family: familyName, bold: boldFace, italic: italic && !skew)
 
         // Snap pointSize to the nearest integer where the font fits the
         // requested pixelHeight, then report the cell the font actually
@@ -127,7 +133,7 @@ public enum FontResolver {
             pointSize: pointSize,
             cellWidth: cellWidth, cellHeight: cellHeight,
             ascent: ascent, descent: descent,
-            isMonospace: isMono, bold: bold, skewItalic: skew,
+            isMonospace: isMono, bold: boldRequested, skewItalic: skew,
             charsetRegistry: registry, charsetEncoding: encoding
         )
     }
@@ -412,6 +418,22 @@ public enum FontResolver {
             return true
         default:
             // Monaco, Andale Mono, Symbol: no real italic face.
+            return false
+        }
+    }
+
+    /// Whether the Mac font family has a real bold face on macOS. Asking
+    /// CTFontCreateWithName for a non-existent bold name (e.g. "Monaco
+    /// Bold") silently resolves to Helvetica, which would give us the
+    /// wrong cell metrics and break per-column sizing in widgets like
+    /// libDtHelp's DisplayArea (`charWidth × columns` for the dialog
+    /// width).
+    private static func hasRealBold(family: String) -> Bool {
+        switch family {
+        case "Courier New", "Helvetica Neue", "Times New Roman", "Charter":
+            return true
+        default:
+            // Monaco, Andale Mono, Symbol: no real bold face.
             return false
         }
     }
