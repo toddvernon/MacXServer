@@ -124,7 +124,7 @@ paint, not the wrong color."
   843 requests for the fresh `-manPage`-mode capture taken today
   (previous was 414 pre-`-manPage`; intermediate was 875 from an
   earlier capture).
-- 294 server tests pass, 4 skipped, 0 failures.
+- 542 total tests pass (294 server + 248 capture/framer), 4 skipped, 0 failures.
 
 ## What's still open (next session's queue)
 
@@ -149,12 +149,7 @@ paint, not the wrong color."
    gap, or might be the original parked issue. Worth re-checking with
    today's clipping in place.
 
-5. **`SwiftXCaptureCoreTests` build break on MacOSX26.2 SDK.**
-   `FileManager.temporaryDirectory` and `NSString.lastPathComponent`
-   missing in the test-target compilation. Pre-existing on clean
-   tree; env-level, not project. Blocks `swift test` overall.
-
-6. **Framer-shared bug investigation.** Deferred again. Still open.
+5. **Framer-shared bug investigation.** Deferred again. Still open.
 
 ## Working tree at end of day
 
