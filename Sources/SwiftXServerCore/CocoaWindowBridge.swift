@@ -1700,17 +1700,29 @@ extension CocoaWindowBridge {
     }
 
     /// Find which managed NSWindow's content area contains the screen point.
-    /// Iterates highest NSWindow.level first so popups (`.popUpMenu` level)
-    /// win over regular top-levels when overlapping. Returns the X-id +
-    /// FlippedXView for coordinate translation.
+    /// Sort key:
+    ///   primary: NSWindow.level descending (popups at .popUpMenu beat
+    ///            regular .normal windows when overlapping).
+    ///   secondary: NSWindow.orderedIndex ascending (front-most first) so
+    ///            same-level overlap (e.g. quickplot's About dialog over
+    ///            the main window — both .normal) routes to the visually-
+    ///            front window. Without the secondary key, ties resolve
+    ///            arbitrarily and grabbed events can route to the wrong
+    ///            top-level, sending absoluteOrigin into the wrong subtree.
+    /// Returns the X-id + FlippedXView for coordinate translation.
     private func findManagedWindow(at screenPt: NSPoint) -> (UInt32, FlippedXView)? {
         lock.lock()
         let snap = slots
         lock.unlock()
-        // Sort by NSWindow.level descending (popups first per z-order)
         let sorted = snap.sorted { lhs, rhs in
-            (lhs.value.window?.level.rawValue ?? 0)
-                > (rhs.value.window?.level.rawValue ?? 0)
+            let lvLeft = lhs.value.window?.level.rawValue ?? 0
+            let lvRight = rhs.value.window?.level.rawValue ?? 0
+            if lvLeft != lvRight { return lvLeft > lvRight }
+            // Tie on level → break by z-order (0 = frontmost). Use
+            // Int.max for absent windows so they sort last.
+            let zLeft = lhs.value.window?.orderedIndex ?? Int.max
+            let zRight = rhs.value.window?.orderedIndex ?? Int.max
+            return zLeft < zRight
         }
         for (id, slot) in sorted {
             guard let win = slot.window, win.isVisible else { continue }
