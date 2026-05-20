@@ -31,6 +31,40 @@ enum DefaultMotifResources {
 
     private static let text = """
     ! swift-x Tier 1 Motif widget defaults. See MOTIF_TEXT_QUALITY.md.
+    !
+    ! ---- Color palette ----
+    ! Modeled on quickplot's fallback resources (reference/quickplot/app.c
+    ! lines 178-239; Todd's Motif app, NASA DFRC 1992). With the CDE
+    ! customization daemon retired 2026-05-18 (see DECISIONS), Motif's
+    ! compiled-in blue takes over any widget that has no resource. These
+    ! restore a coherent classic palette: Gray chrome, DarkSeaGreen text
+    ! fields, SlateBlue1 menu bar, Blue dialog accents, Gray70 secondary
+    ! surfaces. Motif derives top/bottom shadow shading from *background
+    ! automatically, so we don't set shadows here.
+    *background:                  Gray
+    *foreground:                  Black
+    *XmText.background:           DarkSeaGreen
+    *XmText.foreground:           Black
+    *XmTextField.background:      DarkSeaGreen
+    *XmTextField.foreground:      Black
+    *XmList.background:           Gray70
+    *XmList.foreground:           Black
+    ! Menu bars: dt-apps name them differently — dtcalc uses "mainMenu",
+    ! dtterm/dticon use "menuBar", quickplot uses "menubar". Cover the
+    ! three patterns so the SlateBlue1 accent lands on all of them.
+    *menuBar*background:          SlateBlue1
+    *menuBar*foreground:          White
+    *menubar*background:          SlateBlue1
+    *menubar*foreground:          White
+    *mainMenu*background:         SlateBlue1
+    *mainMenu*foreground:         White
+    ! Dialog accents: labels and buttons inside popup dialog shells get
+    ! Blue text. Main-application labels/buttons stay Black (the
+    ! *foreground default above) since they're not under an XmDialogShell.
+    *XmDialogShell*XmLabel.foreground:       Blue
+    *XmDialogShell*XmPushButton.foreground:  Blue
+    !
+    ! ---- Fonts ----
     *XmText.fontList:           -adobe-helvetica-medium-r-normal--14-*-*-*-p-*-iso8859-1
     *XmTextField.fontList:      -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
     *XmLabel.fontList:          -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
