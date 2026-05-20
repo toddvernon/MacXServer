@@ -186,6 +186,66 @@ final class FontDispatchTests: XCTestCase {
                                     "at least the six FONTPROPS we emit")
     }
 
+    func testAverageWidthFontPropIsMeanNotMaxForProportionalFont() throws {
+        // Regression: libDtHelp reads AVERAGE_WIDTH off the default font for
+        // dthelpview's DisplayArea per-column sizing (XUICreate.c:522 →
+        // Resize.c:113 newWidth = charWidth × columns / 10 + chrome). When
+        // we reported max-width × 10 instead of mean × 10, an 80-column
+        // manBox with a proportional dt-application font came out ~960 px
+        // wide vs SS2's ~480 px. Spec is unambiguous: AVERAGE_WIDTH is the
+        // arithmetic mean of glyph advances in tenths of a pixel.
+        let session = ServerSession()
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        // Same XLFD shape dthelpview opens first for libDtHelp's default
+        // font (Font.c:104 *p.10.roman.medium.sans_serif.*.ISO-8859-1).
+        let xlfd = "-dt-application-medium-r-normal-sans-*-120-*-*-p-*-iso8859-1"
+        _ = session.feed(OpenFont(fid: 0x4400008, name: Array(xlfd.utf8))
+            .encode(byteOrder: .lsbFirst))
+        _ = session.outbound.drain()
+        let bytes = session.feed(QueryFont(font: 0x4400008)
+            .encode(byteOrder: .lsbFirst))
+        let reply = try QueryFontReply.decode(from: bytes, byteOrder: .lsbFirst)
+
+        let avgWidthName = session.atoms.intern("AVERAGE_WIDTH")
+        let avgWidth = reply.properties.first { $0.name == avgWidthName }
+        XCTAssertNotNil(avgWidth, "AVERAGE_WIDTH FONTPROP must be present")
+        // AVERAGE_WIDTH (tenths of a pixel) must be strictly below max ×
+        // 10 for a proportional font — that's the bug we're guarding.
+        let maxTenths = UInt32(reply.maxBounds.characterWidth) * 10
+        XCTAssertLessThan(avgWidth!.value, maxTenths,
+                          "proportional fonts must report mean, not max, for AVERAGE_WIDTH")
+        // Sanity floor: must be above min × 10.
+        let minTenths = UInt32(max(0, reply.minBounds.characterWidth)) * 10
+        XCTAssertGreaterThanOrEqual(avgWidth!.value, minTenths)
+
+        // The load-bearing assertion for dthelpview: 80 columns ×
+        // charWidth / 10 must land in SS2's ballpark (~480 px), not the
+        // pre-fix ~960 px. Pick the threshold at 700 — generous of SS2's
+        // exact number, well below the bug's value.
+        let dhelpviewWidth = 80 * Int(avgWidth!.value) / 10
+        XCTAssertLessThan(dhelpviewWidth, 700,
+                          "80 cols × avgWidth/10 must match SS2's ~480 px ballpark")
+    }
+
+    func testAverageWidthEqualsMaxForMonospaceFont() throws {
+        // Monospace fonts: every glyph reports cellWidth, so the mean
+        // equals the max equals cellWidth. Locks in that the mean-not-max
+        // change doesn't regress the trivial case.
+        let session = ServerSession()
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        _ = session.feed(OpenFont(fid: 0x4400009, name: Array("Fixed".utf8))
+            .encode(byteOrder: .lsbFirst))
+        _ = session.outbound.drain()
+        let bytes = session.feed(QueryFont(font: 0x4400009)
+            .encode(byteOrder: .lsbFirst))
+        let reply = try QueryFontReply.decode(from: bytes, byteOrder: .lsbFirst)
+
+        let avgWidthName = session.atoms.intern("AVERAGE_WIDTH")
+        let avgWidth = reply.properties.first { $0.name == avgWidthName }
+        XCTAssertEqual(avgWidth?.value, UInt32(reply.maxBounds.characterWidth) * 10,
+                       "monospace: AVERAGE_WIDTH == max × 10")
+    }
+
     func testQueryFontReplyEmitsCharsetRegistryAndEncodingFontProps() throws {
         // Regression guard for the 2026-05-17 charset fix. Without
         // CHARSET_REGISTRY / CHARSET_ENCODING FONTPROPS pointing at

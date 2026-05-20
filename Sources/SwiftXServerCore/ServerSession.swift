@@ -2176,8 +2176,12 @@ public final class ServerSession: @unchecked Sendable {
             attributes: 0
         )
         var sawAny = false
+        var widthSum = 0
+        var widthCount = 0
         for c in infos where c.characterWidth != 0 {
             sawAny = true
+            widthSum += Int(c.characterWidth)
+            widthCount += 1
             minBounds.leftSideBearing  = min(minBounds.leftSideBearing,  c.leftSideBearing)
             minBounds.rightSideBearing = min(minBounds.rightSideBearing, c.rightSideBearing)
             minBounds.characterWidth   = min(minBounds.characterWidth,   c.characterWidth)
@@ -2208,6 +2212,17 @@ public final class ServerSession: @unchecked Sendable {
         // == maxBounds. Populate iff they differ (proportional fonts).
         let charInfos: [CharInfo] = (minBounds == maxBounds) ? [] : infos
 
+        // AVERAGE_WIDTH per XLFD spec is the arithmetic mean of glyph
+        // advances over the encoded range, in tenths of a pixel. For
+        // monospace this equals max (mean == max). For proportional fonts
+        // it's well below max. libDtHelp reads this off the default font
+        // for its per-column sizing (XUICreate.c:522 → Resize.c:113), so
+        // returning max-width for a proportional font over-sizes its
+        // dialog by the max/mean ratio (~2× for HelveticaNeue iso8859-1).
+        let avgWidthTenths: UInt32 = widthCount > 0
+            ? UInt32(max(1, (widthSum * 10 + widthCount / 2) / widthCount))
+            : UInt32(max(1, maxBounds.characterWidth)) * 10
+
         // FONTPROPS: integer-valued metrics plus the two atom-valued
         // charset props that Motif's XCreateFontSet REQUIRES — without
         // those, the FontSet builder can't match a per-charset variant
@@ -2222,9 +2237,7 @@ public final class ServerSession: @unchecked Sendable {
             FontProp(name: atoms.intern("FONT_ASCENT"),  value: UInt32(resolved.ascent)),
             FontProp(name: atoms.intern("FONT_DESCENT"), value: UInt32(resolved.descent)),
             FontProp(name: atoms.intern("DEFAULT_CHAR"), value: 32),
-            // AVERAGE_WIDTH per XLFD convention is in 1/10 pixel units.
-            FontProp(name: atoms.intern("AVERAGE_WIDTH"),
-                     value: UInt32(maxBounds.characterWidth) * 10),
+            FontProp(name: atoms.intern("AVERAGE_WIDTH"), value: avgWidthTenths),
             // Charset registry/encoding — atom IDs of the charset strings.
             // These are what Motif's per-charset FontSet probe reads.
             FontProp(name: atoms.intern("CHARSET_REGISTRY"),
