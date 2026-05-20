@@ -466,30 +466,24 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             let style: NSWindow.StyleMask = overrideRedirect
                 ? [.borderless, .nonactivatingPanel]
                 : [.titled, .closable, .miniaturizable, .resizable]
-            // Position: regular top-levels go at (100, 100) by convention.
-            // Override-redirect popups need to land where the X client
-            // asked, in screen coords:
-            //   - x: parent NSWindow's screen-x + geometry.x (X-root is
-            //     parent-relative under our (0,0)-per-top-level convention)
-            //   - y: parent's screen-y-top - geometry.y - pointsH
-            //     (X is top-left origin, macOS is bottom-left, so flip)
-            // The "parent" for popup positioning is whichever top-level the
-            // user is currently interacting with — NSApp.keyWindow when
-            // available; fall back to (100,100) for headless / pre-key cases.
-            let contentRect: NSRect
-            if overrideRedirect, let parent = NSApp.keyWindow {
-                let parentFrame = parent.frame
-                let originX = parentFrame.origin.x + CGFloat(geometry.x) * CGFloat(scale) / backingScale
-                let parentTop = parentFrame.origin.y + parentFrame.size.height
-                let originY = parentTop - CGFloat(geometry.y) * CGFloat(scale) / backingScale - pointsH
-                contentRect = NSRect(x: originX, y: originY, width: pointsW, height: pointsH)
-                self.log?.log("  popup-placement 0x\(String(id, radix: 16)) geom=(\(geometry.x),\(geometry.y)) \(geometry.width)x\(geometry.height) keyWin=\(parentFrame) → contentRect=\(contentRect)")
-            } else {
-                contentRect = NSRect(x: 100, y: 100, width: pointsW, height: pointsH)
-                if overrideRedirect {
-                    self.log?.log("  popup-placement 0x\(String(id, radix: 16)) geom=(\(geometry.x),\(geometry.y)) \(geometry.width)x\(geometry.height) keyWin=nil → fallback (100,100)")
-                }
-            }
+            // Identity-map X-root coords → NSScreen coords. The session
+            // already wrote each top-level's X-root position to its
+            // WindowEntry on first map (see ServerSession.placeTopLevelIfNeeded
+            // for regular top-levels; override-redirect popups bring their
+            // own root coords via ConfigureWindow before MapWindow). So
+            // geometry.x / geometry.y are the X-root position in X logical
+            // pixels, and we map them straight to NSScreen with a Y flip
+            // against the main screen height (X is top-left origin, Cocoa
+            // is bottom-left). This is the invariant the popup-placement
+            // bug needed: same conversion for regular windows and popups,
+            // every "where am I in root" query the client can issue gives
+            // an answer that matches what's actually on screen.
+            let screenH = NSScreen.main?.frame.size.height ?? 1080
+            let originX = CGFloat(geometry.x) * CGFloat(scale) / backingScale
+            let topOffset = CGFloat(geometry.y) * CGFloat(scale) / backingScale
+            let originY = screenH - topOffset - pointsH
+            let contentRect = NSRect(x: originX, y: originY, width: pointsW, height: pointsH)
+            self.log?.log("  bridge: NSWindow 0x\(String(id, radix: 16)) at NSScreen=\(contentRect) (X-root=(\(geometry.x),\(geometry.y)) \(geometry.width)x\(geometry.height) override=\(overrideRedirect))")
             let win: NSWindow
             if overrideRedirect {
                 let panel = NSPanel(contentRect: contentRect, styleMask: style, backing: .buffered, defer: false)

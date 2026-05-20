@@ -257,9 +257,18 @@ public struct ConfigureNotifyEvent: Equatable, Sendable {
         self.overrideRedirect = overrideRedirect
     }
 
-    public func encode(byteOrder: ByteOrder) -> [UInt8] {
+    /// Encode the event for the wire. Set `synthetic` to true to mark the
+    /// event as XSendEvent-style (response_code high bit set, per X11
+    /// protocol § 8.3 "send_event field"). ICCCM 4.1.5 specifies that
+    /// window managers must use a synthetic ConfigureNotify to inform a
+    /// client of its placed root position; toolkits (Xt, Motif) cache
+    /// widget root coords at realization and re-sync only on synthetic
+    /// ConfigureNotify, ignoring server-emitted ones because in vanilla
+    /// X those carry the in-parent coords (which for a top-level mean
+    /// root-relative only when no WM intervened).
+    public func encode(byteOrder: ByteOrder, synthetic: Bool = false) -> [UInt8] {
         var w = ByteWriter(byteOrder: byteOrder)
-        w.writeUInt8(22); w.writeUInt8(0)
+        w.writeUInt8(synthetic ? (22 | 0x80) : 22); w.writeUInt8(0)
         w.writeUInt16(sequenceNumber)
         w.writeUInt32(event); w.writeUInt32(window); w.writeUInt32(aboveSibling)
         w.writeUInt16(UInt16(bitPattern: x)); w.writeUInt16(UInt16(bitPattern: y))

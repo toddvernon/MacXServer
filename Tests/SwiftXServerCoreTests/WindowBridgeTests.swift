@@ -85,6 +85,17 @@ final class WindowBridgeTests: XCTestCase {
         XCTAssertEqual(exposeEv.code, 12, "fourth event should be Expose (code 12)")
         offset += exposeEv.bytes.count
 
+        // Fifth event: synthetic ConfigureNotify (code 22, response byte
+        // has the 0x80 send_event bit set) emitted per ICCCM 4.1.5 after
+        // MapNotify, carrying the WM-placed root coords. Toolkits
+        // (Xt/Motif) cache widget root coords at realization and re-sync
+        // only on this synthetic event.
+        let synth = try ServerMessage.decodeOne(from: Array(bytes[offset...]), byteOrder: byteOrder)
+        guard case .event(let synthEv) = synth else { XCTFail("expected event"); return }
+        XCTAssertEqual(synthEv.code, 22, "fifth event should be ConfigureNotify (code 22)")
+        XCTAssertTrue(synthEv.sentEvent, "fifth event should have synthetic / send_event bit set")
+        offset += synthEv.bytes.count
+
         XCTAssertEqual(offset, bytes.count, "no leftover bytes")
     }
 

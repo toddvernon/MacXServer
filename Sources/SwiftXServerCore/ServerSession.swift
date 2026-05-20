@@ -127,6 +127,22 @@ public final class ServerSession: @unchecked Sendable {
     private var inbound: [UInt8] = []
     public private(set) var sequenceNumber: UInt16 = 0
 
+    /// WM-emulation placement allocator for regular (non-override-redirect)
+    /// top-levels. Per ICCCM 4.2.3, a window manager must tell each client
+    /// where it placed the client's top-level via a synthetic ConfigureNotify;
+    /// toolkits (Xt/Motif) feed that root coord into XTranslateCoordinates
+    /// for things like submenu placement. We're a rootless server with no
+    /// separate WM, so we play the WM ourselves: pick a root coord, tell
+    /// the client, and place the NSWindow at the NSScreen-equivalent.
+    /// Values are in X logical pixels; the bridge converts to NSScreen
+    /// points via scale/backingScale.
+    private var nextTopLevelPlacement = (x: Int16(100), y: Int16(100))
+    private let placementCascadeStep: Int16 = 30
+    /// Top-levels we've already assigned a placement to. Sticky across
+    /// unmap/remap so a window keeps its position when the client toggles
+    /// visibility.
+    private var placedTopLevels: Set<UInt32> = []
+
     /// Which X subwindow currently contains the pointer, per top-level
     /// NSWindow. Updated on every pointer-moved event; consulted to decide
     /// when a crossing-event chain (LeaveNotify on old window, EnterNotify
@@ -707,11 +723,12 @@ public final class ServerSession: @unchecked Sendable {
         // SmeBSB items use `<EnterWindow>: highlight()`).
         lastPointerTopLevel = topLevel
         lastPointerXY = (x, y)
+        let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
         let pointerWindow = deepestMappedWindow(topLevel: topLevel, x: x, y: y)
         let from = currentPointerWindow[topLevel]
         if from != pointerWindow {
             currentPointerWindow[topLevel] = pointerWindow
-            emitCrossings(topLevel: topLevel, from: from, to: pointerWindow, rootX: x, rootY: y)
+            emitCrossings(topLevel: topLevel, from: from, to: pointerWindow, rootX: rx, rootY: ry)
             refreshCursor(topLevel: topLevel)
         }
         // Motion under grab: redirect to grab window if grab eventMask has
@@ -733,7 +750,7 @@ public final class ServerSession: @unchecked Sendable {
             time: serverTime,
             root: config.rootWindowId,
             event: target, child: 0,
-            rootX: x, rootY: y,
+            rootX: rx, rootY: ry,
             eventX: x &- tx, eventY: y &- ty,
             state: currentModifierState | buttonStateBit,
             sameScreen: true
@@ -751,6 +768,7 @@ public final class ServerSession: @unchecked Sendable {
         guard let order = byteOrder else { return }
         let mask: UInt32 = isDown ? (1 << 2) : (1 << 3)
         let mask16: UInt16 = UInt16(mask)
+        let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
         // Update held-button bookkeeping first; resolve target second; then
         // (after delivery) install or tear down the implicit grab.
         if isDown { heldButtons.insert(button) } else { heldButtons.remove(button) }
@@ -804,7 +822,7 @@ public final class ServerSession: @unchecked Sendable {
                 topLevel: topLevel,
                 from: currentPointerWindow[topLevel],
                 to: grab.grabWindow,
-                rootX: x, rootY: y, mode: .grab
+                rootX: rx, rootY: ry, mode: .grab
             )
         } else {
             resolved = mouseTarget(topLevel: topLevel, x: x, y: y, eventMaskBit: mask)
@@ -844,12 +862,12 @@ public final class ServerSession: @unchecked Sendable {
             time: serverTime,
             root: config.rootWindowId,
             event: target, child: 0,
-            rootX: x, rootY: y,
+            rootX: rx, rootY: ry,
             eventX: x &- tx, eventY: y &- ty,
             state: state,
             sameScreen: true
         )
-        log?.log("  → \(isDown ? "ButtonPress" : "ButtonRelease") button=\(button) target=0x\(String(target, radix: 16)) at top=(\(x),\(y)) local=(\(x &- tx),\(y &- ty)) state=0x\(String(state, radix: 16))")
+        log?.log("  → \(isDown ? "ButtonPress" : "ButtonRelease") button=\(button) target=0x\(String(target, radix: 16)) at top=(\(x),\(y)) root=(\(rx),\(ry)) local=(\(x &- tx),\(y &- ty)) state=0x\(String(state, radix: 16))")
         outbound.append(event.encode(code: code, byteOrder: order))
 
         // X11 implicit pointer grab. On the first ButtonPress with no other
@@ -876,7 +894,7 @@ public final class ServerSession: @unchecked Sendable {
                 topLevel: topLevel,
                 from: currentPointerWindow[topLevel],
                 to: target,
-                rootX: x, rootY: y, mode: .grab
+                rootX: rx, rootY: ry, mode: .grab
             )
         }
         // End the implicit grab when all buttons are released. Client-issued
@@ -894,7 +912,7 @@ public final class ServerSession: @unchecked Sendable {
                     topLevel: topLevel,
                     from: grabWin,
                     to: currentPointerWindow[topLevel],
-                    rootX: x, rootY: y, mode: .ungrab
+                    rootX: rx, rootY: ry, mode: .ungrab
                 )
             }
         }
@@ -910,11 +928,12 @@ public final class ServerSession: @unchecked Sendable {
         guard windows.get(topLevel) != nil else { return }
         lastPointerTopLevel = topLevel
         lastPointerXY = (x, y)
+        let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
         let target = deepestMappedWindow(topLevel: topLevel, x: x, y: y)
         let from = currentPointerWindow[topLevel]
         if from != target {
             currentPointerWindow[topLevel] = target
-            emitCrossings(topLevel: topLevel, from: from, to: target, rootX: x, rootY: y)
+            emitCrossings(topLevel: topLevel, from: from, to: target, rootX: rx, rootY: ry)
             refreshCursor(topLevel: topLevel)
         }
         // Per X spec, MotionNotify fires on every pointer movement (subject
@@ -945,7 +964,7 @@ public final class ServerSession: @unchecked Sendable {
             time: serverTime,
             root: config.rootWindowId,
             event: mTarget, child: 0,
-            rootX: x, rootY: y,
+            rootX: rx, rootY: ry,
             eventX: x &- tx, eventY: y &- ty,
             state: currentModifierState,
             sameScreen: true
@@ -960,9 +979,10 @@ public final class ServerSession: @unchecked Sendable {
     public func handlePointerEnteredView(topLevel: UInt32, x: Int16, y: Int16) {
         guard byteOrder != nil else { return }
         guard windows.get(topLevel) != nil else { return }
+        let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
         let target = deepestMappedWindow(topLevel: topLevel, x: x, y: y)
         currentPointerWindow[topLevel] = target
-        emitCrossings(topLevel: topLevel, from: nil, to: target, rootX: x, rootY: y)
+        emitCrossings(topLevel: topLevel, from: nil, to: target, rootX: rx, rootY: ry)
         refreshCursor(topLevel: topLevel)
     }
 
@@ -1111,6 +1131,13 @@ public final class ServerSession: @unchecked Sendable {
         // when the pointer crosses a boundary atomically.
         let crossingTime = serverTime
 
+        // rootX/rootY are already in X-root coords (the caller translated
+        // via rootCoords). To compute eventX/eventY (target-local), subtract
+        // the target window's root origin: (top-level root origin) +
+        // (target's offset within top-level).
+        let topRootX: Int16 = windows.get(topLevel)?.x ?? 0
+        let topRootY: Int16 = windows.get(topLevel)?.y ?? 0
+
         for (window, detail) in leaves {
             guard let entry = windows.get(window), entry.eventMask & leaveMask != 0 else { continue }
             let (tlX, tlY) = absoluteOrigin(of: window, topLevel: topLevel)
@@ -1121,11 +1148,11 @@ public final class ServerSession: @unchecked Sendable {
                 root: config.rootWindowId,
                 event: window, child: 0,
                 rootX: rootX, rootY: rootY,
-                eventX: rootX &- tlX, eventY: rootY &- tlY,
+                eventX: rootX &- topRootX &- tlX, eventY: rootY &- topRootY &- tlY,
                 state: 0, mode: mode,
                 sameScreen: true, focus: false
             )
-            log?.log("  → LeaveNotify target=0x\(String(window, radix: 16)) detail=\(detail) at top=(\(rootX),\(rootY))")
+            log?.log("  → LeaveNotify target=0x\(String(window, radix: 16)) detail=\(detail) at root=(\(rootX),\(rootY))")
             outbound.append(event.encode(code: 8, byteOrder: order))
         }
 
@@ -1139,11 +1166,11 @@ public final class ServerSession: @unchecked Sendable {
                 root: config.rootWindowId,
                 event: window, child: 0,
                 rootX: rootX, rootY: rootY,
-                eventX: rootX &- tlX, eventY: rootY &- tlY,
+                eventX: rootX &- topRootX &- tlX, eventY: rootY &- topRootY &- tlY,
                 state: 0, mode: mode,
                 sameScreen: true, focus: false
             )
-            log?.log("  → EnterNotify target=0x\(String(window, radix: 16)) detail=\(detail) at top=(\(rootX),\(rootY))")
+            log?.log("  → EnterNotify target=0x\(String(window, radix: 16)) detail=\(detail) at root=(\(rootX),\(rootY))")
             outbound.append(event.encode(code: 7, byteOrder: order))
         }
     }
@@ -1374,6 +1401,19 @@ public final class ServerSession: @unchecked Sendable {
         return (x, y)
     }
 
+    /// Translate a top-level-local pointer coord (the bridge hands these to
+    /// us in NSWindow-local space) to X-root coords by adding the top-level's
+    /// own WindowEntry x/y (which the WM-emulation placement set on map).
+    /// Used to fill `root_x` / `root_y` in pointer/crossing events and the
+    /// QueryPointer reply — without this Motif/Xt menu-positioning math
+    /// computes popup root coords as if the top-level were at (0, 0), and
+    /// override-redirect menus land in the screen's upper-left corner
+    /// regardless of where the user actually clicked.
+    private func rootCoords(topLevel: UInt32, localX x: Int16, localY y: Int16) -> (Int16, Int16) {
+        guard let entry = windows.get(topLevel) else { return (x, y) }
+        return (entry.x &+ x, entry.y &+ y)
+    }
+
     // MARK: - Grabs
 
     private func handleGrabPointer(_ r: GrabPointer, byteOrder: ByteOrder) {
@@ -1402,11 +1442,12 @@ public final class ServerSession: @unchecked Sendable {
         // to grab window. Xt/Motif rely on this to know "grab is on me."
         if let topLevel = topLevelAncestor(of: r.grabWindow) {
             let (px, py) = lastPointerXY ?? (0, 0)
+            let (rx, ry) = rootCoords(topLevel: topLevel, localX: px, localY: py)
             emitCrossings(
                 topLevel: topLevel,
                 from: currentPointerWindow[topLevel],
                 to: r.grabWindow,
-                rootX: px, rootY: py, mode: .grab
+                rootX: rx, rootY: ry, mode: .grab
             )
         }
         let reply = GrabReply(sequenceNumber: sequenceNumber, status: .success)
@@ -1427,11 +1468,12 @@ public final class ServerSession: @unchecked Sendable {
         // current pointer window.
         if let topLevel = topLevelAncestor(of: grab.window) {
             let (px, py) = lastPointerXY ?? (0, 0)
+            let (rx, ry) = rootCoords(topLevel: topLevel, localX: px, localY: py)
             emitCrossings(
                 topLevel: topLevel,
                 from: grab.window,
                 to: currentPointerWindow[topLevel],
-                rootX: px, rootY: py, mode: .ungrab
+                rootX: rx, rootY: ry, mode: .ungrab
             )
         }
     }
@@ -1973,6 +2015,39 @@ public final class ServerSession: @unchecked Sendable {
             }
         }
         return out
+    }
+
+    /// First-map WM-emulation placement for a regular top-level. If the
+    /// client picked a non-zero position via CreateWindow / ConfigureWindow
+    /// (e.g., quickplot's command window at (55, 260), plot window at
+    /// (500, 20)), we honor it — that's the natural side-by-side layout
+    /// the app was designed around. Only when the client asked for (0, 0)
+    /// (which means "WM, place me somewhere reasonable") do we apply a
+    /// cascade. Sticky per id: remapping after an unmap keeps the same
+    /// position. No-op for override-redirect popups — those place
+    /// themselves and we honor their requested coords.
+    ///
+    /// Either way, after this returns the bridge's `emitMapSequence`
+    /// emits ConfigureNotify with the now-canonical WindowEntry x/y, and
+    /// `handleMapWindow` follows with a SYNTHETIC ConfigureNotify per
+    /// ICCCM 4.1.5 so toolkits cache the right root coords.
+    private func placeTopLevelIfNeeded(id: UInt32) {
+        guard let entry = windows.get(id), !entry.overrideRedirect else { return }
+        guard !placedTopLevels.contains(id) else { return }
+        placedTopLevels.insert(id)
+        if entry.x != 0 || entry.y != 0 {
+            log?.log("  → WM-honor 0x\(String(id, radix: 16)) at client-set X-root (\(entry.x),\(entry.y))")
+            return
+        }
+        let px = nextTopLevelPlacement.x
+        let py = nextTopLevelPlacement.y
+        nextTopLevelPlacement.x &+= placementCascadeStep
+        nextTopLevelPlacement.y &+= placementCascadeStep
+        if nextTopLevelPlacement.x > 500 || nextTopLevelPlacement.y > 500 {
+            nextTopLevelPlacement = (100, 100)
+        }
+        log?.log("  → WM-place 0x\(String(id, radix: 16)) at X-root (\(px),\(py)) (was (\(entry.x),\(entry.y)))")
+        _ = windows.resize(id, width: nil, height: nil, x: px, y: py)
     }
 
     /// Build the paint list for a newly-mapped top-level: the top-level's own
@@ -3157,10 +3232,20 @@ public final class ServerSession: @unchecked Sendable {
             // behavior) made every Athena/Motif menu invisible: client
             // thinks it posted, server says yes, nothing on screen.
             if isTop {
+                // WM emulation: pick a root position for this top-level on
+                // first map, update WindowEntry, and tell the client via
+                // ConfigureNotify before the bridge creates the NSWindow.
+                // After this, the X-root coord we hand to the bridge for
+                // NSWindow placement matches what the client now believes
+                // its root position to be — so XTranslateCoordinates,
+                // submenu placement math, button event root_x/root_y all
+                // line up with what's actually on screen.
+                placeTopLevelIfNeeded(id: r.window)
+                let postPlaceEntry = windows.get(r.window)
                 let descendants = mappedDescendantSnapshots(of: r.window)
-                let topMask = entry?.eventMask ?? 0
+                let topMask = postPlaceEntry?.eventMask ?? 0
                 let topExposeRects = exposeRectsForWindow(r.window)
-                let currentGeom = entry.map { TopLevelGeometry(
+                let currentGeom = postPlaceEntry.map { TopLevelGeometry(
                     x: $0.x, y: $0.y,
                     width: $0.width, height: $0.height,
                     borderWidth: $0.borderWidth
@@ -3174,6 +3259,27 @@ public final class ServerSession: @unchecked Sendable {
                     byteOrder: byteOrder, sequence: sequenceNumber,
                     outbound: outbound
                 )
+                // ICCCM 4.1.5: after MapNotify, the WM must send the client
+                // a SYNTHETIC ConfigureNotify carrying the placed root
+                // coordinates. Toolkits (Xt, Motif) cache widget root coords
+                // at realization and only invalidate the cache on synthetic
+                // events; without this, Motif's MenuBar hit-test computes
+                // cascade-button rectangles in stale (pre-placement) root
+                // coords, the cascade click falls "outside" every gadget,
+                // and the popup never posts. Skip for override-redirect
+                // popups (no WM intervenes in those).
+                if !isOverrideRedirect, let placed = windows.get(r.window) {
+                    let synth = ConfigureNotifyEvent(
+                        sequenceNumber: sequenceNumber,
+                        event: r.window, window: r.window, aboveSibling: 0,
+                        x: placed.x, y: placed.y,
+                        width: placed.width, height: placed.height,
+                        borderWidth: placed.borderWidth,
+                        overrideRedirect: false
+                    )
+                    outbound.append(synth.encode(byteOrder: byteOrder, synthetic: true))
+                    log?.log("  → synthetic ConfigureNotify on 0x\(String(r.window, radix: 16)) at (\(placed.x),\(placed.y)) \(placed.width)x\(placed.height) (ICCCM 4.1.5)")
+                }
                 // Set the NSWindow.backgroundColor to match the X bg pixel
                 // so live-resize doesn't flash a different color (white by
                 // default) in the newly-exposed region before the next
@@ -4969,17 +5075,26 @@ public final class ServerSession: @unchecked Sendable {
         case .queryPointer(let r):
             guard validateWindowOrRoot(r.window, majorOpcode: QueryPointer.opcode) else { break }
             // Best-effort answer: report the last known pointer position
-            // in root coords (top-level local under our (0,0)-per-top-level
-            // convention), the deepest mapped descendant of the queried
+            // in root coords, the deepest mapped descendant of the queried
             // window that contains the pointer (or None), and the current
             // mod+button mask. winX/winY are relative to the queried
             // window. Per X spec same-screen=true unless the pointer is
             // on a different screen — single-screen for us.
+            //
+            // lastPointerXY is stored top-level-local (NSWindow coords);
+            // rootCoords adds the top-level's WM-emulation root offset so
+            // the reply matches the convention every other root_x/root_y
+            // field uses.
             let (px, py) = lastPointerXY ?? (0, 0)
             var winX: Int16 = px
             var winY: Int16 = py
             var child: UInt32 = 0
+            var rxOut: Int16 = px
+            var ryOut: Int16 = py
             if let topLevel = lastPointerTopLevel {
+                let (rx, ry) = rootCoords(topLevel: topLevel, localX: px, localY: py)
+                rxOut = rx
+                ryOut = ry
                 if let stl = topLevelAncestor(of: r.window), stl == topLevel {
                     let (qx, qy) = absoluteOrigin(of: r.window, topLevel: stl)
                     winX = px &- qx
@@ -4997,11 +5112,11 @@ public final class ServerSession: @unchecked Sendable {
                 sameScreen: true,
                 root: config.rootWindowId,
                 child: child,
-                rootX: px, rootY: py,
+                rootX: rxOut, rootY: ryOut,
                 winX: winX, winY: winY,
                 mask: mask
             )
-            log?.log("  QueryPointer window=0x\(String(r.window, radix: 16)) → child=0x\(String(child, radix: 16)) root=(\(px),\(py)) win=(\(winX),\(winY)) mask=0x\(String(mask, radix: 16))")
+            log?.log("  QueryPointer window=0x\(String(r.window, radix: 16)) → child=0x\(String(child, radix: 16)) root=(\(rxOut),\(ryOut)) win=(\(winX),\(winY)) mask=0x\(String(mask, radix: 16))")
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .listExtensions:
