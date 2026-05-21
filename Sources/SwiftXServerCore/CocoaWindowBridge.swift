@@ -1750,15 +1750,19 @@ extension CocoaWindowBridge {
     }
 
     /// Find which managed NSWindow's content area contains the screen point.
-    /// Sort key:
-    ///   primary: NSWindow.level descending (popups at .popUpMenu beat
-    ///            regular .normal windows when overlapping).
-    ///   secondary: NSWindow.orderedIndex ascending (front-most first) so
-    ///            same-level overlap (e.g. quickplot's About dialog over
-    ///            the main window — both .normal) routes to the visually-
-    ///            front window. Without the secondary key, ties resolve
-    ///            arbitrarily and grabbed events can route to the wrong
-    ///            top-level, sending absoluteOrigin into the wrong subtree.
+    ///
+    /// Sort key, three levels:
+    ///   1. NSWindow.level descending — popups at .popUpMenu beat regular
+    ///      .normal windows when overlapping.
+    ///   2. isKeyWindow first — at a given level, the focused window wins
+    ///      over its peers. This is the principle: "the focus window gets
+    ///      the action." Solves the same case orderedIndex did (the key
+    ///      window is usually the visually-frontmost), and degrades
+    ///      gracefully if z-order and focus ever diverge (e.g. a future
+    ///      floating-panel widget).
+    ///   3. NSWindow.orderedIndex ascending — fallback for the case where
+    ///      neither candidate is key (rare; happens during transient
+    ///      AppKit reorderings).
     /// Returns the X-id + FlippedXView for coordinate translation.
     private func findManagedWindow(at screenPt: NSPoint) -> (UInt32, FlippedXView)? {
         lock.lock()
@@ -1768,8 +1772,9 @@ extension CocoaWindowBridge {
             let lvLeft = lhs.value.window?.level.rawValue ?? 0
             let lvRight = rhs.value.window?.level.rawValue ?? 0
             if lvLeft != lvRight { return lvLeft > lvRight }
-            // Tie on level → break by z-order (0 = frontmost). Use
-            // Int.max for absent windows so they sort last.
+            let keyLeft = lhs.value.window?.isKeyWindow ?? false
+            let keyRight = rhs.value.window?.isKeyWindow ?? false
+            if keyLeft != keyRight { return keyLeft }   // key first
             let zLeft = lhs.value.window?.orderedIndex ?? Int.max
             let zRight = rhs.value.window?.orderedIndex ?? Int.max
             return zLeft < zRight
