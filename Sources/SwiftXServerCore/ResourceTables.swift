@@ -417,9 +417,24 @@ public final class GCTable {
     /// rank within the *change's* mask and store it in the entry's values
     /// dict, overwriting any previous value for the same bit. Bits not set
     /// in `valueMask` are left untouched.
+    ///
+    /// Per X11 spec, the `clipMask` slot and the `SetClipRectangles` rect
+    /// list are two faces of the same GC attribute — setting one replaces
+    /// the other. So any ChangeGC that touches `clipMask` must also clear
+    /// any rect list previously set via `SetClipRectangles` (`XSetClipMask
+    /// (gc, None)` is the universal way clients say "remove the clip").
+    /// Without this, a leftover rect list from an earlier draw keeps
+    /// clipping subsequent draws — visible as quickplot's plot frame
+    /// disappearing after a resize: the client draws data with a clip rect
+    /// list, calls `XSetClipMask(gc, None)` to reset, then on the next
+    /// expose tries to draw the frame, but the stored rect list still
+    /// clips it to the old plot position which doesn't overlap the new one.
     public func change(_ id: UInt32, valueMask: UInt32, valueList: [UInt8], byteOrder: ByteOrder) {
         guard var entry = gcs[id] else { return }
         applyValueList(into: &entry.values, mask: valueMask, list: valueList, byteOrder: byteOrder)
+        if valueMask & GCBits.clipMask != 0 {
+            entry.clipRectangles = nil
+        }
         gcs[id] = entry
     }
 
