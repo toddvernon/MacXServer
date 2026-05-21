@@ -250,11 +250,21 @@ public final class FlippedXView: NSView {
     /// view is `isFlipped`, so view-local points already use top-left;
     /// we just need points → device px (× backingScale) → logical px
     /// (÷ scaleFactor).
+    ///
+    /// `.rounded()` (round-half-to-even) is used instead of truncation
+    /// so subpixel cursor movement crosses each logical-pixel boundary
+    /// at the midpoint between integer values, matching how a real X
+    /// server reports coords. Before 2026-05-21 this used `Int(Double)`,
+    /// which truncates toward zero — at boundaries (e.g. the cursor
+    /// brushing the upper edge of Motif's safe-triangle in a cascade
+    /// menu) the truncation produced stair-step transitions that
+    /// Motif's algorithm reads as the cursor jumping across the safe
+    /// zone, dismissing the submenu unreliably.
     private func logicalLocation(of event: NSEvent) -> (Int16, Int16) {
         let pointsLocal = convert(event.locationInWindow, from: nil)
         let backingScale = window?.backingScaleFactor ?? 2.0
-        let logicalX = Int16(clamping: Int((pointsLocal.x * backingScale) / CGFloat(scaleFactor)))
-        let logicalY = Int16(clamping: Int((pointsLocal.y * backingScale) / CGFloat(scaleFactor)))
+        let logicalX = Int16(clamping: Int((pointsLocal.x * backingScale / CGFloat(scaleFactor)).rounded()))
+        let logicalY = Int16(clamping: Int((pointsLocal.y * backingScale / CGFloat(scaleFactor)).rounded()))
         return (logicalX, logicalY)
     }
 

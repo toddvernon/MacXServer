@@ -1829,10 +1829,14 @@ extension CocoaWindowBridge {
             let viewPt = view.convert(windowPt, from: nil)
             // view points → X-logical pixels. The view is .flipped so viewPt.y
             // is already top-left-origin, matching X. Scale by the device-pixel
-            // ratio so 1 X-logical pixel maps consistently.
+            // ratio so 1 X-logical pixel maps consistently. Round-to-nearest
+            // (not truncate) so subpixel cursor motion crosses each logical-
+            // pixel boundary at the midpoint, matching the FlippedXView path
+            // and a real X server's convention. See logicalLocation in
+            // FlippedXView for the full rationale (Motif safe-triangle).
             let bs = NSScreen.main?.backingScaleFactor ?? 2.0
-            let logicalX = Int16(viewPt.x * bs / CGFloat(scaleFactor))
-            let logicalY = Int16(viewPt.y * bs / CGFloat(scaleFactor))
+            let logicalX = Int16(clamping: Int((viewPt.x * bs / CGFloat(scaleFactor)).rounded()))
+            let logicalY = Int16(clamping: Int((viewPt.y * bs / CGFloat(scaleFactor)).rounded()))
 
             if dragLastWindowId != xid {
                 firePointerEnteredView(id: xid, x: logicalX, y: logicalY)
