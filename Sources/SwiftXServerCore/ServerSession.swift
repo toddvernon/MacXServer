@@ -3688,6 +3688,20 @@ public final class ServerSession: @unchecked Sendable {
                             borderWidth: entry.borderWidth
                         )
                     )
+                } else {
+                    // Top-level: push the new geometry to the NSWindow.
+                    // Required by Motif's menubar trick (reuses one popup
+                    // shell, reconfigures it to each menu's position as
+                    // the user drags sideways across the menubar). The
+                    // bridge no-ops if the NSWindow isn't created yet.
+                    bridge?.reconfigureTopLevel(
+                        id: r.window,
+                        geometry: TopLevelGeometry(
+                            x: entry.x, y: entry.y,
+                            width: entry.width, height: entry.height,
+                            borderWidth: entry.borderWidth
+                        )
+                    )
                 }
                 let sizeChanged = old.width != new.width || old.height != new.height
                 let posChanged = old.x != new.x || old.y != new.y

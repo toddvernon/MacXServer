@@ -617,6 +617,56 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         // redraw. M2 doesn't do anything visible.
     }
 
+    /// X client reconfigured an already-mapped top-level. Push the new
+    /// geometry to the NSWindow's frame. Mirrors the placement formula
+    /// used at createWindow / mapTopLevel time: X-root (x, y, w, h) →
+    /// NSScreen content rect with backing-scale + Y-flip-against-main-
+    /// screen-height. If the slot's NSWindow isn't created yet (e.g.,
+    /// ConfigureWindow arrived before MapWindow's main-thread setup
+    /// completed), just update the stored geometry — mapTopLevel reads
+    /// the latest slot.geometry when it creates the NSWindow.
+    public func reconfigureTopLevel(id: UInt32, geometry: TopLevelGeometry) {
+        lock.lock()
+        slots[id]?.geometry = geometry
+        let win = slots[id]?.window
+        let view = slots[id]?.view
+        lock.unlock()
+        let scale = self.scaleFactor
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let win = win else { return }
+            let backingScale = NSScreen.main?.backingScaleFactor ?? 2.0
+            let screenH = NSScreen.main?.frame.size.height ?? 1080
+            let pointsW = CGFloat(geometry.width) * CGFloat(scale) / backingScale
+            let pointsH = CGFloat(geometry.height) * CGFloat(scale) / backingScale
+            let originX = CGFloat(geometry.x) * CGFloat(scale) / backingScale
+            let topOffset = CGFloat(geometry.y) * CGFloat(scale) / backingScale
+            let originY = screenH - topOffset - pointsH
+            // For a titled (regular) NSWindow, frame includes the title bar;
+            // we want the CONTENT to be at (originX, originY) with the
+            // requested size. setContentSize would only resize; use
+            // setFrame after computing the equivalent frameRect for the
+            // current style mask.
+            let contentRect = NSRect(x: originX, y: originY, width: pointsW, height: pointsH)
+            let frameRect = win.frameRect(forContentRect: contentRect)
+            self.log?.log("  bridge: reconfigure 0x\(String(id, radix: 16)) → X-root (\(geometry.x),\(geometry.y)) \(geometry.width)x\(geometry.height) → NSScreen frame=\(frameRect)")
+            win.setFrame(frameRect, display: true, animate: false)
+            // Resize the FlippedXView's backing bitmap to the new logical
+            // dimensions so subsequent draws aren't clipped to the prior
+            // size. autoresizingMask=[.width,.height] keeps the view's
+            // point-frame in sync with the NSWindow content rect; the
+            // backing bitmap is a separate buffer that needs the explicit
+            // resize call.
+            if let view = view {
+                view.resizeBacking(
+                    logicalWidth: Int(geometry.width),
+                    logicalHeight: Int(geometry.height),
+                    scale: scale
+                )
+                view.setNeedsDisplay(view.bounds)
+            }
+        }
+    }
+
     public func drawingTarget(for drawable: UInt32) -> Any? {
         slot(drawable)?.view
     }

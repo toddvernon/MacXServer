@@ -104,6 +104,16 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// WM_NAME or WM_ICON_NAME changed; bridge updates the NSWindow title.
     func setTopLevelTitle(id: UInt32, title: String)
 
+    /// The X client reconfigured an already-mapped top-level via
+    /// ConfigureWindow. Bridge moves and/or resizes the NSWindow to match
+    /// the new geometry. Used heavily by Motif's menubar trick: a single
+    /// popup shell gets dragged sideways across menubar items, with the
+    /// shell repeatedly reconfigured to each menu's position+size and a
+    /// different inner form swapped in. Without this, the popup stays at
+    /// the original position/size and subsequent menus render into the
+    /// wrong place. Default no-op for non-Cocoa bridges (mocks).
+    func reconfigureTopLevel(id: UInt32, geometry: TopLevelGeometry)
+
     /// ConfigureWindow on a non-top-level window resized it. Bridge marks the
     /// affected drawing region dirty. Used in M3 for the post-resize redraw.
     func descendantResized(id: UInt32, parent: UInt32, geometry: TopLevelGeometry)
@@ -503,4 +513,5 @@ public extension WindowBridge {
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {}
     func setCursor(topLevel: UInt32, glyph: UInt16?) {}
     func setTopLevelWindowBackground(id: UInt32, color: RGB16) {}
+    func reconfigureTopLevel(id: UInt32, geometry: TopLevelGeometry) {}
 }
