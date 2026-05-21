@@ -4389,21 +4389,44 @@ public final class ServerSession: @unchecked Sendable {
             gcs.setDashes(r.gc, dashes: r.dashes, offset: r.dashOffset)
 
         case .putImage(let r):
-            // PutImage needs depth/format-aware decoding (Bitmap / XYPixmap
-            // / ZPixmap) and a pixel-storage model on PixmapEntry that we
-            // don't have yet — pixmaps are tracked id/depth/dims-only.
-            // For now this is a documented no-op (logged in OPCODE_STATUS /
-            // SHORTCUTS). We still validate drawable + GC arguments at
-            // entry per XError-honesty policy: unknown drawable → BadDrawable,
-            // unknown GC → BadGC. The silent-drop is preserved for the
-            // valid-drawable case (load-bearing for dt-apps' button chrome
-            // pattern — same as the "draws to pixmaps silently drop" entry).
+            // Argument validation per XError-honesty policy: unknown drawable
+            // → BadDrawable, unknown GC → BadGC.
             if !isKnownDrawable(r.drawable) {
                 emitError(.drawable, majorOpcode: PutImage.opcode, badResourceId: r.drawable)
                 break
             }
             guard validateGC(r.gc, majorOpcode: PutImage.opcode) != nil else { break }
-            log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) format=\(r.format) depth=\(r.depth) \(r.width)x\(r.height) at (\(r.dstX),\(r.dstY)) — silent-drop, see SHORTCUTS")
+
+            // format=Bitmap (X depth-1, packed 1bpp) is the only path
+            // implemented today. Quickplot's icon buttons go through this:
+            // XCreatePixmapFromBitmapData → XCreatePixmap depth=N +
+            // XPutImage format=Bitmap depth=1 into the depth-N pixmap, with
+            // GC fg/bg replacing the 1/0 bits. Other formats (XYPixmap,
+            // ZPixmap) stay silent-dropped — none of the clients we host
+            // today exercise them. See SHORTCUTS.
+            if r.format != .bitmap || r.depth != 1 {
+                log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) format=\(r.format) depth=\(r.depth) \(r.width)x\(r.height) — silent-drop (non-bitmap path not implemented; see SHORTCUTS)")
+                break
+            }
+
+            guard let target = validateDrawTarget(r.drawable, majorOpcode: PutImage.opcode) else {
+                emitError(.implementation, majorOpcode: PutImage.opcode)
+                break
+            }
+            let (dx, dy) = target.windowOffset
+            let state = gcState(r.gc, byteOrder: byteOrder)
+            let fg = resolveColor(state.foreground)
+            let bg = resolveColor(state.background)
+            log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) bitmap \(r.width)x\(r.height) at (\(r.dstX),\(r.dstY)) leftPad=\(r.leftPad)")
+            bridge?.drawPutImage(
+                target: target,
+                sourceData: r.data,
+                sourceWidth: r.width, sourceHeight: r.height,
+                dstX: r.dstX &+ dx, dstY: r.dstY &+ dy,
+                leftPad: r.leftPad,
+                foreground: fg, background: bg,
+                clipRectangles: state.clipRectangles
+            )
 
         case .circulateWindow(let r):
             // Per X11 spec section 10.6 / CirculateWindow:

@@ -306,6 +306,27 @@ public protocol WindowBridge: AnyObject, Sendable {
         clipRectangles: [Rectangle]?
     )
 
+    /// PutImage: blit a bitmap into the target drawable at `(dstX, dstY)`.
+    /// Today only `format=bitmap` (X depth-1, packed 1bpp scanlines) is
+    /// implemented. Other formats (XYPixmap, ZPixmap) get silent-dropped
+    /// at the session layer so the bridge doesn't need to know them yet.
+    /// `sourceWidth` / `sourceHeight` are the image's pixel dims. `leftPad`
+    /// is the number of bits of pad at the start of each scanline (used
+    /// by Xlib when the request had non-byte-aligned width). `foreground`
+    /// replaces 1-bits, `background` replaces 0-bits in the depth-1 source.
+    /// Scanlines are 32-bit-aligned and MSB-first per our setup-reply
+    /// advertisement (ServerConfig: bitmapFormatBitOrder=mostSignificant,
+    /// bitmapFormatScanlinePad=32).
+    func drawPutImage(
+        target: DrawTarget,
+        sourceData: [UInt8],
+        sourceWidth: UInt16, sourceHeight: UInt16,
+        dstX: Int16, dstY: Int16,
+        leftPad: UInt8,
+        foreground: RGB16, background: RGB16,
+        clipRectangles: [Rectangle]?
+    )
+
     /// ImageText8: fill bg rect, then draw text. `(x, y)` is the baseline of
     /// the first glyph in top-level logical pixel coords. The bridge owns
     /// CTFont instantiation per the resolved font's macFontName + pointSize.
@@ -447,6 +468,15 @@ public extension WindowBridge {
         srcX: Int16, srcY: Int16,
         dstX: Int16, dstY: Int16,
         width: UInt16, height: UInt16,
+        clipRectangles: [Rectangle]?
+    ) {}
+    func drawPutImage(
+        target: DrawTarget,
+        sourceData: [UInt8],
+        sourceWidth: UInt16, sourceHeight: UInt16,
+        dstX: Int16, dstY: Int16,
+        leftPad: UInt8,
+        foreground: RGB16, background: RGB16,
         clipRectangles: [Rectangle]?
     ) {}
     func drawImageText8(

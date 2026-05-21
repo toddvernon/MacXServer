@@ -1198,6 +1198,110 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// PutImage with format=Bitmap (depth-1 source). Builds a 32-bit ARGB
+    /// CGImage from the bit-packed source — each 1-bit pixel → foreground
+    /// color, each 0-bit → background — and draws it into the target via
+    /// withDrawContext.
+    ///
+    /// Source-data layout per our SetupAccepted (ServerConfig):
+    ///   bitmapFormatBitOrder = mostSignificant — MSB-first within each byte
+    ///   bitmapFormatScanlinePad = 32 — each scanline padded to 32-bit boundary
+    ///   leftPad — bits of pad at the start of each scanline (before image bits)
+    ///
+    /// Used by quickplot's icon-button bitmap path (XCreatePixmapFromBitmapData
+    /// → XPutImage format=Bitmap into a depth-N pixmap, then XCopyArea pixmap
+    /// → button window). Without this, button bitmaps don't display.
+    public func drawPutImage(
+        target: DrawTarget,
+        sourceData: [UInt8],
+        sourceWidth: UInt16, sourceHeight: UInt16,
+        dstX: Int16, dstY: Int16,
+        leftPad: UInt8,
+        foreground: RGB16, background: RGB16,
+        clipRectangles: [Framer.Rectangle]?
+    ) {
+        log?.log("  drawPutImage target=\(target) src=\(sourceWidth)x\(sourceHeight) dst=(\(dstX),\(dstY)) leftPad=\(leftPad) data=\(sourceData.count)b fg=(\(foreground.red >> 8),\(foreground.green >> 8),\(foreground.blue >> 8)) bg=(\(background.red >> 8),\(background.green >> 8),\(background.blue >> 8))")
+
+        let w = Int(sourceWidth), h = Int(sourceHeight)
+        guard w > 0, h > 0 else { return }
+        let pad = Int(leftPad)
+
+        // scanline width in bits, padded up to the 32-bit unit boundary.
+        // Each scanline carries (leftPad + width) image bits plus the
+        // trailing pad bits to reach a multiple of 32.
+        let scanlineBits = ((pad + w + 31) / 32) * 32
+        let scanlineBytes = scanlineBits / 8
+        guard sourceData.count >= scanlineBytes * h else {
+            log?.log("    short-data: have \(sourceData.count)b, need \(scanlineBytes * h)b — drop")
+            return
+        }
+
+        // Pre-shift RGB16 (0..65535) → UInt8 (0..255). bitmapInfo on our
+        // PixelBuffer is byteOrder32Little + premultipliedFirst, which lays
+        // bytes out as B, G, R, A in memory.
+        let fgR = UInt8(foreground.red   >> 8)
+        let fgG = UInt8(foreground.green >> 8)
+        let fgB = UInt8(foreground.blue  >> 8)
+        let bgR = UInt8(background.red   >> 8)
+        let bgG = UInt8(background.green >> 8)
+        let bgB = UInt8(background.blue  >> 8)
+
+        var argb = [UInt8](repeating: 0, count: w * h * 4)
+        argb.withUnsafeMutableBufferPointer { dst in
+            sourceData.withUnsafeBufferPointer { src in
+                for y in 0..<h {
+                    let scanlineStart = y * scanlineBytes
+                    for x in 0..<w {
+                        let bitIndex = pad + x
+                        let byteOffset = scanlineStart + bitIndex / 8
+                        let bitInByte = 7 - (bitIndex % 8)   // MSB-first
+                        let bit = (src[byteOffset] >> bitInByte) & 1
+                        let i = (y * w + x) * 4
+                        if bit == 1 {
+                            dst[i + 0] = fgB
+                            dst[i + 1] = fgG
+                            dst[i + 2] = fgR
+                            dst[i + 3] = 255
+                        } else {
+                            dst[i + 0] = bgB
+                            dst[i + 1] = bgG
+                            dst[i + 2] = bgR
+                            dst[i + 3] = 255
+                        }
+                    }
+                }
+            }
+        }
+
+        let data = Data(argb)
+        guard let provider = CGDataProvider(data: data as CFData) else { return }
+        let info: UInt32 = CGImageAlphaInfo.premultipliedFirst.rawValue
+                         | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let cgImage = CGImage(
+            width: w, height: h,
+            bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: w * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: info),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        ) else { return }
+
+        let dstRect = CGRect(
+            x: CGFloat(dstX), y: CGFloat(dstY),
+            width: CGFloat(w), height: CGFloat(h)
+        )
+        withDrawContext(target, clipRectangles: clipRectangles) { ctx in
+            // Nearest-neighbor so the 1-bit source pixels stay crisp in the
+            // upscaled destination (window backings are device-scale, pixmaps
+            // are 1:1 logical — both want hard pixel edges for an icon).
+            ctx.interpolationQuality = .none
+            ctx.draw(cgImage, in: dstRect)
+        }
+    }
+
     public func drawImageText8(
         target: DrawTarget,
         foreground: RGB16, background: RGB16,
