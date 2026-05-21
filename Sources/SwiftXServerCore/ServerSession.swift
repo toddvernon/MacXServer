@@ -985,6 +985,17 @@ public final class ServerSession: @unchecked Sendable {
     public func handlePointerEnteredView(topLevel: UInt32, x: Int16, y: Int16) {
         guard byteOrder != nil else { return }
         guard windows.get(topLevel) != nil else { return }
+        // Idempotency: AppKit's tracking-area mouseEntered and the cross-
+        // window drag tracker's transition logic can both fire firePointer-
+        // EnteredView for the same cursor crossing. The duplicate Enter
+        // looks to Motif's submenu state machine like "user left and re-
+        // entered the submenu" — exactly the signal it uses to decide
+        // "dismiss this submenu." If currentPointerWindow[topLevel] is
+        // already set, the X tree already knows the pointer is in this
+        // NSView; subsequent motion is handled by handleMouseDragged /
+        // handlePointerMoved which emit Leave/Enter for X-child transitions.
+        // No-op here to avoid emitting a spurious second Enter.
+        if currentPointerWindow[topLevel] != nil { return }
         let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
         let target = deepestMappedWindow(topLevel: topLevel, x: x, y: y)
         currentPointerWindow[topLevel] = target
@@ -994,11 +1005,24 @@ public final class ServerSession: @unchecked Sendable {
 
     /// Pointer left the NSView's content area. Emit LeaveNotify chain for
     /// whichever X window the pointer was last in, then clear the tracker.
+    ///
+    /// rootX/rootY use the LAST KNOWN pointer position (lastPointerXY +
+    /// rootCoords). Pre-2026-05-21 we hardcoded (0, 0) here — that gave
+    /// Motif's submenu-tracking the impression that the cursor had moved
+    /// to root (0, 0), which it reads as "cursor left the menu hierarchy"
+    /// and the submenu dismisses (verified with quickplot File → Log File).
+    /// The last-known position isn't perfect — by definition the cursor
+    /// has moved by the time the exit fires — but it's typically within
+    /// a few pixels of the boundary, close enough for Motif's
+    /// "is-cursor-in-this-rect" tests.
     public func handlePointerExitedView(topLevel: UInt32) {
         guard byteOrder != nil else { return }
         guard let from = currentPointerWindow[topLevel] else { return }
         currentPointerWindow[topLevel] = nil
-        emitCrossings(topLevel: topLevel, from: from, to: nil, rootX: 0, rootY: 0)
+        let (lx, ly) = lastPointerXY ?? (0, 0)
+        let referenceTL = lastPointerTopLevel ?? topLevel
+        let (rx, ry) = rootCoords(topLevel: referenceTL, localX: lx, localY: ly)
+        emitCrossings(topLevel: topLevel, from: from, to: nil, rootX: rx, rootY: ry)
     }
 
     /// Walk the mapped X subtree under `topLevel` and return the deepest
@@ -1144,6 +1168,18 @@ public final class ServerSession: @unchecked Sendable {
         let topRootX: Int16 = windows.get(topLevel)?.x ?? 0
         let topRootY: Int16 = windows.get(topLevel)?.y ?? 0
 
+        // X11 spec: the `state` field on EnterNotify/LeaveNotify carries
+        // the modifier+button mask AT THE TIME of the crossing — same as
+        // MotionNotify. We were hard-coding 0, which Motif's submenu state
+        // machine reads as "button released between motions" when the user
+        // is mid-drag (Button1 held), and dismisses the submenu. Build
+        // state from currentModifierState + the heldButtons set, matching
+        // handleMouseDragged.
+        var crossingState: UInt16 = currentModifierState
+        for b in heldButtons where b >= 1 && b <= 5 {
+            crossingState |= UInt16(1) << (7 + b)
+        }
+
         for (window, detail) in leaves {
             guard let entry = windows.get(window), entry.eventMask & leaveMask != 0 else { continue }
             let (tlX, tlY) = absoluteOrigin(of: window, topLevel: topLevel)
@@ -1155,7 +1191,7 @@ public final class ServerSession: @unchecked Sendable {
                 event: window, child: 0,
                 rootX: rootX, rootY: rootY,
                 eventX: rootX &- topRootX &- tlX, eventY: rootY &- topRootY &- tlY,
-                state: 0, mode: mode,
+                state: crossingState, mode: mode,
                 sameScreen: true, focus: false
             )
             log?.log("  → LeaveNotify target=0x\(String(window, radix: 16)) detail=\(detail) at root=(\(rootX),\(rootY))")
@@ -1173,7 +1209,7 @@ public final class ServerSession: @unchecked Sendable {
                 event: window, child: 0,
                 rootX: rootX, rootY: rootY,
                 eventX: rootX &- topRootX &- tlX, eventY: rootY &- topRootY &- tlY,
-                state: 0, mode: mode,
+                state: crossingState, mode: mode,
                 sameScreen: true, focus: false
             )
             log?.log("  → EnterNotify target=0x\(String(window, radix: 16)) detail=\(detail) at root=(\(rootX),\(rootY))")

@@ -59,6 +59,7 @@ public final class MockWindowBridge: WindowBridge, @unchecked Sendable {
             topLevelEventMask: eventMask,
             topLevelExposeRects: topLevelExposeRects,
             descendants: descendants,
+            overrideRedirect: overrideRedirect,
             byteOrder: byteOrder, sequence: sequence,
             outbound: outbound
         )
@@ -101,31 +102,41 @@ public final class MockWindowBridge: WindowBridge, @unchecked Sendable {
         topLevelEventMask: UInt32,
         topLevelExposeRects: [BoxRec],
         descendants: [DescendantSnapshot],
+        overrideRedirect: Bool = false,
         byteOrder: ByteOrder,
         sequence: UInt16,
         outbound: OutboundQueue,
         syntheticParent: UInt32 = MockWindowBridge.syntheticParentId
     ) {
-        let reparent = ReparentNotifyEvent(
-            sequenceNumber: sequence,
-            event: window, window: window, parent: syntheticParent,
-            x: geometry.x, y: geometry.y,
-            overrideRedirect: false
-        )
+        // Override-redirect popups bypass the WM by spec — the WM doesn't
+        // reparent them and shouldn't claim it did. Emitting a synthetic
+        // ReparentNotify here used to confuse Motif's submenu state
+        // machine (popup looked "stolen by the WM" → submenu dismissed
+        // as soon as the user moused into it). Sun's X server emits
+        // MapNotify + ConfigureNotify but no ReparentNotify for these,
+        // verified against the quickplot-on-ss2 capture.
+        if !overrideRedirect {
+            let reparent = ReparentNotifyEvent(
+                sequenceNumber: sequence,
+                event: window, window: window, parent: syntheticParent,
+                x: geometry.x, y: geometry.y,
+                overrideRedirect: false
+            )
+            outbound.append(reparent.encode(byteOrder: byteOrder))
+        }
         let configure = ConfigureNotifyEvent(
             sequenceNumber: sequence,
             event: window, window: window, aboveSibling: 0,
             x: geometry.x, y: geometry.y,
             width: geometry.width, height: geometry.height,
             borderWidth: geometry.borderWidth,
-            overrideRedirect: false
+            overrideRedirect: overrideRedirect
         )
         let mappedEv = MapNotifyEvent(
             sequenceNumber: sequence,
             event: window, window: window,
-            overrideRedirect: false
+            overrideRedirect: overrideRedirect
         )
-        outbound.append(reparent.encode(byteOrder: byteOrder))
         outbound.append(configure.encode(byteOrder: byteOrder))
         outbound.append(mappedEv.encode(byteOrder: byteOrder))
 

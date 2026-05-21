@@ -406,6 +406,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             topLevelEventMask: eventMask,
             topLevelExposeRects: topLevelExposeRects,
             descendants: descendants,
+            overrideRedirect: overrideRedirect,
             byteOrder: byteOrder, sequence: sequence,
             outbound: outbound
         )
