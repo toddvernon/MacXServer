@@ -366,9 +366,9 @@ public final class ServerSession: @unchecked Sendable {
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnPointerExitedView(token: token) { [weak self] topLevel in
+        bridge?.setOnPointerExitedView(token: token) { [weak self] topLevel, x, y in
             queue.async {
-                self?.handlePointerExitedView(topLevel: topLevel)
+                self?.handlePointerExitedView(topLevel: topLevel, x: x, y: y)
                 self?.flushOutbound()
             }
         }
@@ -1006,22 +1006,18 @@ public final class ServerSession: @unchecked Sendable {
     /// Pointer left the NSView's content area. Emit LeaveNotify chain for
     /// whichever X window the pointer was last in, then clear the tracker.
     ///
-    /// rootX/rootY use the LAST KNOWN pointer position (lastPointerXY +
-    /// rootCoords). Pre-2026-05-21 we hardcoded (0, 0) here — that gave
-    /// Motif's submenu-tracking the impression that the cursor had moved
-    /// to root (0, 0), which it reads as "cursor left the menu hierarchy"
-    /// and the submenu dismisses (verified with quickplot File → Log File).
-    /// The last-known position isn't perfect — by definition the cursor
-    /// has moved by the time the exit fires — but it's typically within
-    /// a few pixels of the boundary, close enough for Motif's
-    /// "is-cursor-in-this-rect" tests.
-    public func handlePointerExitedView(topLevel: UInt32) {
+    /// `(x, y)` are the cursor's coords AT the boundary crossing, in
+    /// top-level local space — may be outside the top-level's bounds
+    /// since the cursor is leaving. Sun's X server reports Leave at the
+    /// crossing point (same root pixel as the paired Enter on whichever
+    /// window the cursor went to); matching that convention is what kept
+    /// Motif's submenu safe-triangle from seeing a coordinate "teleport"
+    /// between Leave and Enter and dismissing.
+    public func handlePointerExitedView(topLevel: UInt32, x: Int16, y: Int16) {
         guard byteOrder != nil else { return }
         guard let from = currentPointerWindow[topLevel] else { return }
         currentPointerWindow[topLevel] = nil
-        let (lx, ly) = lastPointerXY ?? (0, 0)
-        let referenceTL = lastPointerTopLevel ?? topLevel
-        let (rx, ry) = rootCoords(topLevel: referenceTL, localX: lx, localY: ly)
+        let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
         emitCrossings(topLevel: topLevel, from: from, to: nil, rootX: rx, rootY: ry)
     }
 

@@ -180,10 +180,15 @@ public protocol WindowBridge: AnyObject, Sendable {
 
     /// Called by the session at startup. Bridge invokes this when the
     /// pointer leaves an NSWindow's content area (mouse moves off the
-    /// window edge or to another app). Args: (top-level X window id). The
-    /// session emits the LeaveNotify chain from the current pointer
-    /// window up to the top-level.
-    func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void)
+    /// window edge or to another app). Args: (top-level X window id, X-logical
+    /// cursor coords at exit time, in top-level local space — may be outside
+    /// the window's bounds since the exit IS the cursor leaving). The session
+    /// emits the LeaveNotify chain with the actual exit-point coords; matches
+    /// how a real X server reports the cursor's position at the moment of the
+    /// crossing (verified against Sun's quickplot capture — Sun's Leave coords
+    /// describe the same root pixel as the corresponding Enter on the sibling
+    /// popup, not the prior motion event's coords).
+    func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void)
 
     /// Called by the session at startup. Bridge invokes this when the user
     /// pastes (Cmd-V or Edit > Paste) into one of its NSWindows. Args:
@@ -434,7 +439,7 @@ public extension WindowBridge {
     func setOnMouseDragged(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void) {}
     func setOnPointerMoved(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {}
     func setOnPointerEnteredView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {}
-    func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void) {}
+    func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {}
     func setOnPaste(token: UInt64, _ handler: @escaping @Sendable (UInt32, String) -> Void) {}
     func setOnCopy(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void) {}
     func writeClipboard(text: String) {}

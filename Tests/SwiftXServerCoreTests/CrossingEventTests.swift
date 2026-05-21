@@ -115,7 +115,7 @@ final class CrossingEventTests: XCTestCase {
         session.handlePointerEnteredView(topLevel: 0xA0001, x: 15, y: 15)
         _ = session.outbound.drain()
 
-        session.handlePointerExitedView(topLevel: 0xA0001)
+        session.handlePointerExitedView(topLevel: 0xA0001, x: 15, y: 15)
 
         let events = try decodeCrossingEvents(session.outbound.drain())
         // Spec: Leave A (Nonlinear), Leave top-level (NonlinearVirtual).

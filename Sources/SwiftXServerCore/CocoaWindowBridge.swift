@@ -55,7 +55,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private var mouseDraggedHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16, UInt8) -> Void)] = []
     private var pointerMovedHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16) -> Void)] = []
     private var pointerEnteredViewHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16) -> Void)] = []
-    private var pointerExitedViewHandlers: [(UInt64, @Sendable (UInt32) -> Void)] = []
+    private var pointerExitedViewHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16) -> Void)] = []
     private var pasteHandlers: [(UInt64, @Sendable (UInt32, String) -> Void)] = []
     private var copyHandlers: [(UInt64, @Sendable (UInt32) -> Void)] = []
     private var closeHandlers: [(UInt64, @Sendable (UInt32) -> Void)] = []
@@ -212,7 +212,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         handlerLock.lock(); pointerEnteredViewHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void) {
+    public func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {
         handlerLock.lock(); pointerExitedViewHandlers.append((token, handler)); handlerLock.unlock()
     }
 
@@ -294,9 +294,9 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         handlerLock.lock(); let snap = pointerEnteredViewHandlers; handlerLock.unlock()
         for (_, h) in snap { h(id, x, y) }
     }
-    private func firePointerExitedView(id: UInt32) {
+    private func firePointerExitedView(id: UInt32, x: Int16, y: Int16) {
         handlerLock.lock(); let snap = pointerExitedViewHandlers; handlerLock.unlock()
-        for (_, h) in snap { h(id) }
+        for (_, h) in snap { h(id, x, y) }
     }
     private func firePaste(id: UInt32, text: String) {
         handlerLock.lock(); let snap = pasteHandlers; handlerLock.unlock()
@@ -457,8 +457,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             view.mouseEnteredHandler = { [weak self] x, y in
                 self?.firePointerEnteredView(id: id, x: x, y: y)
             }
-            view.mouseExitedHandler = { [weak self] in
-                self?.firePointerExitedView(id: id)
+            view.mouseExitedHandler = { [weak self] x, y in
+                self?.firePointerExitedView(id: id, x: x, y: y)
             }
             view.pasteHandler = { [weak self] text in
                 self?.firePaste(id: id, text: text)
@@ -1812,9 +1812,32 @@ extension CocoaWindowBridge {
 
         // Cross-window transition: emit EnterView/ExitView so the X server
         // can run its EnterNotify/LeaveNotify chains and menu items
-        // un-highlight when the pointer leaves the popup.
+        // un-highlight when the pointer leaves the popup. Exit coords are
+        // the cursor's CURRENT screen position translated into the OLD
+        // window's view-local space — matches Sun's behavior of reporting
+        // Leave at the precise crossing point (same root pixel as the
+        // corresponding Enter on the new window), not at the prior motion
+        // event's coords. Motif's submenu safe-triangle uses these coords;
+        // the prior-coord shortcut produced a visible "teleport" between
+        // Leave and Enter that confused the algorithm.
         if let lastId = dragLastWindowId, target?.0 != lastId {
-            firePointerExitedView(id: lastId)
+            let bs = NSScreen.main?.backingScaleFactor ?? 2.0
+            let exitX: Int16
+            let exitY: Int16
+            if let oldSlot = slot(lastId),
+               let oldView = oldSlot.view,
+               let oldWin = oldView.window {
+                let oldWindowPt = NSPoint(
+                    x: screenPt.x - oldWin.frame.origin.x,
+                    y: screenPt.y - oldWin.frame.origin.y
+                )
+                let oldViewPt = oldView.convert(oldWindowPt, from: nil)
+                exitX = Int16(clamping: Int((oldViewPt.x * bs / CGFloat(scaleFactor)).rounded()))
+                exitY = Int16(clamping: Int((oldViewPt.y * bs / CGFloat(scaleFactor)).rounded()))
+            } else {
+                exitX = 0; exitY = 0     // old slot gone (rare race); fall through
+            }
+            firePointerExitedView(id: lastId, x: exitX, y: exitY)
         }
 
         if let (xid, view) = target, let win = view.window {
@@ -1838,14 +1861,26 @@ extension CocoaWindowBridge {
             let logicalX = Int16(clamping: Int((viewPt.x * bs / CGFloat(scaleFactor)).rounded()))
             let logicalY = Int16(clamping: Int((viewPt.y * bs / CGFloat(scaleFactor)).rounded()))
 
-            if dragLastWindowId != xid {
+            let crossed = (dragLastWindowId != xid)
+            if crossed {
                 firePointerEnteredView(id: xid, x: logicalX, y: logicalY)
             }
             dragLastWindowId = xid
 
             if isUp {
+                // Button-up always fires regardless of crossing (the press
+                // started a grab, the release ends it; clients depend on
+                // seeing the Release at the cursor's actual position).
                 fireMouse(id: xid, x: logicalX, y: logicalY, button: button, isDown: false)
-            } else {
+            } else if !crossed {
+                // Within-window drag: emit Motion at the new coords as usual.
+                // At a boundary crossing, the Enter we just fired already
+                // conveys the new position; emitting a Motion at the same
+                // coords looks to Motif's submenu state machine like
+                // "cursor entered submenu but didn't actually move into
+                // it" and the submenu dismisses. Sun's X server only emits
+                // Enter at the boundary, with the next Motion coming when
+                // the cursor truly moves further. Match that.
                 fireMouseDragged(id: xid, x: logicalX, y: logicalY, button: button)
             }
         } else {

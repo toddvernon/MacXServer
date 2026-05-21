@@ -50,9 +50,11 @@ public final class FlippedXView: NSView {
     /// Args: (X-logical x, y). The session emits the EnterNotify chain.
     public var mouseEnteredHandler: ((Int16, Int16) -> Void)?
 
-    /// Pointer left the NSView's content area. The session emits the
-    /// LeaveNotify chain for whichever X window the pointer was last in.
-    public var mouseExitedHandler: (() -> Void)?
+    /// Pointer left the NSView's content area. Args: (X-logical x, y at exit
+    /// time — may be outside the view's bounds). The session emits the
+    /// LeaveNotify chain for whichever X window the pointer was last in,
+    /// stamping these coords as the cursor's position at the crossing.
+    public var mouseExitedHandler: ((Int16, Int16) -> Void)?
 
     /// Cursor to display while the pointer is over this view. Bridge sets
     /// this from `setCursor(topLevel:glyph:)` in response to crossing
@@ -205,7 +207,9 @@ public final class FlippedXView: NSView {
     }
 
     public override func mouseExited(with event: NSEvent) {
-        mouseExitedHandler?()
+        guard let handler = mouseExitedHandler else { return }
+        let (x, y) = logicalLocation(of: event)
+        handler(x, y)
     }
 
     /// AppKit calls this whenever the view's frame changes (initial layout,
