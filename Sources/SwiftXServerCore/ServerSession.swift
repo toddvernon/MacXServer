@@ -5072,28 +5072,42 @@ public final class ServerSession: @unchecked Sendable {
             // never about Motif refusing to dispatch — Xlib was just stuck
             // mid-reply, and clicks couldn't propagate through a blocked
             // socket reader. Implementing this reply unblocks the client.
-            // Coordinate convention: each top-level X window is treated as
-            // sitting at (0,0) in root coordinates. That matches how we
-            // already stamp `rootX`/`rootY` on input events (using top-level
-            // local coords). So translating between any two windows in the
-            // same top-level subtree is straight subtraction; translating
-            // between a top-level descendant and the root window is the
-            // descendant's absolute origin within its top-level (since the
-            // top-level itself is at (0,0) in root). All windows share the
-            // single X screen → sameScreen=true.
+            // Coordinate convention: a window's position-in-root is its
+            // absolute origin within its top-level PLUS the top-level's
+            // own root coords (the WM placement for regular windows; the
+            // client-requested coords for override-redirect popups). Pre-
+            // 2026-05-21 this code treated every top-level as sitting at
+            // (0,0) — fine before we honored client placement, but wrong
+            // now that we do. Visible as: Motif second-tier cascade menus
+            // popping up at the wrong screen position. First-tier menus
+            // are unaffected because Motif caches their cascade-button
+            // root coords from the synthetic ConfigureNotify on the main
+            // window; second-tier menus are children of a popup top-level
+            // and Motif re-queries via XTranslateCoordinates, which routes
+            // through this handler. All windows share the single X screen
+            // → sameScreen=true.
             let srcTopLevel = topLevelAncestor(of: r.srcWindow)
             let dstTopLevel = topLevelAncestor(of: r.dstWindow)
             let isRoot: (UInt32) -> Bool = { $0 == self.config.rootWindowId }
+            // Top-level's own root coords (entry.x, entry.y). Defaults to
+            // (0, 0) for the root drawable or an unknown window.
+            let topLevelRoot: (UInt32?) -> (Int16, Int16) = { tl in
+                guard let id = tl, let e = self.windows.get(id) else { return (0, 0) }
+                return (e.x, e.y)
+            }
             let srcRoot: (Int16, Int16) = {
                 if isRoot(r.srcWindow) { return (r.srcX, r.srcY) }
                 guard let stl = srcTopLevel else { return (r.srcX, r.srcY) }
                 let (sx, sy) = self.absoluteOrigin(of: r.srcWindow, topLevel: stl)
-                return (sx &+ r.srcX, sy &+ r.srcY)
+                let (tx, ty) = topLevelRoot(stl)
+                return (tx &+ sx &+ r.srcX, ty &+ sy &+ r.srcY)
             }()
             let dstOriginInRoot: (Int16, Int16) = {
                 if isRoot(r.dstWindow) { return (0, 0) }
                 guard let dtl = dstTopLevel else { return (0, 0) }
-                return self.absoluteOrigin(of: r.dstWindow, topLevel: dtl)
+                let (dx, dy) = self.absoluteOrigin(of: r.dstWindow, topLevel: dtl)
+                let (tx, ty) = topLevelRoot(dtl)
+                return (tx &+ dx, ty &+ dy)
             }()
             let outX: Int16 = srcRoot.0 &- dstOriginInRoot.0
             let outY: Int16 = srcRoot.1 &- dstOriginInRoot.1
