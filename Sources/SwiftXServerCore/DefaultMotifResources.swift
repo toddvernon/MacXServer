@@ -80,8 +80,13 @@ enum DefaultMotifResources {
     ! Dialog accents: labels and buttons inside popup dialog shells get
     ! Blue text. Main-application labels/buttons stay Black (the
     ! *foreground default above) since they're not under an XmDialogShell.
-    *XmDialogShell*XmLabel.foreground:       Blue
-    *XmDialogShell*XmPushButton.foreground:  Blue
+    ! Most dt-app dialog buttons are Gadgets (XmPushButtonGadget) — the
+    ! Help/QuickHelp close/back/print, Print dialog page-size buttons,
+    ! dtcalc info-dialog Cancel, etc. — so cover both classes.
+    *XmDialogShell*XmLabel.foreground:             Blue
+    *XmDialogShell*XmLabelGadget.foreground:       Blue
+    *XmDialogShell*XmPushButton.foreground:        Blue
+    *XmDialogShell*XmPushButtonGadget.foreground:  Blue
     !
     ! ---- Fonts ----
     ! Motif distinguishes widgets (have an X window each) from gadgets
@@ -109,9 +114,11 @@ enum DefaultMotifResources {
     ! Pulldown menu items are XmPushButton(Gadget) children of the
     ! XmRowColumn that is the pulldown menu pane. Match quickplot's
     ! convention of menu titles and menu items at the same 14pt oblique.
-    ! Caveat: any PushButton living inside a non-menu XmRowColumn (e.g.,
-    ! dtcalc's number keypad if it uses RowColumn for its grid) will
-    ! also pick up this rule. Tighten if that looks wrong.
+    ! Audit 2026-05-22 confirmed: dtcalc's number keypad is parented
+    ! to XmForm, not XmRowColumn (motif.c:702 `kkeyboard` =
+    ! XmCreateForm). The only XmRowColumns that wrap PushButtons in
+    ! the dt-apps are XmPulldownMenu / XmPopupMenu instances — exactly
+    ! the targets. Safe rule.
     *XmRowColumn*XmPushButton.fontList:        -adobe-helvetica-medium-o-normal--14-*-*-*-p-*-iso8859-1
     *XmRowColumn*XmPushButtonGadget.fontList:  -adobe-helvetica-medium-o-normal--14-*-*-*-p-*-iso8859-1
     ! DtEditor (the compound widget dtpad/dtmail use) exposes its text
@@ -184,14 +191,17 @@ enum DefaultMotifResources {
     Dthelpview*XmPushButton.fontList:          -adobe-helvetica-medium-o-normal--12-*-*-*-p-*-iso8859-1
     Dthelpview*XmPushButtonGadget.foreground:  Blue
     Dthelpview*XmPushButtonGadget.fontList:    -adobe-helvetica-medium-o-normal--12-*-*-*-p-*-iso8859-1
+    ! Per-instance .foreground triple still listed — earlier empirical
+    ! testing showed the class-based rule didn't beat `*foreground: Black`
+    ! reliably for these specific buttons. If we ever sort out why the
+    ! class lookup loses the cascade fight, these three can go away.
     Dthelpview*closeButton.foreground:         Blue
     Dthelpview*backButton.foreground:          Blue
     Dthelpview*printButton.foreground:         Blue
-    Dthelpview*closeButton.shadowThickness:    1
-    Dthelpview*backButton.shadowThickness:     1
-    Dthelpview*printButton.shadowThickness:    1
-    Dthelpview*closeButton.highlightThickness: 0
-    Dthelpview*backButton.highlightThickness:  0
-    Dthelpview*printButton.highlightThickness: 0
+    ! Shadow/highlight thinning collapsed to class-based rules. The audit
+    ! confirmed the per-instance triple was equivalent and brittle to
+    ! button renames.
+    Dthelpview*XmPushButtonGadget.shadowThickness:    1
+    Dthelpview*XmPushButtonGadget.highlightThickness: 0
     """
 }
