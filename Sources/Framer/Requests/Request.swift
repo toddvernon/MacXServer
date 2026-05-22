@@ -95,6 +95,13 @@ public enum Request: Equatable, Sendable {
     case circulateWindow(CirculateWindow)
     case queryTextExtents(QueryTextExtents)
     case polyPoint(PolyPoint)
+    case getScreenSaver(GetScreenSaver)
+    case setScreenSaver(SetScreenSaver)
+    case forceScreenSaver(ForceScreenSaver)
+    case getImage(GetImage)
+    case polyText16(PolyText16)
+    case imageText16(ImageText16)
+    case copyPlane(CopyPlane)
     // Carries the full request bytes including the 4-byte header. Encode is a
     // pass-through and ignores the byteOrder argument since the bytes are already
     // in their original byte order.
@@ -198,6 +205,13 @@ public enum Request: Equatable, Sendable {
         case .circulateWindow(let r):           return r.encode(byteOrder: byteOrder)
         case .queryTextExtents(let r):          return r.encode(byteOrder: byteOrder)
         case .polyPoint(let r):                 return r.encode(byteOrder: byteOrder)
+        case .getScreenSaver(let r):            return r.encode(byteOrder: byteOrder)
+        case .setScreenSaver(let r):            return r.encode(byteOrder: byteOrder)
+        case .forceScreenSaver(let r):          return r.encode(byteOrder: byteOrder)
+        case .getImage(let r):                  return r.encode(byteOrder: byteOrder)
+        case .polyText16(let r):                return r.encode(byteOrder: byteOrder)
+        case .imageText16(let r):               return r.encode(byteOrder: byteOrder)
+        case .copyPlane(let r):                 return r.encode(byteOrder: byteOrder)
         case .unknown(_, let bytes):            return bytes
         }
     }
@@ -410,6 +424,20 @@ public enum Request: Equatable, Sendable {
             return .queryTextExtents(try QueryTextExtents.decode(from: bytes, byteOrder: byteOrder))
         case PolyPoint.opcode:
             return .polyPoint(try PolyPoint.decode(from: bytes, byteOrder: byteOrder))
+        case GetScreenSaver.opcode:
+            return .getScreenSaver(try GetScreenSaver.decode(from: bytes, byteOrder: byteOrder))
+        case SetScreenSaver.opcode:
+            return .setScreenSaver(try SetScreenSaver.decode(from: bytes, byteOrder: byteOrder))
+        case ForceScreenSaver.opcode:
+            return .forceScreenSaver(try ForceScreenSaver.decode(from: bytes, byteOrder: byteOrder))
+        case GetImage.opcode:
+            return .getImage(try GetImage.decode(from: bytes, byteOrder: byteOrder))
+        case PolyText16.opcode:
+            return .polyText16(try PolyText16.decode(from: bytes, byteOrder: byteOrder))
+        case ImageText16.opcode:
+            return .imageText16(try ImageText16.decode(from: bytes, byteOrder: byteOrder))
+        case CopyPlane.opcode:
+            return .copyPlane(try CopyPlane.decode(from: bytes, byteOrder: byteOrder))
         default:
             return .unknown(opcode: opcode, bytes: Array(bytes[0..<expected]))
         }

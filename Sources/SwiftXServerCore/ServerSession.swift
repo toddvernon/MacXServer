@@ -2629,6 +2629,51 @@ public final class ServerSession: @unchecked Sendable {
         )
     }
 
+    private func handleImageText16(_ r: ImageText16, byteOrder: ByteOrder) {
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: ImageText16.opcode) else { return }
+        guard validateGC(r.gc, majorOpcode: ImageText16.opcode) != nil else { return }
+        guard let bridge = bridge else { return }
+        let state = gcState(r.gc, byteOrder: byteOrder)
+        let (dx, dy) = target.windowOffset
+        let resolvedFont: ResolvedFont
+        if let entry = fonts.get(state.font) {
+            resolvedFont = entry.resolved
+        } else {
+            resolvedFont = FontResolver.resolve(name: "fixed")
+        }
+        bridge.drawImageText16(
+            target: target,
+            foreground: resolveColor(state.foreground),
+            background: resolveColor(state.background),
+            font: resolvedFont,
+            x: r.x &+ dx, y: r.y &+ dy,
+            characters: r.characters,
+            clipRectangles: state.clipRectangles
+        )
+    }
+
+    private func handlePolyText16(_ r: PolyText16, byteOrder: ByteOrder) {
+        guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyText16.opcode) else { return }
+        guard validateGC(r.gc, majorOpcode: PolyText16.opcode) != nil else { return }
+        guard let bridge = bridge else { return }
+        let state = gcState(r.gc, byteOrder: byteOrder)
+        let (dx, dy) = target.windowOffset
+        let resolvedFont: ResolvedFont
+        if let entry = fonts.get(state.font) {
+            resolvedFont = entry.resolved
+        } else {
+            resolvedFont = FontResolver.resolve(name: "fixed")
+        }
+        bridge.drawPolyText16(
+            target: target,
+            foreground: resolveColor(state.foreground),
+            font: resolvedFont,
+            x: r.x &+ dx, y: r.y &+ dy,
+            items: r.items,
+            clipRectangles: state.clipRectangles
+        )
+    }
+
     private func handleCopyArea(_ r: CopyArea, byteOrder: ByteOrder) {
         // BadDrawable check runs up front for both src and dst so unknown
         // drawable IDs emit the spec-correct error regardless of any other
@@ -2695,6 +2740,141 @@ public final class ServerSession: @unchecked Sendable {
                 drawable: r.dstDrawable,
                 minorOpcode: 0,
                 majorOpcode: 62  // X_CopyArea
+            )
+            outbound.append(noExpose.encode(byteOrder: byteOrder))
+        }
+    }
+
+    private func handleCopyPlane(_ r: CopyPlane, byteOrder: ByteOrder) {
+        // X11 spec: extract one bit-plane of the src drawable, render it
+        // into dst substituting GC.foreground for 1-bits and GC.background
+        // for 0-bits. The bitPlane argument must have exactly one bit set,
+        // and that bit must be ≤ src depth.
+        //
+        // We don't store actual bit-planes — pixmaps are 32-bit ARGB
+        // regardless of X-side depth. So we read the src as ARGB, reverse-
+        // map each pixel to its X colormap index via ColorTable, check the
+        // requested plane bit, and pack the result as a 1-bpp MSB-first
+        // bitmap with 32-bit scanline pad. Then hand that bitmap to the
+        // existing drawPutImage path which already knows how to expand
+        // depth-1 → fg/bg into a depth-N target.
+        //
+        // The reverse-map is what limits visual fidelity here: ARGB values
+        // not registered in ColorTable (anti-aliased edges, intermediate
+        // tones) reverse-map to pixel 0 (white/bg). For x11perf's depth-1
+        // source pixmaps that doesn't matter — they're solid fg/bg fills
+        // through PutImage Bitmap. For deepcopyplane variants the src is a
+        // window whose pixel values came through AllocColor at some point,
+        // so most pixels reverse-map cleanly.
+        if !isKnownDrawable(r.srcDrawable) {
+            emitError(.drawable, majorOpcode: CopyPlane.opcode, badResourceId: r.srcDrawable)
+            return
+        }
+        if !isKnownDrawable(r.dstDrawable) {
+            emitError(.drawable, majorOpcode: CopyPlane.opcode, badResourceId: r.dstDrawable)
+            return
+        }
+        guard validateGC(r.gc, majorOpcode: CopyPlane.opcode) != nil else { return }
+        guard let bridge = bridge else { return }
+
+        // Plane validation: exactly one bit set, and ≤ src depth.
+        let planeBitCount = r.bitPlane.nonzeroBitCount
+        if planeBitCount != 1 {
+            emitError(.value, majorOpcode: CopyPlane.opcode)
+            return
+        }
+        // log2 of a single-bit value.
+        let planeIndex = r.bitPlane.trailingZeroBitCount
+
+        guard let srcTarget = validateDrawTarget(r.srcDrawable, majorOpcode: CopyPlane.opcode) else {
+            emitError(.implementation, majorOpcode: CopyPlane.opcode)
+            return
+        }
+        guard let dstTarget = validateDrawTarget(r.dstDrawable, majorOpcode: CopyPlane.opcode) else {
+            emitError(.implementation, majorOpcode: CopyPlane.opcode)
+            return
+        }
+
+        // Figure out src depth so we can validate planeIndex.
+        let srcDepth: Int
+        switch srcTarget {
+        case .pixmap(_, let d): srcDepth = Int(d)
+        case .window:           srcDepth = 8           // root depth advertised in setup
+        }
+        if planeIndex >= srcDepth {
+            emitError(.match, majorOpcode: CopyPlane.opcode)
+            return
+        }
+
+        let (srcDX, srcDY) = srcTarget.windowOffset
+        let (dstDX, dstDY) = dstTarget.windowOffset
+        let w = Int(r.width), h = Int(r.height)
+        if w <= 0 || h <= 0 {
+            // Zero-size CopyPlane is a no-op per X spec.
+            return
+        }
+        log?.log("  CopyPlane src=\(srcTarget) dst=\(dstTarget) srcXY=(\(r.srcX),\(r.srcY)) dstXY=(\(r.dstX),\(r.dstY)) \(w)x\(h) bitPlane=0x\(String(r.bitPlane, radix: 16)) planeIndex=\(planeIndex)")
+
+        // Read source ARGB at logical scale (drawable-local coords).
+        let srcARGB = bridge.readDrawablePixels(
+            from: srcTarget,
+            srcX: r.srcX &+ srcDX, srcY: r.srcY &+ srcDY,
+            width: w, height: h
+        )
+        if srcARGB.isEmpty { return }
+
+        // Reverse-map each ARGB to an X pixel value, then test the requested
+        // plane bit. Memory layout from the Mac backing is BGRA per
+        // CGBitmapContext(byteOrder32Little + premultipliedFirst); read as
+        // UInt32 on a little-endian host that becomes 0xAARRGGBB.
+        let colorTable = self.colors
+        let bytesPerScanline = (w + 31) / 32 * 4
+        var bitmap = [UInt8](repeating: 0, count: bytesPerScanline * h)
+        for y in 0..<h {
+            let srcRow = y * w
+            let dstRow = y * bytesPerScanline
+            for x in 0..<w {
+                let argb = srcARGB[srcRow + x]
+                let r8 = UInt8((argb >> 16) & 0xFF)
+                let g8 = UInt8((argb >>  8) & 0xFF)
+                let b8 = UInt8( argb        & 0xFF)
+                let rgb16 = RGB16(
+                    red:   UInt16(r8) << 8 | UInt16(r8),
+                    green: UInt16(g8) << 8 | UInt16(g8),
+                    blue:  UInt16(b8) << 8 | UInt16(b8)
+                )
+                let pixel = colorTable.pixel(for: rgb16) ?? 0
+                if (pixel >> planeIndex) & 1 == 1 {
+                    // MSB-first per our bitmap-bit-order advertisement.
+                    let byteOff = x / 8
+                    let bitOff = 7 - (x % 8)
+                    bitmap[dstRow + byteOff] |= UInt8(1 << bitOff)
+                }
+            }
+        }
+
+        // Render via the existing depth-1 PutImage path: 1 bits → fg,
+        // 0 bits → bg, exactly what CopyPlane is supposed to do.
+        let state = gcState(r.gc, byteOrder: byteOrder)
+        bridge.drawPutImage(
+            target: dstTarget,
+            sourceData: bitmap,
+            sourceWidth: r.width, sourceHeight: r.height,
+            dstX: r.dstX &+ dstDX, dstY: r.dstY &+ dstDY,
+            leftPad: 0,
+            foreground: resolveColor(state.foreground),
+            background: resolveColor(state.background),
+            clipRectangles: state.clipRectangles
+        )
+
+        // CopyPlane has the same graphics-exposures contract as CopyArea —
+        // emit NoExpose when graphics-exposures=True, nothing otherwise.
+        if state.graphicsExposures {
+            let noExpose = NoExposureEvent(
+                sequenceNumber: sequenceNumber,
+                drawable: r.dstDrawable,
+                minorOpcode: 0,
+                majorOpcode: CopyPlane.opcode
             )
             outbound.append(noExpose.encode(byteOrder: byteOrder))
         }
@@ -4205,6 +4385,10 @@ public final class ServerSession: @unchecked Sendable {
             // names fall back to black with a warning — we don't emit XErrors
             // yet (per SHORTCUTS), so this keeps clients moving rather than
             // hanging on a missing reply.
+            if r.cmap != config.defaultColormapId {
+                emitError(.color, majorOpcode: AllocNamedColor.opcode, badResourceId: r.cmap)
+                break
+            }
             let rgb: RGB16
             if let resolved = XColorDatabase.lookup(bytes: r.name) {
                 rgb = resolved
@@ -4226,6 +4410,10 @@ public final class ServerSession: @unchecked Sendable {
             // Same name resolution as AllocNamedColor but doesn't allocate a
             // pixel. xterm uses this for `-fg <name>` when it intends to do
             // its own AllocColor on the resolved RGB.
+            if r.cmap != config.defaultColormapId {
+                emitError(.color, majorOpcode: LookupColor.opcode, badResourceId: r.cmap)
+                break
+            }
             let rgb: RGB16
             if let resolved = XColorDatabase.lookup(bytes: r.name) {
                 rgb = resolved
@@ -4293,8 +4481,17 @@ public final class ServerSession: @unchecked Sendable {
         case .polyText8(let r):
             handlePolyText8(r, byteOrder: byteOrder)
 
+        case .imageText16(let r):
+            handleImageText16(r, byteOrder: byteOrder)
+
+        case .polyText16(let r):
+            handlePolyText16(r, byteOrder: byteOrder)
+
         case .copyArea(let r):
             handleCopyArea(r, byteOrder: byteOrder)
+
+        case .copyPlane(let r):
+            handleCopyPlane(r, byteOrder: byteOrder)
 
         // Silent no-ops: requests xclock or other apps may issue that we
         // don't yet wire to rendering. Add real handlers as needed.
@@ -4474,6 +4671,149 @@ public final class ServerSession: @unchecked Sendable {
                 clipRectangles: state.clipRectangles
             )
 
+        case .getImage(let r):
+            // ZPixmap path is implemented for both windows and pixmaps.
+            // XYPixmap returns the same content reorganized as bitmap planes.
+            //
+            // Wire-format invariants for our PseudoColor 8-bit server:
+            // depth=8, bits-per-pixel=8, scanline-pad=32. Reply data is 1 byte
+            // per pixel for ZPixmap; for XYPixmap, one bit plane per set bit
+            // in planeMask (8 planes max at depth 8), packed MSB-first, each
+            // scanline padded to 32 bits.
+            //
+            // Backing format mismatch: the Mac CGBitmapContext stores 32-bit
+            // ARGB premultiplied-first. We reverse-map each ARGB to an X
+            // pixel value via ColorTable. Anti-aliased edges produce ARGB
+            // values that aren't in the table → pixel 0 (white). For
+            // x11perf the actual pixel values don't matter; what matters is
+            // that the reply is well-formed at the right byte count.
+            //
+            // Spec validations:
+            //   - drawable must exist (BadDrawable)
+            //   - rectangle must lie entirely within the drawable (BadMatch)
+            //   - format must be 1 (XYPixmap) or 2 (ZPixmap) — enforced by
+            //     the decoder via the GetImageFormat enum
+
+            guard let target = validateDrawTarget(r.drawable, majorOpcode: GetImage.opcode) else { break }
+
+            // Pull drawable extents + depth. Tuple result keeps the assignment
+            // path visible to Swift's flow analysis (a `break` inside the
+            // inner switch wouldn't fall through to the outer case).
+            let extents: (w: Int, h: Int, depth: UInt8, visual: UInt32)? = {
+                switch target {
+                case .pixmap(let id, let depth):
+                    guard let pix = pixmaps.get(id) else { return nil }
+                    return (Int(pix.width), Int(pix.height), depth, 0)
+                case .window:
+                    guard let entry = windows.get(r.drawable) else { return nil }
+                    // Root depth = 8 per ServerConfig.makeSetupAccepted
+                    // (single PseudoColor 8-bit visual).
+                    return (Int(entry.width), Int(entry.height), 8, config.rootVisualId)
+                }
+            }()
+            guard let (drawableW, drawableH, drawableDepth, replyVisual) = extents else {
+                emitError(.drawable, majorOpcode: GetImage.opcode, badResourceId: r.drawable)
+                break
+            }
+
+            // BadMatch if the requested rectangle isn't entirely inside the
+            // drawable. Per X11 spec, x/y are signed but the rect must
+            // satisfy x≥0, y≥0, x+w≤W, y+h≤H.
+            let rx = Int(r.x), ry = Int(r.y), rw = Int(r.width), rh = Int(r.height)
+            if rx < 0 || ry < 0 || rw <= 0 || rh <= 0 ||
+               rx + rw > drawableW || ry + rh > drawableH {
+                emitError(.match, majorOpcode: GetImage.opcode)
+                break
+            }
+
+            // Read BGRA samples at logical scale.
+            let bgra = bridge?.readDrawablePixels(
+                from: target,
+                srcX: r.x, srcY: r.y,
+                width: rw, height: rh
+            ) ?? [UInt32](repeating: 0, count: rw * rh)
+
+            // Reverse-map BGRA → 8-bit X pixel index. The memory layout of
+            // a single UInt32 read from a byteOrder32Little + premultipliedFirst
+            // bitmap is, in low→high byte order: B, G, R, A. On a
+            // little-endian host (Apple Silicon, x86_64) reading it as a
+            // UInt32 yields 0xAARRGGBB.
+            let colorTable = self.colors
+            var pixelBytes = [UInt8](repeating: 0, count: rw * rh)
+            for i in 0..<(rw * rh) {
+                let argb = bgra[i]
+                let r8 = UInt8((argb >> 16) & 0xFF)
+                let g8 = UInt8((argb >>  8) & 0xFF)
+                let b8 = UInt8( argb        & 0xFF)
+                // Expand each 8-bit channel to 16-bit by byte-replication so
+                // the ColorTable key matches what AllocColor stored.
+                let rgb16 = RGB16(
+                    red:   UInt16(r8) << 8 | UInt16(r8),
+                    green: UInt16(g8) << 8 | UInt16(g8),
+                    blue:  UInt16(b8) << 8 | UInt16(b8)
+                )
+                let px = colorTable.pixel(for: rgb16) ?? 0
+                let masked = px & r.planeMask
+                pixelBytes[i] = UInt8(masked & 0xFF)
+            }
+
+            // Build the image-data buffer per format.
+            let imageData: [UInt8]
+            switch r.format {
+            case .zPixmap:
+                // 1 byte per pixel, scanline padded to 4 bytes.
+                let rowStride = (rw + 3) & ~3
+                var buf = [UInt8](repeating: 0, count: rowStride * rh)
+                for y in 0..<rh {
+                    let srcRow = y * rw
+                    let dstRow = y * rowStride
+                    for x in 0..<rw {
+                        buf[dstRow + x] = pixelBytes[srcRow + x]
+                    }
+                }
+                imageData = buf
+            case .xyPixmap:
+                // One bitmap plane per set bit in planeMask, ordered most
+                // significant plane first per X11 spec. Each plane: 1 bit
+                // per pixel, packed MSB-first within bytes, scanline padded
+                // to bitmap-scanline-pad (32 bits = 4 bytes).
+                let bytesPerScanline = ((rw + 31) / 32) * 4
+                // Find which planes (bit indices) are selected, MSB first.
+                // For our depth 8, valid plane bits are 0..7.
+                var planes = [Int]()
+                for bit in (0..<Int(drawableDepth)).reversed() {
+                    if (r.planeMask >> bit) & 1 == 1 {
+                        planes.append(bit)
+                    }
+                }
+                var buf = [UInt8](repeating: 0, count: bytesPerScanline * rh * planes.count)
+                for (planeIdx, bit) in planes.enumerated() {
+                    let planeStart = planeIdx * bytesPerScanline * rh
+                    for y in 0..<rh {
+                        let dstRow = planeStart + y * bytesPerScanline
+                        let srcRow = y * rw
+                        for x in 0..<rw {
+                            let v = pixelBytes[srcRow + x]
+                            if (v >> bit) & 1 == 1 {
+                                // MSB-first: pixel 0 → bit 7 of byte 0.
+                                let byteOff = x / 8
+                                let bitOff = 7 - (x % 8)
+                                buf[dstRow + byteOff] |= UInt8(1 << bitOff)
+                            }
+                        }
+                    }
+                }
+                imageData = buf
+            }
+
+            let reply = GetImageReply(
+                sequenceNumber: sequenceNumber,
+                depth: drawableDepth,
+                visual: replyVisual,
+                imageData: imageData
+            )
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
         case .circulateWindow(let r):
             // Per X11 spec section 10.6 / CirculateWindow:
             //   direction=0 RaiseLowest: if any sibling is occluded by
@@ -4547,9 +4887,13 @@ public final class ServerSession: @unchecked Sendable {
             // is supposed to emit ReparentNotify on the moved window if
             // its parent has SubstructureNotifyMask; we emit it
             // unconditionally on the moved window itself (matches what
-            // most WMs expect to round-trip). Parent validation deferred
-            // to the root-aware sweep (root is a valid parent argument).
+            // most WMs expect to round-trip).
             guard validateWindow(r.window, majorOpcode: ReparentWindow.opcode) != nil else { break }
+            // Spec: ReparentWindow with a bogus parent must emit BadWindow,
+            // not silently re-parent to a nonexistent ID. Root is a valid
+            // parent argument (re-parenting to root makes the window a
+            // top-level under the screen root).
+            guard validateWindowOrRoot(r.parent, majorOpcode: ReparentWindow.opcode) else { break }
             if var entry = windows.get(r.window) {
                 let oldParent = entry.parent
                 // Capture old containing top-level before mutating parent.
@@ -4669,6 +5013,11 @@ public final class ServerSession: @unchecked Sendable {
 
         case .grabButton(let r):
             guard validateWindowOrRoot(r.grabWindow, majorOpcode: GrabButton.opcode) else { break }
+            // confineTo=0 (None) is the spec sentinel; otherwise must be a
+            // valid window. Mirrors the GrabPointer guard.
+            if r.confineTo != 0 {
+                guard validateWindowOrRoot(r.confineTo, majorOpcode: GrabButton.opcode) else { break }
+            }
             // Passive button grab: when the matching button-press happens
             // on the grab-window or any descendant, the server is supposed
             // to auto-install an active pointer grab on grab-window. We
@@ -4715,6 +5064,16 @@ public final class ServerSession: @unchecked Sendable {
             // returns the warped value, but do not call CGWarpMouseCursorPosition
             // — clients that depend on the visible cursor jumping will see
             // a discrepancy. Documented in OPCODE_STATUS as low-confidence.
+            //
+            // srcWindow=0 is the spec sentinel "None" (no source confine);
+            // non-zero must be a valid window. dstWindow=0 means PointerRoot
+            // (no destination — just deltas applied); non-zero must be valid.
+            if r.srcWindow != 0 {
+                guard validateWindowOrRoot(r.srcWindow, majorOpcode: WarpPointer.opcode) else { break }
+            }
+            if r.dstWindow != 0 {
+                guard validateWindowOrRoot(r.dstWindow, majorOpcode: WarpPointer.opcode) else { break }
+            }
             if let stl = topLevelAncestor(of: r.dstWindow) {
                 let (dx, dy) = absoluteOrigin(of: r.dstWindow, topLevel: stl)
                 lastPointerTopLevel = stl
@@ -4786,6 +5145,28 @@ public final class ServerSession: @unchecked Sendable {
             // Single-real-client tier today; accept silently. Real impl
             // would look up resource → client → close client socket.
             log?.log("  KillClient: resource=0x\(String(r.resource, radix: 16)) (no-op, multi-client not yet)")
+
+        case .getScreenSaver:
+            // swift-x doesn't own screen blanking — macOS does via its own
+            // power-management — so we have nothing meaningful to report.
+            // Return "disabled" (timeout=0). x11perf reads this at startup
+            // to remember the prior state for later restoration; with
+            // timeout=0 the restore step is a no-op on its side.
+            let reply = GetScreenSaverReply(sequenceNumber: sequenceNumber)
+            outbound.append(reply.encode(byteOrder: byteOrder))
+
+        case .setScreenSaver:
+            // Accepted, no-op. Real spec lets a client tune blanking timeout
+            // and prefer-blanking flags; we have no blanking, so nothing to
+            // tune. Common caller: x11perf disabling the screensaver for the
+            // duration of a benchmark run.
+            break
+
+        case .forceScreenSaver:
+            // Accepted, no-op. Spec mode is Reset(0)/Activate(1) — we have
+            // no screensaver state to reset or activate. x11perf calls this
+            // with Reset at the end of every benchmark.
+            break
 
         case .ungrabButton(let r):
             // Remove matching passive button grabs. AnyButton=0 and
@@ -4881,6 +5262,10 @@ public final class ServerSession: @unchecked Sendable {
         case .queryColors(let r):
             // Look up each requested pixel in our ColorTable; unknown pixels
             // resolve to black (consistent with the dispatch-time fallback).
+            if r.cmap != config.defaultColormapId {
+                emitError(.color, majorOpcode: QueryColors.opcode, badResourceId: r.cmap)
+                break
+            }
             let entries: [QueryColorsRGB] = r.pixels.map { pixel in
                 let rgb = colors.rgb(for: pixel) ?? RGB16(red: 0, green: 0, blue: 0)
                 return QueryColorsRGB(red: rgb.red, green: rgb.green, blue: rgb.blue)
@@ -4889,6 +5274,14 @@ public final class ServerSession: @unchecked Sendable {
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .getSelectionOwner(let r):
+            // Per spec the selection atom must be a valid atom (selection=0
+            // = None is not a legitimate query target — BadAtom). Any
+            // unknown atom > 0 is also BadAtom.
+            if r.selection == 0 {
+                emitError(.atom, majorOpcode: GetSelectionOwner.opcode, badResourceId: 0)
+                break
+            }
+            guard validateAtom(r.selection, majorOpcode: GetSelectionOwner.opcode) else { break }
             let owner = coordinator.selectionOwner(r.selection)?.window ?? 0
             let reply = GetSelectionOwnerReply(sequenceNumber: sequenceNumber, owner: owner)
             outbound.append(reply.encode(byteOrder: byteOrder))
@@ -4903,6 +5296,12 @@ public final class ServerSession: @unchecked Sendable {
         // dtcalc tripped this during init, hanging at request 85 because
         // we silent-dropped opcode 24.
         case .convertSelection(let r):
+            // Per spec the selection atom must be a valid atom.
+            if r.selection == 0 {
+                emitError(.atom, majorOpcode: ConvertSelection.opcode, badResourceId: 0)
+                break
+            }
+            guard validateAtom(r.selection, majorOpcode: ConvertSelection.opcode) else { break }
             log?.log("  ConvertSelection requestor=0x\(String(r.requestor, radix: 16)) sel=\(r.selection) target=\(r.target) prop=\(r.property)")
             // CRITICAL: every SelectionNotify below must echo `r.time`
             // verbatim. Xt's HandleSelectionReplies in X11R6 Selection.c
@@ -4963,6 +5362,16 @@ public final class ServerSession: @unchecked Sendable {
         // can run the copy roundtrip later (or right now, in xterm-style
         // mode). owner=0 clears the selection.
         case .setSelectionOwner(let r):
+            // Per spec the selection atom must be a valid atom (selection=0
+            // is BadAtom). Window arg owner=0 is the spec sentinel "None"
+            // (clears ownership) and is fine; non-zero owner can be either
+            // root (rare) or a real window — coordinator stores it either
+            // way, no XError on unknown owner per spec.
+            if r.selection == 0 {
+                emitError(.atom, majorOpcode: SetSelectionOwner.opcode, badResourceId: 0)
+                break
+            }
+            guard validateAtom(r.selection, majorOpcode: SetSelectionOwner.opcode) else { break }
             if r.owner == 0 {
                 // Clearing ownership. If we previously held this selection,
                 // a SelectionClear isn't required by spec for the "owner ==
@@ -5385,6 +5794,13 @@ private func opcodeName(_ request: Request) -> String {
     case .circulateWindow: return "CirculateWindow"
     case .queryTextExtents: return "QueryTextExtents"
     case .polyPoint: return "PolyPoint"
+    case .getScreenSaver: return "GetScreenSaver"
+    case .setScreenSaver: return "SetScreenSaver"
+    case .forceScreenSaver: return "ForceScreenSaver"
+    case .getImage: return "GetImage"
+    case .polyText16: return "PolyText16"
+    case .imageText16: return "ImageText16"
+    case .copyPlane: return "CopyPlane"
     case .unknown(let op, _): return "unknown(\(op))"
     }
 }

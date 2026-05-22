@@ -413,6 +413,20 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
         body = "PolyPoint                drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) mode=\(r.coordinateMode) n=\(r.points.count)"
     case .bell(let r):
         body = "Bell                     percent=\(r.percent)"
+    case .getScreenSaver:
+        body = "GetScreenSaver"
+    case .setScreenSaver(let r):
+        body = "SetScreenSaver           timeout=\(r.timeout) interval=\(r.interval) preferBlanking=\(r.preferBlanking) allowExposures=\(r.allowExposures)"
+    case .forceScreenSaver(let r):
+        body = "ForceScreenSaver         mode=\(r.mode == 0 ? "Reset" : "Activate")"
+    case .getImage(let r):
+        body = "GetImage                 drawable=0x\(String(r.drawable, radix: 16)) \(r.width)x\(r.height) at (\(r.x),\(r.y)) format=\(r.format) planeMask=0x\(String(r.planeMask, radix: 16))"
+    case .polyText16(let r):
+        body = "PolyText16               drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) at (\(r.x),\(r.y)) itemsBytes=\(r.items.count)"
+    case .imageText16(let r):
+        body = "ImageText16              drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) at (\(r.x),\(r.y)) nChars=\(r.characters.count)"
+    case .copyPlane(let r):
+        body = "CopyPlane                src=0x\(String(r.srcDrawable, radix: 16)) dst=0x\(String(r.dstDrawable, radix: 16)) srcXY=(\(r.srcX),\(r.srcY)) dstXY=(\(r.dstX),\(r.dstY)) \(r.width)x\(r.height) bitPlane=0x\(String(r.bitPlane, radix: 16))"
     case .unknown(let op, _):
         body = "Request opcode=\(op) (untyped)"
     }
@@ -621,6 +635,13 @@ func opcodeOf(_ req: Request) -> UInt8 {
     case .freeCursor:                return FreeCursor.opcode
     case .recolorCursor:             return RecolorCursor.opcode
     case .bell:                      return Bell.opcode
+    case .getScreenSaver:            return GetScreenSaver.opcode
+    case .setScreenSaver:            return SetScreenSaver.opcode
+    case .forceScreenSaver:          return ForceScreenSaver.opcode
+    case .getImage:                  return GetImage.opcode
+    case .polyText16:                return PolyText16.opcode
+    case .imageText16:               return ImageText16.opcode
+    case .copyPlane:                 return CopyPlane.opcode
     case .unknown(let op, _):        return op
     }
 }

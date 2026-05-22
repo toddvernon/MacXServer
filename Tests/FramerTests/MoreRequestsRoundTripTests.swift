@@ -186,6 +186,114 @@ final class MoreRequestsRoundTripTests: XCTestCase {
             decode: { try KillClient.decode(from: $0, byteOrder: $1) })
     }
 
+    func testGetScreenSaver() throws {
+        try roundTrip(GetScreenSaver(),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try GetScreenSaver.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testSetScreenSaver() throws {
+        try roundTrip(
+            SetScreenSaver(timeout: 600, interval: 60, preferBlanking: 1, allowExposures: 0),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try SetScreenSaver.decode(from: $0, byteOrder: $1) })
+        // Negative timeout (-1 = restore default) is spec-legal.
+        try roundTrip(
+            SetScreenSaver(timeout: -1, interval: -1, preferBlanking: 2, allowExposures: 2),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try SetScreenSaver.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testForceScreenSaver() throws {
+        try roundTrip(ForceScreenSaver(mode: 0),  // Reset
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try ForceScreenSaver.decode(from: $0, byteOrder: $1) })
+        try roundTrip(ForceScreenSaver(mode: 1),  // Activate
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try ForceScreenSaver.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testGetImage() throws {
+        try roundTrip(
+            GetImage(format: .zPixmap, drawable: 0x4400001,
+                     x: 0, y: 0, width: 100, height: 100, planeMask: 0xFFFFFFFF),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try GetImage.decode(from: $0, byteOrder: $1) })
+        // Negative x/y signed-coverage, XYPixmap, partial planemask.
+        try roundTrip(
+            GetImage(format: .xyPixmap, drawable: 0x4400001,
+                     x: -5, y: -10, width: 1, height: 1, planeMask: 0x000000FF),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try GetImage.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testImageText16() throws {
+        // ASCII range — row=0 for every char (CHAR2B = (0x00, 'H') etc).
+        try roundTrip(
+            ImageText16(drawable: 0x4400003, gc: 0x4400004, x: 10, y: 20,
+                        characters: [0x0048, 0x0049]),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try ImageText16.decode(from: $0, byteOrder: $1) })
+        // CJK range — k14 / k24 test data lives in row > 0.
+        try roundTrip(
+            ImageText16(drawable: 0x4400003, gc: 0x4400004, x: -5, y: 200,
+                        characters: [0x2121, 0x2122, 0x2123]),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try ImageText16.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testCopyPlane() throws {
+        // Typical use: depth-1 source pixmap → depth-N dst, bitPlane=1.
+        try roundTrip(
+            CopyPlane(srcDrawable: 0x4400010, dstDrawable: 0x4400020, gc: 0x4400030,
+                      srcX: 0, srcY: 0, dstX: 50, dstY: 60,
+                      width: 100, height: 100, bitPlane: 1),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try CopyPlane.decode(from: $0, byteOrder: $1) })
+        // deepcopyplane: src is depth-8 window, bitPlane is some power of two
+        // in the [1..128] range. Negative srcX/Y / dstX/Y signed coverage.
+        try roundTrip(
+            CopyPlane(srcDrawable: 0x4400011, dstDrawable: 0x4400021, gc: 0x4400031,
+                      srcX: -1, srcY: -2, dstX: -3, dstY: -4,
+                      width: 500, height: 500, bitPlane: 0x80),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try CopyPlane.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testPolyText16() throws {
+        // One TEXTITEM16: length=2 (CHAR2B chars), delta=0, 4 bytes char data.
+        let items: [UInt8] = [
+            2,          // length
+            0,          // delta
+            0x00, 0x48, // 'H'
+            0x00, 0x69  // 'i'
+        ]
+        try roundTrip(
+            PolyText16(drawable: 0x4400003, gc: 0x4400004, x: 10, y: 20,
+                       items: items + [0, 0]),   // pad to 4-byte
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try PolyText16.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testGetImageReply() throws {
+        // 4-byte data path (4 pixels at depth 8, exactly fills one 32-bit unit).
+        try roundTrip(
+            GetImageReply(sequenceNumber: 0xABCD, depth: 8, visual: 0x22,
+                          imageData: [0x01, 0x02, 0x03, 0x04]),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try GetImageReply.decode(from: $0, byteOrder: $1) })
+        // Unpadded payload — 5 bytes encodes with 3 bytes of pad; decode
+        // returns the 8-byte padded buffer (caller-visible payload length is
+        // (reply.imageData.count) which after round-trip will be 8). We
+        // construct the original with the post-padded length to keep the
+        // round-trip equality clean.
+        try roundTrip(
+            GetImageReply(sequenceNumber: 1, depth: 8, visual: 0x22,
+                          imageData: [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0, 0, 0]),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try GetImageReply.decode(from: $0, byteOrder: $1) })
+    }
+
     // MARK: - Structured requests
 
     func testReparentWindow() throws {

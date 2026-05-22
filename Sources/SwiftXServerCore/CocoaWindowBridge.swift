@@ -847,6 +847,75 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// Read pixels out of a drawable as 32-bit BGRA at LOGICAL X-coord scale.
+    /// `src` is a resolved DrawTarget; (srcX, srcY) is in drawable-local
+    /// X-protocol coords (top-left of the rectangle); width / height are
+    /// logical pixels.
+    ///
+    /// Returns one UInt32 per logical pixel — row-major top-to-bottom, left-
+    /// to-right. The UInt32 is the device-pixel's raw 32-bit memory word as
+    /// CGBitmapContext stored it (premultiplied-first, byteOrder32Little) so
+    /// in memory that's B G R A. Callers extract channels accordingly.
+    ///
+    /// For window targets the backing is at device-scale (`scaleFactor` 1×/
+    /// 2×/3×); we sample the top-left device pixel of each logical block.
+    /// For pixmap targets we read at the pixmap's own stored scale (usually
+    /// 1, except Motif-XmText save-under pixmaps allocated at device scale).
+    ///
+    /// Returns an empty array if the target can't be resolved (window not
+    /// yet mapped, pixmap freed mid-request). Callers should emit BadDrawable
+    /// in that case via the normal validator path; this helper is best-
+    /// effort and trusts the caller's prior validation.
+    public func readDrawablePixels(
+        from src: DrawTarget,
+        srcX: Int16, srcY: Int16,
+        width: Int, height: Int
+    ) -> [UInt32] {
+        guard width > 0, height > 0 else { return [] }
+        let total = width * height
+        var out = [UInt32](repeating: 0, count: total)
+
+        switch src {
+        case .window(_, let topLevel, let dx, let dy):
+            // (srcX, srcY) is drawable-local; the backing is in top-level coords.
+            let topX = Int(srcX) + Int(dx)
+            let topY = Int(srcY) + Int(dy)
+            let scale = self.scaleFactor
+            DispatchQueue.main.sync { [weak self] in
+                guard let self = self,
+                      let view = self.slot(topLevel)?.view,
+                      let ctx = view.backing,
+                      let data = ctx.data else { return }
+                sampleBGRA(
+                    data: data,
+                    bytesPerRow: ctx.bytesPerRow,
+                    contextWidth: ctx.width,
+                    contextHeight: ctx.height,
+                    originX: topX, originY: topY,
+                    width: width, height: height,
+                    scale: scale,
+                    out: &out
+                )
+            }
+
+        case .pixmap(let id, _):
+            guard let buf = pixmapBufferLookup?(id),
+                  let data = buf.context.data else { return [] }
+            sampleBGRA(
+                data: data,
+                bytesPerRow: buf.context.bytesPerRow,
+                contextWidth: buf.context.width,
+                contextHeight: buf.context.height,
+                originX: Int(srcX), originY: Int(srcY),
+                width: width, height: height,
+                scale: buf.scaleFactor,
+                out: &out
+            )
+        }
+
+        return out
+    }
+
     public func copyArea(
         src: DrawTarget,
         dst: DrawTarget,
@@ -1544,6 +1613,132 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    public func drawImageText16(
+        target: DrawTarget,
+        foreground: RGB16, background: RGB16,
+        font: ResolvedFont,
+        x: Int16, y: Int16,
+        characters: [UInt16],
+        clipRectangles: [Framer.Rectangle]?
+    ) {
+        let n = characters.count
+        log?.log("  drawImageText16 target=\(target) font=\(font.macFontName) cell=\(font.cellWidth)x\(font.cellHeight) at (\(x),\(y)) fg=(\(foreground.red >> 8),\(foreground.green >> 8),\(foreground.blue >> 8)) nChars=\(n)")
+
+        // Per X11 ImageText16 spec: fill bg rect under the text first, then
+        // draw glyphs. Same cell-snapped bg-rect math as ImageText8 — the
+        // cell width is constant for monospaced fonts. Apps using CHAR2B
+        // typically want CJK fonts where the visual cell is double-width;
+        // for x11perf benchmarking the resolved font's cellWidth is whatever
+        // FontResolver picked (fallback to "fixed" if k14/k24 wasn't named)
+        // and that's what we measure throughput against.
+        let cellW = font.cellWidth
+        let bgRect = CGRect(
+            x: CGFloat(x),
+            y: CGFloat(Int(y) - font.ascent),
+            width: CGFloat(cellW * n),
+            height: CGFloat(font.cellHeight)
+        )
+
+        withDrawContext(target, clipRectangles: clipRectangles) { [weak self] ctx in
+            applyFill(ctx, background)
+            ctx.fill(bgRect)
+
+            applyFill(ctx, foreground)
+            ctx.setShouldAntialias(true)
+            ctx.setShouldSmoothFonts(false)
+            ctx.setAllowsFontSubpixelPositioning(false)
+            ctx.setShouldSubpixelPositionFonts(false)
+
+            ctx.translateBy(x: CGFloat(x), y: CGFloat(y))
+            ctx.scaleBy(x: 1, y: -1)
+
+            guard let ctFont = self?.ctFont(for: font) else { return }
+
+            // Each CHAR2B already decoded to UniChar = row<<8 | column by the
+            // framer. CoreText's missing-glyph substitution handles codepoints
+            // the Mac font doesn't cover (rendered as .notdef rectangles).
+            var unichars = characters
+            var glyphs = [CGGlyph](repeating: 0, count: n)
+            CTFontGetGlyphsForCharacters(ctFont, &unichars, &glyphs, n)
+
+            var positions = [CGPoint](repeating: .zero, count: n)
+            for i in 0..<n {
+                positions[i] = CGPoint(x: CGFloat(i * cellW), y: 0)
+            }
+
+            CTFontDrawGlyphs(ctFont, &glyphs, &positions, n, ctx)
+        }
+    }
+
+    public func drawPolyText16(
+        target: DrawTarget,
+        foreground: RGB16,
+        font: ResolvedFont,
+        x: Int16, y: Int16,
+        items: [UInt8],
+        clipRectangles: [Framer.Rectangle]?
+    ) {
+        // TEXTITEM16 layout: 0xFF marks a 5-byte font shift (sentinel + 4-byte
+        // FontID, ignored — we use the GC's font for the whole request like
+        // PolyText8). Otherwise: length(1, CHAR2B count) + delta(INT8) +
+        // 2*length bytes (CHAR2B big-endian).
+        log?.log("  drawPolyText16 target=\(target) font=\(font.macFontName) cell=\(font.cellWidth)x\(font.cellHeight) at (\(x),\(y)) fg=(\(foreground.red >> 8),\(foreground.green >> 8),\(foreground.blue >> 8)) itemsBytes=\(items.count)")
+
+        withDrawContext(target, clipRectangles: clipRectangles) { [weak self] ctx in
+            applyFill(ctx, foreground)
+            ctx.setShouldAntialias(true)
+            ctx.setShouldSmoothFonts(false)
+            ctx.setAllowsFontSubpixelPositioning(false)
+            ctx.setShouldSubpixelPositionFonts(false)
+
+            let baseX = Int(x)
+            var penX: Int = baseX
+            let baseY = Int(y)
+
+            guard let ctFont = self?.ctFont(for: font) else { return }
+
+            var i = 0
+            while i < items.count {
+                let b = items[i]
+                if b == 0xFF {
+                    i += 5
+                    continue
+                }
+                let n = Int(b)   // CHAR2B count
+                if n == 0 { i += 1; continue }
+                let charBytes = n * 2
+                guard i + 2 + charBytes <= items.count else { break }
+                let delta = Int8(bitPattern: items[i + 1])
+                penX += Int(delta)
+
+                var unichars = [UniChar](repeating: 0, count: n)
+                for j in 0..<n {
+                    let hi = UInt16(items[i + 2 + j * 2])
+                    let lo = UInt16(items[i + 2 + j * 2 + 1])
+                    unichars[j] = (hi << 8) | lo
+                }
+
+                let (glyphsImm, advances) = FontResolver.integerAdvances(font, characters: unichars)
+                var glyphs = glyphsImm
+
+                var positions = [CGPoint](repeating: .zero, count: n)
+                var localX: Int = 0
+                for j in 0..<n {
+                    positions[j] = CGPoint(x: CGFloat(localX), y: 0)
+                    localX += advances[j]
+                }
+                ctx.saveGState()
+                ctx.translateBy(x: CGFloat(penX), y: CGFloat(baseY))
+                ctx.scaleBy(x: 1, y: -1)
+                CTFontDrawGlyphs(ctFont, &glyphs, &positions, n, ctx)
+                ctx.restoreGState()
+
+                penX += localX
+                i += 2 + charBytes
+            }
+        }
+    }
+
     public func setCursor(topLevel: UInt32, glyph: UInt16?) {
         DispatchQueue.main.async { [weak self] in
             guard let view = self?.slot(topLevel)?.view else { return }
@@ -2031,4 +2226,61 @@ internal func ellipseArcPath(arc a: Arc, includePieCenter: Bool) -> CGPath {
     }
     if includePieCenter { path.closeSubpath() }
     return path
+}
+
+/// Pull `width × height` logical pixels out of a CGBitmapContext stored at
+/// `scale` device-pixels-per-logical, starting at logical (originX, originY)
+/// and writing into `out` row-major. The bitmap is BGRA in memory
+/// (CGBitmapContext with byteOrder32Little + premultipliedFirst). Logical
+/// pixels outside the context's device bounds emit 0 — same as the spec's
+/// "result is undefined for areas outside the drawable" but in practice the
+/// caller validates the rect first.
+func sampleBGRA(
+    data: UnsafeMutableRawPointer,
+    bytesPerRow: Int,
+    contextWidth: Int,
+    contextHeight: Int,
+    originX: Int, originY: Int,
+    width: Int, height: Int,
+    scale: Double,
+    out: inout [UInt32]
+) {
+    let base = data.assumingMemoryBound(to: UInt8.self)
+    let scaleInt: Int
+    let scaleIsInteger = scale == scale.rounded() && scale >= 1
+    if scaleIsInteger {
+        scaleInt = Int(scale)
+    } else {
+        scaleInt = 1   // fractional-scale fallback; uses rounded coord per pixel
+    }
+    for ly in 0..<height {
+        let dy: Int
+        if scaleIsInteger {
+            dy = (originY + ly) * scaleInt
+        } else {
+            dy = Int((Double(originY + ly) * scale).rounded())
+        }
+        guard dy >= 0, dy < contextHeight else {
+            for lx in 0..<width { out[ly * width + lx] = 0 }
+            continue
+        }
+        let rowPtr = base.advanced(by: dy * bytesPerRow)
+        for lx in 0..<width {
+            let dx: Int
+            if scaleIsInteger {
+                dx = (originX + lx) * scaleInt
+            } else {
+                dx = Int((Double(originX + lx) * scale).rounded())
+            }
+            if dx < 0 || dx >= contextWidth {
+                out[ly * width + lx] = 0
+                continue
+            }
+            let p = rowPtr.advanced(by: dx * 4)
+            // Load 4 bytes as a UInt32 (host byte order). Memory is BGRA;
+            // on Apple Silicon (little-endian host) that becomes 0xAARRGGBB
+            // when read as a UInt32. Callers extract via &0xFF shifts.
+            out[ly * width + lx] = p.withMemoryRebound(to: UInt32.self, capacity: 1) { $0.pointee }
+        }
+    }
 }

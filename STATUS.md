@@ -1,3 +1,36 @@
+# Status 2026-05-22 — x11perf clean sweep + error-path test suite
+
+x11perf survey from the SS2 is 254/254. Every test in the build runs to
+completion and reports a number. The three-day push that got us here
+was a chain of unblocks: ScreenSaver-trio stubs (107/108/115), GetImage
+with ARGB→pixel reverse-mapping, PolyText16+ImageText16 CHAR2B variants,
+CopyPlane via a 1-bpp bitmap synthesized from the src ARGB and routed
+through the existing PutImage path. Plus a bookkeeping pass that
+brought OPCODE_STATUS in sync with the Request enum (14 catch-up rows).
+
+Today's other landing: an error-path test sweep delegated to a worktree
+agent, then merged back cleanly. `Tests/SwiftXServerCoreTests/ErrorPathSweepTests.swift`
+adds 69 new tests on top of the existing 49 in `XErrorEmissionTests.swift`,
+table-driven and grouped by argument type (window, GC, drawable,
+colormap, font, cursor, atom). The sweep caught six silent-drop bugs:
+ReparentWindow.parent, WarpPointer.srcWindow + dstWindow, GrabButton.confineTo,
+AllocNamedColor/LookupColor/QueryColors cmap, and SetSelectionOwner/
+GetSelectionOwner/ConvertSelection selection-atom. ReparentWindow was
+the worst — it was emitting a ReparentNotify event with the bogus
+parent ID embedded in it, a lie on the wire. All fixed with small
+validation guards.
+
+The worktree pattern worked well — the sweep ran in parallel with the
+user's SS2 x11perf survey without contention. One quirk: the agent
+branched from the last committed state, which predated three days of
+uncommitted GetImage/CopyPlane/text16 work on main. The merge required
+dropping four stale `_RoutesToBadRequest` tests that assumed those
+opcodes were still routed through `case .unknown` → BadRequest. The
+six dispatcher fixes themselves landed cleanly because they touched
+sites that the recent work didn't overlap with.
+
+All 631 tests pass (4 unrelated skipped).
+
 # Status 2026-05-19 — End of day
 
 The X server's bg-paint contract is now honored end-to-end. Three big

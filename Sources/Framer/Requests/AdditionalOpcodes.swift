@@ -331,3 +331,96 @@ public struct KillClient: Equatable, Sendable {
         return KillClient(resource: res)
     }
 }
+
+// Screensaver trio (107/108/115). x11perf calls all three at startup to save
+// the current screensaver state, disable blanking during the run, and reset
+// it afterward. swift-x doesn't own screen blanking — macOS does — so these
+// are honest no-ops: GetScreenSaver reports "disabled" (timeout=0), Set/Force
+// accept and ignore. Pre-this-change they fell through to .unknown and emitted
+// BadRequest, which trips Xlib's default error handler and aborts the client.
+
+public struct GetScreenSaver: Equatable, Sendable {
+    public static let opcode: UInt8 = 108
+
+    public init() {}
+
+    public func encode(byteOrder: ByteOrder) -> [UInt8] {
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(Self.opcode)
+        w.writeUInt8(0)
+        w.writeUInt16(1)
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> GetScreenSaver {
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        let op = try r.readUInt8()
+        guard op == Self.opcode else { throw FramerError.invalidOpcode(expected: Self.opcode, got: op) }
+        _ = try r.readUInt8()
+        _ = try r.readUInt16()
+        return GetScreenSaver()
+    }
+}
+
+public struct SetScreenSaver: Equatable, Sendable {
+    public static let opcode: UInt8 = 107
+    public var timeout: Int16        // seconds; 0 disables, -1 restores default
+    public var interval: Int16       // seconds between regenerations
+    public var preferBlanking: UInt8 // 0 No, 1 Yes, 2 Default
+    public var allowExposures: UInt8 // 0 No, 1 Yes, 2 Default
+
+    public init(timeout: Int16, interval: Int16, preferBlanking: UInt8, allowExposures: UInt8) {
+        self.timeout = timeout
+        self.interval = interval
+        self.preferBlanking = preferBlanking
+        self.allowExposures = allowExposures
+    }
+
+    public func encode(byteOrder: ByteOrder) -> [UInt8] {
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(Self.opcode); w.writeUInt8(0); w.writeUInt16(3)
+        w.writeUInt16(UInt16(bitPattern: timeout))
+        w.writeUInt16(UInt16(bitPattern: interval))
+        w.writeUInt8(preferBlanking); w.writeUInt8(allowExposures)
+        w.writeUInt16(0)
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> SetScreenSaver {
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        let op = try r.readUInt8()
+        guard op == Self.opcode else { throw FramerError.invalidOpcode(expected: Self.opcode, got: op) }
+        _ = try r.readUInt8()
+        _ = try r.readUInt16()
+        let to = Int16(bitPattern: try r.readUInt16())
+        let iv = Int16(bitPattern: try r.readUInt16())
+        let pb = try r.readUInt8()
+        let ae = try r.readUInt8()
+        _ = try r.readUInt16()
+        return SetScreenSaver(timeout: to, interval: iv, preferBlanking: pb, allowExposures: ae)
+    }
+}
+
+public struct ForceScreenSaver: Equatable, Sendable {
+    public static let opcode: UInt8 = 115
+    public var mode: UInt8           // 0 Reset, 1 Activate
+
+    public init(mode: UInt8) { self.mode = mode }
+
+    public func encode(byteOrder: ByteOrder) -> [UInt8] {
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(Self.opcode)
+        w.writeUInt8(mode)
+        w.writeUInt16(1)
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> ForceScreenSaver {
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        let op = try r.readUInt8()
+        guard op == Self.opcode else { throw FramerError.invalidOpcode(expected: Self.opcode, got: op) }
+        let mode = try r.readUInt8()
+        _ = try r.readUInt16()
+        return ForceScreenSaver(mode: mode)
+    }
+}

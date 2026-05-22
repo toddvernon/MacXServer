@@ -394,6 +394,13 @@ public enum Dumper {
         case .circulateWindow:           return CirculateWindow.opcode
         case .queryTextExtents:          return QueryTextExtents.opcode
         case .polyPoint:                 return PolyPoint.opcode
+        case .getScreenSaver:            return GetScreenSaver.opcode
+        case .setScreenSaver:            return SetScreenSaver.opcode
+        case .forceScreenSaver:          return ForceScreenSaver.opcode
+        case .getImage:                  return GetImage.opcode
+        case .polyText16:                return PolyText16.opcode
+        case .imageText16:               return ImageText16.opcode
+        case .copyPlane:                 return CopyPlane.opcode
         case .unknown(let op, _):        return op
         }
     }

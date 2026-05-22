@@ -342,6 +342,16 @@ public protocol WindowBridge: AnyObject, Sendable {
         clipRectangles: [Rectangle]?
     )
 
+    /// Read drawable contents back as UInt32 pixels at LOGICAL X-coord
+    /// scale. One UInt32 per logical pixel; in-memory layout is BGRA per
+    /// the Mac CGBitmapContext format (byteOrder32Little + premultipliedFirst).
+    /// On a little-endian host that reads as 0xAARRGGBB. Used by GetImage.
+    func readDrawablePixels(
+        from src: DrawTarget,
+        srcX: Int16, srcY: Int16,
+        width: Int, height: Int
+    ) -> [UInt32]
+
     /// ImageText8: fill bg rect, then draw text. `(x, y)` is the baseline of
     /// the first glyph in top-level logical pixel coords. The bridge owns
     /// CTFont instantiation per the resolved font's macFontName + pointSize.
@@ -360,6 +370,34 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// `length` glyph bytes). The bridge parses + renders. Used by Athena
     /// widget apps (xcalc) which never use ImageText8.
     func drawPolyText8(
+        target: DrawTarget,
+        foreground: RGB16,
+        font: ResolvedFont,
+        x: Int16, y: Int16,
+        items: [UInt8],
+        clipRectangles: [Rectangle]?
+    )
+
+    /// ImageText16: same as drawImageText8 but with CHAR2B characters
+    /// (`row<<8 | column` per UniChar, already decoded by the dispatcher).
+    /// For Latin-1 char with row=0 this is identical to the 8-bit path.
+    /// For CJK fonts (k14, k24 in x11perf) the row carries the kanji block;
+    /// Core Text's missing-glyph fallback handles the cases where the
+    /// resolved Mac font has no glyph at that codepoint.
+    func drawImageText16(
+        target: DrawTarget,
+        foreground: RGB16, background: RGB16,
+        font: ResolvedFont,
+        x: Int16, y: Int16,
+        characters: [UInt16],
+        clipRectangles: [Rectangle]?
+    )
+
+    /// PolyText16: same as drawPolyText8 but with TEXTITEM16 items
+    /// (CHAR2B characters big-endian). Each text run inside `items` has the
+    /// CHAR2B byte pairs in MSB-first order regardless of connection byte
+    /// order; the bridge converts them to UniChar at draw time.
+    func drawPolyText16(
         target: DrawTarget,
         foreground: RGB16,
         font: ResolvedFont,
@@ -494,6 +532,11 @@ public extension WindowBridge {
         foreground: RGB16, background: RGB16,
         clipRectangles: [Rectangle]?
     ) {}
+    func readDrawablePixels(
+        from src: DrawTarget,
+        srcX: Int16, srcY: Int16,
+        width: Int, height: Int
+    ) -> [UInt32] { [] }
     func drawImageText8(
         target: DrawTarget,
         foreground: RGB16, background: RGB16,
@@ -503,6 +546,22 @@ public extension WindowBridge {
         clipRectangles: [Rectangle]?
     ) {}
     func drawPolyText8(
+        target: DrawTarget,
+        foreground: RGB16,
+        font: ResolvedFont,
+        x: Int16, y: Int16,
+        items: [UInt8],
+        clipRectangles: [Rectangle]?
+    ) {}
+    func drawImageText16(
+        target: DrawTarget,
+        foreground: RGB16, background: RGB16,
+        font: ResolvedFont,
+        x: Int16, y: Int16,
+        characters: [UInt16],
+        clipRectangles: [Rectangle]?
+    ) {}
+    func drawPolyText16(
         target: DrawTarget,
         foreground: RGB16,
         font: ResolvedFont,

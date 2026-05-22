@@ -99,6 +99,19 @@ public final class ColorTable: @unchecked Sendable {
         return pixelToRGB[pixel]
     }
 
+    /// Reverse lookup: given an RGB color, find the X pixel value (colormap
+    /// index) that maps to it. nil if the color isn't in the table. Used by
+    /// GetImage when we have to reconstruct an X-protocol 8-bit pixel value
+    /// from the 32-bit ARGB sitting in the Mac backing bitmap. Anti-aliased
+    /// edges produce intermediate ARGB values that aren't in the table; the
+    /// dispatcher treats nil as pixel 0 (white) — close enough for x11perf
+    /// benchmarking and matches what a real screenshot of a depth-8 server
+    /// would do (clamp to the nearest allocated cell or background).
+    public func pixel(for rgb: RGB16) -> UInt32? {
+        lock.lock(); defer { lock.unlock() }
+        return rgbToPixel[rgb]
+    }
+
     public var count: Int {
         lock.lock(); defer { lock.unlock() }
         return pixelToRGB.count
