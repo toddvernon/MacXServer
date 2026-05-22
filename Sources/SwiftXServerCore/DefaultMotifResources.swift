@@ -58,6 +58,25 @@ enum DefaultMotifResources {
     *menubar*foreground:          White
     *mainMenu*background:         SlateBlue1
     *mainMenu*foreground:         White
+    ! dtterm names its menu bar widget `"menu_pulldown"` even though it's
+    ! the menu bar, not a pulldown (XmCreateMenuBar(parent,
+    ! "menu_pulldown", ...) in TermViewMenu.c:622). Match it so dtterm's
+    ! menu bar gets the SlateBlue1 accent like every other dt-app.
+    *menu_pulldown*background:    SlateBlue1
+    *menu_pulldown*foreground:    White
+    ! Pulldown menus that appear when a menu-bar title is clicked are
+    ! XmRowColumn instances parented under an XmMenuShell popup shell.
+    ! Scoping by `*XmMenuShell*` is universal across all Motif apps and
+    ! reaches both the pane's bg and the item-button bg/fg. Tighter than
+    ! `*XmRowColumn*` which would also catch dtcalc's number keypad.
+    *XmMenuShell*background:      SlateBlue1
+    *XmMenuShell*foreground:      White
+    ! Text-insertion caret color across Motif text widgets and the dtterm
+    ! terminal area. XmNcursorForeground (resource name `cursorForeground`)
+    ! is what Motif's XmText / DtTerm both honor for the caret color.
+    ! xterm uses the simpler `cursorColor` resource; cover both.
+    *cursorForeground:            cyan
+    *cursorColor:                 cyan
     ! Dialog accents: labels and buttons inside popup dialog shells get
     ! Blue text. Main-application labels/buttons stay Black (the
     ! *foreground default above) since they're not under an XmDialogShell.
@@ -65,12 +84,36 @@ enum DefaultMotifResources {
     *XmDialogShell*XmPushButton.foreground:  Blue
     !
     ! ---- Fonts ----
-    *XmText.fontList:           -adobe-helvetica-medium-r-normal--14-*-*-*-p-*-iso8859-1
-    *XmTextField.fontList:      -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
-    *XmLabel.fontList:          -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
-    *XmList.fontList:           -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
-    *XmCascadeButton.fontList:  -adobe-helvetica-bold-r-normal--12-*-*-*-p-*-iso8859-1
-    *XmPushButton.fontList:     -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
+    ! Motif distinguishes widgets (have an X window each) from gadgets
+    ! (lighter — no window, share the parent's). Most menu bars and
+    ! labels in dt-apps and quickplot create Gadget instances by default
+    ! (XmCascadeButtonGadget, XmLabelGadget, XmPushButtonGadget) because
+    ! they're cheaper. Xrm class-name lookup is strict, so we have to
+    ! list both forms for resources to reach both kinds of instance.
+    *XmText.fontList:               -adobe-helvetica-medium-r-normal--14-*-*-*-p-*-iso8859-1
+    *XmTextField.fontList:          -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
+    *XmLabel.fontList:              -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
+    *XmLabelGadget.fontList:        -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
+    *XmList.fontList:               -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
+    ! Menu items in the quickplot theme are Helvetica 14pt oblique — see
+    ! reference/quickplot/app.c `qp.menuFont`. Applies to menu-bar
+    ! CascadeButtons across all hosted Motif apps so dtcalc/dtterm/etc.
+    ! menus match quickplot's slim-italic menu look. Pulldown menu items
+    ! are XmPushButton, but so are dialog action buttons and dtcalc's
+    ! number keypad — punting that broader scope until we know which
+    ! look the user actually wants.
+    *XmCascadeButton.fontList:        -adobe-helvetica-medium-o-normal--14-*-*-*-p-*-iso8859-1
+    *XmCascadeButtonGadget.fontList:  -adobe-helvetica-medium-o-normal--14-*-*-*-p-*-iso8859-1
+    *XmPushButton.fontList:           -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
+    *XmPushButtonGadget.fontList:     -adobe-helvetica-medium-r-normal--12-*-*-*-p-*-iso8859-1
+    ! Pulldown menu items are XmPushButton(Gadget) children of the
+    ! XmRowColumn that is the pulldown menu pane. Match quickplot's
+    ! convention of menu titles and menu items at the same 14pt oblique.
+    ! Caveat: any PushButton living inside a non-menu XmRowColumn (e.g.,
+    ! dtcalc's number keypad if it uses RowColumn for its grid) will
+    ! also pick up this rule. Tighten if that looks wrong.
+    *XmRowColumn*XmPushButton.fontList:        -adobe-helvetica-medium-o-normal--14-*-*-*-p-*-iso8859-1
+    *XmRowColumn*XmPushButtonGadget.fontList:  -adobe-helvetica-medium-o-normal--14-*-*-*-p-*-iso8859-1
     ! DtEditor (the compound widget dtpad/dtmail use) exposes its text
     ! font via a separate resource name: textFontList, not fontList.
     ! When unset, DtEditor leaves XmNfontList alone on its inner XmText,
@@ -96,6 +139,31 @@ enum DefaultMotifResources {
     ! Per-app overrides
     Dtpad*XmText.fontList:      -adobe-courier-medium-r-normal--14-*-*-*-m-*-iso8859-1
     Dtpad*textFontList:         -adobe-courier-medium-r-normal--14-*-*-*-m-*-iso8859-1
+    ! dtpad names its menu bar `"bar"` (XmCreateMenuBar(parent, "bar", ...)
+    ! in dtpad.c:947) so the generic *menuBar/*menubar/*mainMenu rules
+    ! miss it. App-scoped + name-scoped fix.
+    Dtpad*bar*background:       SlateBlue1
+    Dtpad*bar*foreground:       White
+    ! Text editor bg: override the global DarkSeaGreen XmText bg to White
+    ! for dtpad specifically — the editor's main work area benefits from
+    ! a paper-white background more than the colored field look used by
+    ! quickplot / dt-app XmTextFields.
+    Dtpad*XmText.background:        White
+    Dtpad*XmText.foreground:        Black
+    ! Drop the Motif keyboard-focus highlight ring on the editor — the
+    ! caret already indicates focus, and the ring is visually noisy
+    ! around a full-window editor area.
+    Dtpad*XmText.highlightThickness: 0
+    ! dtterm terminal area: classic black background + white foreground.
+    ! DtCreateTerm produces an instance with class `DtTerm` and instance
+    ! name `dtTerm` (see Term.c:411 + TermView.c:1136). DtTermPrim is a
+    ! superclass but Xrm matches on the leaf-class name only, not the
+    ! inheritance chain — so we have to spell out DtTerm. Both class
+    ! and instance-name forms listed for robustness.
+    *DtTerm.background:         DarkBlue
+    *DtTerm.foreground:         Wheat
+    *dtTerm.background:         DarkBlue
+    *dtTerm.foreground:         Wheat
     ! dthelpview's manBox is a DtHelpQuickDialog instance; its rows/columns
     ! determine the dialog's initial aspect ratio. 32x80 matches u5's
     ! installed app-defaults (Dthelpview source line 43-44).
@@ -103,5 +171,27 @@ enum DefaultMotifResources {
     Dthelpview*manBox.columns:  80
     Dthelpview*fileBox.rows:    32
     Dthelpview*fileBox.columns: 80
+    ! dthelpview uses XtInitialize (creates an ApplicationShell, NOT an
+    ! XmDialogShell), so our `*XmDialogShell*` rules don't apply to its
+    ! Close/Backtrack/Print action buttons. Buttons are XmPushButtonGadgets
+    ! named `closeButton`, `backButton`, `printButton` (HelpQuickD.c:750,
+    ! 790, 810). Targeting by instance name beats the class-based rules
+    ! since class-name lookup sometimes loses to `*foreground: Black` on
+    ! the cascade — instance-name lookup wins more reliably. Also thin the
+    ! shadow + highlight rings so the buttons don't sit in the deep
+    ! trough Motif draws by default; matches quickplot's lighter look.
+    Dthelpview*XmPushButton.foreground:        Blue
+    Dthelpview*XmPushButton.fontList:          -adobe-helvetica-medium-o-normal--12-*-*-*-p-*-iso8859-1
+    Dthelpview*XmPushButtonGadget.foreground:  Blue
+    Dthelpview*XmPushButtonGadget.fontList:    -adobe-helvetica-medium-o-normal--12-*-*-*-p-*-iso8859-1
+    Dthelpview*closeButton.foreground:         Blue
+    Dthelpview*backButton.foreground:          Blue
+    Dthelpview*printButton.foreground:         Blue
+    Dthelpview*closeButton.shadowThickness:    1
+    Dthelpview*backButton.shadowThickness:     1
+    Dthelpview*printButton.shadowThickness:    1
+    Dthelpview*closeButton.highlightThickness: 0
+    Dthelpview*backButton.highlightThickness:  0
+    Dthelpview*printButton.highlightThickness: 0
     """
 }

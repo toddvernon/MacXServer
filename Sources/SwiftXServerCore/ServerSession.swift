@@ -290,6 +290,12 @@ public final class ServerSession: @unchecked Sendable {
         // setPixmapBufferLookup doc in WindowBridge.swift for the
         // multi-session caveat (most-recently-set lookup wins).
         bridge?.setPixmapBufferLookup { [weak self] id in self?.pixmaps.buffer(for: id) }
+        // Hand the bridge a closure that resolves to the server-global
+        // ColorTable. Lets the depth-8 GXxor path (dtterm cursor invert)
+        // reverse-map ARGB pixels back to X pixel indices and do true
+        // pixel-value XOR instead of the CGBlendMode.difference
+        // approximation that fails on black-on-black.
+        bridge?.setColorTableLookup { [weak self] in self?.colors }
         // Hand the bridge a closure that resolves window ids to their
         // current clipList rects (visible region in top-level coords).
         // withDrawContext for window targets uses this to set CGContext.clip

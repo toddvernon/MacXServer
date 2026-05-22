@@ -442,6 +442,13 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// integration test coverage yet anyway.
     func setPixmapBufferLookup(_ lookup: @escaping @Sendable (UInt32) -> PixelBuffer?)
 
+    /// Install the server's ColorTable for reverse-mapping ARGB pixels to
+    /// X pixel indices. Required by the GXxor true-pixel-value path in
+    /// PolyFillRectangle (dtterm's invert-cell cursor) — without it the
+    /// path falls back to a CGBlendMode.difference approximation that
+    /// fails when src and dst RGB are equal (black-on-black = invisible).
+    func setColorTableLookup(_ lookup: @escaping @Sendable () -> ColorTable?)
+
     /// Push a cursor to display when the pointer is inside the given
     /// top-level NSWindow's content area. `glyph` is the X cursor-font
     /// source-char index (XC_xterm = 152, XC_left_ptr = 68, etc.) — the
@@ -494,6 +501,7 @@ public extension WindowBridge {
     func setOnCloseRequest(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void) {}
     func removeHandlers(token: UInt64) {}
     func setPixmapBufferLookup(_ lookup: @escaping @Sendable (UInt32) -> PixelBuffer?) {}
+    func setColorTableLookup(_ lookup: @escaping @Sendable () -> ColorTable?) {}
     // Default no-ops so unit-test bridges don't have to implement every method.
     func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
     func drawPolyLine(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}

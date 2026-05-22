@@ -78,6 +78,19 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         self.pixmapBufferLookup = lookup
     }
 
+    /// Closure for forward + reverse mapping between X pixel values and
+    /// RGB16. Set by the session via `setColorTableLookup` so depth-8
+    /// drawing paths that need true pixel-value semantics (GXxor for
+    /// dtterm's invert-cell cursor) can reconstruct pixel indices from
+    /// the 32-bit ARGB stored in our backing bitmaps. nil during early
+    /// bring-up / tests; GXxor falls back to its `.difference` blend-mode
+    /// approximation when not available.
+    private var colorTableLookup: (@Sendable () -> ColorTable?)?
+
+    public func setColorTableLookup(_ lookup: @escaping @Sendable () -> ColorTable?) {
+        self.colorTableLookup = lookup
+    }
+
     /// Closure that maps a window id → its visible-region rects (clipList,
     /// in top-level coords). Set by the session via `setWindowClipLookup`.
     /// nil during early bring-up / tests that don't wire up the session;
@@ -1159,23 +1172,177 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             return
         }
 
+        // FillTiled with function=GXand on a depth-1 destination. Motif's
+        // XmScale builds the slider's value-indicator stipple by carving
+        // an I-beam into a 5×13 depth-1 pixmap (PolySegment), then
+        // ANDing it with a 16×16 checkerboard tile to produce a dotted
+        // I-beam. Without honoring this, the carved I-beam stays solid
+        // and the slider thumb visually reads as "pressed/etched" rather
+        // than the raised dotted highlight Motif intends.
+        //
+        // dst' = dst AND tile (depth-1, BLACK=1=set, WHITE=0=clear):
+        //   tile bit 1 (BLACK) → keep dst unchanged
+        //   tile bit 0 (WHITE) → clear dst to WHITE
+        // So we only need to paint white where the tile is clear.
+        if fillStyle == 1, function == 1, tile != 0,
+           case .pixmap(_, let dstDepth) = target, dstDepth == 1,
+           let tileBuf = pixmapBufferLookup?(tile),
+           let tileBitGrid = StippleBitGrid(buffer: tileBuf) {
+            withDrawContext(target, clipRectangles: clipRectangles) { [weak self] ctx in
+                self?.fillTiledAndDepth1(
+                    ctx: ctx, rects: rectangles,
+                    tile: tileBitGrid,
+                    originX: Int(stippleOriginX), originY: Int(stippleOriginY)
+                )
+            }
+            return
+        }
+
+        // True pixel-value XOR for GXxor on depth-8 destinations. dtterm's
+        // text cursor uses `cursorGC.foreground = fg ^ bg` (pixel-value
+        // XOR) drawn with function=GXxor — relying on the server to do
+        // per-pixel index-space XOR so the cursor visibly inverts the
+        // cells under it. Our default CGBlendMode.difference is RGB-space
+        // and produces invisible cursors when src and dst RGB match
+        // (black-on-black, e.g. with our dtterm bg=Black + fg=White
+        // setup). The path below reads each device pixel, reverse-maps
+        // its ARGB to an X pixel index via ColorTable, XORs in pixel-value
+        // space, forward-maps the result back to ARGB, and writes. Falls
+        // back to .difference for tests without a ColorTable or when the
+        // GXxor case doesn't apply.
+        if function == 6, let lookup = colorTableLookup, let colorTable = lookup() {
+            let srcRGB = foreground
+            // Reverse-map the source RGB to its pixel index. dtterm sets
+            // cursorGC.foreground to a pure pixel index (no AllocColor),
+            // so the value should always be in our table for the pixels
+            // dtterm actually uses (0 and 1).
+            let srcPixel = colorTable.pixel(for: srcRGB) ?? 0
+            let scale = max(1, Int(self.scaleFactor.rounded()))
+            withDrawContext(target, clipRectangles: clipRectangles) { [weak self] ctx in
+                self?.fillGXxorPixelValue(
+                    ctx: ctx, rects: rectangles,
+                    srcPixel: srcPixel, colorTable: colorTable,
+                    scale: scale
+                )
+            }
+            return
+        }
+
         withDrawContext(target, clipRectangles: clipRectangles) { ctx in
-            // X GC function = 6 (GXxor): XOR fill toggles destination
-            // pixels. Athena's menu-item highlight relies on this — first
-            // XOR-fill highlights, second XOR-fill on the same area
-            // un-highlights, text preserved because XOR-then-XOR is
-            // identity. CG's .difference blend mode is XOR-equivalent
-            // for binary colors (|D - S|: black↔white inverts,
-            // intermediate values don't perfectly reverse but Athena
-            // only uses solid colors here). Function 3 (GXcopy) is the
-            // spec default — overwrite.
-            if function == 6 {  // GXxor
+            // GXxor fallback (no ColorTable available, e.g., tests): use
+            // CG difference blend. Correct only for binary-color pairs;
+            // dtterm's cursor relies on pixel-XOR semantics and needs the
+            // path above. Function 3 (GXcopy) is the spec default —
+            // overwrite.
+            if function == 6 {
                 ctx.setBlendMode(.difference)
             }
             applyFill(ctx, foreground)
             for r in rectangles {
                 ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
                                 width: CGFloat(r.width), height: CGFloat(r.height)))
+            }
+        }
+    }
+
+    /// True pixel-value XOR fill for a depth-8 destination. Walks every
+    /// device pixel inside each rect, reads its stored ARGB, reverse-maps
+    /// to an X pixel index via ColorTable, XORs with srcPixel, forward-
+    /// maps the result to an ARGB, and writes it back. Unallocated
+    /// destination pixels (AA edges that don't round-trip cleanly) fall
+    /// back to pixel 0 (white) for the reverse map. Unallocated result
+    /// pixels (XOR landing in an unallocated slot) render as black —
+    /// X spec lets us pick since the colormap entry is undefined.
+    ///
+    /// Built for dtterm's invert-cell cursor (a single small rect per
+    /// blink), so per-device-pixel work is fine.
+    private func fillGXxorPixelValue(
+        ctx: CGContext,
+        rects: [Framer.Rectangle],
+        srcPixel: UInt32,
+        colorTable: ColorTable,
+        scale: Int
+    ) {
+        guard let raw = ctx.data else { return }
+        let bytes = raw.assumingMemoryBound(to: UInt8.self)
+        let bpr = ctx.bytesPerRow
+        let ctxW = ctx.width
+        let ctxH = ctx.height
+
+        for r in rects {
+            let x0 = max(0, Int(r.x) * scale)
+            let y0 = max(0, Int(r.y) * scale)
+            let x1 = min(ctxW, (Int(r.x) + Int(r.width)) * scale)
+            let y1 = min(ctxH, (Int(r.y) + Int(r.height)) * scale)
+            for dy in y0..<y1 {
+                let rowBase = dy * bpr
+                for dx in x0..<x1 {
+                    let off = rowBase + dx * 4
+                    // BGRA in memory: [B][G][R][A]. Build RGB16 by byte
+                    // replication so the ColorTable lookup matches the
+                    // form ColorTable.pin stored.
+                    let b = bytes[off]
+                    let g = bytes[off + 1]
+                    let r2 = bytes[off + 2]
+                    let dstRGB = RGB16(
+                        red:   UInt16(r2) << 8 | UInt16(r2),
+                        green: UInt16(g)  << 8 | UInt16(g),
+                        blue:  UInt16(b)  << 8 | UInt16(b)
+                    )
+                    let dstPixel = colorTable.pixel(for: dstRGB) ?? 0
+                    let outPixel = dstPixel ^ srcPixel
+                    let outRGB = colorTable.rgb(for: outPixel) ?? RGB16(red: 0, green: 0, blue: 0)
+                    bytes[off]     = UInt8(outRGB.blue  >> 8)
+                    bytes[off + 1] = UInt8(outRGB.green >> 8)
+                    bytes[off + 2] = UInt8(outRGB.red   >> 8)
+                    // Leave alpha alone — keeps premultiplied invariant.
+                }
+            }
+        }
+    }
+
+    /// FillTiled + GXand on a depth-1 destination. Treats both pixmaps as
+    /// bitmaps (BLACK=1=set, WHITE=0=clear, the X11 paper/ink convention
+    /// we mirror in storage) and writes WHITE to every dst pixel where the
+    /// tile is clear; bits where the tile is set stay unchanged. That's
+    /// exactly `dst AND tile` for binary values. Built for Motif's
+    /// XmScale slider-stipple construction (5×13 dst, 16×16 tile) — tiny
+    /// inputs, run-length write the white spans so we're not making one
+    /// fill call per pixel.
+    private func fillTiledAndDepth1(
+        ctx: CGContext, rects: [Framer.Rectangle],
+        tile: StippleBitGrid,
+        originX: Int, originY: Int
+    ) {
+        let tw = tile.width
+        let th = tile.height
+        let bits = tile.bits
+
+        @inline(__always) func tileBit(_ x: Int, _ y: Int) -> Bool {
+            let tx = ((x - originX) % tw + tw) % tw
+            let ty = ((y - originY) % th + th) % th
+            return bits[ty * tw + tx]
+        }
+
+        // White = pixel value 0 = clear bit, matching PixelBuffer/StippleBitGrid.
+        applyFill(ctx, RGB16(red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF))
+        for r in rects {
+            let x0 = Int(r.x), x1 = Int(r.x) + Int(r.width)
+            let y0 = Int(r.y), y1 = Int(r.y) + Int(r.height)
+            for y in y0..<y1 {
+                var x = x0
+                while x < x1 {
+                    if !tileBit(x, y) {
+                        // Run-length the contiguous "tile clear" span.
+                        let start = x
+                        x += 1
+                        while x < x1, !tileBit(x, y) { x += 1 }
+                        ctx.fill(CGRect(x: CGFloat(start), y: CGFloat(y),
+                                        width: CGFloat(x - start), height: 1))
+                    } else {
+                        x += 1
+                    }
+                }
             }
         }
     }
