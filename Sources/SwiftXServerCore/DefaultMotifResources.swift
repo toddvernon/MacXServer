@@ -167,10 +167,10 @@ enum DefaultMotifResources {
     ! superclass but Xrm matches on the leaf-class name only, not the
     ! inheritance chain — so we have to spell out DtTerm. Both class
     ! and instance-name forms listed for robustness.
-    *DtTerm.background:         DarkBlue
-    *DtTerm.foreground:         Wheat
-    *dtTerm.background:         DarkBlue
-    *dtTerm.foreground:         Wheat
+    *DtTerm.background:         Black
+    *DtTerm.foreground:         White
+    *dtTerm.background:         Black
+    *dtTerm.foreground:         White
     ! dthelpview's manBox is a DtHelpQuickDialog instance; its rows/columns
     ! determine the dialog's initial aspect ratio. 32x80 matches u5's
     ! installed app-defaults (Dthelpview source line 43-44).
