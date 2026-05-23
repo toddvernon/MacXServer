@@ -200,8 +200,326 @@ enum DefaultMotifResources {
     Dthelpview*printButton.foreground:         Blue
     ! Shadow/highlight thinning collapsed to class-based rules. The audit
     ! confirmed the per-instance triple was equivalent and brittle to
-    ! button renames.
+    ! button renames. highlightThickness bumped 0 → 1 (2026-05-22) for
+    ! parity with the per-app chrome rules below (narrow focus ring, not
+    ! zero ring) — matches the reference look.
     Dthelpview*XmPushButtonGadget.shadowThickness:    1
-    Dthelpview*XmPushButtonGadget.highlightThickness: 0
+    Dthelpview*XmPushButtonGadget.highlightThickness: 1
+    !
+    ! ============================================================
+    ! Per-app dialog chrome thinning (2026-05-22)
+    ! ============================================================
+    ! Previous attempt used broad *XmDialogShell* rules; reverted because
+    ! they also reached quickplot's dialogs, modifying the reference look
+    ! we're trying to match. Re-doing as fully per-app, per-widget rules
+    ! prefixed with a dt-app class (Dtcalc*, Dtterm*, Dtpad*, Dthelpview*,
+    ! Dtaction*, Dtfile*) so quickplot (class Quickplot) is untouched.
+    !
+    ! Goal per the reference look:
+    !   - 1px shadow on action buttons (thin 3D, not deep trough)
+    !   - 1px focus highlight ring (visible but narrow, not zero)
+    !   - 1px default-button decoration (visible but not chunky)
+    !   - 1px Separator shadow (subtle divider)
+    !   - 1px Frame shadow where used
+    !
+    ! Instance names verified against the CDE source (May 2026); see the
+    ! per-section comments for the source file + line.
+    !
+    ! ---- Dtcalc dialogs ----
+    ! Source: reference/cde/cde/programs/dtcalc/motif.c, help.c.
+    ! Instance names: rframe (Memory Registers, motif.c:483),
+    ! frframe (Financial Registers, motif.c:566), cfframe
+    ! (Constant/Function entry, motif.c:1170), aframe (ASCII entry,
+    ! motif.c:2545), "continue" (Info dialog — note: NOT "notice"; that's
+    ! just the C variable name X->notice; the instance name passed to
+    ! XmCreateInformationDialog at motif.c:1423/1457 is "continue"),
+    ! ErroNotice (Error dialog, help.c:505), helpDlg (Help dialog,
+    ! help.c:85/443/473).
+    Dtcalc*rframe*XmPushButton.shadowThickness:                 1
+    Dtcalc*rframe*XmPushButton.highlightThickness:              1
+    Dtcalc*rframe*XmPushButton.defaultButtonShadowThickness:    1
+    Dtcalc*rframe*XmPushButtonGadget.shadowThickness:           1
+    Dtcalc*rframe*XmPushButtonGadget.highlightThickness:        1
+    Dtcalc*rframe*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtcalc*rframe*XmSeparator.shadowThickness:                  1
+    Dtcalc*rframe*XmSeparatorGadget.shadowThickness:            1
+    Dtcalc*frframe*XmPushButton.shadowThickness:                1
+    Dtcalc*frframe*XmPushButton.highlightThickness:             1
+    Dtcalc*frframe*XmPushButton.defaultButtonShadowThickness:   1
+    Dtcalc*frframe*XmPushButtonGadget.shadowThickness:          1
+    Dtcalc*frframe*XmPushButtonGadget.highlightThickness:       1
+    Dtcalc*frframe*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtcalc*frframe*XmSeparator.shadowThickness:                 1
+    Dtcalc*frframe*XmSeparatorGadget.shadowThickness:           1
+    Dtcalc*cfframe*XmPushButton.shadowThickness:                1
+    Dtcalc*cfframe*XmPushButton.highlightThickness:             1
+    Dtcalc*cfframe*XmPushButton.defaultButtonShadowThickness:   1
+    Dtcalc*cfframe*XmPushButtonGadget.shadowThickness:          1
+    Dtcalc*cfframe*XmPushButtonGadget.highlightThickness:       1
+    Dtcalc*cfframe*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtcalc*cfframe*XmSeparator.shadowThickness:                 1
+    Dtcalc*cfframe*XmSeparatorGadget.shadowThickness:           1
+    Dtcalc*aframe*XmPushButton.shadowThickness:                 1
+    Dtcalc*aframe*XmPushButton.highlightThickness:              1
+    Dtcalc*aframe*XmPushButton.defaultButtonShadowThickness:    1
+    Dtcalc*aframe*XmPushButtonGadget.shadowThickness:           1
+    Dtcalc*aframe*XmPushButtonGadget.highlightThickness:        1
+    Dtcalc*aframe*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtcalc*aframe*XmSeparator.shadowThickness:                  1
+    Dtcalc*aframe*XmSeparatorGadget.shadowThickness:            1
+    Dtcalc*continue*XmPushButton.shadowThickness:               1
+    Dtcalc*continue*XmPushButton.highlightThickness:            1
+    Dtcalc*continue*XmPushButton.defaultButtonShadowThickness:  1
+    Dtcalc*continue*XmPushButtonGadget.shadowThickness:         1
+    Dtcalc*continue*XmPushButtonGadget.highlightThickness:      1
+    Dtcalc*continue*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtcalc*continue*XmSeparator.shadowThickness:                1
+    Dtcalc*continue*XmSeparatorGadget.shadowThickness:          1
+    Dtcalc*ErroNotice*XmPushButton.shadowThickness:             1
+    Dtcalc*ErroNotice*XmPushButton.highlightThickness:          1
+    Dtcalc*ErroNotice*XmPushButton.defaultButtonShadowThickness: 1
+    Dtcalc*ErroNotice*XmPushButtonGadget.shadowThickness:       1
+    Dtcalc*ErroNotice*XmPushButtonGadget.highlightThickness:    1
+    Dtcalc*ErroNotice*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtcalc*ErroNotice*XmSeparator.shadowThickness:              1
+    Dtcalc*ErroNotice*XmSeparatorGadget.shadowThickness:        1
+    Dtcalc*helpDlg*XmPushButton.shadowThickness:                1
+    Dtcalc*helpDlg*XmPushButton.highlightThickness:             1
+    Dtcalc*helpDlg*XmPushButton.defaultButtonShadowThickness:   1
+    Dtcalc*helpDlg*XmPushButtonGadget.shadowThickness:          1
+    Dtcalc*helpDlg*XmPushButtonGadget.highlightThickness:       1
+    Dtcalc*helpDlg*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtcalc*helpDlg*XmSeparator.shadowThickness:                 1
+    Dtcalc*helpDlg*XmSeparatorGadget.shadowThickness:           1
+    !
+    ! ---- Dtterm dialogs ----
+    ! Source: reference/cde/cde/lib/DtTerm/TermView/*, programs/dtterm/*.
+    ! Instance names: terminal (Terminal Options, TermViewTerminalDialog.c:358),
+    ! global (Global Options, TermViewGlobalDialog.c:656), helpDialog
+    ! (Help, TermView.c:2016/2050 — used for both quick + full help),
+    ! termWarning (TermPrim warning, TermPrim.c:3653), IconEditorError
+    ! (sunDtTermServer.c:375).
+    ! The Terminal/Global option dialogs heavily use XmFrame to group
+    ! settings (KbdControlFrame, ScreenControlFrame, cursorFrame,
+    ! backgroundFrame, scrollFrame, bellFrame) and XmToggleButtonGadget
+    ! for option toggles.
+    Dtterm*terminal*XmPushButton.shadowThickness:               1
+    Dtterm*terminal*XmPushButton.highlightThickness:            1
+    Dtterm*terminal*XmPushButton.defaultButtonShadowThickness:  1
+    Dtterm*terminal*XmPushButtonGadget.shadowThickness:         1
+    Dtterm*terminal*XmPushButtonGadget.highlightThickness:      1
+    Dtterm*terminal*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtterm*terminal*XmToggleButton.shadowThickness:             1
+    Dtterm*terminal*XmToggleButton.highlightThickness:          1
+    Dtterm*terminal*XmToggleButtonGadget.shadowThickness:       1
+    Dtterm*terminal*XmToggleButtonGadget.highlightThickness:    1
+    Dtterm*terminal*XmSeparator.shadowThickness:                1
+    Dtterm*terminal*XmSeparatorGadget.shadowThickness:          1
+    Dtterm*terminal*XmFrame.shadowThickness:                    1
+    Dtterm*global*XmPushButton.shadowThickness:                 1
+    Dtterm*global*XmPushButton.highlightThickness:              1
+    Dtterm*global*XmPushButton.defaultButtonShadowThickness:    1
+    Dtterm*global*XmPushButtonGadget.shadowThickness:           1
+    Dtterm*global*XmPushButtonGadget.highlightThickness:        1
+    Dtterm*global*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtterm*global*XmToggleButton.shadowThickness:               1
+    Dtterm*global*XmToggleButton.highlightThickness:            1
+    Dtterm*global*XmToggleButtonGadget.shadowThickness:         1
+    Dtterm*global*XmToggleButtonGadget.highlightThickness:      1
+    Dtterm*global*XmSeparator.shadowThickness:                  1
+    Dtterm*global*XmSeparatorGadget.shadowThickness:            1
+    Dtterm*global*XmFrame.shadowThickness:                      1
+    Dtterm*helpDialog*XmPushButton.shadowThickness:             1
+    Dtterm*helpDialog*XmPushButton.highlightThickness:          1
+    Dtterm*helpDialog*XmPushButton.defaultButtonShadowThickness: 1
+    Dtterm*helpDialog*XmPushButtonGadget.shadowThickness:       1
+    Dtterm*helpDialog*XmPushButtonGadget.highlightThickness:    1
+    Dtterm*helpDialog*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtterm*helpDialog*XmSeparator.shadowThickness:              1
+    Dtterm*helpDialog*XmSeparatorGadget.shadowThickness:        1
+    Dtterm*termWarning*XmPushButton.shadowThickness:            1
+    Dtterm*termWarning*XmPushButton.highlightThickness:         1
+    Dtterm*termWarning*XmPushButton.defaultButtonShadowThickness: 1
+    Dtterm*termWarning*XmPushButtonGadget.shadowThickness:      1
+    Dtterm*termWarning*XmPushButtonGadget.highlightThickness:   1
+    Dtterm*termWarning*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtterm*termWarning*XmSeparator.shadowThickness:             1
+    Dtterm*termWarning*XmSeparatorGadget.shadowThickness:       1
+    Dtterm*IconEditorError*XmPushButton.shadowThickness:        1
+    Dtterm*IconEditorError*XmPushButton.highlightThickness:     1
+    Dtterm*IconEditorError*XmPushButton.defaultButtonShadowThickness: 1
+    Dtterm*IconEditorError*XmPushButtonGadget.shadowThickness:  1
+    Dtterm*IconEditorError*XmPushButtonGadget.highlightThickness: 1
+    Dtterm*IconEditorError*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtterm*IconEditorError*XmSeparator.shadowThickness:         1
+    Dtterm*IconEditorError*XmSeparatorGadget.shadowThickness:   1
+    !
+    ! ---- Dtpad dialogs ----
+    ! Source: reference/cde/cde/programs/dtpad/fileDlg.c, helpDlg.c,
+    ! printSetup.c; reference/cde/cde/lib/DtWidget/SearchDlg.c, Editor.c.
+    ! Instance names: Warn (both alrdy_exist and gen_warning use the
+    ! instance name "Warn" — fileDlg.c:117, 781), save_dialog (SaveAs
+    ! FileSelectionDialog — NOT "saveAs_form"; that's the C variable.
+    ! fileDlg.c:345-346 passes "save_dialog" to XmCreateFileSelectionDialog),
+    ! file_sel_dlg (open FileSelectionDialog, fileDlg.c:574-575),
+    ! save_warn (PromptDialog, fileDlg.c:648), ad_dial (DtEditor format
+    ! settings — NOT "formatDialog"; Editor.c:7220-7221 passes "ad_dial"
+    ! to XmCreateFormDialog. "formatDialog" is only a help-topic ID),
+    ! findDlg (DtEditor find/replace — NOT "searchDialog"; SearchDlg.c:304-305
+    ! passes "findDlg" to XmCreateFormDialog), DtPrintSetup
+    ! (printSetup.c:945), helpDlg (helpDlg.c:151).
+    Dtpad*Warn*XmPushButton.shadowThickness:                    1
+    Dtpad*Warn*XmPushButton.highlightThickness:                 1
+    Dtpad*Warn*XmPushButton.defaultButtonShadowThickness:       1
+    Dtpad*Warn*XmPushButtonGadget.shadowThickness:              1
+    Dtpad*Warn*XmPushButtonGadget.highlightThickness:           1
+    Dtpad*Warn*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtpad*Warn*XmSeparator.shadowThickness:                     1
+    Dtpad*Warn*XmSeparatorGadget.shadowThickness:               1
+    Dtpad*save_dialog*XmPushButton.shadowThickness:             1
+    Dtpad*save_dialog*XmPushButton.highlightThickness:          1
+    Dtpad*save_dialog*XmPushButton.defaultButtonShadowThickness: 1
+    Dtpad*save_dialog*XmPushButtonGadget.shadowThickness:       1
+    Dtpad*save_dialog*XmPushButtonGadget.highlightThickness:    1
+    Dtpad*save_dialog*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtpad*save_dialog*XmSeparator.shadowThickness:              1
+    Dtpad*save_dialog*XmSeparatorGadget.shadowThickness:        1
+    Dtpad*file_sel_dlg*XmPushButton.shadowThickness:            1
+    Dtpad*file_sel_dlg*XmPushButton.highlightThickness:         1
+    Dtpad*file_sel_dlg*XmPushButton.defaultButtonShadowThickness: 1
+    Dtpad*file_sel_dlg*XmPushButtonGadget.shadowThickness:      1
+    Dtpad*file_sel_dlg*XmPushButtonGadget.highlightThickness:   1
+    Dtpad*file_sel_dlg*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtpad*file_sel_dlg*XmSeparator.shadowThickness:             1
+    Dtpad*file_sel_dlg*XmSeparatorGadget.shadowThickness:       1
+    Dtpad*save_warn*XmPushButton.shadowThickness:               1
+    Dtpad*save_warn*XmPushButton.highlightThickness:            1
+    Dtpad*save_warn*XmPushButton.defaultButtonShadowThickness:  1
+    Dtpad*save_warn*XmPushButtonGadget.shadowThickness:         1
+    Dtpad*save_warn*XmPushButtonGadget.highlightThickness:      1
+    Dtpad*save_warn*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtpad*save_warn*XmSeparator.shadowThickness:                1
+    Dtpad*save_warn*XmSeparatorGadget.shadowThickness:          1
+    Dtpad*ad_dial*XmPushButton.shadowThickness:                 1
+    Dtpad*ad_dial*XmPushButton.highlightThickness:              1
+    Dtpad*ad_dial*XmPushButton.defaultButtonShadowThickness:    1
+    Dtpad*ad_dial*XmPushButtonGadget.shadowThickness:           1
+    Dtpad*ad_dial*XmPushButtonGadget.highlightThickness:        1
+    Dtpad*ad_dial*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtpad*ad_dial*XmToggleButton.shadowThickness:               1
+    Dtpad*ad_dial*XmToggleButton.highlightThickness:            1
+    Dtpad*ad_dial*XmToggleButtonGadget.shadowThickness:         1
+    Dtpad*ad_dial*XmToggleButtonGadget.highlightThickness:      1
+    Dtpad*ad_dial*XmSeparator.shadowThickness:                  1
+    Dtpad*ad_dial*XmSeparatorGadget.shadowThickness:            1
+    Dtpad*ad_dial*XmFrame.shadowThickness:                      1
+    Dtpad*findDlg*XmPushButton.shadowThickness:                 1
+    Dtpad*findDlg*XmPushButton.highlightThickness:              1
+    Dtpad*findDlg*XmPushButton.defaultButtonShadowThickness:    1
+    Dtpad*findDlg*XmPushButtonGadget.shadowThickness:           1
+    Dtpad*findDlg*XmPushButtonGadget.highlightThickness:        1
+    Dtpad*findDlg*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtpad*findDlg*XmToggleButton.shadowThickness:               1
+    Dtpad*findDlg*XmToggleButton.highlightThickness:            1
+    Dtpad*findDlg*XmToggleButtonGadget.shadowThickness:         1
+    Dtpad*findDlg*XmToggleButtonGadget.highlightThickness:      1
+    Dtpad*findDlg*XmSeparator.shadowThickness:                  1
+    Dtpad*findDlg*XmSeparatorGadget.shadowThickness:            1
+    Dtpad*DtPrintSetup*XmPushButton.shadowThickness:            1
+    Dtpad*DtPrintSetup*XmPushButton.highlightThickness:         1
+    Dtpad*DtPrintSetup*XmPushButton.defaultButtonShadowThickness: 1
+    Dtpad*DtPrintSetup*XmPushButtonGadget.shadowThickness:      1
+    Dtpad*DtPrintSetup*XmPushButtonGadget.highlightThickness:   1
+    Dtpad*DtPrintSetup*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtpad*DtPrintSetup*XmSeparator.shadowThickness:             1
+    Dtpad*DtPrintSetup*XmSeparatorGadget.shadowThickness:       1
+    Dtpad*DtPrintSetup*XmFrame.shadowThickness:                 1
+    Dtpad*helpDlg*XmPushButton.shadowThickness:                 1
+    Dtpad*helpDlg*XmPushButton.highlightThickness:              1
+    Dtpad*helpDlg*XmPushButton.defaultButtonShadowThickness:    1
+    Dtpad*helpDlg*XmPushButtonGadget.shadowThickness:           1
+    Dtpad*helpDlg*XmPushButtonGadget.highlightThickness:        1
+    Dtpad*helpDlg*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtpad*helpDlg*XmSeparator.shadowThickness:                  1
+    Dtpad*helpDlg*XmSeparatorGadget.shadowThickness:            1
+    !
+    ! ---- Dthelpview dialogs ----
+    ! Source: reference/cde/cde/programs/dthelp/dthelpview/{Util.c, ManPage.c}.
+    ! Instance names: manBox (DtHelpQuickDialog, Util.c:595),
+    ! fileBox (DtHelpQuickDialog, Util.c:510),
+    ! helpWidget (DtHelpDialog, Util.c:350),
+    ! manWidget (XmCreateDialogShell wrapping manForm + manBtn + closeBtn,
+    ! ManPage.c:165). Note: the existing Dthelpview*XmPushButtonGadget
+    ! .shadowThickness:1 / .highlightThickness:1 (above) already covers
+    ! the action buttons across these dialogs; the per-dialog rules below
+    ! pick up Separators / Frames / widget-class (non-gadget) variants
+    ! plus defaultButtonShadowThickness.
+    Dthelpview*manBox*XmPushButton.shadowThickness:             1
+    Dthelpview*manBox*XmPushButton.highlightThickness:          1
+    Dthelpview*manBox*XmPushButton.defaultButtonShadowThickness: 1
+    Dthelpview*manBox*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dthelpview*manBox*XmSeparator.shadowThickness:              1
+    Dthelpview*manBox*XmSeparatorGadget.shadowThickness:        1
+    Dthelpview*fileBox*XmPushButton.shadowThickness:            1
+    Dthelpview*fileBox*XmPushButton.highlightThickness:         1
+    Dthelpview*fileBox*XmPushButton.defaultButtonShadowThickness: 1
+    Dthelpview*fileBox*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dthelpview*fileBox*XmSeparator.shadowThickness:             1
+    Dthelpview*fileBox*XmSeparatorGadget.shadowThickness:       1
+    Dthelpview*helpWidget*XmPushButton.shadowThickness:         1
+    Dthelpview*helpWidget*XmPushButton.highlightThickness:      1
+    Dthelpview*helpWidget*XmPushButton.defaultButtonShadowThickness: 1
+    Dthelpview*helpWidget*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dthelpview*helpWidget*XmSeparator.shadowThickness:          1
+    Dthelpview*helpWidget*XmSeparatorGadget.shadowThickness:    1
+    Dthelpview*manWidget*XmPushButton.shadowThickness:          1
+    Dthelpview*manWidget*XmPushButton.highlightThickness:       1
+    Dthelpview*manWidget*XmPushButton.defaultButtonShadowThickness: 1
+    Dthelpview*manWidget*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dthelpview*manWidget*XmSeparator.shadowThickness:           1
+    Dthelpview*manWidget*XmSeparatorGadget.shadowThickness:     1
+    !
+    ! ---- Dtaction dialogs ----
+    ! Source: reference/cde/cde/programs/dtaction/Main.c.
+    ! Instance names: err (XmCreateErrorDialog, Main.c:796 + Main.c:1199 —
+    ! two creation sites, both use the same "err" instance name),
+    ! prompt (XmCreatePromptDialog for password prompt, Main.c:916).
+    Dtaction*err*XmPushButton.shadowThickness:                  1
+    Dtaction*err*XmPushButton.highlightThickness:               1
+    Dtaction*err*XmPushButton.defaultButtonShadowThickness:     1
+    Dtaction*err*XmPushButtonGadget.shadowThickness:            1
+    Dtaction*err*XmPushButtonGadget.highlightThickness:         1
+    Dtaction*err*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtaction*err*XmSeparator.shadowThickness:                   1
+    Dtaction*err*XmSeparatorGadget.shadowThickness:             1
+    Dtaction*prompt*XmPushButton.shadowThickness:               1
+    Dtaction*prompt*XmPushButton.highlightThickness:            1
+    Dtaction*prompt*XmPushButton.defaultButtonShadowThickness:  1
+    Dtaction*prompt*XmPushButtonGadget.shadowThickness:         1
+    Dtaction*prompt*XmPushButtonGadget.highlightThickness:      1
+    Dtaction*prompt*XmPushButtonGadget.defaultButtonShadowThickness: 1
+    Dtaction*prompt*XmSeparator.shadowThickness:                1
+    Dtaction*prompt*XmSeparatorGadget.shadowThickness:          1
+    !
+    ! ---- Dtfile (universal app-scoped rules) ----
+    ! dtfile has many dialogs across Help.c, HelpCB.c, Main.c, ModAttr.c,
+    ! ChangeDir.c, Prefs.c, FileDialog.c, Filter.c, Find.c, OverWrite.c,
+    ! FileMgr.c, MultiView.c, Desktop.c. Per-dialog enumeration would
+    ! double the size of this file with diminishing returns. Use
+    ! Dtfile-scoped class rules: still per-app (no spillover to
+    ! quickplot, class Quickplot), just less granular than the others.
+    Dtfile*XmPushButton.shadowThickness:                        1
+    Dtfile*XmPushButton.highlightThickness:                     1
+    Dtfile*XmPushButton.defaultButtonShadowThickness:           1
+    Dtfile*XmPushButtonGadget.shadowThickness:                  1
+    Dtfile*XmPushButtonGadget.highlightThickness:               1
+    Dtfile*XmPushButtonGadget.defaultButtonShadowThickness:     1
+    Dtfile*XmToggleButton.shadowThickness:                      1
+    Dtfile*XmToggleButton.highlightThickness:                   1
+    Dtfile*XmToggleButtonGadget.shadowThickness:                1
+    Dtfile*XmToggleButtonGadget.highlightThickness:             1
+    Dtfile*XmSeparator.shadowThickness:                         1
+    Dtfile*XmSeparatorGadget.shadowThickness:                   1
+    Dtfile*XmFrame.shadowThickness:                             1
     """
 }
