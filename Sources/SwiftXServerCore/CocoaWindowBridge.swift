@@ -67,42 +67,101 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// with AA edges at cell boundaries.
     public let scaleFactor: Double
 
-    /// Lookup for a pixmap's PixelBuffer by id. Set by the session at startup
-    /// via `setPixmapBufferLookup`. Lets `withDrawContext(.pixmap)` resolve
-    /// the CGBitmapContext without CocoaWindowBridge having a direct
-    /// dependency on `PixmapTable`. nil = treat pixmap draws as silent-drop
-    /// (pre-Stage-1b behavior, used by tests that don't construct a session).
-    private var pixmapBufferLookup: (@Sendable (UInt32) -> PixelBuffer?)?
+    /// Multi-session lookup registry. The bridge is a singleton shared
+    /// across all connected sessions, but pixmap tables and window tables
+    /// are session-local. Pre-2026-05-23 we stored a single closure per
+    /// lookup type, set-last-wins; that broke as soon as two Motif apps
+    /// ran concurrently — session B's closures overwrote session A's, so
+    /// every draw on a session-A window asked session B's table for the
+    /// window, missed, and silently dropped (visible as "second app's
+    /// menu items don't render text + highlight while bg + outline do").
+    ///
+    /// Now: each session registers its closure under its own token
+    /// (`bridgeHandlerToken`) on connect, and unregisters on disconnect.
+    /// Internal `lookupX(...)` helpers walk all registered closures and
+    /// return the first non-nil result. Per-session contracts:
+    ///   - pixmap-buffer lookup: returns the PixelBuffer if this session
+    ///     owns the pixmap id, else nil.
+    ///   - window-clip lookup: returns the clipList rects (possibly
+    ///     empty array = "known but fully obscured") if this session
+    ///     owns the window id, else nil.
+    ///   - color-table lookup: server-global ColorTable — same instance
+    ///     across all sessions, so multi-registration is harmless.
+    ///
+    /// `setX` setters are kept for backward compat with tests that don't
+    /// use a session token; internally they register under token 0.
+    private let lookupLock = NSLock()
+    private var pixmapBufferLookups: [UInt64: @Sendable (UInt32) -> PixelBuffer?] = [:]
+    private var windowClipLookups:   [UInt64: @Sendable (UInt32) -> [Framer.Rectangle]?] = [:]
+    private var colorTableLookups:   [UInt64: @Sendable () -> ColorTable?] = [:]
 
+    public func registerPixmapBufferLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> PixelBuffer?) {
+        lookupLock.lock(); defer { lookupLock.unlock() }
+        pixmapBufferLookups[token] = lookup
+    }
+    public func unregisterPixmapBufferLookup(token: UInt64) {
+        lookupLock.lock(); defer { lookupLock.unlock() }
+        pixmapBufferLookups.removeValue(forKey: token)
+    }
     public func setPixmapBufferLookup(_ lookup: @escaping @Sendable (UInt32) -> PixelBuffer?) {
-        self.pixmapBufferLookup = lookup
+        registerPixmapBufferLookup(token: 0, lookup)
+    }
+    private func lookupPixmapBuffer(_ id: UInt32) -> PixelBuffer? {
+        lookupLock.lock()
+        let closures = Array(pixmapBufferLookups.values)
+        lookupLock.unlock()
+        for lookup in closures {
+            if let buf = lookup(id) { return buf }
+        }
+        return nil
     }
 
-    /// Closure for forward + reverse mapping between X pixel values and
-    /// RGB16. Set by the session via `setColorTableLookup` so depth-8
-    /// drawing paths that need true pixel-value semantics (GXxor for
-    /// dtterm's invert-cell cursor) can reconstruct pixel indices from
-    /// the 32-bit ARGB stored in our backing bitmaps. nil during early
-    /// bring-up / tests; GXxor falls back to its `.difference` blend-mode
-    /// approximation when not available.
-    private var colorTableLookup: (@Sendable () -> ColorTable?)?
-
-    public func setColorTableLookup(_ lookup: @escaping @Sendable () -> ColorTable?) {
-        self.colorTableLookup = lookup
+    public func registerWindowClipLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> [Framer.Rectangle]?) {
+        lookupLock.lock(); defer { lookupLock.unlock() }
+        windowClipLookups[token] = lookup
     }
-
-    /// Closure that maps a window id → its visible-region rects (clipList,
-    /// in top-level coords). Set by the session via `setWindowClipLookup`.
-    /// nil during early bring-up / tests that don't wire up the session;
-    /// `withDrawContext` falls back to "no window clip" in that case so
-    /// existing tests that draw via DrawTarget without a real window tree
-    /// still render. Real X-server behavior requires this to be set —
-    /// without it, draw ops aren't clipped to the window's visible region
-    /// and a parent's bg paint will bleed through descendant windows.
-    private var windowClipLookup: (@Sendable (UInt32) -> [Framer.Rectangle])?
-
+    public func unregisterWindowClipLookup(token: UInt64) {
+        lookupLock.lock(); defer { lookupLock.unlock() }
+        windowClipLookups.removeValue(forKey: token)
+    }
+    /// Legacy single-set entry point. Tests that don't construct a session
+    /// use this; it registers under token 0. Note the closure here returns
+    /// non-optional `[Framer.Rectangle]` (the pre-2026-05-23 contract);
+    /// we wrap it to match the new optional contract by returning the
+    /// array even when empty (the legacy behavior — empty = fully
+    /// obscured, which `withDrawContext` short-circuits on).
     public func setWindowClipLookup(_ lookup: @escaping @Sendable (UInt32) -> [Framer.Rectangle]) {
-        self.windowClipLookup = lookup
+        registerWindowClipLookup(token: 0) { id in lookup(id) }
+    }
+    private func lookupWindowClip(_ id: UInt32) -> [Framer.Rectangle]? {
+        lookupLock.lock()
+        let closures = Array(windowClipLookups.values)
+        lookupLock.unlock()
+        for lookup in closures {
+            if let clip = lookup(id) { return clip }
+        }
+        return nil
+    }
+
+    public func registerColorTableLookup(token: UInt64, _ lookup: @escaping @Sendable () -> ColorTable?) {
+        lookupLock.lock(); defer { lookupLock.unlock() }
+        colorTableLookups[token] = lookup
+    }
+    public func unregisterColorTableLookup(token: UInt64) {
+        lookupLock.lock(); defer { lookupLock.unlock() }
+        colorTableLookups.removeValue(forKey: token)
+    }
+    public func setColorTableLookup(_ lookup: @escaping @Sendable () -> ColorTable?) {
+        registerColorTableLookup(token: 0, lookup)
+    }
+    private func lookupColorTable() -> ColorTable? {
+        lookupLock.lock()
+        let closures = Array(colorTableLookups.values)
+        lookupLock.unlock()
+        for lookup in closures {
+            if let ct = lookup() { return ct }
+        }
+        return nil
     }
 
 
@@ -159,9 +218,12 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // (in top-level coords) once here and pass it through to
             // withClip alongside the translated GC clip. Empty clipList =
             // window fully obscured — withClip short-circuits and the
-            // body never runs. Lookup nil = test/bring-up path; degrade
-            // to GC-clip-only so legacy tests still pass.
-            let windowClip = self.windowClipLookup?(windowId)
+            // body never runs. Lookup nil = no session knows the window
+            // (test/bring-up path, or cross-session lookup miss that
+            // pre-2026-05-23 silently dropped draws); degrade to
+            // GC-clip-only so legacy tests still pass and so a draw on
+            // a window the bridge doesn't know about still happens.
+            let windowClip = self.lookupWindowClip(windowId)
             DispatchQueue.main.async { [weak self] in
                 guard let self = self,
                       let view = self.slot(topLevel)?.view,
@@ -172,7 +234,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 view.setNeedsDisplay(view.bounds)
             }
         case .pixmap(let id, let depth):
-            guard let buffer = self.pixmapBufferLookup?(id) else { return }
+            guard let buffer = self.lookupPixmapBuffer(id) else { return }
             self.withClip(buffer.context, clipRectangles) {
                 if depth == 1 {
                     // Depth-1 pixmaps are usually stipple sources.
@@ -912,7 +974,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             }
 
         case .pixmap(let id, _):
-            guard let buf = pixmapBufferLookup?(id),
+            guard let buf = lookupPixmapBuffer(id),
                   let data = buf.context.data else { return [] }
             sampleBGRA(
                 data: data,
@@ -969,7 +1031,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         // dst is a window.
         switch src {
         case .pixmap(let srcId, _):
-            guard let buffer = self.pixmapBufferLookup?(srcId),
+            guard let buffer = self.lookupPixmapBuffer(srcId),
                   let srcImage = buffer.context.makeImage() else { return }
             // Pixmap backings are stored at device scale (see PixelBuffer);
             // the resulting CGImage is `width*scaleFactor × height*scaleFactor`
@@ -1156,7 +1218,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         // block) renders as the solid block and obscures the character
         // under the cursor.
         if (fillStyle == 2 || fillStyle == 3), stipple != 0,
-           let stippleBuf = pixmapBufferLookup?(stipple),
+           let stippleBuf = lookupPixmapBuffer(stipple),
            let stippleBitGrid = StippleBitGrid(buffer: stippleBuf) {
             let opaque = (fillStyle == 3)
             withDrawContext(target, clipRectangles: clipRectangles) { [weak self] ctx in
@@ -1186,7 +1248,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         // So we only need to paint white where the tile is clear.
         if fillStyle == 1, function == 1, tile != 0,
            case .pixmap(_, let dstDepth) = target, dstDepth == 1,
-           let tileBuf = pixmapBufferLookup?(tile),
+           let tileBuf = lookupPixmapBuffer(tile),
            let tileBitGrid = StippleBitGrid(buffer: tileBuf) {
             withDrawContext(target, clipRectangles: clipRectangles) { [weak self] ctx in
                 self?.fillTiledAndDepth1(
@@ -1210,7 +1272,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         // space, forward-maps the result back to ARGB, and writes. Falls
         // back to .difference for tests without a ColorTable or when the
         // GXxor case doesn't apply.
-        if function == 6, let lookup = colorTableLookup, let colorTable = lookup() {
+        if function == 6, let colorTable = lookupColorTable() {
             let srcRGB = foreground
             // Reverse-map the source RGB to its pixel index. dtterm sets
             // cursorGC.foreground to a pure pixel index (no AllocColor),

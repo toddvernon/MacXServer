@@ -289,13 +289,24 @@ public final class ServerSession: @unchecked Sendable {
         // this to find the CGBitmapContext for pixmap-targeted draws. See
         // setPixmapBufferLookup doc in WindowBridge.swift for the
         // multi-session caveat (most-recently-set lookup wins).
-        bridge?.setPixmapBufferLookup { [weak self] id in self?.pixmaps.buffer(for: id) }
-        // Hand the bridge a closure that resolves to the server-global
-        // ColorTable. Lets the depth-8 GXxor path (dtterm cursor invert)
-        // reverse-map ARGB pixels back to X pixel indices and do true
-        // pixel-value XOR instead of the CGBlendMode.difference
-        // approximation that fails on black-on-black.
-        bridge?.setColorTableLookup { [weak self] in self?.colors }
+        // Register the per-session lookups under our bridgeHandlerToken.
+        // Multi-session safe: the bridge keeps a dictionary keyed by
+        // token and walks all entries until one returns a non-nil
+        // result. Pre-2026-05-23 these were single closures that the
+        // most-recently-connected session overwrote, silently breaking
+        // every other session's window draws (visible as "second Motif
+        // app's menu items don't render text + highlight while bg +
+        // outline do," because bg paint goes through paintWindowRects
+        // which doesn't consult windowClipLookup but text rendering
+        // does and short-circuits on the empty-array miss).
+        bridge?.registerPixmapBufferLookup(token: bridgeHandlerToken) { [weak self] id in
+            self?.pixmaps.buffer(for: id)
+        }
+        // ColorTable is server-global so multi-registration is harmless;
+        // each session returns the same instance.
+        bridge?.registerColorTableLookup(token: bridgeHandlerToken) { [weak self] in
+            self?.colors
+        }
         // Hand the bridge a closure that resolves window ids to their
         // current clipList rects (visible region in top-level coords).
         // withDrawContext for window targets uses this to set CGContext.clip
@@ -303,8 +314,14 @@ public final class ServerSession: @unchecked Sendable {
         // ref: mi/migc.c:miComputeCompositeClip. Without this the parent's
         // bg paint bleeds through descendant windows — the dthelpview
         // 2026-05-19 "leftover blue rectangles on expand" bug.
-        bridge?.setWindowClipLookup { [weak self] id -> [Framer.Rectangle] in
-            guard let self = self, let entry = self.windows.get(id) else { return [] }
+        bridge?.registerWindowClipLookup(token: bridgeHandlerToken) { [weak self] id -> [Framer.Rectangle]? in
+            // Return nil (not []) when this session doesn't own the
+            // window — that's the signal to the bridge to ask other
+            // registered sessions' lookups. `[]` means "owned but fully
+            // obscured" which short-circuits the draw in withDrawContext.
+            // The pre-2026-05-23 closure returned [] for both cases,
+            // which broke multi-session draws.
+            guard let self = self, let entry = self.windows.get(id) else { return nil }
             return entry.clipList.rects.map { box in
                 Framer.Rectangle(
                     x: Int16(clamping: box.x1),
@@ -2998,6 +3015,13 @@ public final class ServerSession: @unchecked Sendable {
         // closures stop firing on every AppKit event. Safe even when
         // bridge is nil (test mode).
         bridge?.removeHandlers(token: bridgeHandlerToken)
+        // Pull the per-session lookups too — pre-2026-05-23 these were
+        // single set-last-wins fields, now they're keyed by token and
+        // need explicit unregister so a future session's lookup for a
+        // window id doesn't fall through to a dead session's closure.
+        bridge?.unregisterPixmapBufferLookup(token: bridgeHandlerToken)
+        bridge?.unregisterColorTableLookup(token: bridgeHandlerToken)
+        bridge?.unregisterWindowClipLookup(token: bridgeHandlerToken)
         guard let bridge = bridge, let bo = byteOrder else { return }
         // Snapshot top-level ids first (mutating windows during walk would
         // be a bug). Top-levels = direct children of the root window.

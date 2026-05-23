@@ -300,7 +300,19 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// `withDrawContext` for window targets to set CGContext.clip to the
     /// composite clip = window clipList ∩ GC user clip. Spec ref:
     /// mi/migc.c:miComputeCompositeClip. Session registers once on init.
+    /// Legacy single-set entry; production code uses
+    /// `registerWindowClipLookup(token:_:)` so multiple sessions can
+    /// coexist (pre-2026-05-23 this was last-write-wins, which silently
+    /// broke draws on session A's windows once session B connected).
     func setWindowClipLookup(_ lookup: @escaping @Sendable (UInt32) -> [Rectangle])
+
+    /// Register a per-session window-clip lookup. The closure should
+    /// return nil when this session doesn't own the window (lets the
+    /// bridge consult other sessions), and `[]` when the window IS
+    /// owned but fully obscured (withDrawContext short-circuits on
+    /// empty). On disconnect, call `unregisterWindowClipLookup(token:)`.
+    func registerWindowClipLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> [Rectangle]?)
+    func unregisterWindowClipLookup(token: UInt64)
 
     /// CopyArea: copies a rectangular region of pixels from `src` to `dst`.
     /// All five spec-supported variants resolve via DrawTarget: window→window
@@ -437,17 +449,26 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// pixmap, getting the per-pixmap CGBitmapContext that backs the draw.
     /// Default no-op for test/mock bridges that don't render into pixmaps
     /// (their pixmap draws silent-drop). With multiple sessions sharing a
-    /// bridge, the most-recently-set lookup wins — fine for single-session
-    /// dev/test, broken for multi-session, but multi-session has no
-    /// integration test coverage yet anyway.
+    /// bridge, the most-recently-set lookup wins. Pre-2026-05-23 this
+    /// was the only entry point and broke multi-session apps; now also
+    /// have `registerPixmapBufferLookup(token:_:)` for per-session use.
     func setPixmapBufferLookup(_ lookup: @escaping @Sendable (UInt32) -> PixelBuffer?)
+
+    /// Register a per-session pixmap-buffer lookup. Returns the buffer
+    /// if this session owns the pixmap id, else nil so the bridge can
+    /// fall through to other sessions' lookups.
+    func registerPixmapBufferLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> PixelBuffer?)
+    func unregisterPixmapBufferLookup(token: UInt64)
 
     /// Install the server's ColorTable for reverse-mapping ARGB pixels to
     /// X pixel indices. Required by the GXxor true-pixel-value path in
     /// PolyFillRectangle (dtterm's invert-cell cursor) — without it the
     /// path falls back to a CGBlendMode.difference approximation that
     /// fails when src and dst RGB are equal (black-on-black = invisible).
+    /// Server-global object — multi-registration is harmless.
     func setColorTableLookup(_ lookup: @escaping @Sendable () -> ColorTable?)
+    func registerColorTableLookup(token: UInt64, _ lookup: @escaping @Sendable () -> ColorTable?)
+    func unregisterColorTableLookup(token: UInt64)
 
     /// Push a cursor to display when the pointer is inside the given
     /// top-level NSWindow's content area. `glyph` is the X cursor-font
@@ -501,7 +522,11 @@ public extension WindowBridge {
     func setOnCloseRequest(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void) {}
     func removeHandlers(token: UInt64) {}
     func setPixmapBufferLookup(_ lookup: @escaping @Sendable (UInt32) -> PixelBuffer?) {}
+    func registerPixmapBufferLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> PixelBuffer?) {}
+    func unregisterPixmapBufferLookup(token: UInt64) {}
     func setColorTableLookup(_ lookup: @escaping @Sendable () -> ColorTable?) {}
+    func registerColorTableLookup(token: UInt64, _ lookup: @escaping @Sendable () -> ColorTable?) {}
+    func unregisterColorTableLookup(token: UInt64) {}
     // Default no-ops so unit-test bridges don't have to implement every method.
     func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
     func drawPolyLine(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
@@ -523,6 +548,8 @@ public extension WindowBridge {
     func stopCrossWindowDragTracking() {}
     func clearArea(topLevel: UInt32, rects: [Rectangle], background: RGB16) {}
     func setWindowClipLookup(_ lookup: @escaping @Sendable (UInt32) -> [Rectangle]) {}
+    func registerWindowClipLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> [Rectangle]?) {}
+    func unregisterWindowClipLookup(token: UInt64) {}
     func copyArea(
         src: DrawTarget,
         dst: DrawTarget,
