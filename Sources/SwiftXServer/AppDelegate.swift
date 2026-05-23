@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem?
     private var prefsController: PreferencesWindowController?
+    private var resourcesController: ResourcesWindowController?
 
     /// Display string shown in the status-bar menu's first (disabled) row,
     /// e.g. "Listening on :6000 (display :0)". main.swift sets this once
@@ -68,6 +69,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                   keyEquivalent: ",")
         prefsRow.target = self
         menu.addItem(prefsRow)
+
+        let resourcesRow = NSMenuItem(title: "Edit Resources\u{2026}",
+                                      action: #selector(openResources(_:)),
+                                      keyEquivalent: "")
+        resourcesRow.target = self
+        menu.addItem(resourcesRow)
         menu.addItem(.separator())
 
         let quitRow = NSMenuItem(title: "Quit swiftx-server",
@@ -95,6 +102,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                keyEquivalent: ",")
         prefs.target = self
         appMenu.addItem(prefs)
+
+        let resources = NSMenuItem(title: "Edit Resources\u{2026}",
+                                   action: #selector(openResources(_:)),
+                                   keyEquivalent: "")
+        resources.target = self
+        appMenu.addItem(resources)
+
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: "Hide swiftx-server",
                                    action: #selector(NSApplication.hide(_:)),
@@ -159,5 +173,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             prefsController = PreferencesWindowController(preferences: preferences)
         }
         prefsController?.showWindow()
+    }
+
+    @MainActor
+    @objc private func openResources(_ sender: Any?) {
+        if resourcesController == nil {
+            resourcesController = ResourcesWindowController()
+        }
+        resourcesController?.showWindow()
     }
 }

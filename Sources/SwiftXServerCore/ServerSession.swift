@@ -503,16 +503,21 @@ public final class ServerSession: @unchecked Sendable {
             value: mwmInfoBytes
         )
 
-        // RESOURCE_MANAGER on root, populated with our Tier 1 Motif
-        // widget-class defaults (Helvetica via FontResolver's substitution
-        // table). See MOTIF_TEXT_QUALITY.md → "The control surface:
-        // RESOURCE_MANAGER" for why we publish this and what's in it.
+        // RESOURCE_MANAGER on root. Content comes from the user-editable
+        // file at `~/.swiftx-resources` (seeded on first run from
+        // `DefaultThemes.seedContent`, then owned by the user). The
+        // file's `[global]` plus `[theme:<active>]` sections concatenate
+        // to form the bytes published. See THEMES.md for the format and
+        // MOTIF_TEXT_QUALITY.md → "The control surface: RESOURCE_MANAGER"
+        // for why we publish this at all.
         //
-        // This replaces the 2026-05-18-retired CDE-flavored fixture.
-        // That was about impersonating CDE; this is about steering Motif
-        // to request XLFDs that map cleanly to Mac fonts through our
-        // resolver. Different purpose, smaller content (~250 bytes vs
-        // 3910 bytes), no CDE-specific resources.
+        // Phase 1 of the themes work: file is loaded once per session
+        // at startup. Reload-on-save and the Preferences editor land in
+        // a later commit; the file-driven pipeline itself lives here.
+        let file = ResourceFileLoader.loadOrSeed(
+            seed: DefaultThemes.seedContent,
+            log: log
+        )
         let resourceManagerAtom: UInt32 = 23   // predefined RESOURCE_MANAGER
         let stringAtom: UInt32 = 31            // predefined STRING
         properties.change(
@@ -521,7 +526,7 @@ public final class ServerSession: @unchecked Sendable {
             type: stringAtom,
             format: 8,
             mode: 0,
-            value: DefaultMotifResources.bytes
+            value: file.resourceManagerBytes()
         )
     }
 

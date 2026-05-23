@@ -29,7 +29,12 @@ enum DefaultMotifResources {
         return Array(text.utf8) + [0x0A, 0x00]
     }()
 
-    private static let text = """
+    /// Raw resources text in legacy single-theme form. Kept module-visible
+    /// (not private) so `DefaultThemes` can wrap it in the section format
+    /// for the first-run seed of `~/.swiftx-resources` without
+    /// duplicating ~500 lines of content. Will be retired once the seed
+    /// is hand-tweaked and theme blocks are split out.
+    static let text = """
     ! swift-x Tier 1 Motif widget defaults. See MOTIF_TEXT_QUALITY.md.
     !
     ! ---- Color palette ----
