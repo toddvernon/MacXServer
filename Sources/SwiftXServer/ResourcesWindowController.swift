@@ -4,15 +4,21 @@ import SwiftXServerCore
 // Standalone editor window for `~/.swiftx-resources`. See THEMES.md
 // for the format and overall design.
 //
-// Layout (top to bottom):
-//   [Active theme: ▼ quickplot]                            (theme picker)
-//   ┌──────────────────────────────────────────────────┐
-//   │ NSTextView in NSScrollView — monospaced, plain,   │
-//   │ no spell-check, no auto-correct, no smart quotes. │
-//   │ Horizontal scroll for long resource lines.        │
-//   │ ...                                               │
-//   └──────────────────────────────────────────────────┘
-//   [Save] [Reload from Disk] [Revert to Defaults]   <banner text>
+// Layout (top to bottom): standard Mac.
+//   Active theme: [▼ quickplot]
+//   ╭─────────────────────────────────────────────╮
+//   │  NSTextView in NSScrollView, monospaced,    │
+//   │  plain text, find-bar enabled, horizontal   │
+//   │  scroll for long lines.                     │
+//   │  ...                                        │
+//   ╰─────────────────────────────────────────────╯
+//   [Revert to Defaults]              [Reload] [Save]
+//   Saved. Restart Motif apps to see changes.
+//
+// Action area follows Mac dialog convention: default (Save, bound to
+// Return) on the far right, other positive action (Reload) next to it,
+// destructive (Revert) on the far left. Status text under the action
+// row as a secondary label.
 //
 // Dirty tracking: NSTextViewDelegate.textDidChange sets a flag, Save
 // becomes enabled. Save writes the buffer verbatim to disk (no
@@ -132,16 +138,20 @@ private final class ResourcesViewController: NSViewController, NSTextViewDelegat
     private func configureButtons() {
         saveButton.target = self
         saveButton.action = #selector(saveClicked)
-        saveButton.keyEquivalent = "s"
-        saveButton.keyEquivalentModifierMask = [.command]
+        saveButton.bezelStyle = .rounded
+        // Return key activates Save when the editor doesn't have focus —
+        // makes Save the default action per Mac dialog convention. AppKit
+        // gives default buttons the blue tint automatically.
+        saveButton.keyEquivalent = "\r"
         saveButton.isEnabled = false   // disabled until dirty
 
         reloadButton.target = self
         reloadButton.action = #selector(reloadClicked)
+        reloadButton.bezelStyle = .rounded
 
         revertButton.target = self
         revertButton.action = #selector(revertClicked)
-        revertButton.bezelColor = .systemRed   // visual cue this one destroys edits
+        revertButton.bezelStyle = .rounded
     }
 
     private func configureBanner() {
@@ -157,31 +167,55 @@ private final class ResourcesViewController: NSViewController, NSTextViewDelegat
     }
 
     private func buildLayout() -> NSView {
-        let top = NSStackView(views: [themeLabel, themePopUp, NSView()])
-        top.orientation = .horizontal
-        top.alignment = .centerY
-        top.spacing = 8
+        // Top row: "Active theme:" label + popup, left-aligned with
+        // natural intrinsic widths.
+        let themeRow = NSStackView(views: [themeLabel, themePopUp])
+        themeRow.orientation = .horizontal
+        themeRow.alignment = .firstBaseline
+        themeRow.spacing = 8
+        themeRow.translatesAutoresizingMaskIntoConstraints = false
+        themePopUp.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
-        let buttons = NSStackView(views: [saveButton, reloadButton, revertButton, NSView(), bannerLabel])
-        buttons.orientation = .horizontal
-        buttons.alignment = .centerY
-        buttons.spacing = 8
+        // Action row: destructive on the far left, positive group on
+        // the far right with a flex spacer between. Standard Mac dialog
+        // convention (System Settings, NSAlert, etc.). Save is the
+        // rightmost / default button.
+        let leadingGroup = NSStackView(views: [revertButton])
+        leadingGroup.orientation = .horizontal
+        leadingGroup.spacing = 8
 
-        let outer = NSStackView(views: [top, scrollView, buttons])
+        let trailingGroup = NSStackView(views: [reloadButton, saveButton])
+        trailingGroup.orientation = .horizontal
+        trailingGroup.spacing = 8
+
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let actionRow = NSStackView(views: [leadingGroup, spacer, trailingGroup])
+        actionRow.orientation = .horizontal
+        actionRow.alignment = .centerY
+        actionRow.spacing = 8
+        actionRow.translatesAutoresizingMaskIntoConstraints = false
+
+        // Outer vertical stack: theme row, editor (takes slack),
+        // action row, status banner.
+        let outer = NSStackView(views: [themeRow, scrollView, actionRow, bannerLabel])
         outer.orientation = .vertical
         outer.alignment = .leading
-        outer.spacing = 8
+        outer.spacing = 12
         outer.distribution = .fill
         outer.translatesAutoresizingMaskIntoConstraints = false
-        outer.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        outer.edgeInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
 
-        // Force the scroll view to take the vertical slack and stretch
-        // horizontally. The horizontal-pin makes the top + button rows
-        // also span the full width.
-        outer.setHuggingPriority(.defaultLow, for: .vertical)
+        // Scroll view absorbs vertical slack; everything else hugs its
+        // intrinsic height.
         scrollView.setContentHuggingPriority(.defaultLow, for: .vertical)
-        scrollView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         scrollView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        themeRow.setContentHuggingPriority(.required, for: .vertical)
+        actionRow.setContentHuggingPriority(.required, for: .vertical)
+        bannerLabel.setContentHuggingPriority(.required, for: .vertical)
 
         let root = NSView()
         root.addSubview(outer)
@@ -190,13 +224,18 @@ private final class ResourcesViewController: NSViewController, NSTextViewDelegat
             outer.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             outer.topAnchor.constraint(equalTo: root.topAnchor),
             outer.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            top.leadingAnchor.constraint(equalTo: outer.leadingAnchor),
-            top.trailingAnchor.constraint(equalTo: outer.trailingAnchor),
+            // Each major row spans the full inner width.
+            themeRow.leadingAnchor.constraint(equalTo: outer.leadingAnchor),
+            themeRow.trailingAnchor.constraint(equalTo: outer.trailingAnchor),
             scrollView.leadingAnchor.constraint(equalTo: outer.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: outer.trailingAnchor),
-            buttons.leadingAnchor.constraint(equalTo: outer.leadingAnchor),
-            buttons.trailingAnchor.constraint(equalTo: outer.trailingAnchor),
-            scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 280),
+            actionRow.leadingAnchor.constraint(equalTo: outer.leadingAnchor),
+            actionRow.trailingAnchor.constraint(equalTo: outer.trailingAnchor),
+            bannerLabel.leadingAnchor.constraint(equalTo: outer.leadingAnchor),
+            bannerLabel.trailingAnchor.constraint(equalTo: outer.trailingAnchor),
+            // Editor minimum height so the window opens looking like an
+            // editor, not a thin strip.
+            scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 360),
         ])
         return root
     }
