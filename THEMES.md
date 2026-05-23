@@ -155,11 +155,17 @@ On save (or Reload menu):
 
 **Phase 1 (this round):**
 - File parser + theme selector
-- Seed file with 4 themes
-- Menu items + Cocoa editor window
+- Seed file with one theme (quickplot), populated from the previous `DefaultMotifResources.swift` content
+- Menu items + editor window
 - Save/Reload/Revert
 - Banner
 - Tests for parser
+
+**Phase 1.5 (landed 2026-05-23):**
+- Editor chrome ported from AppKit to SwiftUI hosted in an NSPanel via NSHostingView (Resources editor + Preferences). See DECISIONS.md 2026-05-23 for the rationale and file map.
+- Dark code-editor theme for the resource buffer: near-black background, warm coral section headers, green keys, soft cyan values, muted green-grey italic comments. Color values (hex or X11 named) render in their actual color, with a luminance-lift fallback for values too dark to read on black.
+- `NSRulerView` line-number gutter down the left of the editor.
+- Pure-Swift `ResourceTokenizer` lifted to `SwiftXServerCore` so the chrome-side `NSTextStorageDelegate` (`ResourceSyntaxHighlighter`) stays thin.
 
 Ships as one PR, one weekend of work.
 

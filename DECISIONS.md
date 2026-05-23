@@ -481,6 +481,31 @@ This entry advances step (1) of DECISIONS 2026-05-18 line 470 for the colormap. 
 
 ---
 
+## 2026-05-23 — Chrome dialogs use SwiftUI in an NSPanel; X server windowing stays AppKit
+
+**Chosen**: The Mac-side chrome (Resources editor, Preferences) is SwiftUI hosted in an `NSPanel` via `NSHostingView`. The X server's per-X-window `NSWindow` + custom `NSView` rendering layer stays AppKit. The two boundary classes (`ResourcesWindowController`, `PreferencesWindowController`) keep their `showWindow()` API so AppDelegate's menu wiring doesn't move. The Resources editor uses a dark code-editor theme (near-black background, warm coral section headers, green keys, soft cyan values, muted green-grey italic comments) with a `ResourceSyntaxHighlighter` (`NSTextStorageDelegate`) that paints color values in their actual color (with a luminance-lift fallback for values too dark to read on black). **Line-number gutter was attempted as an `NSRulerView` and deferred** — see SHORTCUTS "Line-number gutter deferred" for the iteration history; an `NSRulerView` inside a SwiftUI-hosted `NSScrollView` couldn't be made to coexist with the surrounding VStack layout, so the editor ships without one.
+
+**Alternatives rejected**:
+
+1. *Keep everything AppKit and refine the existing NSStackView layouts.* Achievable but expensive in code per pixel — every spacing, font, button bezel, focus ring decision is manual, and the defaults skew older with each macOS release. The earlier passes on the Resources editor (two extreme versions then a settling middle on 2026-05-23 morning) demonstrated the cost.
+2. *Port the X server side to SwiftUI too.* SwiftUI hides NSWindow internals we depend on for rootless WM emulation: `NSEvent.addLocalMonitorForEvents` cross-window tracking during X grabs, direct backing-scale-factor control for pixmap-at-device-scale, raw key-event interception for the keymap, per-window custom-draw `NSView` subclasses. Fighting the framework constantly would cost far more than the chrome benefit.
+3. *Use SwiftUI's `TextEditor` for the resources file editor.* Weak for code editing — no find-bar, no horizontal scroll, no good monospace handling, slow on long buffers. We wrap `NSTextView` in `NSViewRepresentable` instead (`CodeEditorView.swift`, ~110 lines) and keep all the AppKit knobs we already had.
+4. *Light-themed editor matching Covey chrome.* Todd wanted iTerm/Xcode dark-theme vibe for the editor specifically — code is code. Surrounding chrome (header, theme picker, action row, banner) still follows system light/dark via SwiftUI semantic colors.
+
+**Why this is structurally clean**: SwiftUI and AppKit cross at exactly two boundary classes (the window controllers). The X server windowing layer doesn't know SwiftUI exists. The chrome doesn't know about ServerSession or the protocol queue. The Preferences settings still flow through the same `Preferences` (UserDefaults-backed) class that `ServerSession` reads — the SwiftUI panel is a thin `ObservableObject` wrapper that proxies writes back. Removing SwiftUI later would touch only the chrome files.
+
+**File map after this change**:
+- `Sources/SwiftXServer/EditorTheme.swift` — palette + token → NSColor mapping (~75 lines)
+- `Sources/SwiftXServer/CodeEditorView.swift` — `NSViewRepresentable` around NSScrollView + NSTextView (~95 lines)
+- `Sources/SwiftXServer/ResourceSyntaxHighlighter.swift` — `NSTextStorageDelegate` + color-value rendering (~120 lines)
+- `Sources/SwiftXServer/ResourcesPanelView.swift` — SwiftUI root + view model (~230 lines)
+- `Sources/SwiftXServer/PreferencesPanelView.swift` — SwiftUI tabs + view model (~140 lines)
+- `Sources/SwiftXServer/ResourcesWindowController.swift` — NSPanel + NSHostingView shell (~35 lines, replaces ~400-line AppKit version)
+- `Sources/SwiftXServer/PreferencesWindowController.swift` — same shape (~30 lines)
+- `Sources/SwiftXServerCore/ResourceTokenizer.swift` — pure-Swift tokenizer in Core for test coverage (~150 lines)
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
