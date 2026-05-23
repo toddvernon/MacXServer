@@ -1,0 +1,77 @@
+import AppKit
+import SwiftXServerCore
+
+// NSTextStorageDelegate that paints the font mappings file. Same shape
+// as ResourceSyntaxHighlighter — retokenize whole buffer on each char
+// edit (files are tiny), reapply token attributes.
+//
+// Token → color (reuses EditorTheme palette so the two editors feel
+// like the same product):
+//   comment       → muted green-grey italic (theme.comment)
+//   fallbackKey   → coral (theme.sectionHeader — same as [section] headers)
+//   family        → green (theme.key)
+//   macFont       → soft cyan (theme.value)
+//   spacingKind   → plum (theme.keyPrefix — reads as a "type marker")
+//   unknown       → defaultText
+
+final class FontMappingSyntaxHighlighter: NSObject, SyntaxHighlighter {
+
+    private let theme: EditorTheme
+    private let baseFont: NSFont
+    private let italicFont: NSFont
+
+    init(theme: EditorTheme, baseFont: NSFont) {
+        self.theme = theme
+        self.baseFont = baseFont
+        self.italicFont = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
+        super.init()
+    }
+
+    func applyAll(to storage: NSTextStorage) {
+        let full = NSRange(location: 0, length: storage.length)
+        applyAttributes(storage: storage, in: full)
+    }
+
+    func textStorage(_ textStorage: NSTextStorage,
+                     didProcessEditing editedMask: NSTextStorageEditActions,
+                     range editedRange: NSRange,
+                     changeInLength delta: Int) {
+        guard editedMask.contains(.editedCharacters) else { return }
+        let full = NSRange(location: 0, length: textStorage.length)
+        applyAttributes(storage: textStorage, in: full)
+    }
+
+    private func applyAttributes(storage: NSTextStorage, in range: NSRange) {
+        storage.beginEditing()
+        storage.setAttributes([
+            .font: baseFont,
+            .foregroundColor: theme.defaultText,
+        ], range: range)
+
+        let spans = FontMappingTokenizer.tokenize(storage.string)
+        for span in spans {
+            let clamped = NSIntersectionRange(span.range, range)
+            if clamped.length == 0 { continue }
+            var attrs: [NSAttributedString.Key: Any] = [:]
+            switch span.kind {
+            case .comment:
+                attrs[.font] = italicFont
+                attrs[.foregroundColor] = theme.comment
+            case .fallbackKey:
+                attrs[.foregroundColor] = theme.sectionHeader
+            case .family:
+                attrs[.foregroundColor] = theme.key
+            case .arrow:
+                attrs[.foregroundColor] = theme.separator
+            case .macFont:
+                attrs[.foregroundColor] = theme.value
+            case .spacingKind:
+                attrs[.foregroundColor] = theme.keyPrefix
+            case .unknown:
+                attrs[.foregroundColor] = theme.defaultText
+            }
+            storage.addAttributes(attrs, range: clamped)
+        }
+        storage.endEditing()
+    }
+}

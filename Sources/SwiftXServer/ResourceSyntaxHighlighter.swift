@@ -18,7 +18,7 @@ import SwiftXServerCore
 // safe per Apple's NSTextStorage contract — they don't re-trigger the
 // `editedCharacters` mask. We never touch characters from here.
 
-final class ResourceSyntaxHighlighter: NSObject, NSTextStorageDelegate {
+final class ResourceSyntaxHighlighter: NSObject, SyntaxHighlighter {
 
     private let theme: EditorTheme
     private let baseFont: NSFont

@@ -21,8 +21,14 @@ struct ResourcesPanelView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             themeRow
-            CodeEditorView(text: $model.text, theme: .dark)
-                .frame(minHeight: 320)
+            CodeEditorView(
+                text: $model.text,
+                theme: .dark,
+                makeHighlighter: { theme, font in
+                    ResourceSyntaxHighlighter(theme: theme, baseFont: font)
+                }
+            )
+            .frame(minHeight: 320)
             actionRow
             bannerRow
         }

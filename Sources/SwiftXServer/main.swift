@@ -122,6 +122,11 @@ do {
 // the listener thread can pass it to runAccepting. The provider type is Sendable.
 let prefsProvider: ClipboardPreferencesProvider = appDelegate.sharedPreferences
 
+// Font mappings: seed ~/.swiftx-fonts on first run and load into the
+// FontResolver cache. Subsequent runs read the user's file; the
+// embedded seed only re-seeds via Revert to Defaults in the editor.
+FontResolver.installMappings()
+
 // Coordinator is shared across every session this listener spins up — it
 // owns the global atom table and selection-owner state, and hands out
 // non-overlapping resource-id ranges per accepted client.

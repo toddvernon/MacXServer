@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var prefsController: PreferencesWindowController?
     private var resourcesController: ResourcesWindowController?
+    private var fontMappingsController: FontMappingsWindowController?
 
     /// Display string shown in the status-bar menu's first (disabled) row,
     /// e.g. "Listening on :6000 (display :0)". main.swift sets this once
@@ -75,6 +76,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                       keyEquivalent: "")
         resourcesRow.target = self
         menu.addItem(resourcesRow)
+
+        let fontsRow = NSMenuItem(title: "Edit Font Mappings\u{2026}",
+                                  action: #selector(openFontMappings(_:)),
+                                  keyEquivalent: "")
+        fontsRow.target = self
+        menu.addItem(fontsRow)
         menu.addItem(.separator())
 
         let quitRow = NSMenuItem(title: "Quit swiftx-server",
@@ -108,6 +115,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                    keyEquivalent: "")
         resources.target = self
         appMenu.addItem(resources)
+
+        let fonts = NSMenuItem(title: "Edit Font Mappings\u{2026}",
+                               action: #selector(openFontMappings(_:)),
+                               keyEquivalent: "")
+        fonts.target = self
+        appMenu.addItem(fonts)
 
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: "Hide swiftx-server",
@@ -181,5 +194,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             resourcesController = ResourcesWindowController()
         }
         resourcesController?.showWindow()
+    }
+
+    @MainActor
+    @objc private func openFontMappings(_ sender: Any?) {
+        if fontMappingsController == nil {
+            fontMappingsController = FontMappingsWindowController()
+        }
+        fontMappingsController?.showWindow()
     }
 }

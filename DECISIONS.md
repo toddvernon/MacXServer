@@ -481,6 +481,35 @@ This entry advances step (1) of DECISIONS 2026-05-18 line 470 for the colormap. 
 
 ---
 
+## 2026-05-23 — Font substitution table promoted to user-editable `~/.swiftx-fonts`
+
+**Chosen**: Move the XLFD-family → Mac-font mapping from a hardcoded switch in `FontResolver.resolveFamily` to a user-editable file at `~/.swiftx-fonts`, with the same shape as the resources file: parsed by `FontMappingFile` in `SwiftXServerCore`, seeded from `DefaultFontMappings.seedContent` on first run via `FontMappingFileLoader.loadOrSeed`, edited via a SwiftUI panel (`FontMappingsPanelView` in an `NSPanel`) opened from a new "Edit Font Mappings…" menu item. `FontResolver.installMappings()` is called from `main.swift` at server startup and again by the editor on Save/Revert so newly-launched X clients pick up edits without a server restart. Existing clients keep their cached font metrics from QueryFont; banner makes this explicit.
+
+**File format**: line-oriented `<xlfd-family>  ->  <mac-font>  mono|prop`. The `->` separates family from Mac font; the trailing `mono`/`prop` token separates Mac font from spacing kind. This supports multi-word X family names (`new century schoolbook`) and multi-word Mac fonts (`Helvetica Neue`) without ambiguity. Two special keys hold the wildcard fallbacks: `*fallback-mono` (used when a client requests spacing `c` or `m` with an unknown family) and `*fallback-prop` (everything else).
+
+**Alternatives rejected**:
+
+1. *INI sections like the resources file* (`[mono] ... [prop] ... [fallbacks]`). Adds hierarchy the data doesn't need — the substitution table IS a flat lookup. Flat format makes diffs and edits trivially readable.
+2. *Whitespace-only delimiters with the trailing `mono`/`prop` as disambiguator* (no `->`). Was the first cut; broke as soon as `new century schoolbook` (multi-word family) was added because there's no way to tell where the family ends and the Mac font starts.
+3. *Keep the table hardcoded and skip the editor entirely.* The seed/revert/save story already exists for resources; making fonts editable cost ~600 lines including chrome and tests, and it lets us iterate font substitutions live during dt-app tuning without rebuilding the server.
+
+**This is not a change to the substitution table architecture** (which `CLAUDE.md` explicitly asks me to ask before changing). The default contents are byte-identical to the prior hardcoded switch and the spec table in `SERVER_RESOLUTION_SCALING_AND_FONTS.md`. Tier-2 delivery, not a redesign — same pattern this doc already calls out as a follow-on for `RESOURCE_MANAGER`.
+
+**Files**:
+- `Sources/SwiftXServerCore/FontMappingFile.swift` — parser + `FontMappingFileLoader.loadOrSeed` (~150 lines)
+- `Sources/SwiftXServerCore/DefaultFontMappings.swift` — seed content (~60 lines)
+- `Sources/SwiftXServerCore/FontMappingTokenizer.swift` — syntax-highlight tokenizer (~150 lines)
+- `Sources/SwiftXServerCore/FontResolver.swift` — `resolveFamily` now hits the loaded `FontMappingFile`; new `installMappings()` startup hook
+- `Sources/SwiftXServer/FontMappingSyntaxHighlighter.swift` — `NSTextStorageDelegate` painting the file (~75 lines)
+- `Sources/SwiftXServer/FontMappingsPanelView.swift` — SwiftUI root + model (~170 lines)
+- `Sources/SwiftXServer/FontMappingsWindowController.swift` — NSPanel + NSHostingView shell (~35 lines)
+- `Sources/SwiftXServer/SyntaxHighlighter.swift` — extracted protocol so `CodeEditorView` takes either highlighter via a factory closure
+- `Sources/SwiftXServer/AppDelegate.swift` — new menu items in both status menu and app menu
+- `Sources/SwiftXServer/main.swift` — `FontResolver.installMappings()` at startup
+- `Tests/SwiftXServerCoreTests/FontMappingFileTests.swift` + `FontMappingTokenizerTests.swift` — 25 tests
+
+---
+
 ## 2026-05-23 — Chrome dialogs use SwiftUI in an NSPanel; X server windowing stays AppKit
 
 **Chosen**: The Mac-side chrome (Resources editor, Preferences) is SwiftUI hosted in an `NSPanel` via `NSHostingView`. The X server's per-X-window `NSWindow` + custom `NSView` rendering layer stays AppKit. The two boundary classes (`ResourcesWindowController`, `PreferencesWindowController`) keep their `showWindow()` API so AppDelegate's menu wiring doesn't move. The Resources editor uses a dark code-editor theme (near-black background, warm coral section headers, green keys, soft cyan values, muted green-grey italic comments) with a `ResourceSyntaxHighlighter` (`NSTextStorageDelegate`) that paints color values in their actual color (with a luminance-lift fallback for values too dark to read on black). **Line-number gutter was attempted as an `NSRulerView` and deferred** — see SHORTCUTS "Line-number gutter deferred" for the iteration history; an `NSRulerView` inside a SwiftUI-hosted `NSScrollView` couldn't be made to coexist with the surrounding VStack layout, so the editor ships without one.

@@ -128,6 +128,8 @@ For XLFD requests, parse family/weight/slant/spacing/pixelSize and substitute:
 | `*` with spacing `c` or `m` | Monaco | Monospace fallback |
 | `*` with spacing `p` | Helvetica Neue | Proportional fallback |
 
+This table is the **seed** for a user-editable file at `~/.swiftx-fonts` (as of 2026-05-23). `FontResolver.installMappings` writes the seed on first run and loads the user's edits thereafter. The Mac chrome's "Edit Font Mappings…" menu opens a SwiftUI editor for it. Revert to Defaults overwrites the file with the seed. The bundled seed lives in `Sources/SwiftXServerCore/DefaultFontMappings.swift`; this table is the canonical spec for what that seed contains.
+
 ### Bold and italic
 
 - `weight=bold` → real bold face of the substitute family (Monaco Bold, Courier New Bold, Andale Mono Bold, Helvetica Neue Bold, Times New Roman Bold). All exist on macOS.

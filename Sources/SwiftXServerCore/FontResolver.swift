@@ -140,31 +140,43 @@ public enum FontResolver {
 
     // MARK: - Substitution table
 
+    /// Cached `FontMappingFile`, loaded from `~/.swiftx-fonts` (seeded
+    /// from `DefaultFontMappings.seedContent` on first run). Initialized
+    /// lazily on first access; tests and pre-startup callers see the
+    /// in-memory seed if `installMappings` hasn't been called yet.
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var loadedMappings: FontMappingFile = {
+        FontMappingFile.parse(DefaultFontMappings.seedContent)
+    }()
+
+    /// Server startup hook — load the user-editable file (writing seed
+    /// on first run) and cache the parsed result. Idempotent. Safe to
+    /// call multiple times if a future "Reload Fonts" path wants to
+    /// re-read the file.
+    public static func installMappings(log: ServerLogSink? = nil) {
+        let file = FontMappingFileLoader.loadOrSeed(
+            seed: DefaultFontMappings.seedContent,
+            log: log
+        )
+        lock.lock()
+        loadedMappings = file
+        lock.unlock()
+    }
+
     /// Maps an XLFD family name (with optional spacing fallback for
-    /// wildcards) to a Mac font family name. Per the substitution table in
-    /// SERVER_RESOLUTION_SCALING_AND_FONTS.md.
+    /// wildcards) to a Mac font family name. Per the substitution table
+    /// in SERVER_RESOLUTION_SCALING_AND_FONTS.md, which is also the seed
+    /// for `~/.swiftx-fonts`; once the user has the file they own it and
+    /// the seed is only consulted on Revert to Defaults.
     public static func resolveFamily(family: String, spacing: String) -> (name: String, isMonospace: Bool) {
-        let f = family.lowercased()
-        switch f {
-        case "fixed", "misc-fixed":                               return ("Monaco", true)
-        case "courier", "adobe-courier":                          return ("Courier New", true)
-        case "lucidatypewriter", "b&h-lucidatypewriter":          return ("Andale Mono", true)
-        case "terminal", "vt100", "screen":                       return ("Monaco", true)
-        case "clean", "schumacher-clean":                         return ("Monaco", true)
-        case "helvetica", "adobe-helvetica":                      return ("Helvetica Neue", false)
-        case "times", "adobe-times":                              return ("Times New Roman", false)
-        case "new century schoolbook", "adobe-new century schoolbook":
-            return ("Charter", false)
-        case "symbol", "adobe-symbol":                            return ("Symbol", false)
-        default:
-            // Wildcard or unknown family — fall back on spacing.
-            switch spacing.lowercased() {
-            case "c", "m":
-                return ("Monaco", true)
-            default:
-                return ("Helvetica Neue", false)
-            }
+        lock.lock()
+        let file = loadedMappings
+        lock.unlock()
+        if let hit = file.resolve(family: family) {
+            return (hit.macFont, hit.isMonospace)
         }
+        let fallback = file.fallback(spacing: spacing)
+        return (fallback.macFont, fallback.isMonospace)
     }
 
     // MARK: - Helpers

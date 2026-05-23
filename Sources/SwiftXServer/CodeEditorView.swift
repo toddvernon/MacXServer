@@ -25,6 +25,11 @@ struct CodeEditorView: NSViewRepresentable {
 
     @Binding var text: String
     let theme: EditorTheme
+    /// Closure that builds the per-file syntax highlighter. Different
+    /// editor instances (resources, font mappings) pass different
+    /// highlighters, but every other piece — scroll view, gutter,
+    /// theme application — is shared.
+    let makeHighlighter: (EditorTheme, NSFont) -> SyntaxHighlighter
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -73,7 +78,7 @@ struct CodeEditorView: NSViewRepresentable {
 
         // Initial buffer + highlight.
         textView.string = text
-        let highlighter = ResourceSyntaxHighlighter(theme: theme, baseFont: font)
+        let highlighter = makeHighlighter(theme, font)
         if let storage = textView.textStorage {
             storage.delegate = highlighter
             highlighter.applyAll(to: storage)
@@ -125,7 +130,7 @@ struct CodeEditorView: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CodeEditorView
-        var highlighter: ResourceSyntaxHighlighter?
+        var highlighter: (any SyntaxHighlighter)?
 
         init(_ parent: CodeEditorView) {
             self.parent = parent
