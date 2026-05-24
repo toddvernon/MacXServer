@@ -60,34 +60,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let item = statusItem else { return }
         let menu = NSMenu()
 
+        // Status-bar menu is deliberately minimal: the listening address
+        // (so you can read off `xterm -display ...` at a glance) and a
+        // way to stop the server. Everything else — Preferences,
+        // editors, capture actions — lives in the standard app menu at
+        // the top of the screen.
         let statusRow = NSMenuItem(title: listenerStatus, action: nil, keyEquivalent: "")
         statusRow.isEnabled = false
         menu.addItem(statusRow)
         menu.addItem(.separator())
 
-        let prefsRow = NSMenuItem(title: "Preferences\u{2026}",
-                                  action: #selector(openPreferences(_:)),
-                                  keyEquivalent: ",")
-        prefsRow.target = self
-        menu.addItem(prefsRow)
-
-        let resourcesRow = NSMenuItem(title: "Edit Resources\u{2026}",
-                                      action: #selector(openResources(_:)),
-                                      keyEquivalent: "")
-        resourcesRow.target = self
-        menu.addItem(resourcesRow)
-
-        let fontsRow = NSMenuItem(title: "Edit Font Mappings\u{2026}",
-                                  action: #selector(openFontMappings(_:)),
-                                  keyEquivalent: "")
-        fontsRow.target = self
-        menu.addItem(fontsRow)
-        menu.addItem(.separator())
-
-        let quitRow = NSMenuItem(title: "Quit swiftx-server",
+        let stopRow = NSMenuItem(title: "Stop Server",
                                  action: #selector(NSApplication.terminate(_:)),
-                                 keyEquivalent: "q")
-        menu.addItem(quitRow)
+                                 keyEquivalent: "")
+        menu.addItem(stopRow)
 
         item.menu = menu
     }
@@ -121,6 +107,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                keyEquivalent: "")
         fonts.target = self
         appMenu.addItem(fonts)
+
+        appMenu.addItem(.separator())
+
+        // Capture actions — the toggle lives in Preferences (Capture
+        // tab). These are pure actions on the captures folder so they
+        // belong here, not on the status-bar menu.
+        let revealCaptures = NSMenuItem(title: "Reveal Captures Folder",
+                                        action: #selector(revealCapturesFolder(_:)),
+                                        keyEquivalent: "")
+        revealCaptures.target = self
+        appMenu.addItem(revealCaptures)
+
+        let discardCaptures = NSMenuItem(title: "Discard All Captures\u{2026}",
+                                         action: #selector(discardAllCaptures(_:)),
+                                         keyEquivalent: "")
+        discardCaptures.target = self
+        appMenu.addItem(discardCaptures)
 
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: "Hide swiftx-server",
@@ -202,5 +205,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             fontMappingsController = FontMappingsWindowController()
         }
         fontMappingsController?.showWindow()
+    }
+
+    @MainActor
+    @objc private func revealCapturesFolder(_ sender: Any?) {
+        let path = preferences.captureDirectory
+        // mkdir first so reveal works even before any capture has run.
+        try? FileManager.default.createDirectory(
+            atPath: path,
+            withIntermediateDirectories: true
+        )
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
+    }
+
+    @MainActor
+    @objc private func discardAllCaptures(_ sender: Any?) {
+        let path = preferences.captureDirectory
+        let fm = FileManager.default
+
+        // Surface a count up front so the user sees what they're
+        // committing to. Only count .xtap and .xtap.json — leave any
+        // stray files (in-progress markers, accidentally-dropped
+        // unrelated files) untouched.
+        let captures = (try? fm.contentsOfDirectory(atPath: path)) ?? []
+        let toRemove = captures.filter { $0.hasSuffix(".xtap") || $0.hasSuffix(".xtap.json") }
+
+        let alert = NSAlert()
+        alert.messageText = "Discard all captures?"
+        alert.informativeText = toRemove.isEmpty
+            ? "No capture files in \(path)."
+            : "This will delete \(toRemove.count) file(s) in \(path). The folder itself stays so new captures keep landing there."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: toRemove.isEmpty ? "OK" : "Discard")
+        if !toRemove.isEmpty {
+            alert.addButton(withTitle: "Cancel")
+        }
+
+        let response = alert.runModal()
+        guard !toRemove.isEmpty, response == .alertFirstButtonReturn else { return }
+
+        for name in toRemove {
+            let full = (path as NSString).appendingPathComponent(name)
+            try? fm.removeItem(atPath: full)
+        }
     }
 }
