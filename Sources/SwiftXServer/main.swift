@@ -141,6 +141,7 @@ let prefsProvider: ClipboardPreferencesProvider = appDelegate.sharedPreferences
 // after a server restart (documented in the Capture tab UI).
 let captureEnabled = captureOverride ?? appDelegate.preferences.captureSessions
 let captureDirectory = appDelegate.preferences.captureDirectory
+appDelegate.captureActive = captureEnabled
 if captureEnabled {
     writeStderr("capture: every client session will be written to \(captureDirectory)\n")
 }

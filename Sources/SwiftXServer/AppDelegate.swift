@@ -25,6 +25,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         didSet { updateStatusMenu() }
     }
 
+    /// Whether server-side capture is on for this process. Set once at
+    /// startup from main.swift after CLI/Preferences resolution.
+    /// Surfaced as a quiet suffix on the address row (no new menu
+    /// items — status menu stays minimal per Todd's call).
+    var captureActive: Bool = false {
+        didSet { updateStatusMenu() }
+    }
+
     override init() {
         self.preferences = Preferences()
         super.init()
@@ -65,7 +73,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // way to stop the server. Everything else — Preferences,
         // editors, capture actions — lives in the standard app menu at
         // the top of the screen.
-        let statusRow = NSMenuItem(title: listenerStatus, action: nil, keyEquivalent: "")
+        let rowTitle = captureActive
+            ? "\(listenerStatus) · capturing"
+            : listenerStatus
+        let statusRow = NSMenuItem(title: rowTitle, action: nil, keyEquivalent: "")
         statusRow.isEnabled = false
         menu.addItem(statusRow)
         menu.addItem(.separator())
