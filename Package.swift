@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "SwiftXCaptureCore", targets: ["SwiftXCaptureCore"]),
         .library(name: "SwiftXServerCore", targets: ["SwiftXServerCore"]),
         .executable(name: "swiftx-capture", targets: ["SwiftXCapture"]),
+        .executable(name: "swiftx-capture-app", targets: ["SwiftXCaptureApp"]),
         .executable(name: "swiftx-server", targets: ["SwiftXServer"]),
     ],
     targets: [
@@ -25,6 +26,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "SwiftXCapture",
+            dependencies: ["SwiftXCaptureCore", "Framer"]
+        ),
+        .executableTarget(
+            name: "SwiftXCaptureApp",
             dependencies: ["SwiftXCaptureCore", "Framer"]
         ),
         .executableTarget(
