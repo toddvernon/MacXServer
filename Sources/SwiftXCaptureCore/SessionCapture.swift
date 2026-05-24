@@ -6,20 +6,31 @@ import Foundation
 // enabled. Three states:
 //
 //   1. **In-progress.** Constructor opens a Recorder pointed at
-//      `<directory>/.in-progress-<sessionId>.xtap`. The `.in-progress-`
-//      prefix marks the file as not-yet-named so UI listings can hide
-//      it and a server crash leaves an obviously-incomplete artifact.
+//      `<directory>/.in-progress-<sessionId>.xtap`. Recorder buffers
+//      frames in memory and only writes at finalize() time, so this
+//      path is just a placeholder that gets replaced before any file
+//      is actually written. The `.in-progress-` prefix is a backstop
+//      for the rare case where setOutputPath fails (mkdir error) on
+//      both the rename-to-identified and rename-to-unidentified paths
+//      below — in that case the file lands at .in-progress-<id>.xtap
+//      and a UI listing's "hidden file" filter can flag it.
 //
 //   2. **Identified.** When the session observes a useful client name
 //      (WM_CLASS, WM_NAME, or whatever signal fires first), it calls
 //      `rename(toClientName:)` which switches the Recorder's planned
-//      output path to `<timestamp>-<client-name>.xtap`. No disk I/O at
-//      this point — Recorder writes only at finalize() — so the rename
-//      is just a string update.
+//      output path to `<timestamp>-<client-name>.xtap`. First call
+//      wins (idempotent) so an early WM_CLASS isn't overridden by a
+//      later WM_NAME.
 //
 //   3. **Finalized.** Session disconnect calls `finalize()`, which
-//      flushes the buffered frames to whatever path is currently set
-//      (identified or still-in-progress) and writes the sidecar JSON.
+//      flushes the buffered frames. If `rename(toClientName:)` was
+//      never called (client disconnected before identifying — e.g.,
+//      xclock hitting an unimplemented opcode and bailing 41 requests
+//      in), finalize first renames to a visible
+//      `<timestamp>-unidentified-<sessionId>.xtap` so the file isn't
+//      hidden behind a dot-prefix in Finder. Such sessions are still
+//      complete, useful bug-report captures and shouldn't be invisible
+//      to the user.
 //
 // SessionCapture conforms to CaptureSink so the Listener's tee points
 // don't care which sink they're feeding — Recorder for proxy capture,
@@ -94,6 +105,30 @@ public final class SessionCapture: CaptureSink, @unchecked Sendable {
     }
 
     public func finalize() throws {
+        // If the session never identified itself, rename to a visible
+        // fallback so the file shows up in Finder. The `.in-progress-`
+        // path's dot-prefix is meant for crashed sessions, not for
+        // sessions that simply disconnected before sending WM_CLASS.
+        lock.lock()
+        let needsFallback = !renamed
+        lock.unlock()
+        if needsFallback {
+            let timestamp = Self.timestampString()
+            let fallback = (directory as NSString)
+                .appendingPathComponent("\(timestamp)-unidentified-\(sessionId).xtap")
+            // setOutputPath only throws on mkdir failure; we made the
+            // dir in init so this is unlikely. If it does fail, the
+            // capture lands at the in-progress path — better than
+            // losing the buffered frames.
+            do {
+                try recorder.setOutputPath(fallback)
+                lock.lock()
+                renamed = true
+                lock.unlock()
+            } catch {
+                // Best effort; recorder.finalize() below still runs.
+            }
+        }
         try recorder.finalize()
     }
 

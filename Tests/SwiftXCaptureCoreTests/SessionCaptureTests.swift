@@ -19,19 +19,29 @@ final class SessionCaptureTests: XCTestCase {
         try? FileManager.default.removeItem(atPath: dir)
     }
 
-    func testWritesToInProgressPathWhenNeverRenamed() throws {
-        // A session that disconnects before identifying itself should
-        // still produce a usable .xtap, just with the .in-progress
-        // filename so a UI listing can flag it.
+    func testFinalizeWithoutRenameUsesUnidentifiedFallback() throws {
+        // A session that disconnects before sending WM_CLASS (e.g.,
+        // xclock bailing on an unimplemented opcode) should still
+        // produce a visible .xtap, NOT one hidden behind a dot prefix.
+        // finalize() renames to <timestamp>-unidentified-<id>.xtap.
         let dir = uniqueTempDirPath()
         let cap = try SessionCapture(sessionId: 42, directory: dir)
         cap.record(direction: .clientToServer, bytes: [0xAA, 0xBB])
         try cap.finalize()
 
-        let expected = (dir as NSString).appendingPathComponent(".in-progress-42.xtap")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: expected))
+        // The .in-progress path must NOT be the final resting place.
+        let inProgress = (dir as NSString).appendingPathComponent(".in-progress-42.xtap")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: inProgress))
 
-        let frames = try CaptureReader.read(from: expected)
+        // The fallback name should be the only .xtap in the directory.
+        let landed = try files(in: dir)
+        XCTAssertEqual(landed.count, 1)
+        XCTAssertTrue(landed[0].hasSuffix("-unidentified-42.xtap"),
+                      "expected unidentified-42 fallback, got: \(landed[0])")
+        XCTAssertFalse(landed[0].hasPrefix("."))
+
+        let path = (dir as NSString).appendingPathComponent(landed[0])
+        let frames = try CaptureReader.read(from: path)
         XCTAssertEqual(frames.count, 1)
         XCTAssertEqual(frames[0].bytes, [0xAA, 0xBB])
         try? FileManager.default.removeItem(atPath: dir)
@@ -79,16 +89,20 @@ final class SessionCaptureTests: XCTestCase {
         try? FileManager.default.removeItem(atPath: dir)
     }
 
-    func testRenameWithEmptySanitizedNameStaysAtInProgress() throws {
+    func testRenameWithEmptySanitizedNameFallsThroughToUnidentified() throws {
         // Garbage-only client names sanitize to empty; SessionCapture
-        // refuses to rename rather than producing `-<timestamp>-.xtap`.
+        // refuses to rename to `<timestamp>-.xtap`. The session stays
+        // unrenamed, so finalize() applies the unidentified fallback
+        // — a visible filename, not the hidden in-progress one.
         let dir = uniqueTempDirPath()
         let cap = try SessionCapture(sessionId: 9, directory: dir)
         cap.rename(toClientName: "///")    // sanitize → "_"  trimmed → ""
         try cap.finalize()
 
-        let expected = (dir as NSString).appendingPathComponent(".in-progress-9.xtap")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: expected))
+        let landed = try files(in: dir)
+        XCTAssertEqual(landed.count, 1)
+        XCTAssertTrue(landed[0].hasSuffix("-unidentified-9.xtap"),
+                      "expected unidentified-9 fallback, got: \(landed[0])")
         try? FileManager.default.removeItem(atPath: dir)
     }
 
