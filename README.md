@@ -80,8 +80,10 @@ server's auto-captures are the obvious choice.
 
 ### Capture, CLI
 
-The v1 CLI behavior is preserved. Any args trigger the CLI; no
-args launches the GUI.
+The v1 CLI behavior is preserved. Any subcommand triggers the
+CLI; no args launches the GUI. `--no-gui` is also recognised as
+an explicit "headless mode" flag for scripts that want CLI
+behaviour even with empty args.
 
 ```
 # proxy two real X endpoints
@@ -102,8 +104,13 @@ args launches the GUI.
     --target localhost:6000
 ```
 
-`./run.sh` still works — pass-through to `swiftx-capture` with
-`connection.json` providing the default listen/forward/output.
+`./run-capture.sh` is a build-and-run wrapper that reads
+`connection.json` (`listen` / `forward` / `output`) for proxy
+mode and passes any other args straight through to
+`swiftx-capture`. `./run-server.sh` does the same for the
+server. `./run-all.sh` starts swiftx-server + a proxy capture
+forwarding into it — used for "capture what swiftx itself
+produces" diffing against gold Sun captures.
 
 ### Server-side capture
 

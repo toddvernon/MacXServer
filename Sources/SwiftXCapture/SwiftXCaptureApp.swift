@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // SwiftUI capture app — the GUI face of the `swiftx-capture` binary,
 // sharing the SwiftXCaptureCore library with `swiftx-server`'s
@@ -13,6 +14,8 @@ import SwiftUI
 // rationale behind one binary instead of two.
 
 struct SwiftXCaptureApp: App {
+
+    @NSApplicationDelegateAdaptor(CaptureAppDelegate.self) private var appDelegate
 
     var body: some Scene {
 
@@ -52,4 +55,14 @@ enum WindowID: String {
     case record = "record"
     case open = "open"
     case replay = "replay"
+}
+
+/// Bring the app to the foreground on launch. Without this, a
+/// terminal-launched swiftx-capture creates its window behind the
+/// terminal that ran it — the user sees no GUI and assumes the
+/// app is broken.
+final class CaptureAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.activate(ignoringOtherApps: true)
+    }
 }

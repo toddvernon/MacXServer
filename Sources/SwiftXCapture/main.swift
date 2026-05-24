@@ -1,26 +1,46 @@
 import Foundation
+import AppKit
 import SwiftUI
 import SwiftXCaptureCore
 
 // `swiftx-capture` carries both faces: a CLI for the v1 corpus-
 // capture workflow (proxy / dump / summary / diff / replay) and a
-// SwiftUI app for the v2 hobbyist-facing experience. Which face
-// runs is decided here from CommandLine.arguments.
+// SwiftUI app for the v2 hobbyist-facing experience. The GUI is
+// the default; the CLI is opted into.
 //
-//   No args              → GUI (matches typical Mac-app expectation)
-//   `--gui` as first arg → GUI (explicit, redundant)
-//   Any other arg        → CLI subcommand or proxy-mode flags
+//   No args                  → GUI
+//   `--no-gui`               → CLI (print usage, exit)
+//   Any subcommand           → CLI (dump / summary / diff / replay /
+//                               proxy-mode flags)
+//   `--no-gui <subcommand>`  → CLI (the flag is a no-op signaling
+//                               intent; subcommand args drive the
+//                               dispatch)
 //
-// `--help` / `-h` route to CLI so the usage text still prints to
-// stdout for scripting.
+// `--help` / `-h` route to CLI so usage prints to stdout for
+// scripting.
 
-let args = Array(CommandLine.arguments.dropFirst())
+let rawArgs = Array(CommandLine.arguments.dropFirst())
+let forceHeadless = rawArgs.contains("--no-gui")
+let args = rawArgs.filter { $0 != "--no-gui" }
 
-if args.isEmpty || args.first == "--gui" {
-    // GUI mode. SwiftUI's App.main() takes over the runloop and
-    // never returns; nothing past this call ever runs.
+if !forceHeadless && args.isEmpty {
+    // GUI mode (the default). macOS doesn't auto-foreground apps
+    // launched from a terminal — without explicit activation the
+    // chooser window opens behind whatever was there before and
+    // the user sees nothing. The activation step has to run AFTER
+    // the runloop is up (App.main() resets policy on its own way
+    // through), so we hook it to applicationDidFinishLaunching
+    // via an NSApplicationDelegateAdaptor inside
+    // SwiftXCaptureApp.swift.
     SwiftXCaptureApp.main()
     exit(0)   // unreachable, here for compiler completeness
+}
+
+// CLI mode from here. If --no-gui was the only arg, print usage —
+// matches v1's "no useful args" behaviour.
+if args.isEmpty {
+    print(CLI.usage)
+    exit(1)
 }
 
 if args.contains("-h") || args.contains("--help") {

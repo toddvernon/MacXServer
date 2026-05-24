@@ -1,13 +1,36 @@
 #!/usr/bin/env bash
-# Build + run the whole capture stack: swift-x server + capture proxy.
-# Reads connection.json. If 'forward' is local (127.0.0.1 / localhost) we
-# start the swift-x server on that port so capture has something to forward
-# to. Otherwise (e.g., forward = u5.example.com:6000 for a gold reference
-# capture) we just run the capture proxy standalone.
+# Build + run capture proxy AND swiftx-server together, with the
+# proxy forwarding into the server. Used for "capture what swiftx
+# itself does against a Sun client" — the resulting .xtap is a
+# parallel-universe copy of the same client session run against
+# our server, for diffing against gold captures from a real Xsun.
 #
-# Workflow: edit connection.json — change "output" filename and "forward"
-# target — then ./run-all.sh. Point your Sun client at the Mac's en0 IP +
-# the capture's listen port (typically :0 for port 6000).
+# Reads connection.json. The proxy forwards to whatever "forward"
+# names; if that's a localhost address, we start swiftx-server on
+# that port automatically (because something has to be listening
+# there). For gold captures aimed at a real Sun, leave forward
+# pointing at the Sun and this script just runs the proxy.
+#
+# Workflow:
+#   1. Edit connection.json (output filename + forward target).
+#   2. ./run-all.sh
+#   3. Point your Sun client at the Mac's en0 IP + the listen port
+#      (typically :0 → 6000).
+#   4. Use the X client. When it closes, the .xtap finalises.
+#
+# If you want server-side capture INSTEAD of a proxy capture, see
+# run-server.sh and pass --capture. That writes a .xtap from
+# inside the server (no second TCP hop). The two paths are useful
+# in different contexts:
+#
+#   proxy capture (this script)
+#     ↳ man-in-the-middle, byte-faithful, includes setup + auth
+#     ↳ useful when comparing "swiftx wire" vs "Xsun wire" for
+#       the same client
+#
+#   server-side capture (--capture on swiftx-server)
+#     ↳ per-client file, no second hop, auto-named after WM_CLASS
+#     ↳ useful for bug reports from end users running swiftx
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -15,9 +38,9 @@ CONFIG="connection.json"
 if [ ! -f "$CONFIG" ]; then
     echo "missing $CONFIG. Create one like:" >&2
     echo '{' >&2
-    echo '  "listen": ":6000",' >&2
+    echo '  "listen":  ":6000",' >&2
     echo '  "forward": "127.0.0.1:6001",' >&2
-    echo '  "output": "captures/session.xtap"' >&2
+    echo '  "output":  "captures/session.xtap"' >&2
     echo '}' >&2
     exit 1
 fi
@@ -32,28 +55,28 @@ OUTPUT=$(read_json "$CONFIG" output)
 
 swift build -c release
 
-# Start swift-x only when capture's forward target is local. Convention:
-# capture forwards to 127.0.0.1:<port>; we run swift-x on that port. For
-# gold reference captures (forward = sun:6000) we skip — the Sun is the
-# X server in that case.
+# Start swiftx-server only when the capture's forward target is
+# local. Convention: capture forwards to 127.0.0.1:<port>; we run
+# swiftx-server on that port. For gold reference captures
+# (forward = sun:6000) we skip — the Sun is the X server.
 SERVER_PID=""
 case "$FORWARD" in
     127.0.0.1:*|localhost:*)
         SERVER_PORT="${FORWARD##*:}"
-        echo "starting swift-x server on 127.0.0.1:$SERVER_PORT"
+        echo "starting swiftx-server on 127.0.0.1:$SERVER_PORT"
         .build/release/swiftx-server --host 127.0.0.1 --port "$SERVER_PORT" &
         SERVER_PID=$!
         # Give the server a moment to bind before capture starts forwarding.
         sleep 1
         ;;
     *)
-        echo "forward target is $FORWARD — not starting swift-x"
+        echo "forward target is $FORWARD — not starting swiftx-server"
         ;;
 esac
 
 cleanup() {
     if [ -n "$SERVER_PID" ]; then
-        echo "shutting down swift-x server (pid $SERVER_PID)"
+        echo "shutting down swiftx-server (pid $SERVER_PID)"
         kill "$SERVER_PID" 2>/dev/null || true
         wait "$SERVER_PID" 2>/dev/null || true
     fi
@@ -61,4 +84,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "capture: listen=$LISTEN forward=$FORWARD output=$OUTPUT"
-.build/release/swiftx-capture --listen "$LISTEN" --forward "$FORWARD" --output "$OUTPUT"
+.build/release/swiftx-capture \
+    --listen  "$LISTEN" \
+    --forward "$FORWARD" \
+    --output  "$OUTPUT"
