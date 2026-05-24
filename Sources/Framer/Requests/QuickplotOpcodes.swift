@@ -313,6 +313,43 @@ public struct ListFonts: Equatable, Sendable {
     }
 }
 
+public struct ListFontsWithInfo: Equatable, Sendable {
+    public static let opcode: UInt8 = 50
+    public var maxNames: UInt16
+    public var pattern: [UInt8]
+
+    public init(maxNames: UInt16, pattern: [UInt8]) {
+        self.maxNames = maxNames
+        self.pattern = pattern
+    }
+
+    public func encode(byteOrder: ByteOrder) -> [UInt8] {
+        let n = pattern.count
+        let p = xPad(n)
+        let lenIn4 = UInt16(2 + (n + p) / 4)
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(Self.opcode); w.writeUInt8(0); w.writeUInt16(lenIn4)
+        w.writeUInt16(maxNames)
+        w.writeUInt16(UInt16(n))
+        w.writeBytes(pattern)
+        w.writePadding(p)
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> ListFontsWithInfo {
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        let op = try r.readUInt8()
+        guard op == Self.opcode else { throw FramerError.invalidOpcode(expected: Self.opcode, got: op) }
+        _ = try r.readUInt8()
+        _ = try r.readUInt16()
+        let max = try r.readUInt16()
+        let n = Int(try r.readUInt16())
+        let pat = try r.readBytes(n)
+        try r.skip(xPad(n))
+        return ListFontsWithInfo(maxNames: max, pattern: pat)
+    }
+}
+
 public enum BestSizeClass: UInt8, Sendable {
     case cursor = 0
     case tile = 1

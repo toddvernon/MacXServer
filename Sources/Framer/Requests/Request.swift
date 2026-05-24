@@ -41,6 +41,7 @@ public enum Request: Equatable, Sendable {
     case closeFont(CloseFont)
     case queryFont(QueryFont)
     case listFonts(ListFonts)
+    case listFontsWithInfo(ListFontsWithInfo)
     case createPixmap(CreatePixmap)
     case freePixmap(FreePixmap)
     case createGC(CreateGC)
@@ -151,6 +152,7 @@ public enum Request: Equatable, Sendable {
         case .closeFont(let r):                 return r.encode(byteOrder: byteOrder)
         case .queryFont(let r):                 return r.encode(byteOrder: byteOrder)
         case .listFonts(let r):                 return r.encode(byteOrder: byteOrder)
+        case .listFontsWithInfo(let r):         return r.encode(byteOrder: byteOrder)
         case .createPixmap(let r):              return r.encode(byteOrder: byteOrder)
         case .freePixmap(let r):                return r.encode(byteOrder: byteOrder)
         case .createGC(let r):                  return r.encode(byteOrder: byteOrder)
@@ -316,6 +318,8 @@ public enum Request: Equatable, Sendable {
             return .queryFont(try QueryFont.decode(from: bytes, byteOrder: byteOrder))
         case ListFonts.opcode:
             return .listFonts(try ListFonts.decode(from: bytes, byteOrder: byteOrder))
+        case ListFontsWithInfo.opcode:
+            return .listFontsWithInfo(try ListFontsWithInfo.decode(from: bytes, byteOrder: byteOrder))
         case CreatePixmap.opcode:
             return .createPixmap(try CreatePixmap.decode(from: bytes, byteOrder: byteOrder))
         case FreePixmap.opcode:

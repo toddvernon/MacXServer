@@ -340,6 +340,7 @@ public enum Dumper {
         case .closeFont:                 return CloseFont.opcode
         case .queryFont:                 return QueryFont.opcode
         case .listFonts:                 return ListFonts.opcode
+        case .listFontsWithInfo:         return ListFontsWithInfo.opcode
         case .createPixmap:              return CreatePixmap.opcode
         case .freePixmap:                return FreePixmap.opcode
         case .createGC:                  return CreateGC.opcode

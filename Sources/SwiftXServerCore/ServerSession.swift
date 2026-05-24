@@ -2356,6 +2356,41 @@ public final class ServerSession: @unchecked Sendable {
         )
     }
 
+    /// Build a ListFontsWithInfoReply for one matched font name.
+    /// Reuses the same per-font computation as QueryFont (min/max
+    /// bounds, FONTPROPS, charset-driven range) minus the per-glyph
+    /// CharInfo array which ListFontsWithInfo's reply shape doesn't
+    /// carry. `repliesHint` is the number of replies still to come
+    /// after this one — clients use it as a sizing hint for their
+    /// reply buffer but always look for name-length=0 to terminate.
+    private func makeListFontsWithInfoReply(
+        resolved: ResolvedFont,
+        sequence: UInt16,
+        name: [UInt8],
+        repliesHint: UInt32
+    ) -> ListFontsWithInfoReply {
+        // The simplest correct approach: have makeQueryFontReply do
+        // the work, then peel off the bits ListFontsWithInfo wants.
+        // Marginal extra cost (per-glyph CharInfos computed but
+        // discarded) is acceptable — ListFontsWithInfo isn't on a
+        // visible hot path.
+        let qfr = makeQueryFontReply(resolved: resolved, sequence: sequence)
+        return ListFontsWithInfoReply(
+            sequenceNumber: sequence,
+            name: name,
+            minBounds: qfr.minBounds, maxBounds: qfr.maxBounds,
+            minCharOrByte2: qfr.minCharOrByte2,
+            maxCharOrByte2: qfr.maxCharOrByte2,
+            defaultChar: qfr.defaultChar,
+            drawDirection: qfr.drawDirection,
+            minByte1: qfr.minByte1, maxByte1: qfr.maxByte1,
+            allCharsExist: qfr.allCharsExist,
+            fontAscent: qfr.fontAscent, fontDescent: qfr.fontDescent,
+            repliesHint: repliesHint,
+            properties: qfr.properties
+        )
+    }
+
     /// Resolve the GC by id and translate to a typed `GCState`.
     private func gcState(_ gcId: UInt32, byteOrder: ByteOrder) -> GCState {
         guard let entry = gcs.get(gcId) else { return GCState() }
@@ -5270,6 +5305,31 @@ public final class ServerSession: @unchecked Sendable {
             let reply = ListFontsReply(sequenceNumber: sequenceNumber, names: names)
             outbound.append(reply.encode(byteOrder: byteOrder))
 
+        case .listFontsWithInfo(let r):
+            // Same match as ListFonts, but the client wants per-font
+            // metric info too. Emit one reply per match (each carrying
+            // the font's CharInfo bounds + FONTPROPS) followed by a
+            // terminator reply with name-length=0. Clients (xclock,
+            // xfontsel, libXt's font enumerator) read until they see
+            // the terminator. Per X11 spec section 9 — the multi-reply
+            // pattern is unique to this opcode in the core protocol.
+            let pattern = String(decoding: r.pattern, as: UTF8.self)
+            let names = SynthesizedFonts.match(pattern: pattern, max: Int(r.maxNames))
+            for (i, nameBytes) in names.enumerated() {
+                let nameString = String(decoding: nameBytes, as: UTF8.self)
+                let resolved = FontResolver.resolve(name: nameString)
+                let remaining = UInt32(names.count - i - 1)
+                let reply = makeListFontsWithInfoReply(
+                    resolved: resolved,
+                    sequence: sequenceNumber,
+                    name: nameBytes,
+                    repliesHint: remaining
+                )
+                outbound.append(reply.encode(byteOrder: byteOrder))
+            }
+            let terminator = ListFontsWithInfoReply.terminator(sequenceNumber: sequenceNumber)
+            outbound.append(terminator.encode(byteOrder: byteOrder))
+
         case .getKeyboardMapping(let r):
             let keysyms = DefaultKeyboardMap.keysyms(firstKeycode: r.firstKeycode, count: r.count)
             let reply = GetKeyboardMappingReply(
@@ -5775,6 +5835,7 @@ private func opcodeName(_ request: Request) -> String {
     case .closeFont: return "CloseFont"
     case .queryFont: return "QueryFont"
     case .listFonts: return "ListFonts"
+    case .listFontsWithInfo: return "ListFontsWithInfo"
     case .createPixmap: return "CreatePixmap"
     case .freePixmap: return "FreePixmap"
     case .createGC: return "CreateGC"

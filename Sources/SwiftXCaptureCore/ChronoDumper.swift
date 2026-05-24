@@ -301,6 +301,8 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
         body = "QueryFont                font=\(windowDisplay(r.font))"
     case .listFonts(let r):
         body = "ListFonts                pattern=\"\(String(decoding: r.pattern, as: UTF8.self))\" max=\(r.maxNames)"
+    case .listFontsWithInfo(let r):
+        body = "ListFontsWithInfo        pattern=\"\(String(decoding: r.pattern, as: UTF8.self))\" max=\(r.maxNames)"
     case .createPixmap(let r):
         body = "CreatePixmap             pid=\(windowDisplay(r.pid)) drawable=\(windowDisplay(r.drawable)) \(r.width)x\(r.height) depth=\(r.depth)"
     case .freePixmap(let r):
@@ -581,6 +583,7 @@ func opcodeOf(_ req: Request) -> UInt8 {
     case .closeFont:                 return CloseFont.opcode
     case .queryFont:                 return QueryFont.opcode
     case .listFonts:                 return ListFonts.opcode
+    case .listFontsWithInfo:         return ListFontsWithInfo.opcode
     case .createPixmap:              return CreatePixmap.opcode
     case .freePixmap:                return FreePixmap.opcode
     case .createGC:                  return CreateGC.opcode
