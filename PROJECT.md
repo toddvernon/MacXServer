@@ -73,26 +73,38 @@ networking.
 
 Written in Swift, used by both products.
 
-## Product 1: Capture tool
+## Product 1: Capture (CLI tool → library + GUI app + server-side capture)
 
-A Swift CLI on the Mac that sits between two Suns on the LAN as a passive proxy. Forwards X traffic
-faithfully, decodes it for human consumption, records sessions to disk for later replay.
+A two-phase product. v1 is the CLI proxy tool that produced the framer, the corpus, and the article.
+v2 is the public-release evolution: refactor the format/decode logic into a library, build a SwiftUI
+app over it for hobbyists who want to record / examine / replay captures, and bolt server-side capture
+into `swiftx-server` so users can hit a bug and hand back a `.xtap` without running a separate tool.
 
-Standalone value: lets me trace what real X clients actually do over the wire. Useful for documentation,
-for learning the protocol, and for producing test fixtures.
+Standalone value (v1): lets me trace what real X clients actually do over the wire. Useful for
+documentation, for learning the protocol, and for producing test fixtures.
 
-Deliverables:
+Standalone value (v2): bug-report-grade capture for any swift-x user, plus an approachable GUI for
+the "what's on the wire?" question.
+
+Deliverables (v1, done 2026-05-06):
 - Swift package with a clean wire protocol decoder (the framer)
 - CLI tool that proxies, records, and dumps captures
 - Captured data is between two real Sun workstations routed through the Swift capture app (man in the middle)
-- A corpus of recorded sessions from real Suns: xterm, xclock, xeyes, twm, mwm, my Motif app, CDE if I have
-	it, OpenWindows
+- A corpus of recorded sessions from real Suns: xterm, xclock, xeyes, xcalc, my Motif app (quickplot)
 - Replay tool that can feed a capture back into a fresh X server
 - A document for my web site about the tool, plus a written article walking through what goes over the wire
 	during a simple xterm session, with annotated packet traffic matched to x.org packet definitions
 
-Why this gets built first: the framer is reused by every later product. Having a real captured corpus before
-writing a server means the server's tests are grounded in reality, not in the spec.
+Deliverables (v2, in design 2026-05-23 — full spec at the bottom of `PRODUCT_1_CAPTURE.md`):
+- `SwiftXCaptureCore` as the single source of truth for `.xtap` format and decode
+- `swiftx-server --capture` (and matching Preferences toggle) writing per-client `.xtap` files to
+	`/tmp/swift-x-captures/` with no measurable hot-path latency
+- New SwiftUI capture app with three modes: Record (proxy), Open (examine), Replay
+- Library + apps stay in lockstep on file format; format is unchanged from v1
+
+Why this gets built first: the framer is reused by Product 2. Having a real captured corpus before
+writing a server means the server's tests are grounded in reality, not in the spec. v2's library
+refactor doesn't gate Product 2 work; the two run in parallel.
 
 ## Product 2: Swift X server
 

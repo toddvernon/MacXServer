@@ -1,4 +1,20 @@
-# Product 1: Capture tool
+# Product 1: Capture (CLI tool → library + GUI app + server-side capture)
+
+Two phases:
+
+- **v1** — the CLI proxy tool that produced the framer, the corpus, and the article.
+	Status: done 2026-05-06. Content of this doc through the end of "Order of work (as built)"
+	covers v1.
+- **v2** — refactor format/decode into a library, build a SwiftUI capture app over it, add
+	server-side capture to `swiftx-server` for public-release bug reporting. Status: in design
+	as of 2026-05-23. See the "v2: Public-ready capture" section at the bottom of this doc.
+
+v1 and v2 share the `.xtap` format. v2 is additive: v1 binaries and v1 captures keep working
+throughout the transition. The framer is unchanged.
+
+---
+
+# v1: CLI capture tool (done 2026-05-06)
 
 ## What this is
 
@@ -313,4 +329,474 @@ walks through every packet with a short explanation referencing the x.org spec s
 11. Article written. ✅
 12. Corpus regression test: framer round-trips every C2S byte semantically. ✅
 
-Product 1 is done. Move on to Product 2.
+Product 1 v1 is done. Product 2 (the server) is in progress; the v2
+work below was scoped on 2026-05-23 to make capture public-release ready.
+
+---
+
+# v2: Public-ready capture (in design 2026-05-23)
+
+## What this is
+
+A redesign of how capture works now that swift-x is heading toward a public
+release. Two complementary capture paths driven by the same library, so
+hobbyists running the server can hand back useful bug reports without
+running a separate tool.
+
+1. **Server-side capture** — `swiftx-server` gains a `--capture` flag (and a
+   matching "Capture every client" toggle in Preferences). When on, every
+   client that connects writes its own `.xtap` to `/tmp/swift-x-captures/`.
+   One client = one file. Reboot wipes everything; that's the only privacy
+   gate.
+
+2. **Capture app** — `swiftx-capture` becomes a SwiftUI app with three modes:
+   record-proxy (between two real Suns or a Sun and a real server), open
+   an existing `.xtap` and browse it, and replay an `.xtap` against a
+   target server. Replaces the v1 CLI tool, which serves only me.
+
+Both apps use the same `SwiftXCaptureCore` library for the file format,
+the framing, and the decode/annotation logic. The library is the single
+source of truth; the two binaries are thin shells over it.
+
+## Why now
+
+v1 capture is functionally done but its UX is "Todd uses the CLI."
+Going public means:
+
+- **A hobbyist running the server hits a rendering bug.** They have no way
+  to send me a capture today unless they happen to know that a separate
+  proxy tool exists and how to set it up. Server-side capture turns this
+  into "toggle the checkbox, hit the bug, send me the file."
+- **A hobbyist who wants to look at what their app does on the wire** has
+  to learn the CLI subcommands. A GUI examiner makes "what's actually
+  happening when xterm scrolls?" approachable.
+- **The replay-as-smoke-test path** isn't going away (it's how I verify
+  framer round-trips against new captures). Better in a GUI too — fewer
+  flag memorizations, easier to tweak timing and target while watching.
+
+## Topology (the two paths)
+
+### Server-side capture (the new path)
+
+```
+[Sun A: xterm]   [Sun A: xclock]   [Sun A: quickplot]
+       │                │                    │
+       ▼                ▼                    ▼
+                  [Mac: swiftx-server --capture]
+                            │
+                            ▼
+            /tmp/swift-x-captures/
+                2026-05-23T14-32-11-xterm.xtap
+                2026-05-23T14-32-11-xterm.xtap.json
+                2026-05-23T14-37-02-xclock.xtap
+                2026-05-23T14-37-02-xclock.xtap.json
+                2026-05-23T14-41-58-quickplot.xtap
+                2026-05-23T14-41-58-quickplot.xtap.json
+```
+
+Each X client connection gets its own capture file. The server is also
+the actual X server; the capture is a tee, not a proxy. The user sees
+no extra latency in the common case (see "Performance" below).
+
+### Proxy capture (the v1 path, now with a UI)
+
+```
+[Sun A: clients]                                       [Sun B: real Xsun]
+       │                                                       ▲
+       │  DISPLAY=mac.local:1                                  │
+       │  TCP to mac.local:6001                                │  TCP to sun-b:6000
+       ▼                                                       │
+   [Mac: swiftx-capture (Record mode)]  ─forwards both ways───┘
+       │
+       ▼
+   session.xtap
+```
+
+Same as today's v1 tool, but:
+- Default listen port is `:6001` so it can run alongside `swiftx-server`
+  on `:6000` without a flag dance.
+- Live status: bytes in/out per direction, packet counts, last few
+  decoded requests in a window. The user can see something is happening
+  without `--decode-stdout`.
+
+## Goals
+
+v2 is "done" when:
+
+- `swiftx-server --capture` writes a per-client `.xtap` to
+  `/tmp/swift-x-captures/` with no measurable latency hit on interactive
+  workloads. The Preferences toggle has the same effect.
+- The CLI flag and the Preferences toggle compose with documented
+  precedence: CLI when present wins, Preferences applies otherwise.
+- `swiftx-capture` opens with a mode picker, can record a proxy session,
+  can open an `.xtap` and let the user browse it (request tree, decoded
+  payload, jump to events), and can replay against a target.
+- `SwiftXCaptureCore` is the only place that knows the `.xtap` format,
+  the framer wiring, and the annotation logic. Both apps link it.
+- A first-time user on a friend's Mac can hit a bug, find the capture
+  file in Finder, and email it to me without consulting documentation.
+
+## Non-goals
+
+- **Encrypted or authenticated capture transport.** Captures are local
+  files. If you want to encrypt before emailing, use whatever you'd use
+  for any other attachment.
+- **Capture filtering.** No "only record GetImage" or "exclude this
+  client" mode. The file is the file; analysis is the examiner's job.
+- **Cross-session capture in one file.** One client connection, one
+  `.xtap`. Always.
+- **Capture playback as a recovery tool.** Replay is for smoke tests
+  and bug reproduction, not "redo my session."
+- **Live capture editing.** Captures are append-only at write time and
+  read-only at examine time.
+- **A "capture daemon" model.** Capture is a feature of the server
+  binary, not a separate process the server talks to over IPC.
+
+## Library boundary
+
+`SwiftXCaptureCore` becomes the canonical home for everything format-
+and decode-related. The current contents (`CaptureFile`, `CaptureReader`,
+`Recorder`, `Proxy`, `Replay`, `Dumper`, `ChronoDumper`, `Direction`,
+`StartupHint`, `CaptureDiff`, `NetworkInterfaces`, `CLI`) mostly stay,
+with one cut and one addition:
+
+**Cut**: `CLI.swift` moves out. It's a CLI argument parser specific to
+the current binary; the new capture app has a SwiftUI front end and
+the server's flag handling lives in the server's `main.swift`.
+
+**Add**: `CaptureSink` — a thin protocol for "something that consumes
+wire bytes plus direction plus timestamp and writes them out." Today
+`Recorder` is a concrete struct; promoting it behind a protocol lets
+the server install a per-session sink alongside its normal protocol
+handlers without depending on the proxy machinery.
+
+```swift
+public protocol CaptureSink {
+    func record(direction: Direction, bytes: UnsafeRawBufferPointer, at: ContinuousClock.Instant)
+    func finalize()
+}
+```
+
+What stays library-internal vs binary-side:
+
+| Concern | Library (`SwiftXCaptureCore`) | App (`swiftx-server` or `swiftx-capture`) |
+|---|---|---|
+| `.xtap` file format read/write | yes | no |
+| Sidecar JSON read/write | yes | no |
+| Framing/decoding (via Framer) | yes | no |
+| Decoded packet annotation | yes | no |
+| TCP listen/forward (proxy mode) | yes | no |
+| TCP forward-only (replay mode) | yes | no |
+| Per-session sink lifecycle (start, write, finalize) | yes | no |
+| CLI argument parsing | no | yes (server has one, capture-app has none) |
+| SwiftUI views | no | yes (capture app only) |
+| Preferences storage (UserDefaults) | no | yes (both) |
+| Status-menu items | no | yes (both) |
+
+## Server-side capture: how it wires in
+
+### Activation
+
+Two inputs:
+1. CLI flag `--capture` (boolean, defaults to "use preferences value")
+2. Preferences toggle "Capture every client to /tmp"
+
+**Precedence**: CLI when present wins. So:
+
+| Pref | CLI | Effect |
+|---|---|---|
+| OFF | absent | no capture |
+| ON | absent | capture |
+| OFF | `--capture` | capture (CLI overrides) |
+| ON | `--no-capture` | no capture (CLI overrides) |
+| any | `--capture=false` | no capture (explicit off) |
+
+A small status-menu indicator shows the active state ("Capturing" badge
+when on) so the user can tell at a glance. Toggling from the menu
+persists to Preferences.
+
+### Per-session lifecycle
+
+1. **On client connect**: `ServerCoordinator` allocates a `Recorder`
+   (the library's `CaptureSink` implementation) writing to a temp file
+   `/tmp/swift-x-captures/.in-progress-<sessionId>.xtap`. The temp
+   name avoids confusion if the server crashes mid-capture.
+2. **On first SetupRequest decoded**: the session knows the client's
+   byte order and, after the connection completes, often a human-readable
+   client name (from `WM_CLIENT_MACHINE` / `WM_COMMAND` or the first
+   `CreateWindow`'s `WM_NAME`). At that point we rename the in-progress
+   file to `<timestamp>-<client-name>.xtap`. If no name resolves within
+   30 seconds we fall back to `<timestamp>-client-<sessionId>.xtap`.
+3. **During the session**: every byte that crosses the protocolQueue's
+   read or write boundary is fed to the session's sink (see Performance
+   for the threading).
+4. **On disconnect (clean or dirty)**: sink writes the sidecar JSON,
+   closes the file.
+5. **On server crash**: in-progress files remain on disk; next launch
+   doesn't try to recover them (`.in-progress-` prefix keeps them
+   distinguishable from real captures so a UI listing can hide them).
+
+### File naming
+
+```
+/tmp/swift-x-captures/
+    2026-05-23T14-32-11-xterm.xtap
+    2026-05-23T14-32-11-xterm.xtap.json
+    2026-05-23T14-32-58-xterm.xtap                  # second xterm
+    2026-05-23T14-32-58-xterm.xtap.json
+    2026-05-23T14-41-58-quickplot.xtap
+    2026-05-23T14-41-58-quickplot.xtap.json
+```
+
+ISO-8601-ish timestamps with `T` separator, `-` instead of `:` (legal
+in filenames everywhere). Client name comes from the best signal
+available at "rename time" (~50 ms after `SetupRequest`); good enough
+for triage.
+
+### Status-menu additions
+
+- **"Capture Sessions" toggle** (mirrors Preferences value).
+- **"Reveal Captures Folder"** (opens `/tmp/swift-x-captures/` in
+  Finder). Important because /tmp is invisible to normal users.
+- **"Discard All Captures"** (rm everything in the folder, confirm
+  first). Useful after a multi-app debugging session.
+
+## Performance
+
+Capturing every byte of every session has two cost vectors:
+
+1. **Copy cost on the hot path** — every read and write on the
+   protocolQueue has to fork bytes to the sink. This must be cheap
+   (memcpy at most) or it slows down rendering.
+2. **Disk write cost** — flushing to `/tmp` is async-able but real;
+   200+ MB/s SSD writes are fast but blocking the protocolQueue on
+   them is unacceptable.
+
+### Threading model
+
+```
+                    ┌──────────────────────┐
+                    │ protocolQueue        │
+                    │ (per session)        │
+                    │                      │
+                    │  read socket ───┐    │
+                    │  decode ────────┤    │
+                    │  dispatch ──────┤    │
+                    │  encode reply ──┤    │
+                    │  write socket ──┤    │
+                    │                 │    │
+                    │  sink.record() ─┘    │  (memcpy into ring buffer)
+                    └──────────────────────┘
+                              │
+                              ▼
+                    ┌──────────────────────┐
+                    │ captureQueue         │
+                    │ (per session, serial)│
+                    │                      │
+                    │  drain ring → write  │
+                    │  flush on:           │
+                    │    - 64 KB filled    │
+                    │    - 100 ms timer    │
+                    └──────────────────────┘
+                              │
+                              ▼
+                       /tmp/.../*.xtap
+```
+
+- Each session owns a serial `captureQueue` distinct from its
+  `protocolQueue`. The protocolQueue does a memcpy into a 64 KB
+  ring and dispatches a drain on the captureQueue if a threshold
+  triggers (every 100 ms or 64 KB filled).
+- The drain is `write(2)` to the temp file. No `fsync`. A crash
+  loses at most the last ~half-second.
+- The ring is per-session, so high-traffic clients (Motif Expose
+  floods) don't starve quiet ones (xterm idle).
+
+### Expected overhead
+
+Rough numbers from the existing capture tool's proxy path:
+- Memcpy of 1 KB packets: tens of nanoseconds.
+- Ring enqueue: a few cache lines of pointer bumping.
+- Compare to the protocolQueue's actual work (decode + dispatch +
+  bridge call): microseconds.
+
+Capture overhead should be in the <1% range for interactive workloads.
+x11perf-style stress tests would see it more clearly but those aren't
+the workload we care about.
+
+### Crash-loss tradeoff
+
+64 KB buffer means up to ~500 ms of activity can be lost on crash.
+For a hobbyist bug-report tool, that's fine. If the user is hitting a
+crash and the last half-second is exactly what's interesting, they
+can re-trigger after restart. If we ever need it: a fsync-every-frame
+mode behind a flag, off by default.
+
+## The capture app: UI shape
+
+Launch with a mode picker (window-style chooser, like Xcode's "what
+kind of project"). Once a mode is chosen, that window stays in that
+mode until closed.
+
+### Mode 1: Record (proxy)
+
+```
++--------------------------------------------------------+
+| Record — Proxy Capture                          [Stop] |
+| Listen on:   [:6001]                                   |
+| Forward to:  [sun-b.lan:6000]                          |
+| Output:      [~/Desktop/session.xtap]   [Choose...]    |
+|                                                        |
+| Status: connected — 12,847 bytes in / 91,283 bytes out |
+| Last requests:                                         |
+|   PolyFillRectangle  win=0x2a  gc=0x10  rects=1        |
+|   PolyText8          win=0x2a  gc=0x10  "Hello"        |
+|   ChangeProperty     win=0x2a  prop=_NET_WM_NAME       |
+|   ...                                                  |
++--------------------------------------------------------+
+```
+
+Fields are saved between launches (UserDefaults). Live byte counts.
+Last N decoded requests scroll past as they happen (read-only
+window). Stop button finalizes and offers to open the file in a new
+Examine window.
+
+### Mode 2: Open (examine)
+
+```
++------------------------------------------------------------+
+| Open: 2026-05-23T14-41-58-quickplot.xtap                   |
+|                                                            |
+| Tree                  | Detail                             |
+| ────────────────────  | ─────────────────────────────────  |
+| ▶ Connection Setup    | Request 47: PolyFillRectangle      |
+| ▼ Window Creation     |   drawable: 0x2a00007 (window)    |
+|     CreateWindow 0x2a |   gc: 0x2a00010                    |
+|     ChangeWMProps     |   nRects: 1                        |
+|     MapWindow         |   rect[0]: (10, 20, 100, 30)       |
+| ▼ Drawing             |                                    |
+|     PolyFillRect (47) |  [bytes] [annotation] [hex view]  |
+|     PolyText8         |                                    |
+| ▼ Events              |  ◀ prev   [   timeline   ]   next ▶|
++------------------------------------------------------------+
+```
+
+- Tree groups requests by phase. Phase boundaries are inferred from
+  the request stream (setup → window creation → drawing → events).
+- Detail pane decodes the selected packet with three views: structured,
+  annotated (spec excerpt), raw hex.
+- Timeline scrubber across the bottom: jump by time, by request count,
+  by request type filter.
+- "Open in Replay mode" button hands the current file off.
+
+### Mode 3: Replay
+
+```
++--------------------------------------------------------+
+| Replay: 2026-05-23T14-41-58-quickplot.xtap             |
+|                                                        |
+| Target:    [localhost:6000]                            |
+| Mode:      ○ Real-time   ● Fast pump                   |
+| Hold open: [✓] (keeps connection alive after replay)   |
+|                                                        |
+| Progress: ████████████░░░░  142 / 287 requests         |
+|                                                        |
+|                              [Start]  [Pause]  [Stop]  |
++--------------------------------------------------------+
+```
+
+Same semantics as the v1 CLI `replay` subcommand. Hold-open defaulted
+on because that's almost always what you want when visually
+inspecting.
+
+## Migration from v1
+
+v1's `swiftx-capture` binary stays — its CLI is what I use for corpus
+capture and won't break. The new SwiftUI app is *additionally* named
+`swiftx-capture` though, so there's a name conflict to resolve.
+
+Two options:
+- **(a) Rename the new app `swiftx-capture-app`** and keep the CLI at
+  `swiftx-capture`. Ugly name, but no breakage.
+- **(b) Move the CLI's subcommand interface into the new app and
+  retire the old binary.** The SwiftUI app gets a `--headless` mode
+  that exposes the v1 CLI behavior, so my corpus-capture scripts keep
+  working. Cleaner long-term but more refactor up front.
+
+Leaning toward (b) but won't decide until the SwiftUI app is real
+enough to know if `--headless` is awkward.
+
+## Implementation order
+
+1. **Extract `CaptureSink` protocol** in `SwiftXCaptureCore`. Refactor
+   `Recorder` to implement it. Existing CLI continues to work
+   unchanged.
+2. **Wire capture into `swiftx-server`** behind `--capture`. Per-
+   session captureQueue, ring buffer, drain-to-disk. File naming and
+   in-progress-then-rename logic.
+3. **Preferences UI for "Capture every client"**. Status-menu indicator
+   plus "Reveal Captures Folder" and "Discard All Captures" items.
+4. **Cross-session test**: launch the server with capture on, run the
+   captured-app replay tests against it, verify a `.xtap` lands in
+   `/tmp/swift-x-captures/` and round-trips through the framer.
+5. **New SwiftUI app skeleton**: mode picker + empty Record / Open /
+   Replay windows. Three modes, three SwiftUI scenes.
+6. **Record mode**: bind to existing `Proxy` + `Recorder` in
+   `SwiftXCaptureCore`. UI for listen/forward/output, live byte
+   counters.
+7. **Open mode**: bind to existing `CaptureReader` + `ChronoDumper`.
+   Tree-view of requests; detail pane with structured/annotated/hex
+   tabs.
+8. **Replay mode**: bind to existing `Replay`. Real-time vs fast,
+   hold-open, progress bar.
+9. **Name collision resolution** (see Migration section).
+10. **Docs pass**: README updates, blog post on the new server-side
+    capture flow, screenshots.
+
+## Test strategy
+
+- **Library** (`SwiftXCaptureCore`): existing tests cover format and
+  round-trip. Add tests for the new `CaptureSink` protocol against a
+  mock sink.
+- **Server-side capture**: a new server test that connects a synthetic
+  client, runs through a known request sequence, and verifies the
+  resulting `.xtap` decodes back to the same sequence. Verify naming
+  (timestamp + client name) and finalize-on-disconnect.
+- **Performance**: a benchmark that times protocolQueue throughput with
+  and without capture enabled, asserts <5% regression on representative
+  workloads (existing captured-app replay set).
+- **Capture app**: SwiftUI views are notoriously hard to unit-test;
+  cover the model layer (CaptureBrowserModel, ReplayModel,
+  RecordModel) with XCTests and accept that the actual view code is
+  validated by use.
+
+## Open questions to settle during build
+
+- **First-launch behavior of the server when `--capture` is on but
+  `/tmp/swift-x-captures/` doesn't exist**: just `mkdir -p`. No prompt.
+- **What "client name" means at rename time**: I'm proposing the first
+  of (a) the program-class from `WM_CLASS`, (b) `WM_NAME`, (c) the
+  first `CreateWindow`'s window-name property, (d) fallback to
+  `client-<sessionId>`. Need to verify which one fires fastest in
+  practice across xterm / Motif / Athena.
+- **Ring buffer sizing**: 64 KB is a guess. Might want to scale by
+  observed throughput (e.g., bump to 256 KB if the drain falls behind
+  more than once per minute). Measure first.
+- **Replay-against-Swift-X**: per DECISIONS.md 2026-05-06, replay
+  doesn't drive Product 2 testing because resource-id-base differs.
+  The capture app's Replay mode inherits the same limitation. Worth
+  surfacing in the UI (warning banner when target is `localhost:6000`
+  and the target is detected to be `swiftx-server`).
+
+## What this doesn't change
+
+- v1's existing CLI continues to work for my corpus-capture scripts
+  during the transition.
+- The `.xtap` format is unchanged. Files captured by the v1 CLI open
+  in the new examiner; files captured by the server open in the v1
+  CLI's `dump` subcommand. Format compatibility is the whole point of
+  putting it in the library.
+- The framer is unchanged. All annotation goes through the existing
+  `ChronoDumper` path.
+- Product 2's M1/M2/M3 milestones are unaffected. Capture is a
+  cross-cutting feature, not a milestone gate.

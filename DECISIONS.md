@@ -535,6 +535,37 @@ This entry advances step (1) of DECISIONS 2026-05-18 line 470 for the colormap. 
 
 ---
 
+## 2026-05-23 — Capture v2: split into library + GUI app + server-side capture for public release
+
+**Chosen**: Refactor capture into three pieces that share one library, in service of a public release where hobbyists need to send bug reports without running a separate proxy tool.
+
+1. `SwiftXCaptureCore` (existing library) becomes the single source of truth for `.xtap` file format, framing, decode/annotation, sink lifecycle, and the proxy + replay TCP machinery. A new `CaptureSink` protocol lets the server install its own per-session sink without depending on proxy code.
+2. `swiftx-server` gains `--capture` (CLI flag) and a matching "Capture every client to /tmp" Preferences toggle. When on, every X client that connects writes its own `.xtap` to `/tmp/swift-x-captures/`. One client = one file. Per-session `captureQueue` separate from `protocolQueue`, 64 KB ring buffer, flush on size or 100 ms timer. Status menu gets an indicator + "Reveal Captures Folder" + "Discard All Captures."
+3. A new SwiftUI app (working name `swiftx-capture`, name-conflict resolution deferred) with three modes on a launch picker: Record (proxy capture, replaces v1 CLI's default subcommand), Open (browse an existing `.xtap`), Replay (send a capture at a target server).
+
+Capture v1's CLI keeps working through the transition for my corpus-capture scripts. The `.xtap` format is unchanged — v1 captures open in the new examiner, server-emitted captures open in the v1 CLI's `dump`. Format compatibility is the whole reason the library is the boundary.
+
+**Why now**: A public-release user can't currently send a useful bug report. They'd need to know a separate proxy tool exists, set it up, and run their client against it. Server-side capture turns that into "toggle the checkbox, hit the bug, send the file." Plus a GUI examiner makes "what does this app do on the wire?" approachable for hobbyists who aren't going to learn CLI subcommands.
+
+**Alternatives rejected**:
+
+1. *Leave v1 alone and write a separate examiner GUI later.* Loses the chance to make capture genuinely useful for end users. A capture they can't send is a capture that doesn't exist for bug-report purposes.
+2. *Put server-side capture in a separate daemon process the server talks to over IPC.* IPC overhead and lifecycle bugs for no benefit. The server already owns the wire bytes; teeing them in-process is the cheap path.
+3. *Write captures to `~/Library/Application Support/swift-x/captures/`.* Discoverability cost is high — `~/Library` is hidden on macOS and most users don't know it exists, so files would accumulate invisibly and never get cleaned up. /tmp is shorter to type, gets wiped on reboot (self-cleaning), and a status-menu "Reveal Captures Folder" item handles the discoverability hit.
+4. *Always-on capture as the default.* Privacy concern in principle (captures contain keystrokes, clipboard, window titles), but for a LAN-only hobby tool used by nerds the right default is still off — captures should be opt-in via flag or pref, so the user knows they're recording.
+5. *Skip the GUI app, just ship server-side capture + the v1 CLI.* Half a solution. The CLI examiner subcommand (`dump`) is fine for me but unusable for anyone who doesn't already know the X protocol. The browser is what makes captures legible.
+6. *Fork the format/decode code into the server.* Drift guaranteed within weeks. Library-as-single-source-of-truth is the reason this whole split works.
+
+**Decisions deferred to during build**:
+
+- *Name collision between v1's `swiftx-capture` binary and the new SwiftUI app of the same name.* Two options on the table: rename the new app `swiftx-capture-app`, or move the CLI behavior into the new app behind a `--headless` flag and retire the v1 binary. Leaning toward the second but won't decide until the SwiftUI app is real enough to know if `--headless` is awkward.
+- *Ring buffer sizing (64 KB starting guess).* May want to scale by observed throughput once measured.
+- *Best client-name signal for file naming.* Pick from `WM_CLASS`, `WM_NAME`, the first `CreateWindow`'s window-name property — verify which fires fastest in practice across xterm / Motif / Athena.
+
+Full design spec: `PRODUCT_1_CAPTURE.md` § "v2: Public-ready capture."
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
