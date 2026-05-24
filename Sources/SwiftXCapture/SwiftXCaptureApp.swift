@@ -1,19 +1,17 @@
 import SwiftUI
 
-// SwiftUI capture app — successor to the v1 CLI tool, sharing the
-// SwiftXCaptureCore library with `swiftx-server`'s server-side
-// capture path. Step 5 of PRODUCT_1_CAPTURE.md § v2 is just the
-// skeleton: a mode-chooser at launch, three placeholder windows
-// (Record / Open / Replay) that real implementations land in steps
-// 6, 7, 8. Each placeholder lists what it'll do so the navigation
-// reads as intentional, not unfinished.
+// SwiftUI capture app — the GUI face of the `swiftx-capture` binary,
+// sharing the SwiftXCaptureCore library with `swiftx-server`'s
+// server-side capture path. Three modes: Record (proxy capture),
+// Open (browse a `.xtap`), Replay (pipe a `.xtap` into a server).
 //
-// Binary name is `swiftx-capture-app` for now; v1's `swiftx-capture`
-// CLI keeps its name during the transition. Step 9 resolves the
-// collision — either rename this app or fold the CLI into a
-// --headless mode of this binary.
+// This struct does NOT carry @main — the executable's entry point
+// is main.swift, which routes between the CLI and this GUI based on
+// CommandLine.arguments. When the GUI is wanted, main.swift calls
+// `SwiftXCaptureApp.main()` (the static method App protocol provides)
+// explicitly. See step 9 in PRODUCT_1_CAPTURE.md § v2 for the
+// rationale behind one binary instead of two.
 
-@main
 struct SwiftXCaptureApp: App {
 
     var body: some Scene {

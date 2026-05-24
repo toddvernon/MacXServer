@@ -1,11 +1,31 @@
 import Foundation
+import SwiftUI
 import SwiftXCaptureCore
+
+// `swiftx-capture` carries both faces: a CLI for the v1 corpus-
+// capture workflow (proxy / dump / summary / diff / replay) and a
+// SwiftUI app for the v2 hobbyist-facing experience. Which face
+// runs is decided here from CommandLine.arguments.
+//
+//   No args              → GUI (matches typical Mac-app expectation)
+//   `--gui` as first arg → GUI (explicit, redundant)
+//   Any other arg        → CLI subcommand or proxy-mode flags
+//
+// `--help` / `-h` route to CLI so the usage text still prints to
+// stdout for scripting.
 
 let args = Array(CommandLine.arguments.dropFirst())
 
-if args.isEmpty || args.contains("-h") || args.contains("--help") {
+if args.isEmpty || args.first == "--gui" {
+    // GUI mode. SwiftUI's App.main() takes over the runloop and
+    // never returns; nothing past this call ever runs.
+    SwiftXCaptureApp.main()
+    exit(0)   // unreachable, here for compiler completeness
+}
+
+if args.contains("-h") || args.contains("--help") {
     print(CLI.usage)
-    exit(args.isEmpty ? 1 : 0)
+    exit(0)
 }
 
 func writeStderr(_ s: String) {
