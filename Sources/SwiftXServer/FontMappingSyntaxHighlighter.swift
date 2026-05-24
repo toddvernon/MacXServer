@@ -11,7 +11,6 @@ import SwiftXServerCore
 //   fallbackKey   → coral (theme.sectionHeader — same as [section] headers)
 //   family        → green (theme.key)
 //   macFont       → soft cyan (theme.value)
-//   spacingKind   → plum (theme.keyPrefix — reads as a "type marker")
 //   unknown       → defaultText
 
 final class FontMappingSyntaxHighlighter: NSObject, SyntaxHighlighter {
@@ -65,8 +64,6 @@ final class FontMappingSyntaxHighlighter: NSObject, SyntaxHighlighter {
                 attrs[.foregroundColor] = theme.separator
             case .macFont:
                 attrs[.foregroundColor] = theme.value
-            case .spacingKind:
-                attrs[.foregroundColor] = theme.keyPrefix
             case .unknown:
                 attrs[.foregroundColor] = theme.defaultText
             }

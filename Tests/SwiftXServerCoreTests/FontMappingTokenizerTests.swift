@@ -26,62 +26,52 @@ final class FontMappingTokenizerTests: XCTestCase {
     // MARK: - Data lines
 
     func testSimpleDataLine() {
-        // "fixed  ->  Monaco  mono" → family + arrow + macFont + spacingKind
-        let spans = FontMappingTokenizer.tokenize("fixed  ->  Monaco  mono")
-        XCTAssertEqual(spans.count, 4)
+        // "fixed  ->  Monaco" → family + arrow + macFont
+        let spans = FontMappingTokenizer.tokenize("fixed  ->  Monaco")
+        XCTAssertEqual(spans.count, 3)
         XCTAssertEqual(spans[0].kind, .family)
         XCTAssertEqual(spans[0].range, NSRange(location: 0, length: 5))    // "fixed"
         XCTAssertEqual(spans[1].kind, .arrow)
         XCTAssertEqual(spans[1].range, NSRange(location: 7, length: 2))    // "->"
         XCTAssertEqual(spans[2].kind, .macFont)
         XCTAssertEqual(spans[2].range, NSRange(location: 11, length: 6))   // "Monaco"
-        XCTAssertEqual(spans[3].kind, .spacingKind)
-        XCTAssertEqual(spans[3].range, NSRange(location: 19, length: 4))   // "mono"
     }
 
     func testMacFontWithSpacesSpansThroughInternalWhitespace() {
-        // "helvetica  ->  Helvetica Neue  prop" — macFont span covers
+        // "helvetica  ->  Helvetica Neue" — macFont span covers
         // "Helvetica Neue" including the internal space.
-        let spans = FontMappingTokenizer.tokenize("helvetica  ->  Helvetica Neue  prop")
-        XCTAssertEqual(spans.count, 4)
+        let spans = FontMappingTokenizer.tokenize("helvetica  ->  Helvetica Neue")
+        XCTAssertEqual(spans.count, 3)
         XCTAssertEqual(spans[0].kind, .family)
         XCTAssertEqual(spans[1].kind, .arrow)
         XCTAssertEqual(spans[2].kind, .macFont)
         XCTAssertEqual(spans[2].range, NSRange(location: 15, length: 14))  // "Helvetica Neue"
-        XCTAssertEqual(spans[3].kind, .spacingKind)
     }
 
     func testMultiWordFamily() {
-        // "new century schoolbook  ->  Charter  prop" — family span
-        // covers the full multi-word name.
-        let spans = FontMappingTokenizer.tokenize("new century schoolbook  ->  Charter  prop")
+        // "new century schoolbook  ->  Charter" — family span covers
+        // the full multi-word name.
+        let spans = FontMappingTokenizer.tokenize("new century schoolbook  ->  Charter")
         XCTAssertEqual(spans[0].kind, .family)
         XCTAssertEqual(spans[0].range, NSRange(location: 0, length: 22))   // "new century schoolbook"
     }
 
     func testFallbackKey() {
-        let spans = FontMappingTokenizer.tokenize("*fallback-mono  ->  Monaco  mono")
-        XCTAssertEqual(spans.count, 4)
+        let spans = FontMappingTokenizer.tokenize("*fallback-mono  ->  Monaco")
+        XCTAssertEqual(spans.count, 3)
         XCTAssertEqual(spans[0].kind, .fallbackKey)
         XCTAssertEqual(spans[0].range, NSRange(location: 0, length: 14))   // "*fallback-mono"
     }
 
     func testLeadingWhitespacePreserved() {
-        let spans = FontMappingTokenizer.tokenize("    fixed  ->  Monaco  mono")
+        let spans = FontMappingTokenizer.tokenize("    fixed  ->  Monaco")
         XCTAssertEqual(spans[0].kind, .family)
         XCTAssertEqual(spans[0].range, NSRange(location: 4, length: 5))    // "fixed" starts after spaces
     }
 
     func testMalformedLineGetsUnknown() {
         // No `->` separator
-        let spans = FontMappingTokenizer.tokenize("fixed Monaco mono")
-        XCTAssertEqual(spans.count, 1)
-        XCTAssertEqual(spans[0].kind, .unknown)
-    }
-
-    func testMissingKindGetsUnknown() {
-        // Has `->` but trailing token isn't mono/prop
-        let spans = FontMappingTokenizer.tokenize("fixed -> Monaco junk")
+        let spans = FontMappingTokenizer.tokenize("fixed Monaco")
         XCTAssertEqual(spans.count, 1)
         XCTAssertEqual(spans[0].kind, .unknown)
     }
@@ -89,7 +79,7 @@ final class FontMappingTokenizerTests: XCTestCase {
     // MARK: - Multi-line offsets
 
     func testMultilineOffsets() {
-        let text = "# header\nfixed  ->  Monaco  mono"
+        let text = "# header\nfixed  ->  Monaco"
         let spans = FontMappingTokenizer.tokenize(text)
         XCTAssertEqual(spans[0].kind, .comment)
         XCTAssertEqual(spans[0].range, NSRange(location: 0, length: 8))    // "# header"
@@ -98,6 +88,5 @@ final class FontMappingTokenizerTests: XCTestCase {
         XCTAssertEqual(spans[1].kind, .family)
         XCTAssertEqual(spans[2].kind, .arrow)
         XCTAssertEqual(spans[3].kind, .macFont)
-        XCTAssertEqual(spans[4].kind, .spacingKind)
     }
 }

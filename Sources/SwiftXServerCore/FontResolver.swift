@@ -168,15 +168,48 @@ public enum FontResolver {
     /// in SERVER_RESOLUTION_SCALING_AND_FONTS.md, which is also the seed
     /// for `~/.swiftx-fonts`; once the user has the file they own it and
     /// the seed is only consulted on Revert to Defaults.
+    ///
+    /// `isMonospace` is derived from the resolved Mac font itself via
+    /// CTFontGetSymbolicTraits, not declared in the file. Monaco /
+    /// Courier New / Andale Mono report monoSpace; Helvetica Neue /
+    /// Times New Roman / Charter / Symbol don't.
     public static func resolveFamily(family: String, spacing: String) -> (name: String, isMonospace: Bool) {
         lock.lock()
         let file = loadedMappings
         lock.unlock()
-        if let hit = file.resolve(family: family) {
-            return (hit.macFont, hit.isMonospace)
+        let macFont = file.resolve(family: family) ?? file.fallback(spacing: spacing)
+        return (macFont, isMonospaceFont(macFont))
+    }
+
+    /// CTFontGetSymbolicTraits-based monospace check. Cached by Mac
+    /// font name — CTFontCreateWithName is cheap and macOS caches
+    /// internally, but resolveFamily runs on every XLFD lookup so the
+    /// extra dictionary hit is worth avoiding the trait read.
+    ///
+    /// Unknown font names (typos in the user's file) fall through to
+    /// Helvetica via CTFontCreateWithName's silent substitution, which
+    /// reports as proportional. That's the conservative default — over-
+    /// reporting monospace would corrupt cell metrics in xterm-style
+    /// grid clients.
+    nonisolated(unsafe) private static var monospaceCache: [String: Bool] = [:]
+    private static let monospaceCacheLock = NSLock()
+
+    public static func isMonospaceFont(_ macFontName: String) -> Bool {
+        monospaceCacheLock.lock()
+        if let cached = monospaceCache[macFontName] {
+            monospaceCacheLock.unlock()
+            return cached
         }
-        let fallback = file.fallback(spacing: spacing)
-        return (fallback.macFont, fallback.isMonospace)
+        monospaceCacheLock.unlock()
+
+        let font = CTFontCreateWithName(macFontName as CFString, 12.0, nil)
+        let traits = CTFontGetSymbolicTraits(font)
+        let isMono = traits.contains(.monoSpaceTrait)
+
+        monospaceCacheLock.lock()
+        monospaceCache[macFontName] = isMono
+        monospaceCacheLock.unlock()
+        return isMono
     }
 
     // MARK: - Helpers

@@ -5,21 +5,20 @@ import Foundation
 // in an NSTextStorageDelegate to paint attributes.
 //
 // Grammar — see DefaultFontMappings for the file format:
-//   # ...                                  → comment (also !)
-//   <family>  ->  <mac-font>  mono|prop    → data line
+//   # ...                          → comment (also !)
+//   <family>  ->  <mac-font>       → data line
 //
-// Both family and mac-font may be multi-word; `->` separates them; the
-// trailing `mono`/`prop` token is the spacing kind. Spans returned span
-// the whole family extent (including any internal whitespace) so the
-// highlighter paints "new century schoolbook" as one coherent unit.
+// Both family and mac-font may be multi-word; `->` separates them.
+// Spans returned span the whole family / Mac-font extent (including
+// any internal whitespace) so the highlighter paints "new century
+// schoolbook" and "Helvetica Neue" as coherent units.
 
 public enum FontMappingTokenKind: Equatable {
     case comment
     case fallbackKey       // *fallback-mono / *fallback-prop
     case family            // tokens before the `->`
     case arrow             // the literal `->`
-    case macFont           // tokens between `->` and the trailing kind
-    case spacingKind       // trailing `mono` or `prop`
+    case macFont           // tokens after `->` (excluding any legacy trailing kind)
     case unknown           // line we couldn't classify
 }
 
@@ -92,21 +91,10 @@ public enum FontMappingTokenizer {
             }
         }
 
-        // Need at least: family token(s), '->', mac-font token(s), kind.
+        // Need at least: family token(s), '->', mac-font token(s).
         guard arrowIdx >= 1,
-              tokenRanges.count >= arrowIdx + 3
+              tokenRanges.count >= arrowIdx + 2
         else {
-            spans.append(FontMappingTokenSpan(
-                kind: .unknown,
-                range: NSRange(location: offset + i, length: n - i)
-            ))
-            return
-        }
-
-        // Trailing token must be mono/prop.
-        let last = tokenRanges.last!
-        let lastWord = utf16Slice(units, from: last.start, to: last.end).lowercased()
-        guard lastWord == "mono" || lastWord == "prop" else {
             spans.append(FontMappingTokenSpan(
                 kind: .unknown,
                 range: NSRange(location: offset + i, length: n - i)
@@ -134,18 +122,14 @@ public enum FontMappingTokenizer {
             range: NSRange(location: offset + arrowSpan.start, length: arrowSpan.end - arrowSpan.start)
         ))
 
-        // Mac font: from token after arrow to token before the last.
+        // Mac font: from token after arrow through the final token.
+        // The full extent (including internal whitespace) paints as
+        // one span.
         let macStart = tokenRanges[arrowIdx + 1].start
-        let macEnd = tokenRanges[tokenRanges.count - 2].end
+        let macFontEnd = tokenRanges.last!.end
         spans.append(FontMappingTokenSpan(
             kind: .macFont,
-            range: NSRange(location: offset + macStart, length: macEnd - macStart)
-        ))
-
-        // Spacing kind.
-        spans.append(FontMappingTokenSpan(
-            kind: .spacingKind,
-            range: NSRange(location: offset + last.start, length: last.end - last.start)
+            range: NSRange(location: offset + macStart, length: macFontEnd - macStart)
         ))
     }
 

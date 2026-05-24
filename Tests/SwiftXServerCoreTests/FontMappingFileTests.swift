@@ -16,45 +16,43 @@ final class FontMappingFileTests: XCTestCase {
         let file = FontMappingFile.parse("""
         # this is a comment
         ! so is this
-        fixed  ->  Monaco  mono
+        fixed  ->  Monaco
         """)
         XCTAssertEqual(file.mappings.count, 1)
         XCTAssertEqual(file.mappings[0].family, "fixed")
         XCTAssertEqual(file.mappings[0].macFont, "Monaco")
-        XCTAssertTrue(file.mappings[0].isMonospace)
     }
 
     func testMacFontWithSpaces() {
         // "Helvetica Neue" — multi-word mac font.
-        let file = FontMappingFile.parse("helvetica  ->  Helvetica Neue  prop")
+        let file = FontMappingFile.parse("helvetica  ->  Helvetica Neue")
         XCTAssertEqual(file.mappings.count, 1)
         XCTAssertEqual(file.mappings[0].macFont, "Helvetica Neue")
-        XCTAssertFalse(file.mappings[0].isMonospace)
     }
 
     func testMacFontWithThreeWords() {
-        let file = FontMappingFile.parse("times  ->  Times New Roman  prop")
+        let file = FontMappingFile.parse("times  ->  Times New Roman")
         XCTAssertEqual(file.mappings.count, 1)
         XCTAssertEqual(file.mappings[0].macFont, "Times New Roman")
     }
 
     func testMultiWordFamily() {
         // "new century schoolbook" — multi-word family on the left of `->`
-        let file = FontMappingFile.parse("new century schoolbook  ->  Charter  prop")
+        let file = FontMappingFile.parse("new century schoolbook  ->  Charter")
         XCTAssertEqual(file.mappings.count, 1)
         XCTAssertEqual(file.mappings[0].family, "new century schoolbook")
         XCTAssertEqual(file.mappings[0].macFont, "Charter")
     }
 
     func testFamilyNameLowercased() {
-        let file = FontMappingFile.parse("FIXED  ->  Monaco  mono")
+        let file = FontMappingFile.parse("FIXED  ->  Monaco")
         XCTAssertEqual(file.mappings[0].family, "fixed")
     }
 
     func testFallbackKeysParsedSeparately() {
         let file = FontMappingFile.parse("""
-        *fallback-mono  ->  Courier New      mono
-        *fallback-prop  ->  Times New Roman  prop
+        *fallback-mono  ->  Courier New
+        *fallback-prop  ->  Times New Roman
         """)
         XCTAssertTrue(file.mappings.isEmpty)   // fallback keys don't go into mappings
         XCTAssertEqual(file.fallbackMono, "Courier New")
@@ -63,45 +61,55 @@ final class FontMappingFileTests: XCTestCase {
 
     func testMalformedLinesSkipped() {
         let file = FontMappingFile.parse("""
-        fixed  ->  Monaco  mono
-        garbage line with no arrow or kind
-        no-arrow Helvetica prop
-        helvetica  ->  Helvetica Neue  prop
+        fixed  ->  Monaco
+        garbage line with no arrow
+        no-arrow Helvetica
+        helvetica  ->  Helvetica Neue
         """)
         XCTAssertEqual(file.mappings.count, 2)
         XCTAssertEqual(file.mappings[0].family, "fixed")
         XCTAssertEqual(file.mappings[1].family, "helvetica")
     }
 
-    func testMissingMonoPropTokenSkipped() {
-        let file = FontMappingFile.parse("fixed  ->  Monaco")
+    func testMissingMacFontSkipped() {
+        // `->` with nothing after it
+        let file = FontMappingFile.parse("fixed  ->")
         XCTAssertTrue(file.mappings.isEmpty)
+    }
+
+    func testMultiWordMacFontWithCapitalMonoPreserved() {
+        // "Andale Mono" — the trailing "Mono" is part of the font
+        // name. The parser takes everything after `->` verbatim, so
+        // there's no risk of it being mis-stripped.
+        let file = FontMappingFile.parse("lucidatypewriter  ->  Andale Mono")
+        XCTAssertEqual(file.mappings.count, 1)
+        XCTAssertEqual(file.mappings[0].macFont, "Andale Mono")
     }
 
     // MARK: - Lookup
 
     func testResolveByFamilyIsCaseInsensitive() {
-        let file = FontMappingFile.parse("courier  ->  Courier New  mono")
-        XCTAssertEqual(file.resolve(family: "courier")?.macFont, "Courier New")
-        XCTAssertEqual(file.resolve(family: "Courier")?.macFont, "Courier New")
-        XCTAssertEqual(file.resolve(family: "COURIER")?.macFont, "Courier New")
+        let file = FontMappingFile.parse("courier  ->  Courier New")
+        XCTAssertEqual(file.resolve(family: "courier"), "Courier New")
+        XCTAssertEqual(file.resolve(family: "Courier"), "Courier New")
+        XCTAssertEqual(file.resolve(family: "COURIER"), "Courier New")
     }
 
     func testResolveUnknownReturnsNil() {
-        let file = FontMappingFile.parse("courier  ->  Courier New  mono")
+        let file = FontMappingFile.parse("courier  ->  Courier New")
         XCTAssertNil(file.resolve(family: "helvetica"))
     }
 
     func testFallbackRoutesOnSpacing() {
         let file = FontMappingFile.parse("""
-        *fallback-mono  ->  Andale Mono  mono
-        *fallback-prop  ->  Charter      prop
+        *fallback-mono  ->  Andale Mono
+        *fallback-prop  ->  Charter
         """)
-        XCTAssertEqual(file.fallback(spacing: "c").macFont, "Andale Mono")
-        XCTAssertEqual(file.fallback(spacing: "m").macFont, "Andale Mono")
-        XCTAssertEqual(file.fallback(spacing: "p").macFont, "Charter")
-        XCTAssertEqual(file.fallback(spacing: "*").macFont, "Charter")
-        XCTAssertEqual(file.fallback(spacing: "").macFont, "Charter")
+        XCTAssertEqual(file.fallback(spacing: "c"), "Andale Mono")
+        XCTAssertEqual(file.fallback(spacing: "m"), "Andale Mono")
+        XCTAssertEqual(file.fallback(spacing: "p"), "Charter")
+        XCTAssertEqual(file.fallback(spacing: "*"), "Charter")
+        XCTAssertEqual(file.fallback(spacing: ""), "Charter")
     }
 
     // MARK: - Seed
@@ -110,15 +118,15 @@ final class FontMappingFileTests: XCTestCase {
         let file = FontMappingFile.parse(DefaultFontMappings.seedContent)
 
         // Spot-check known mappings from SERVER_RESOLUTION_SCALING_AND_FONTS.md
-        XCTAssertEqual(file.resolve(family: "fixed")?.macFont, "Monaco")
-        XCTAssertEqual(file.resolve(family: "courier")?.macFont, "Courier New")
-        XCTAssertEqual(file.resolve(family: "helvetica")?.macFont, "Helvetica Neue")
-        XCTAssertEqual(file.resolve(family: "new century schoolbook")?.macFont, "Charter")
-        XCTAssertEqual(file.resolve(family: "b&h-lucidatypewriter")?.macFont, "Andale Mono")
+        XCTAssertEqual(file.resolve(family: "fixed"), "Monaco")
+        XCTAssertEqual(file.resolve(family: "courier"), "Courier New")
+        XCTAssertEqual(file.resolve(family: "helvetica"), "Helvetica Neue")
+        XCTAssertEqual(file.resolve(family: "new century schoolbook"), "Charter")
+        XCTAssertEqual(file.resolve(family: "b&h-lucidatypewriter"), "Andale Mono")
 
         // Fallbacks
-        XCTAssertEqual(file.fallback(spacing: "c").macFont, "Monaco")
-        XCTAssertEqual(file.fallback(spacing: "p").macFont, "Helvetica Neue")
+        XCTAssertEqual(file.fallback(spacing: "c"), "Monaco")
+        XCTAssertEqual(file.fallback(spacing: "p"), "Helvetica Neue")
     }
 
     func testSeedRoundTripsThroughFontResolver() {
@@ -126,9 +134,32 @@ final class FontMappingFileTests: XCTestCase {
         // server does at startup), FontResolver.resolveFamily should
         // match the seed.
         FontResolver.installMappings()
-        XCTAssertEqual(FontResolver.resolveFamily(family: "fixed", spacing: "c").name, "Monaco")
-        XCTAssertEqual(FontResolver.resolveFamily(family: "helvetica", spacing: "p").name, "Helvetica Neue")
-        XCTAssertEqual(FontResolver.resolveFamily(family: "unknown", spacing: "c").name, "Monaco")
-        XCTAssertEqual(FontResolver.resolveFamily(family: "unknown", spacing: "p").name, "Helvetica Neue")
+        let monaco = FontResolver.resolveFamily(family: "fixed", spacing: "c")
+        XCTAssertEqual(monaco.name, "Monaco")
+        XCTAssertTrue(monaco.isMonospace)
+
+        let helvetica = FontResolver.resolveFamily(family: "helvetica", spacing: "p")
+        XCTAssertEqual(helvetica.name, "Helvetica Neue")
+        XCTAssertFalse(helvetica.isMonospace)
+
+        let unknownMono = FontResolver.resolveFamily(family: "unknown", spacing: "c")
+        XCTAssertEqual(unknownMono.name, "Monaco")
+        XCTAssertTrue(unknownMono.isMonospace)
+
+        let unknownProp = FontResolver.resolveFamily(family: "unknown", spacing: "p")
+        XCTAssertEqual(unknownProp.name, "Helvetica Neue")
+        XCTAssertFalse(unknownProp.isMonospace)
+    }
+
+    // MARK: - isMonospace derivation
+
+    func testCTFontMonospaceTraitDetected() {
+        // Truth comes from CTFontGetSymbolicTraits, not the file.
+        XCTAssertTrue(FontResolver.isMonospaceFont("Monaco"))
+        XCTAssertTrue(FontResolver.isMonospaceFont("Courier New"))
+        XCTAssertTrue(FontResolver.isMonospaceFont("Andale Mono"))
+        XCTAssertFalse(FontResolver.isMonospaceFont("Helvetica Neue"))
+        XCTAssertFalse(FontResolver.isMonospaceFont("Times New Roman"))
+        XCTAssertFalse(FontResolver.isMonospaceFont("Charter"))
     }
 }
