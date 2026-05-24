@@ -1,3 +1,64 @@
+# Status 2026-05-24 — Optional Motif frame; SIGPIPE fix; parked-bug closures
+
+Three things landed today.
+
+**Optional Motif window-manager frame for X top-levels.** Opt-in via
+Preferences → Display. Vendored from a separate WindowText prototype
+into `Sources/SwiftXServerCore/MotifFrame/` (MotifTheme, MotifFrameView,
+MotifWindow + a small Preferences provider). NSWindow content rect grows
+by the frame insets so the inner X-client area still equals the
+client-requested geometry (ICCCM §4.2.1 reparenting model). Title text
+follows real mwm policy (center when it fits, left-align + visual clip
+mid-glyph when it doesn't — verified against `motif/clients/mwm/
+WmGraphics.c::WmDrawXmString`). Per-window button style toggle between
+Motif raised glyphs and Mac traffic lights. FlippedXView grew
+`layer?.masksToBounds = true` to fix a latent shrink-overshoot bug that
+was hidden by AppKit's native title-bar compositing layer.
+
+**SIGPIPE fix.** `signal(SIGPIPE, SIG_IGN)` at the top of
+`ServerEntry.run()`. Latent bug since the listener was written —
+`writeAllToSocket` calls plain `Darwin.write()`, so a post-EOF write
+returned EPIPE *and* the kernel killed the process by signal. Symptom:
+"I quit my X client and the server vanished." Recent timing changes
+(GUI redesign + my new Motif close-button → WM_DELETE handshake) made
+the race more likely. One-line fix in `Sources/SwiftXServer/
+ServerEntry.swift`.
+
+**OSF/Motif source pulled into `reference/motif/`.** Community-
+maintained Motif 2.3.x (`https://git.code.sf.net/p/motif/code`,
+LGPL 2.1) cloned via `reference/fetch.sh`. ~73MB. `clients/mwm/` is
+the canonical standalone mwm (direct ancestor of CDE's `dtwm`); `lib/Xm/`
+is the widget library. For the first time we can read what Motif
+widgets actually expect from the server. README + SOURCE.md updated.
+
+**Two agent-driven closures**:
+
+- **2026-05-10 "park dt-Motif widget chrome redraw"** — formally closed
+  in `DECISIONS.md` 2026-05-24. Symptom ("buttons don't render at all")
+  was actually fixed during the 05-13 → 05-18 sweep (VisibilityNotify
+  state derived from `borderClip ∩ interiorBox`, QueryTextExtents,
+  PolySegment pixmap path, PutImage Bitmap + CopyArea cross-window/
+  pixmap, CDE-impersonation retirement). Both background agents found
+  explicit closure evidence — no live re-investigation needed.
+
+- **Expose-architecture flooding** — also closed in the same DECISIONS
+  entry. Survey of 21 Motif widget classes via `reference/motif/lib/Xm/*`
+  showed every Motif widget declares `visible_interest = FALSE`, so
+  VisibilityNotify gates nothing on the Motif side. The dominant Motif
+  gates are `XtIsRealized` and `MenuShell.popped_up`, both purely
+  client-side. Xt's `XtExposeCompressMaximal` (default for every
+  manager — BulletinB.c:372, RowColumn.c:837, …) already coalesces our
+  per-clip-rect Expose events client-side. Recommendation: keep the
+  current model; the visibility-tracking work envisioned in the parking
+  decision would have been wasted effort.
+
+**Status of in-flight bugs**: see "What's still open" near the bottom
+of this file (updated today). The big remaining real one is the
+resize-uncover repaint gap in `ServerSession.handleConfigureWindow`'s
+descendant-uncover branch (dthelpview buttons thinner after resize;
+dtpad text-area paint loss). Distinct from the now-closed chrome
+parking.
+
 # Status 2026-05-22 — x11perf clean sweep + error-path test suite
 
 x11perf survey from the SS2 is 254/254. Every test in the build runs to
@@ -167,20 +228,25 @@ paint, not the wrong color."
    end-to-end. Should be the first thing — quick visual check on the
    live app, formally close the memory entries if confirmed.
 
-2. **dthelpview aspect ratio wider than SS2.** Width comes out wider
-   by ~80px. Likely font cell-width metric divergence
-   (`manBox.columns=80` × cell width feeds the dialog's preferred
-   width). Diff OpenFont/QueryFont calls between captures.
+2. ~~**dthelpview aspect ratio wider than SS2.**~~ **Closed 2026-05-20**
+   via mean-not-max AVERAGE_WIDTH + Monaco-Bold fallback. See memory
+   `project_dthelpview_cosmetic_open` for the FONTPROP spec audit lesson.
 
 3. **Smoke other dt-apps and Motif clients post-clipping.** dtcalc,
    dtterm, dticon — quickplot got bonus fixes, others probably did too.
    Walk through each, note what's improved, what's still off.
 
-4. **Motif button chrome on Expose / resize.** Still parked from
-   2026-05-18. Today's button-bar buttons in dthelpview look thinner
-   after resize than before — might be a related re-paint-on-grow
-   gap, or might be the original parked issue. Worth re-checking with
-   today's clipping in place.
+4. **Resize-uncover repaint gap.** The 2026-05-10 "park Motif button
+   chrome" parking decision is closed (DECISIONS 2026-05-24 — chrome
+   renders fine post the 05-13/05-14/05-17 VisibilityNotify +
+   QueryTextExtents + PolySegment-pixmap + PutImage/CopyArea fixes,
+   and post the 05-18 CDE-impersonation retirement). The residual
+   distinct bug is: dthelpview button-bar buttons look thinner after
+   resize than before; dtpad's text-area drops content on resize.
+   Root is in `ServerSession.handleConfigureWindow`'s descendant-
+   uncover branch — not Expose architecture, not PushButton internals.
+   Capture u5→swiftx during a dtpad resize and diff Expose against
+   gold.
 
 5. **Framer-shared bug investigation.** Deferred again. Still open.
 

@@ -564,6 +564,33 @@ Capture v1's CLI keeps working through the transition for my corpus-capture scri
 
 Full design spec: `PRODUCT_1_CAPTURE.md` § "v2: Public-ready capture."
 
+## 2026-05-24 — Close out 2026-05-10 "Park dt-Motif widget chrome redraw"; keep current Expose model
+
+**Decision**: the 2026-05-10 parking entry above is closed. dt-app button chrome (shadows + labels) renders correctly. The hypothesis behind the parking — "Motif's PushButton ignores our flood because it expects sparse visibility-tracked Expose like real Sun" — was wrong. We are not implementing visibility tracking at the Expose-emission layer.
+
+**What actually closed the visible symptom** (during May 13–18 sweeps, before today):
+- VisibilityNotify state derived from `borderClip ∩ interiorBox` instead of post-children `clipList` (SHORTCUTS:79, 2026-05-14). The original derivation reported container windows as `FullyObscured` — the exact signal Motif's PushButton uses to skip shadow chrome.
+- `QueryTextExtents` shipped (SHORTCUTS:155, 2026-05-15). CascadeButton uses it to measure menu titles; falling through to `BadRequest` broke the chrome path.
+- PolySegment pixmap path shipped (OPCODE_STATUS:83, 2026-05-17). "Heavily used by Motif PushButton for top-shadow / bottom-shadow chrome lines drawn into backing pixmaps."
+- PutImage Bitmap + cross-window/pixmap CopyArea (2026-05-17).
+- Retire the CDE customization daemon impersonation (DECISIONS 2026-05-18). The earlier 2026-05-10 SDT-Pixel-Set impersonation was routing Motif's foreground through a grey-on-grey palette slot, making labels invisible. Removing it left buttons rendering in plain Motif fallback colors.
+
+**The architectural call** (informed by today's Motif-source survey, now possible because `reference/motif/` is local):
+- Per-widget Expose method survey across 21 Motif widget classes (`reference/motif/lib/Xm/*.c`) shows: the dominant gates are `XtIsRealized` and `MenuShell.popped_up`, both purely client-side state we have no leverage over. Motif widgets universally declare `visible_interest = FALSE` (Label.c:488, ToggleB.c:496, Text.c:511, …all 21), so VisibilityNotify expansion gates nothing on the Motif side — only X-aware apps like xterm/xeyes would consume it.
+- Xt's `XtExposeCompressMaximal` (the default for every manager — BulletinB.c:372, RowColumn.c:837, ScrollBar.c:448, List.c:824, …) accumulates our per-clip-rect Exposes into one region client-side. Our `count = n-1-i` field already drives that compression correctly. So our model is effectively single-region-per-Map even when we emit many Expose events.
+- `XmeRedisplayGadgets` (`reference/motif/lib/Xm/GadgetUtil.c:132-185`) dispatches to gadgets only when our Expose region intersects each gadget's geometry. The *shape* of our rects matters but the *count* doesn't.
+- We already suppress Expose for fully-covered descendants: `ServerSession.swift:2075-2089` skips when `exposeRects.isEmpty`, and `MockWindowBridge.swift:169-186` no-ops on empty.
+
+**What NOT to add**:
+- Server-side visibility-tracking suppression of Expose for partially-covered descendants. Would require a full region engine + stacking-order tracking. No surveyed Motif widget cares — they re-clip against widget geometry on receipt. Real implementation cost, no measurable widget benefit.
+- VisibilityNotify tuning for Motif. Nothing subscribes.
+
+**Optional polish items, deferred until a concrete cosmetic bug points at them**:
+- Coalesce per-window Expose rects to one bounding rect before emission (wire-efficiency, since Xt accumulates client-side anyway). No correctness change.
+- Suppress Expose for descendants whose Map didn't actually grow their visible region (compare pre/post clipList in `recomputeClipsForSubtreeContaining`). Matches Xsun behavior more closely without building a parallel region engine.
+
+**Residual bug to NOT conflate with this one**: `STATUS.md:179` (2026-05-19) and `project_dt_apps_theme_pass_open.md` both flag a resize-uncover repaint gap (dthelpview buttons thinner after resize; dtpad text-area paint loss on resize). That's `ServerSession.handleConfigureWindow`'s descendant-uncover branch, not Expose architecture. Separate investigation when it gets prioritized.
+
 ---
 
 ## Decisions still to make

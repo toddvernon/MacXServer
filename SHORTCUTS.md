@@ -76,8 +76,30 @@ a date and rationale.
 
 ### Known visual / behavioral residue
 
-- **dt-Motif widget chrome doesn't redraw on Expose — four hypotheses now closed in code; pending u5 verification.** dt-apps render their containers + LCD area + any window with explicit non-bg `BackPixel`, but the deep button hierarchy historically rendered as flat panels with no visible button shadows or labels. Per gold-vs-swiftx trace diff 2026-05-10: gold emits ~7 Expose events for the whole calculator boot, we emitted 451. Region Steps E0+E1+E1.5+E2 (2026-05-13) collapsed dtcalc Expose count to 8, matching gold within 1. SubstructureNotify variants of MapNotify (and friends) shipped 2026-05-14. VisibilityNotify state-transition emission shipped 2026-05-14. **Fourth fix 2026-05-14 (post-comparison-study):** visibility state was derived from `clipList` (post-children-subtraction) but spec says compute it IGNORING subwindows. Container windows fully covered by their child widgets were therefore reported as FullyObscured, which is exactly the signal Motif's PushButton uses to skip shadow-chrome drawing on Expose. `emitVisibilityChanges` now derives state from `borderClip ∩ interiorBox`; new test `VisibilityNotifyTests.testContainerCoveredByChildrenStaysUnobscured` locks it in. Surface u5 next session — if chrome still doesn't appear, hypothesis pool is empty and we go deeper on event ORDERING.
-- **Popup menu placement is over the launching button instead of below it.** Visible in both xfontsel (Athena MenuButton + SimpleMenu) and quickplot (Motif menu). Override-redirect popup window is positioned where the client requested, but Motif/Athena typically request a position that assumes the menu drops downward FROM the bottom edge of the launching button; our placement appears to land directly on the button. Possible causes: we don't honor `_MOTIF_WM_OFFSET` on the popup, or our coordinate origin for override-redirect windows is off by the height of the launching widget. Cosmetic but consistent across toolkits.
+- ~~**dt-Motif widget chrome doesn't redraw on Expose.**~~ Closed
+  2026-05-24 (DECISIONS entry same date). The four code-side fixes
+  shipped 05-13 → 05-14 (Region Steps E0–E2, SubstructureNotify
+  variants, VisibilityNotify state-transition emission, and the
+  load-bearing `borderClip ∩ interiorBox` correction in
+  `emitVisibilityChanges`) plus the 2026-05-18 CDE-impersonation
+  retirement already had the symptom gone. The 2026-05-24 OSF/Motif
+  source survey (`reference/motif/lib/Xm/*`) confirmed the architectural
+  picture: every Motif widget declares `visible_interest = FALSE`, so
+  VisibilityNotify gates nothing on the toolkit side; the dominant
+  gates are `XtIsRealized` and `MenuShell.popped_up`, both client-side;
+  `XtExposeCompressMaximal` already coalesces our per-clip-rect Expose
+  events client-side. No more architectural work needed here.
+  Regression test: `VisibilityNotifyTests.testContainerCoveredByChildrenStaysUnobscured`.
+- ~~**Popup menu placement is over the launching button instead of
+  below it.**~~ Closed 2026-05-20. Three-part WM-emulation fix (see
+  memory `project_motif_quickplot_status` 2026-05-20 stamp +
+  `reference_wm_emulation_iccm`): (a) cascade-place each non-override-
+  redirect top-level on first map, update `WindowEntry.x/y`;
+  (b) translate top-level-local pointer coords to root coords in every
+  input event; (c) emit synthetic ConfigureNotify (response byte
+  22|0x80) after MapNotify per ICCCM 4.1.5 — Motif's MenuBar caches
+  widget root coords at realization and re-syncs only on the synthetic
+  event. Verified live with quickplot AND xfontsel.
 - ~~**Motif Text widget character spacing.**~~ Closed 2026-05-18 — see Closed list below. The "odd inter-glyph spacing" hypothesis turned out to be wrong; the real visible symptom (text damage near the caret) was four separate bugs: 15-field XLFDs failing to parse → Motif fell back to "fixed"/Monaco for everything; DtEditor's font resource is `textFontList` not `fontList` so our Tier 1 XmText override never applied; GC `fillStyle` / `stipple` / `tile-stipple-origin` were dropped → Motif's caret rendered as a solid 5×14 block instead of an I-beam stipple; pixmaps stored at logical scale on a 3× device backing → CopyArea save-under eroded glyph AA edges every blink.
 - **Idle 6-request poll loop in quickplot.** When quickplot sits idle, the server log streams a tight repeat of `GetWindowAttributes, GetGeometry, ChangeGC, PolySegment, ChangeGC, PolySegment` — top-shadow + bottom-shadow stroke pair on something that introspects window state each pass. Probably a Motif Text widget cursor blink or focus-ring animation timer that never decides nothing has changed. Wastes server CPU but renders correctly. Compare to gold capture before claiming it's our bug — Motif may behave this way against any X server.
 - **No SHAPE extension.** XShape is what gives xeyes its non-rectangular outline (eye shape clipped to an ellipse). Without it, xeyes renders inside its rectangular bounding window — visible as a slight rectangular "halo" around each eye where the white sclera meets the window edge. Cosmetic, low-priority. xclock has the same issue for its non-square clock face.
