@@ -73,6 +73,15 @@ enum ServerEntry {
         let args = Array(CommandLine.arguments.dropFirst())
         var i = 0
         while i < args.count {
+            // AppKit passes its own -NSFoo / -AppleBar key/value pairs
+            // when an .app is launched from Xcode or Finder (e.g.
+            // -NSDocumentRevisionsDebugMode YES). They're NSUserDefaults
+            // pokes meant for the foundation layer, not our CLI. Skip
+            // each arg AND its following value rather than blowing up.
+            if args[i].hasPrefix("-NS") || args[i].hasPrefix("-Apple") {
+                i += 2
+                continue
+            }
             switch args[i] {
             case "-h", "--help":
                 print("""
