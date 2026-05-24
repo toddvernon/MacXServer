@@ -63,6 +63,14 @@ enum ServerEntry {
     /// that, so we annotate explicitly.
     @MainActor
     static func run() {
+        // Ignore SIGPIPE: a write to a socket whose peer already closed will
+        // return EPIPE and the listener's read source picks up the EOF on the
+        // next loop. Without this the kernel kills the process on the first
+        // post-disconnect write, which manifests as "I quit my X client and
+        // the server vanished." Safe to call here pre-thread-spawn — signal()
+        // is per-process, not per-thread.
+        signal(SIGPIPE, SIG_IGN)
+
         var host = "0.0.0.0"
         var port: UInt16 = 6000
         // nil = use the Preferences value at startup. `--capture` sets true,
@@ -129,6 +137,11 @@ enum ServerEntry {
 
         let app = NSApplication.shared
         let appDelegate = AppDelegate()
+        // Wire the optional Motif-frame preference into the bridge now that
+        // the AppDelegate (and its Preferences instance) exists. Bridge
+        // snapshots `current` at mapTopLevel time, so the live values are
+        // always honored for new windows.
+        bridge.motifFramePrefs = appDelegate.preferences.motifFrameProvider
         app.delegate = appDelegate
         // `.regular`: standard Mac app. `.accessory` would hide the Dock icon but
         // per Apple's docs also hides the menu bar entirely, which is wrong here —

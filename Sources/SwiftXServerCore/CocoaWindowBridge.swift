@@ -165,9 +165,18 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     }
 
 
-    public init(scaleFactor: Double = 1, log: ServerLogSink? = nil) {
+    /// Optional Motif-frame preference provider. Bridge snapshots the
+    /// current value at mapTopLevel time and uses it to decide whether the
+    /// NSWindow gets the optional mwm-style chrome instead of native macOS
+    /// chrome. Default: native chrome for everyone (nil provider == off).
+    public var motifFramePrefs: MotifFramePreferencesProvider?
+
+    public init(scaleFactor: Double = 1,
+                log: ServerLogSink? = nil,
+                motifFramePrefs: MotifFramePreferencesProvider? = nil) {
         self.scaleFactor = scaleFactor
         self.log = log
+        self.motifFramePrefs = motifFramePrefs
     }
 
     // MARK: - Draw target routing
@@ -549,9 +558,21 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             //   - level=popUpMenu (floats above regular windows)
             // Use NSPanel for the non-activating + window-level behavior;
             // regular NSWindow for normal top-levels.
+            //
+            // Motif frame opt-in: when the user has the Motif-frame pref on
+            // (and we're not a popup), wrap the X client in a MotifWindow
+            // (.closable/.miniaturizable/.resizable, no .titled — that mask
+            // gives square corners and working close/min/zoom). The NSWindow
+            // content rect grows by `MotifTheme.horizontalPadding` /
+            // `verticalPadding` so the X client area inside the frame is
+            // still exactly its requested geometry, matching what a
+            // reparenting WM does in real X (ICCCM §4.2.1).
             let style: NSWindow.StyleMask = overrideRedirect
                 ? [.borderless, .nonactivatingPanel]
                 : [.titled, .closable, .miniaturizable, .resizable]
+            let motifEnabled = !overrideRedirect && (self.motifFramePrefs?.current.enabled ?? false)
+            let motifButtonStyle = self.motifFramePrefs?.current.buttonStyle ?? .motif
+
             // Identity-map X-root coords → NSScreen coords. The session
             // already wrote each top-level's X-root position to its
             // WindowEntry on first map (see ServerSession.placeTopLevelIfNeeded
@@ -565,11 +586,30 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // every "where am I in root" query the client can issue gives
             // an answer that matches what's actually on screen.
             let screenH = NSScreen.main?.frame.size.height ?? 1080
-            let originX = CGFloat(geometry.x) * CGFloat(scale) / backingScale
+            let xClientOriginX = CGFloat(geometry.x) * CGFloat(scale) / backingScale
             let topOffset = CGFloat(geometry.y) * CGFloat(scale) / backingScale
-            let originY = screenH - topOffset - pointsH
-            let contentRect = NSRect(x: originX, y: originY, width: pointsW, height: pointsH)
-            self.log?.log("  bridge: NSWindow 0x\(String(id, radix: 16)) at NSScreen=\(contentRect) (X-root=(\(geometry.x),\(geometry.y)) \(geometry.width)x\(geometry.height) override=\(overrideRedirect))")
+            let xClientOriginY = screenH - topOffset - pointsH
+
+            // NSWindow content rect: when motifEnabled, grow by the frame
+            // insets and shift origin so the inner X-client area lands at the
+            // same on-screen position it would have had with native chrome.
+            let contentRect: NSRect
+            if motifEnabled {
+                let leftPad = MotifTheme.clientLeftInset
+                let bottomPad = MotifTheme.clientBottomInset
+                contentRect = NSRect(
+                    x: xClientOriginX - leftPad,
+                    y: xClientOriginY - bottomPad,
+                    width: pointsW + MotifTheme.horizontalPadding,
+                    height: pointsH + MotifTheme.verticalPadding
+                )
+            } else {
+                contentRect = NSRect(
+                    x: xClientOriginX, y: xClientOriginY,
+                    width: pointsW, height: pointsH
+                )
+            }
+            self.log?.log("  bridge: NSWindow 0x\(String(id, radix: 16)) at NSScreen=\(contentRect) (X-root=(\(geometry.x),\(geometry.y)) \(geometry.width)x\(geometry.height) override=\(overrideRedirect) motif=\(motifEnabled))")
             let win: NSWindow
             if overrideRedirect {
                 let panel = NSPanel(contentRect: contentRect, styleMask: style, backing: .buffered, defer: false)
@@ -577,11 +617,17 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 panel.hidesOnDeactivate = false
                 panel.becomesKeyOnlyIfNeeded = true
                 win = panel
+                win.contentView = view
+            } else if motifEnabled {
+                let motif = MotifWindow(contentRect: contentRect, clientView: view)
+                motif.buttonStyle = motifButtonStyle
+                motif.windowTitle = pendingTitle
+                win = motif
             } else {
                 win = NSWindow(contentRect: contentRect, styleMask: style, backing: .buffered, defer: false)
+                win.contentView = view
             }
-            win.contentView = view
-            if !overrideRedirect { win.title = pendingTitle }
+            if !overrideRedirect && !motifEnabled { win.title = pendingTitle }
             win.isReleasedWhenClosed = false
             // Tracking-area-driven mouseMoved is reliable on its own, but this
             // is the legacy switch the Cocoa docs still call out — set it true
@@ -683,7 +729,14 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
         lock.unlock()
         if let win = win {
-            DispatchQueue.main.async { win.title = title }
+            DispatchQueue.main.async {
+                win.title = title
+                // MotifWindow paints its title text from `windowTitle` on the
+                // MotifFrameView, not the standard NSWindow.title (the .titled
+                // mask is intentionally absent so there's no native title bar
+                // to display win.title in).
+                (win as? MotifWindow)?.windowTitle = title
+            }
         }
     }
 
@@ -713,15 +766,28 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             let screenH = NSScreen.main?.frame.size.height ?? 1080
             let pointsW = CGFloat(geometry.width) * CGFloat(scale) / backingScale
             let pointsH = CGFloat(geometry.height) * CGFloat(scale) / backingScale
-            let originX = CGFloat(geometry.x) * CGFloat(scale) / backingScale
+            let xClientOriginX = CGFloat(geometry.x) * CGFloat(scale) / backingScale
             let topOffset = CGFloat(geometry.y) * CGFloat(scale) / backingScale
-            let originY = screenH - topOffset - pointsH
+            let xClientOriginY = screenH - topOffset - pointsH
             // For a titled (regular) NSWindow, frame includes the title bar;
-            // we want the CONTENT to be at (originX, originY) with the
-            // requested size. setContentSize would only resize; use
-            // setFrame after computing the equivalent frameRect for the
-            // current style mask.
-            let contentRect = NSRect(x: originX, y: originY, width: pointsW, height: pointsH)
+            // we want the CONTENT to be at (xClientOriginX, xClientOriginY)
+            // with the requested size. For a MotifWindow, the NSWindow content
+            // rect is larger than the X-client area by the frame insets, so
+            // grow the rect to wrap the X geometry from the outside.
+            let contentRect: NSRect
+            if win is MotifWindow {
+                let leftPad = MotifTheme.clientLeftInset
+                let bottomPad = MotifTheme.clientBottomInset
+                contentRect = NSRect(
+                    x: xClientOriginX - leftPad,
+                    y: xClientOriginY - bottomPad,
+                    width: pointsW + MotifTheme.horizontalPadding,
+                    height: pointsH + MotifTheme.verticalPadding
+                )
+            } else {
+                contentRect = NSRect(x: xClientOriginX, y: xClientOriginY,
+                                     width: pointsW, height: pointsH)
+            }
             let frameRect = win.frameRect(forContentRect: contentRect)
             self.log?.log("  bridge: reconfigure 0x\(String(id, radix: 16)) → X-root (\(geometry.x),\(geometry.y)) \(geometry.width)x\(geometry.height) → NSScreen frame=\(frameRect)")
             win.setFrame(frameRect, display: true, animate: false)
@@ -2092,7 +2158,16 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         // includes title bar; contentRect(forFrameRect:) strips it back to
         // the inner content area, matching what we passed at createWindow
         // time. Y-flip against main screen height to get X-root y.
-        let contentRect = win.contentRect(forFrameRect: win.frame)
+        var contentRect = win.contentRect(forFrameRect: win.frame)
+        if win is MotifWindow {
+            // The NSWindow content rect wraps the X-client area on all four
+            // sides; shrink back to the inner X-client area before reporting
+            // root coords so cached widget positions match what we mapped.
+            contentRect.origin.x += MotifTheme.clientLeftInset
+            contentRect.origin.y += MotifTheme.clientBottomInset
+            contentRect.size.width  -= MotifTheme.horizontalPadding
+            contentRect.size.height -= MotifTheme.verticalPadding
+        }
         let originX = contentRect.origin.x
         let originY = contentRect.origin.y
         let pointsH = contentRect.size.height

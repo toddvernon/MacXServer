@@ -26,11 +26,7 @@ struct PreferencesPanelView: View {
                 .tabItem {
                     Label("Capture", systemImage: "recordingtape")
                 }
-            PlaceholderTab(
-                icon: "display",
-                title: "Display",
-                message: "Display settings coming soon."
-            )
+            DisplayTab(model: model)
                 .tabItem {
                     Label("Display", systemImage: "display")
                 }
@@ -133,6 +129,49 @@ private struct CaptureTab: View {
     }
 }
 
+// MARK: - Display tab
+
+private struct DisplayTab: View {
+    @ObservedObject var model: PreferencesPanelModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            PanelHeader(
+                icon: "macwindow",
+                title: "Window Frame",
+                caption: "Optional OSF/Motif-style chrome around X windows."
+            )
+
+            Toggle("Use Motif window frame for new X windows", isOn: $model.motifFrameEnabled)
+                .toggleStyle(.checkbox)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Title bar buttons:")
+                    .foregroundStyle(.secondary)
+                Picker("", selection: $model.motifFrameButtonStyle) {
+                    Text("Motif glyphs (raised menu dash, restore, maximize)")
+                        .tag(MotifFrameButtonStyle.motif)
+                    Text("Mac traffic lights (red close, yellow minimize, green zoom)")
+                        .tag(MotifFrameButtonStyle.trafficLights)
+                }
+                .labelsHidden()
+                .pickerStyle(.radioGroup)
+                .padding(.leading, 4)
+            }
+            .disabled(!model.motifFrameEnabled)
+
+            Text("Toggling either setting only affects X windows mapped after the change. Existing windows keep whatever chrome they were created with.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
 // MARK: - Placeholder tab
 
 private struct PlaceholderTab: View {
@@ -209,6 +248,22 @@ final class PreferencesPanelModel: ObservableObject {
         }
     }
 
+    @Published var motifFrameEnabled: Bool {
+        didSet {
+            if motifFrameEnabled != prefs.motifFrameEnabled {
+                prefs.motifFrameEnabled = motifFrameEnabled
+            }
+        }
+    }
+
+    @Published var motifFrameButtonStyle: MotifFrameButtonStyle {
+        didSet {
+            if motifFrameButtonStyle != prefs.motifFrameButtonStyle {
+                prefs.motifFrameButtonStyle = motifFrameButtonStyle
+            }
+        }
+    }
+
     var captureDirectory: String { prefs.captureDirectory }
 
     init(preferences: Preferences) {
@@ -216,6 +271,8 @@ final class PreferencesPanelModel: ObservableObject {
         self.clipboardEnabled = preferences.clipboardEnabled
         self.copyMode = preferences.copyMode
         self.captureSessions = preferences.captureSessions
+        self.motifFrameEnabled = preferences.motifFrameEnabled
+        self.motifFrameButtonStyle = preferences.motifFrameButtonStyle
     }
 
     /// Open the captures folder in Finder. Creates the directory if it

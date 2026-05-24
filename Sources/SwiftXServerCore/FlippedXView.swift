@@ -126,6 +126,17 @@ public final class FlippedXView: NSView {
         // our draw cycle catches up to the new bounds.
         wantsLayer = true
         layer?.backgroundColor = liveResizeBackground
+        // Clip drawing to the layer's bounds. During a live shrink the view's
+        // bounds shrink but the backing bitmap stays at the old (larger) size
+        // until live-resize ends (handleNSWindowDidEndLiveResize defers the
+        // rebuild to avoid a white flash). The draw method anchors the image
+        // to the view's bottom, so the bitmap's top edge overshoots upward
+        // past the view's top. With native chrome, the NSWindow's title bar
+        // is a higher compositing layer that hides the overshoot. With the
+        // optional Motif frame we install (where the FlippedXView is a
+        // subview of a MotifFrameView), the overshoot paints into the title
+        // bar pixels. Layer masking clips the bleed cleanly.
+        layer?.masksToBounds = true
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }

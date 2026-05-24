@@ -1,0 +1,422 @@
+import AppKit
+
+// NSView that draws an OSF/Motif (mwm) window-manager decoration: a flat
+// raised grey band wrapped around a client area, with a row of raised
+// buttons across the top bearing the window title, and L-shaped resize
+// grooves cut into all four corners.
+//
+// One subview (the X client view, typically a FlippedXView) lives at
+// `clientRect` and resizes with the frame. All bevel/title/button drawing
+// + mouse handling for buttons, title drag, and edge resize is owned here.
+
+public final class MotifFrameView: NSView {
+
+    public var windowTitle: String = "" {
+        didSet {
+            guard windowTitle != oldValue else { return }
+            setNeedsDisplay(titleBarRect())
+        }
+    }
+
+    public var buttonStyle: MotifFrameButtonStyle = .motif {
+        didSet { needsDisplay = true }
+    }
+
+    /// The X client view. Installed at init and kept sized to `clientRect`
+    /// on every layout pass. Cocoa routes mouse events to it normally as
+    /// long as the pointer is inside its frame; events on the surrounding
+    /// frame stay with `self`.
+    public let clientView: NSView
+
+    public override var isFlipped: Bool { true }
+
+    public init(frame frameRect: NSRect, clientView: NSView) {
+        self.clientView = clientView
+        super.init(frame: frameRect)
+        clientView.autoresizingMask = []   // we manage its frame in resizeSubviews
+        addSubview(clientView)
+        layoutClientView()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    public override func resizeSubviews(withOldSize oldSize: NSSize) {
+        super.resizeSubviews(withOldSize: oldSize)
+        layoutClientView()
+        // Repaint the frame chrome on every layout pass — the title bar /
+        // grooves / corner buttons all move with the new bounds, and any
+        // stray pixels the client view bled into the title region during a
+        // live shrink (between bound shrink and bitmap rebuild at end of
+        // live resize) get covered over.
+        needsDisplay = true
+    }
+
+    private func layoutClientView() {
+        clientView.frame = clientRect
+    }
+
+    // MARK: - Theme aliases (kept short for the drawing math)
+
+    private var bv: CGFloat   { MotifTheme.bevelWidth }
+    private var band: CGFloat { MotifTheme.band }
+    private var bs: CGFloat   { MotifTheme.buttonSize }
+    private var bi: CGFloat   { MotifTheme.buttonInset }
+
+    // MARK: - Layout rects
+
+    public var clientRect: NSRect {
+        NSRect(
+            x: MotifTheme.clientLeftInset,
+            y: MotifTheme.clientTopInset,
+            width: max(0, bounds.width - MotifTheme.horizontalPadding),
+            height: max(0, bounds.height - MotifTheme.verticalPadding)
+        )
+    }
+
+    private var titleRowY: CGFloat { band + bi }
+
+    private func menuButtonRect() -> NSRect {
+        NSRect(x: band + bi, y: titleRowY, width: bs, height: bs)
+    }
+    private func maximizeButtonRect() -> NSRect {
+        NSRect(x: bounds.width - band - bi - bs, y: titleRowY, width: bs, height: bs)
+    }
+    private func restoreButtonRect() -> NSRect {
+        let mx = maximizeButtonRect()
+        return NSRect(x: mx.minX - bs, y: titleRowY, width: bs, height: bs)
+    }
+    private func titleBarRect() -> NSRect {
+        let left = menuButtonRect().maxX
+        let right = restoreButtonRect().minX
+        return NSRect(x: left, y: titleRowY, width: max(0, right - left), height: bs)
+    }
+
+    /// Full title row (used as the drag-to-move hit zone).
+    private var titleDragRect: NSRect {
+        NSRect(x: band, y: titleRowY,
+               width: bounds.width - 2 * band, height: bs)
+    }
+
+    // MARK: - Drawing
+
+    public override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let W = bounds.width, H = bounds.height
+
+        // Band body
+        fill(ctx, bounds, MotifTheme.fill)
+
+        // Outer raised bevel
+        bevel(ctx, bounds, topLeft: MotifTheme.highlight, bottomRight: MotifTheme.shadow)
+
+        // Inner sunken bevel — combined with the outer raised, the band reads
+        // as a slab raised from both sides simultaneously.
+        let inner = CGRect(x: band, y: band, width: W - 2*band, height: H - 2*band)
+        bevel(ctx, inner, topLeft: MotifTheme.shadow, bottomRight: MotifTheme.highlight)
+
+        drawCornerGrooves(ctx, W: W, H: H)
+        drawTitleBar(ctx)
+    }
+
+    private func drawTitleBar(_ ctx: CGContext) {
+        let menuR = menuButtonRect()
+        let maxR  = maximizeButtonRect()
+        let restR = restoreButtonRect()
+
+        raisedTile(ctx, menuR, pressed: pressedButton == 0)
+        raisedTile(ctx, maxR,  pressed: pressedButton == 2)
+        raisedTile(ctx, restR, pressed: pressedButton == 1)
+
+        switch buttonStyle {
+        case .motif:
+            raisedTileCentered(ctx, in: menuR, width: MotifTheme.menuDashW, height: MotifTheme.menuDashH)
+            raisedTileCentered(ctx, in: maxR,  width: MotifTheme.maximizeSq, height: MotifTheme.maximizeSq)
+            raisedTileCentered(ctx, in: restR, width: MotifTheme.restoreSq, height: MotifTheme.restoreSq)
+        case .trafficLights:
+            dot(ctx, in: menuR, color: MotifTheme.macRed)
+            dot(ctx, in: restR, color: MotifTheme.macYellow)
+            dot(ctx, in: maxR,  color: MotifTheme.macGreen)
+        }
+
+        let titleR = titleBarRect()
+        raisedTile(ctx, titleR)
+        drawTitleText(in: titleR)
+    }
+
+    private func dot(_ ctx: CGContext, in rect: CGRect, color: NSColor) {
+        let d = round(MotifTheme.titleBarHeight * 0.45)
+        let outerD = d + 2 * bv
+        let outerR = CGRect(x: rect.midX - outerD/2, y: rect.midY - outerD/2,
+                            width: outerD, height: outerD)
+        let innerR = CGRect(x: rect.midX - d/2, y: rect.midY - d/2,
+                            width: d, height: d)
+
+        // Sunken bevel ring drawn as a linear gradient clipped to the annulus.
+        // A hard upper-left/bottom-right split looks abrupt on circles; the
+        // gradient sells the recess at any size.
+        ctx.saveGState()
+        ctx.addEllipse(in: outerR)
+        ctx.addEllipse(in: innerR)
+        ctx.clip(using: .evenOdd)
+        let gradient = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: [MotifTheme.shadow.cgColor, MotifTheme.highlight.cgColor] as CFArray,
+            locations: [0, 1])!
+        ctx.drawLinearGradient(
+            gradient,
+            start: CGPoint(x: outerR.minX, y: outerR.minY),
+            end:   CGPoint(x: outerR.maxX, y: outerR.maxY),
+            options: [])
+        ctx.restoreGState()
+
+        ctx.setFillColor(color.cgColor)
+        ctx.fillEllipse(in: innerR)
+    }
+
+    private func drawTitleText(in rect: CGRect) {
+        // dtwm's WmDrawXmString does exactly this: center when the text fits,
+        // switch to left-aligned + visual clip (mid-glyph) when it overflows.
+        // Real mwm gets the clip for free because the title bar is its own
+        // X window of bounded width; we approximate by clipping the draw to
+        // the title-bar rect. See reference/cde/cde/programs/dtwm/WmGraphics.c
+        // (WmDrawXmString) + WmCDecor.c (GetTextBox).
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: MotifTheme.titleFontSize, weight: .medium),
+            .foregroundColor: MotifTheme.titleColor,
+        ]
+        let text = windowTitle as NSString
+        let sz = text.size(withAttributes: attrs)
+        let fits = sz.width <= rect.width
+        let origin: CGPoint
+        if fits {
+            origin = CGPoint(x: rect.midX - sz.width / 2,
+                             y: rect.midY - sz.height / 2)
+        } else {
+            // Left-align with a small inset so the text doesn't kiss the
+            // raised bevel on the menu-button side.
+            origin = CGPoint(x: rect.minX + bv,
+                             y: rect.midY - sz.height / 2)
+        }
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: rect).addClip()
+        text.draw(at: origin, withAttributes: attrs)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    // MARK: - Corner grooves
+
+    private func drawCornerGrooves(_ ctx: CGContext, W: CGFloat, H: CGFloat) {
+        let btnLeftX     = band + bi
+        let btnTopY      = band + bi
+        let btnRightX    = W - band - bi - bs
+        let btnBotY      = H - band - bi - bs
+        let btnRightEdge = btnLeftX + bs - bv
+        let btnBotEdge   = btnTopY  + bs - bv
+
+        horizontalGroove(ctx, x: 0,              y: btnBotEdge,   length: band)
+        verticalGroove(ctx,   x: btnRightEdge,   y: 0,            length: band)
+        horizontalGroove(ctx, x: W - band,       y: btnBotEdge,   length: band)
+        verticalGroove(ctx,   x: btnRightX - bv, y: 0,            length: band)
+        horizontalGroove(ctx, x: 0,              y: btnBotY - bv, length: band)
+        verticalGroove(ctx,   x: btnRightEdge,   y: H - band,     length: band)
+        horizontalGroove(ctx, x: W - band,       y: btnBotY - bv, length: band)
+        verticalGroove(ctx,   x: btnRightX - bv, y: H - band,     length: band)
+    }
+
+    // MARK: - Bevel primitives
+
+    private func raisedTile(_ ctx: CGContext, _ r: CGRect, pressed: Bool = false) {
+        fill(ctx, r, MotifTheme.fill)
+        bevel(ctx, r,
+              topLeft:     pressed ? MotifTheme.shadow    : MotifTheme.highlight,
+              bottomRight: pressed ? MotifTheme.highlight : MotifTheme.shadow)
+    }
+
+    private func raisedTileCentered(_ ctx: CGContext, in outer: CGRect,
+                                    width: CGFloat, height: CGFloat) {
+        let r = CGRect(
+            x: outer.minX + (outer.width  - width)  / 2,
+            y: outer.minY + (outer.height - height) / 2,
+            width: width, height: height
+        )
+        raisedTile(ctx, r)
+    }
+
+    private func bevel(_ ctx: CGContext, _ r: CGRect,
+                       topLeft: NSColor, bottomRight: NSColor) {
+        for i in 0..<Int(bv) {
+            let o = CGFloat(i)
+            fill(ctx, CGRect(x: r.minX + o, y: r.minY + o,
+                             width: r.width - 2*o, height: 1), topLeft)
+            fill(ctx, CGRect(x: r.minX + o, y: r.minY + o,
+                             width: 1, height: r.height - 2*o), topLeft)
+            fill(ctx, CGRect(x: r.minX + o, y: r.maxY - 1 - o,
+                             width: r.width - 2*o, height: 1), bottomRight)
+            fill(ctx, CGRect(x: r.maxX - 1 - o, y: r.minY + o,
+                             width: 1, height: r.height - 2*o), bottomRight)
+        }
+    }
+
+    private func horizontalGroove(_ ctx: CGContext,
+                                  x: CGFloat, y: CGFloat, length: CGFloat) {
+        for i in 0..<Int(bv) {
+            let o = CGFloat(i)
+            fill(ctx, CGRect(x: x, y: y + o,      width: length, height: 1), MotifTheme.shadow)
+            fill(ctx, CGRect(x: x, y: y + bv + o, width: length, height: 1), MotifTheme.highlight)
+        }
+    }
+
+    private func verticalGroove(_ ctx: CGContext,
+                                x: CGFloat, y: CGFloat, length: CGFloat) {
+        for i in 0..<Int(bv) {
+            let o = CGFloat(i)
+            fill(ctx, CGRect(x: x + o,      y: y, width: 1, height: length), MotifTheme.shadow)
+            fill(ctx, CGRect(x: x + bv + o, y: y, width: 1, height: length), MotifTheme.highlight)
+        }
+    }
+
+    private func fill(_ ctx: CGContext, _ r: CGRect, _ color: NSColor) {
+        ctx.setFillColor(color.cgColor)
+        ctx.fill(r)
+    }
+
+    // MARK: - Mouse handling
+
+    private var dragOrigin: NSPoint?
+    private var dragWindowOrigin: NSPoint?
+    private var pressedButton: Int? = nil
+    private var resizeEdge: ResizeEdge = .none
+    private var resizeInitialFrame: NSRect = .zero
+
+    private enum ResizeEdge {
+        case none, top, bottom, left, right
+        case topLeft, topRight, bottomLeft, bottomRight
+    }
+
+    public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    public override func mouseDown(with event: NSEvent) {
+        let pt = convert(event.locationInWindow, from: nil)
+        window?.makeKeyAndOrderFront(nil)
+
+        if menuButtonRect().contains(pt)     { pressedButton = 0; needsDisplay = true; return }
+        if restoreButtonRect().contains(pt)  { pressedButton = 1; needsDisplay = true; return }
+        if maximizeButtonRect().contains(pt) { pressedButton = 2; needsDisplay = true; return }
+
+        let edge = hitTestEdge(at: pt)
+        if edge != .none {
+            resizeEdge = edge
+            resizeInitialFrame = window?.frame ?? .zero
+            dragOrigin = NSEvent.mouseLocation
+            return
+        }
+
+        if titleDragRect.contains(pt) {
+            if event.clickCount == 2 {
+                window?.zoom(nil)
+                return
+            }
+            dragOrigin = NSEvent.mouseLocation
+            dragWindowOrigin = window?.frame.origin
+        }
+    }
+
+    public override func mouseDragged(with event: NSEvent) {
+        let now = NSEvent.mouseLocation
+        if resizeEdge != .none, let o = dragOrigin {
+            applyResize(dx: now.x - o.x, dy: now.y - o.y); return
+        }
+        if let o = dragOrigin, let wo = dragWindowOrigin {
+            window?.setFrameOrigin(NSPoint(x: wo.x + now.x - o.x, y: wo.y + now.y - o.y))
+        }
+    }
+
+    public override func mouseUp(with event: NSEvent) {
+        let pt = convert(event.locationInWindow, from: nil)
+        if let btn = pressedButton {
+            switch btn {
+            case 0:
+                // performClose beeps on non-.titled windows. Invoke the
+                // delegate's windowShouldClose hook manually (that's where
+                // the WM_DELETE_WINDOW polite-close flow lives) and then
+                // close the NSWindow directly.
+                if menuButtonRect().contains(pt), let win = window {
+                    let ok = win.delegate?.windowShouldClose?(win) ?? true
+                    if ok { win.close() }
+                }
+            case 1: if restoreButtonRect().contains(pt)  { window?.miniaturize(nil) }
+            case 2: if maximizeButtonRect().contains(pt) { window?.zoom(nil) }
+            default: break
+            }
+            pressedButton = nil
+            needsDisplay = true
+        }
+        dragOrigin = nil
+        dragWindowOrigin = nil
+        resizeEdge = .none
+    }
+
+    // MARK: - Edge-resize
+
+    private func hitTestEdge(at pt: NSPoint) -> ResizeEdge {
+        let b = band
+        let cs = band + bi + bs   // corner span — same length as a title button
+        let w = bounds.width, h = bounds.height
+        let nearT = pt.y < b, nearB = pt.y > h - b
+        let nearL = pt.x < b, nearR = pt.x > w - b
+        if (nearT && pt.x < cs)    || (nearL && pt.y < cs)    { return .topLeft }
+        if (nearT && pt.x > w - cs) || (nearR && pt.y < cs)    { return .topRight }
+        if (nearB && pt.x < cs)    || (nearL && pt.y > h - cs) { return .bottomLeft }
+        if (nearB && pt.x > w - cs) || (nearR && pt.y > h - cs) { return .bottomRight }
+        if nearT { return .top }
+        if nearB { return .bottom }
+        if nearL { return .left }
+        if nearR { return .right }
+        return .none
+    }
+
+    private func applyResize(dx: CGFloat, dy: CGFloat) {
+        // NSEvent.mouseLocation is screen coords (bottom-up). NSWindow.frame
+        // is also screen coords (bottom-up origin). So a positive dy = pointer
+        // moved up, which for the top edge grows height and for the bottom
+        // edge shrinks height (anchoring the top by sliding the origin up).
+        guard let window = window else { return }
+        var f = resizeInitialFrame
+        let minW: CGFloat = MotifTheme.horizontalPadding + 60
+        let minH: CGFloat = MotifTheme.verticalPadding + 40
+        func cL(_ d: CGFloat) {
+            let nw = max(minW, f.width - d); f.origin.x += f.width - nw; f.size.width = nw
+        }
+        func cR(_ d: CGFloat) { f.size.width = max(minW, f.width + d) }
+        func cT(_ d: CGFloat) { f.size.height = max(minH, f.height + d) }
+        func cB(_ d: CGFloat) {
+            let nh = max(minH, f.height - d); f.origin.y += f.height - nh; f.size.height = nh
+        }
+        switch resizeEdge {
+        case .left:        cL(dx)
+        case .right:       cR(dx)
+        case .top:         cT(dy)
+        case .bottom:      cB(dy)
+        case .topLeft:     cL(dx); cT(dy)
+        case .topRight:    cR(dx); cT(dy)
+        case .bottomLeft:  cL(dx); cB(dy)
+        case .bottomRight: cR(dx); cB(dy)
+        case .none:        return
+        }
+        window.setFrame(f, display: true)
+    }
+
+    // MARK: - Key/active state
+
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(keyChanged), name: name, object: nil)
+        }
+    }
+    @objc private func keyChanged(_ n: Notification) {
+        if (n.object as? NSWindow) === window { needsDisplay = true }
+    }
+}

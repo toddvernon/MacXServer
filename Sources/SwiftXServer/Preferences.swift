@@ -20,6 +20,8 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         static let clipboardMode    = "clipboard.mode"        // "mac" | "xterm"
         static let captureSessions  = "capture.sessions"      // bool
         static let captureDirectory = "capture.directory"     // string
+        static let motifFrameEnabled     = "motifFrame.enabled"     // bool
+        static let motifFrameButtonStyle = "motifFrame.buttonStyle" // "motif" | "trafficLights"
     }
 
     /// Where server-side captures land when capture is enabled. /tmp is
@@ -39,6 +41,8 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
             Key.clipboardMode: "mac",
             Key.captureSessions: false,
             Key.captureDirectory: Self.defaultCaptureDirectory,
+            Key.motifFrameEnabled: false,
+            Key.motifFrameButtonStyle: "motif",
         ])
     }
 
@@ -88,9 +92,57 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         }
     }
 
+    /// Whether new top-level X windows should be wrapped in the optional
+    /// Motif-style window-manager frame (drawn by us) instead of using
+    /// native macOS chrome. Changes only affect windows mapped after the
+    /// toggle; already-on-screen windows keep whatever chrome they had.
+    var motifFrameEnabled: Bool {
+        get { defaults.bool(forKey: Key.motifFrameEnabled) }
+        set {
+            defaults.set(newValue, forKey: Key.motifFrameEnabled)
+            NotificationCenter.default.post(name: Self.didChange, object: self)
+        }
+    }
+
+    /// When the Motif frame is on, controls whether the three title-bar
+    /// buttons render as Motif raised glyphs or as Mac-style colored dots.
+    var motifFrameButtonStyle: MotifFrameButtonStyle {
+        get {
+            switch defaults.string(forKey: Key.motifFrameButtonStyle) {
+            case "trafficLights": return .trafficLights
+            default:              return .motif
+            }
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: Key.motifFrameButtonStyle)
+            NotificationCenter.default.post(name: Self.didChange, object: self)
+        }
+    }
+
     // MARK: - ClipboardPreferencesProvider
 
     var current: ClipboardPreferences {
         ClipboardPreferences(enabled: clipboardEnabled, mode: copyMode)
+    }
+
+    // MARK: - MotifFramePreferencesProvider
+
+    /// MotifFramePreferencesProvider expects a `current` of its own type;
+    /// our top-level `current` already returns ClipboardPreferences, so we
+    /// vend a thin adapter that reads through to the live keys here.
+    var motifFrameProvider: MotifFramePreferencesProvider { MotifFrameProviderAdapter(prefs: self) }
+}
+
+/// Forwards the protocol's `current` requirement to live reads of the
+/// matching Preferences keys, so every call sees the latest value without
+/// snapshotting at adapter-creation time.
+private final class MotifFrameProviderAdapter: MotifFramePreferencesProvider, @unchecked Sendable {
+    private let prefs: Preferences
+    init(prefs: Preferences) { self.prefs = prefs }
+    var current: MotifFramePreferences {
+        MotifFramePreferences(
+            enabled: prefs.motifFrameEnabled,
+            buttonStyle: prefs.motifFrameButtonStyle
+        )
     }
 }
