@@ -7,7 +7,11 @@ public enum RecorderError: Error, Sendable, Equatable {
 
 public final class Recorder: CaptureSink, @unchecked Sendable {
     private let lock = NSLock()
-    private let outputPath: String
+    // Mutable so SessionCapture can rename the output file mid-session
+    // once the client identifies itself. Recorder buffers all frames in
+    // memory and only writes at finalize() time, so the path is read
+    // lazily — flipping it after init has no I/O cost.
+    private var outputPath: String
     private let listenDescription: String
     private let forwardDescription: String
     private let toolVersion: String
@@ -55,6 +59,24 @@ public final class Recorder: CaptureSink, @unchecked Sendable {
         buffer.append(0)
         buffer.append(0)
         buffer.append(0)
+    }
+
+    /// Change the path the buffered frames will land at when finalize()
+    /// runs. Used by SessionCapture to switch from the in-progress
+    /// filename to the identified one (`<timestamp>-<client>.xtap`)
+    /// after the client publishes WM_CLASS or equivalent. Parent
+    /// directory is created if needed — same shape as the init path.
+    public func setOutputPath(_ path: String) throws {
+        let parent = (path as NSString).deletingLastPathComponent
+        if !parent.isEmpty && parent != "." {
+            try FileManager.default.createDirectory(
+                atPath: parent,
+                withIntermediateDirectories: true
+            )
+        }
+        lock.lock()
+        outputPath = path
+        lock.unlock()
     }
 
     public func record(direction: Direction, bytes: [UInt8]) {

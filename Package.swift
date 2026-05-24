@@ -21,7 +21,7 @@ let package = Package(
         ),
         .target(
             name: "SwiftXServerCore",
-            dependencies: ["Framer"]
+            dependencies: ["Framer", "SwiftXCaptureCore"]
         ),
         .executableTarget(
             name: "SwiftXCapture",

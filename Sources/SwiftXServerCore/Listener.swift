@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import SwiftXCaptureCore
 
 // TCP listener glue.
 //
@@ -67,6 +68,7 @@ public final class Listener: @unchecked Sendable {
         bridge: WindowBridge? = nil,
         coordinator: ServerCoordinator = ServerCoordinator(),
         clipboardPrefs: ClipboardPreferencesProvider = StaticClipboardPreferencesProvider(),
+        captureSink: CaptureSink? = nil,
         onSession: ((ServerSession) -> Void)? = nil
     ) throws {
         guard fd >= 0 else { throw ListenerError.acceptFailed(errno: 0) }
@@ -83,7 +85,12 @@ public final class Listener: @unchecked Sendable {
         // returns), so block here on a semaphore until the cancel handler
         // fires on EOF/error. That matches the old runOne semantics.
         let done = DispatchSemaphore(value: 0)
-        runConnection(session: session, clientFd: clientFd, sessionLog: log) {
+        runConnection(
+            session: session,
+            clientFd: clientFd,
+            sessionLog: log,
+            captureSink: captureSink
+        ) {
             done.signal()
         }
         done.wait()
@@ -98,13 +105,21 @@ public final class Listener: @unchecked Sendable {
     /// listener's own log is reused for everyone. `sessionDidStart` runs
     /// synchronously on the listener thread before the dispatch source
     /// resumes, so callers can wire `onIdentified` etc.
+    ///
+    /// `captureSinkFactory`, when present, builds a per-session
+    /// CaptureSink (typically a SessionCapture writing to `/tmp/swift-x-
+    /// captures/`). The listener tees client-to-server bytes after each
+    /// socket read and server-to-client bytes before each socket write
+    /// to the sink, and calls `finalize()` on disconnect. `nil` factory
+    /// or factory returning `nil` disables capture for that session.
     public func runAccepting(
         template: ServerConfig = .default,
         bridge: WindowBridge? = nil,
         coordinator: ServerCoordinator,
         clipboardPrefs: ClipboardPreferencesProvider = StaticClipboardPreferencesProvider(),
         sessionLogFactory: ((Int) -> ServerLogSink)? = nil,
-        sessionDidStart: ((ServerSession, Int, ServerLogSink?) -> Void)? = nil
+        captureSinkFactory: ((Int) -> CaptureSink?)? = nil,
+        sessionDidStart: ((ServerSession, Int, ServerLogSink?, CaptureSink?) -> Void)? = nil
     ) {
         while !stopRequested {
             let clientFd: Int32
@@ -129,12 +144,18 @@ public final class Listener: @unchecked Sendable {
             let clientNumber = Int((session.config.resourceIdBase &- template.resourceIdBase) / max(template.resourceIdMask &+ 1, 1)) + 1
             let sessionLog = sessionLogFactory?(clientNumber) ?? log
             session.log = sessionLog
-            sessionDidStart?(session, clientNumber, sessionLog)
+            let captureSink = captureSinkFactory?(clientNumber) ?? nil
+            sessionDidStart?(session, clientNumber, sessionLog, captureSink)
 
             // Non-blocking — dispatch source registers itself on the
             // session's protocolQueue and returns immediately. The
             // listener thread loops back to accept the next connection.
-            runConnection(session: session, clientFd: clientFd, sessionLog: sessionLog)
+            runConnection(
+                session: session,
+                clientFd: clientFd,
+                sessionLog: sessionLog,
+                captureSink: captureSink
+            )
         }
     }
 
@@ -164,10 +185,19 @@ public final class Listener: @unchecked Sendable {
     /// bytes, then returns. The dispatch source's cancel handler does
     /// teardown on EOF / error; `onClose` fires last for callers (runOne)
     /// that want to block on the session lifetime.
+    ///
+    /// `captureSink`, when non-nil, gets every C2S byte after each
+    /// successful socket read and every S2C byte before each socket
+    /// write. The sink is finalized in the cancel handler so the
+    /// `.xtap` lands on disk regardless of whether disconnect was clean
+    /// or dirty. Both read and write paths run on the session's
+    /// protocolQueue, so the sink sees calls in wire order and
+    /// single-threaded.
     private func runConnection(
         session: ServerSession,
         clientFd: Int32,
         sessionLog: ServerLogSink?,
+        captureSink: CaptureSink? = nil,
         onClose: (@Sendable () -> Void)? = nil
     ) {
         sessionLog?.log("client connected (resourceIdBase=0x\(String(session.config.resourceIdBase, radix: 16)))")
@@ -175,8 +205,10 @@ public final class Listener: @unchecked Sendable {
         // Single writer: protocolQueue. The closure captures clientFd and
         // pushes whatever bytes the session hands it directly to the
         // socket via writeAll. No lock needed — every call to this
-        // closure runs on protocolQueue.
+        // closure runs on protocolQueue. Capture sink (if set) sees the
+        // bytes immediately before they go on the wire.
         session.writeCallback = { bytes in
+            captureSink?.record(direction: .serverToClient, bytes: bytes)
             writeAllToSocket(clientFd, bytes)
         }
 
@@ -204,8 +236,10 @@ public final class Listener: @unchecked Sendable {
                 return
             }
             let chunk = Array(readBuffer[0..<n])
+            captureSink?.record(direction: .clientToServer, bytes: chunk)
             let outBytes = session.feed(chunk)
             if !outBytes.isEmpty {
+                captureSink?.record(direction: .serverToClient, bytes: outBytes)
                 writeAllToSocket(clientFd, outBytes)
             }
             // Session marked itself unrecoverable (e.g., a bogus request
@@ -230,6 +264,13 @@ public final class Listener: @unchecked Sendable {
             session.cleanupOnDisconnect()
             Darwin.close(clientFd)
             sessionLog?.log("session: requests=\(session.requestsProcessed) windows=\(session.windows.count) colors=\(session.colors.count)")
+            if let sink = captureSink {
+                do {
+                    try sink.finalize()
+                } catch {
+                    sessionLog?.log("capture finalize error: \(error)")
+                }
+            }
             sourceHolder.source = nil
             onClose?()
         }

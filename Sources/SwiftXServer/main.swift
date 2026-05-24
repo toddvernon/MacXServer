@@ -146,10 +146,12 @@ DispatchQueue.global(qos: .userInitiated).async {
             // Renamed to <wmInstance>-<timestamp>.log when WM_CLASS arrives.
             FileLogSink(sessionNumber: clientNumber)
         },
-        sessionDidStart: { session, clientNumber, sessionLog in
+        sessionDidStart: { session, clientNumber, sessionLog, _ in
             // When the client identifies itself via WM_CLASS, retitle the
             // log file from session-N-<ts>.log to <instance>-<ts>.log so
             // we can tell at a glance which app produced which trace.
+            // (Capture-file renaming will hook the same callback in
+            // step 2b once --capture lands.)
             session.onIdentified = { instance, _ in
                 if let fileSink = sessionLog as? FileLogSink {
                     fileSink.rename(toIdentified: instance)
