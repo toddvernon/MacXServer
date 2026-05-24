@@ -134,6 +134,8 @@ private struct CaptureTab: View {
 private struct DisplayTab: View {
     @ObservedObject var model: PreferencesPanelModel
 
+    @State private var showingReseedConfirm = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             PanelHeader(
@@ -165,10 +167,44 @@ private struct DisplayTab: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            Divider().padding(.vertical, 4)
+
+            // Resources reseed — same backend as Edit Resources… > Revert,
+            // surfaced here so the path from "I just changed something in
+            // Preferences" to "I need to refresh my Motif resources" is one
+            // click instead of three. Backup-first means user edits are
+            // recoverable from <path>.bak if they regret the reseed.
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Motif Resources")
+                    .font(.headline)
+                Text("Your X resources file at \(model.motifResourcesPath) overrides the bundled defaults. When the bundled defaults change (e.g. after a server update), reseed to pick them up. Your current file is backed up first.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button("Reseed Resources from Defaults\u{2026}") {
+                        showingReseedConfirm = true
+                    }
+                    if let banner = model.reseedBanner {
+                        Text(banner)
+                            .font(.callout)
+                            .foregroundStyle(model.reseedBannerIsError ? .red : .secondary)
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                }
+            }
+
             Spacer()
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .alert("Reseed resources from defaults?", isPresented: $showingReseedConfirm) {
+            Button("Reseed", role: .destructive) { model.reseedResources() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This replaces \(model.motifResourcesPath) with the bundled seed content. Your current file is saved to \(model.motifResourcesPath).bak first, so any edits you've made are recoverable from there.")
+        }
     }
 }
 
@@ -266,6 +302,14 @@ final class PreferencesPanelModel: ObservableObject {
 
     var captureDirectory: String { prefs.captureDirectory }
 
+    /// Path of the user-editable resources file. Same path the resources
+    /// editor uses; surfaced here so the Display tab's reseed button can
+    /// reference it in copy + the confirm dialog.
+    var motifResourcesPath: String { ResourceFileLoader.defaultPath }
+
+    @Published var reseedBanner: String? = nil
+    @Published var reseedBannerIsError: Bool = false
+
     init(preferences: Preferences) {
         self.prefs = preferences
         self.clipboardEnabled = preferences.clipboardEnabled
@@ -273,6 +317,29 @@ final class PreferencesPanelModel: ObservableObject {
         self.captureSessions = preferences.captureSessions
         self.motifFrameEnabled = preferences.motifFrameEnabled
         self.motifFrameButtonStyle = preferences.motifFrameButtonStyle
+    }
+
+    /// Reseed the user resources file from the bundled defaults. Same
+    /// backend as the Resources editor's Revert button; surfaced here so
+    /// Preferences users have a one-click path after a server update
+    /// changes the compiled-in defaults. Backup-first so a previous
+    /// customization is recoverable.
+    func reseedResources() {
+        do {
+            let backupPath = try ResourceFileLoader.reseed(
+                path: motifResourcesPath,
+                seed: DefaultThemes.seedContent
+            )
+            reseedBannerIsError = false
+            if let backupPath = backupPath {
+                reseedBanner = "Reseeded. Previous file at \(backupPath). Restart Motif apps to see changes."
+            } else {
+                reseedBanner = "Reseeded. Restart Motif apps to see changes."
+            }
+        } catch {
+            reseedBannerIsError = true
+            reseedBanner = "Reseed failed: \(error.localizedDescription)"
+        }
     }
 
     /// Open the captures folder in Finder. Creates the directory if it

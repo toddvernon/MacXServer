@@ -40,7 +40,7 @@ struct ResourcesPanelView: View {
             Button("Revert", role: .destructive) { model.revert() }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("This replaces the contents of \(model.path) with the bundled seed content. Any edits you've made are lost.")
+            Text("This replaces \(model.path) with the bundled seed content. Your current file is saved to \(model.path).bak first, so any edits you've made are recoverable from there.")
         }
     }
 
@@ -189,9 +189,16 @@ final class ResourcesPanelModel: ObservableObject {
 
     func revert() {
         do {
-            try DefaultThemes.seedContent.write(toFile: path, atomically: true, encoding: .utf8)
+            let backupPath = try ResourceFileLoader.reseed(
+                path: path,
+                seed: DefaultThemes.seedContent
+            )
             loadFromDisk()
-            setBanner("Reverted to bundled defaults.", error: false)
+            if let backupPath = backupPath {
+                setBanner("Reverted to bundled defaults. Previous file backed up to \(backupPath).", error: false)
+            } else {
+                setBanner("Reverted to bundled defaults.", error: false)
+            }
         } catch {
             setBanner("Revert failed: \(error.localizedDescription)", error: true)
         }

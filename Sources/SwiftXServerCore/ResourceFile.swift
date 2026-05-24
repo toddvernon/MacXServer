@@ -188,4 +188,40 @@ public enum ResourceFileLoader {
             return ResourceFile.parse(seed())
         }
     }
+
+    /// Overwrite the user's resource file with fresh seed bytes. Optionally
+    /// copies the existing file to `<path>.bak` first so a customization
+    /// the user wanted to keep is recoverable. Returns the backup path
+    /// when a backup was actually written (nil otherwise — either the
+    /// caller passed `backup: false`, or there was nothing on disk to
+    /// back up).
+    ///
+    /// Thrown errors come from `FileManager.copyItem` / `removeItem` or
+    /// `String.write(toFile:)`. Callers should surface them to the user
+    /// rather than silently swallow.
+    @discardableResult
+    public static func reseed(
+        path: String = defaultPath,
+        seed: String,
+        backup: Bool = true,
+        log: ServerLogSink? = nil
+    ) throws -> String? {
+        let fm = FileManager.default
+        var backupPath: String? = nil
+        if backup, fm.fileExists(atPath: path) {
+            let bak = path + ".bak"
+            // Replace any prior .bak — we keep one generation only,
+            // matching the simplest "oh wait, I wanted that" recovery
+            // story without growing a chain of .bak.bak.bak files.
+            if fm.fileExists(atPath: bak) {
+                try fm.removeItem(atPath: bak)
+            }
+            try fm.copyItem(atPath: path, toPath: bak)
+            backupPath = bak
+            log?.log("ResourceFile: backed up \(path) → \(bak)")
+        }
+        try seed.write(toFile: path, atomically: true, encoding: .utf8)
+        log?.log("ResourceFile: reseeded \(path) from defaults")
+        return backupPath
+    }
 }
