@@ -405,6 +405,28 @@ enum DefaultMotifResources {
     Dtpad*save_warn*XmPushButtonGadget.defaultButtonShadowThickness: 1
     Dtpad*save_warn*XmSeparator.shadowThickness:                1
     Dtpad*save_warn*XmSeparatorGadget.shadowThickness:          1
+    ! save_warn is a PromptDialog (XmSelectionBox flavor), not an
+    ! XmMessageBox — dtpad creates it via XmCreatePromptDialog
+    ! (cde/cde/programs/dtpad/fileDlg.c:648). The four logical answers
+    ! map onto SelectionBox slots: Yes→OK, No→Apply, Cancel→Cancel,
+    ! Help→Help (fileDlg.c:631-643). Button widgets are PushButtonGadgets
+    ! literally named "OK"/"Apply"/"Cancel"/"Help" — case-sensitive,
+    ! capitalized (SelectioB.c:942/959/978/994 via _XmBB_CreateButtonG →
+    ! BBUtil.c:131). Same Blue+italic Helvetica look as the rest of dtpad.
+    Dtpad*save_warn*XmPushButton.foreground:         Blue
+    Dtpad*save_warn*XmPushButton.fontList:           -adobe-helvetica-medium-o-normal--12-*-*-*-p-*-iso8859-1
+    Dtpad*save_warn*XmPushButtonGadget.foreground:   Blue
+    Dtpad*save_warn*XmPushButtonGadget.fontList:     -adobe-helvetica-medium-o-normal--12-*-*-*-p-*-iso8859-1
+    Dtpad*save_warn*OK.foreground:      Blue
+    Dtpad*save_warn*Apply.foreground:   Blue
+    Dtpad*save_warn*Cancel.foreground:  Blue
+    Dtpad*save_warn*Help.foreground:    Blue
+    ! Belt-and-suspenders for any other Dtpad SelectionBox / MessageBox
+    ! dialogs (covers Warn, which is a real XmMessageBox at fileDlg.c:117).
+    Dtpad*XmSelectionBox*XmPushButtonGadget.foreground:  Blue
+    Dtpad*XmSelectionBox*XmPushButtonGadget.fontList:    -adobe-helvetica-medium-o-normal--12-*-*-*-p-*-iso8859-1
+    Dtpad*XmMessageBox*XmPushButtonGadget.foreground:    Blue
+    Dtpad*XmMessageBox*XmPushButtonGadget.fontList:      -adobe-helvetica-medium-o-normal--12-*-*-*-p-*-iso8859-1
     Dtpad*ad_dial*XmPushButton.shadowThickness:                 1
     Dtpad*ad_dial*XmPushButton.highlightThickness:              1
     Dtpad*ad_dial*XmPushButton.defaultButtonShadowThickness:    1
