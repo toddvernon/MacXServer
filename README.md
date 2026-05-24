@@ -1,30 +1,45 @@
 # MacXServer
 
-A modern X11 server in Swift for macOS, plus the capture and protocol
-infrastructure to display X applications from real vintage Sun workstations
-on the Mac with proper modern rendering. The Swift package is internally
-called `swift-x`.
+A modern X11 server in Swift for macOS, plus a capture toolchain for
+recording and inspecting X11 wire traffic. Built so I can display X
+applications from real vintage Sun workstations on my Mac with proper
+modern rendering. The Swift package is internally called `swift-x`.
 
-The project has two pieces: a passive capture tool that records and decodes
-X11 traffic between two Sun workstations on a LAN, and a Swift X server on
-the Mac that real X clients can connect to. They share a typed Swift wire
-decoder (the framer).
+The project has two pieces: a Swift X server that real X clients
+connect to as their display, and a capture utility that records X11
+sessions to disk and can replay them. They share a typed Swift wire
+decoder (the framer) and a common `.xtap` file format.
 
 ## What's here
 
-- `Sources/Framer/` — typed Swift decoders for the X11 core protocol. 73
-  request opcodes, 26 events, 3 typed reply bodies, all 4 connection-setup
-  variants. ~45,000 captured requests across 8 real Sun sessions decode at
-  100% for every core opcode the apps emit.
-- `Sources/SwiftXCaptureCore/` and `Sources/SwiftXCapture/` — a POSIX TCP
-  byte-pump proxy that forwards X11 traffic between two Suns while recording
-  it to an `.xtap` file. Includes a chronological per-message dump tool and
-  an aggregate summary tool for inspecting recordings.
-- `captures/` — `.xtap` files captured from real Sun workstations: xterm
-  (three sessions), xeyes, xclock, xcalc, and quickplot (a Motif graphing
-  app, two sessions).
-- `Tests/` — 212 passing tests covering the framer, the capture tool, the
-  proxy, and the file format.
+- `Sources/Framer/` — typed Swift decoders for the X11 core protocol.
+  Covers every opcode that any of the captured Sun apps emit, plus
+  encoders for the replies the server has to produce.
+- `Sources/SwiftXServer/` + `Sources/SwiftXServerCore/` — the X11
+  server. Rootless mode: each top-level X window becomes a real
+  `NSWindow` with native chrome. Core Text font rendering with
+  scalable substitutes for the X11 bitmap fonts the Sun apps ask
+  for. Runs xterm, xcalc, xclock, xeyes, twm/mwm, quickplot (a
+  Motif graphing app), and CDE's dt-apps (dtcalc, dtterm,
+  dthelpview, dtpad, dticon).
+- `Sources/SwiftXCapture/` + `Sources/SwiftXCaptureCore/` — the
+  capture utility. Single binary, two faces:
+  - **CLI**: proxy capture, dump, summary, diff, replay
+    subcommands. Backwards-compatible with the v1 tool.
+  - **SwiftUI app**: three modes — Record (proxy a session
+    interactively with live byte counters and a decoded-opcode
+    feed), Open (pick a `.xtap` and browse packet by packet),
+    Replay (pipe a `.xtap` into a target server with progress
+    bar, cancel button, and hold-open).
+
+  The server can also tee its own sessions to `.xtap` files via
+  `--capture` — useful for "hit a bug and email me the file"
+  workflows.
+- `captures/` — `.xtap` files from real Sun workstations. xterm
+  (multiple sessions), xeyes, xclock, xcalc, quickplot, and the
+  full CDE dt-app suite.
+- `Tests/` — 749 tests across the framer, capture library, server
+  core, file format, and end-to-end integration paths.
 
 ## Quick start
 
@@ -34,43 +49,77 @@ Build:
 swift build -c release
 ```
 
-Capture a session (edit `connection.json` to point at your upstream X server):
+### Running the server
+
+Start it listening on the default X display port (6000 → display
+`:0`):
 
 ```
-./run.sh
+.build/release/swiftx-server
 ```
 
-The script prints listen address, candidate Mac IPs for the Sun's `DISPLAY`,
-and starts recording. Then on the Sun:
+Status menu appears in the menu bar with the listen address and a
+Stop Server item. Preferences (⌘,) covers clipboard bridging, font
+mappings, and the capture toggle.
+
+Point an X client at it from a real Sun (or anywhere on the LAN):
 
 ```
 xterm -display <mac-ip>:0
 ```
 
-When the Sun's X client closes, the proxy writes `<output>.xtap` and a
-`<output>.xtap.json` sidecar with metadata.
-
-Inspect a recorded session chronologically:
+### Capture, GUI
 
 ```
-./run.sh dump captures/xterm_long.xtap
+.build/release/swiftx-capture
 ```
 
-Aggregate statistics for a recording:
+Launches a chooser with three modes (Record / Open / Replay).
+Defaults to opening files from `/tmp/swift-x-captures/` so the
+server's auto-captures are the obvious choice.
+
+### Capture, CLI
+
+The v1 CLI behavior is preserved. Any args trigger the CLI; no
+args launches the GUI.
 
 ```
-./run.sh summary captures/quickplot.xtap
+# proxy two real X endpoints
+# (./run.sh + connection.json also still works)
+.build/release/swiftx-capture \
+    --listen :6001 \
+    --forward sun-b.lan:6000 \
+    --output session.xtap
+
+# decoded chronological dump
+.build/release/swiftx-capture dump captures/xterm_long.xtap
+
+# aggregate per-opcode summary
+.build/release/swiftx-capture summary captures/quickplot.xtap
+
+# byte-pump replay into a target server
+.build/release/swiftx-capture replay captures/xterm_long.xtap \
+    --target localhost:6000
 ```
 
-Replay a recorded session's client-to-server bytes against a target X server
-(useful for driving a fresh server with a known-good byte stream):
+`./run.sh` still works — pass-through to `swiftx-capture` with
+`connection.json` providing the default listen/forward/output.
+
+### Server-side capture
 
 ```
-./run.sh replay captures/xterm_long.xtap --target localhost:6000
+.build/release/swiftx-server --capture
 ```
 
-`--target` defaults to `127.0.0.1:6000` if omitted. Replay sends bytes as fast
-as the target accepts them; original timing is not honored.
+Every X client connecting to the server gets its own `.xtap` file
+in `/tmp/swift-x-captures/`, named after the client's `WM_CLASS`
+once it identifies itself. The toggle is also available in the
+server's Preferences → Capture tab; the CLI flag overrides the
+preference. `/tmp` wipes on reboot, so captures don't accumulate
+forever.
+
+For bug reports: turn capture on, reproduce the issue, drag the
+freshest file out of `/tmp/swift-x-captures/` into an email.
 
 ## Tests
 
@@ -82,22 +131,32 @@ swift test
 
 The full project context lives in markdown at the repo root:
 
-- `PROJECT.md` — what we're building, the two-product plan, explicit non-goals
+- `PROJECT.md` — what we're building, the two-product plan,
+  explicit non-goals
 - `ARCHITECTURE.md` — how the components fit together
-- `DECISIONS.md` — architectural choices with reasoning, append-only
-- `PRODUCT_1_CAPTURE.md` — scope and order-of-work for the capture tool
-- `PRODUCT_2_SERVER.md` — scope and milestones for the X server
+- `DECISIONS.md` — architectural choices with reasoning,
+  append-only
+- `PRODUCT_1_CAPTURE.md` — capture utility: v1 (CLI, done) and v2
+  (library + GUI app + server-side capture, in flight)
+- `PRODUCT_2_SERVER.md` — X server scope and milestones
+- `OPCODE_STATUS.md` — per-opcode implementation status with
+  honest confidence ratings
+- `SHORTCUTS.md` — known stubs, fakes-on-the-wire, and other
+  ledgered tech debt
 - `CLAUDE.md` — instructions for collaborator agents
 
 ## Status
 
-**Capture tool + framer**: functionally complete. All requests from the
-captured Sun sessions decode by typed name. The framer covers ~60% of the
-X11 spec but 100% of the opcodes any of these vintage apps actually use.
-SHAPE extension calls pass through correctly but are not yet typed. Capture,
-dump, summary, and replay subcommands all work.
+**Capture utility**: v1 (CLI proxy + framer + corpus + article)
+done. v2 (library + SwiftUI app + server-side `--capture`) all
+landed except for screenshots and a blog post. Single binary
+hosts both faces.
 
-**Swift X server**: in progress; M1–M3 green, live xterm / xcalc / quickplot
-from a real Sun working, CDE dt-apps booting. See `PRODUCT_2_SERVER.md` for
-milestones and `OPCODE_STATUS.md` / `SHORTCUTS.md` for what's shipped vs
+**Swift X server**: M1–M3 green. xterm, xcalc, xeyes, xclock,
+twm/mwm, quickplot (Motif), and the CDE dt-apps all run from a
+real Ultra 5 against the Mac. Core Text font substitution with
+cell-snapping is in. Server-side capture is wired so any client
+session lands as a `.xtap` for inspection. See
+`PRODUCT_2_SERVER.md` for milestone definitions and
+`OPCODE_STATUS.md` / `SHORTCUTS.md` for what's shipped vs
 stubbed.
