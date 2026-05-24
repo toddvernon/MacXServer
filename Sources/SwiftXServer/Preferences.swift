@@ -18,17 +18,27 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
     private enum Key {
         static let clipboardEnabled = "clipboard.enabled"
         static let clipboardMode    = "clipboard.mode"        // "mac" | "xterm"
+        static let captureSessions  = "capture.sessions"      // bool
+        static let captureDirectory = "capture.directory"     // string
     }
+
+    /// Where server-side captures land when capture is enabled. /tmp is
+    /// the deliberate choice — it wipes on reboot so captures never
+    /// accumulate invisibly, and it's a short path the user can type.
+    /// See DECISIONS.md 2026-05-23 for the alternatives.
+    static let defaultCaptureDirectory = "/tmp/swift-x-captures"
 
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         // Register defaults on first launch so .object(forKey:) returns the
-        // configured default (Mac-style on) instead of nil.
+        // configured default instead of nil.
         defaults.register(defaults: [
             Key.clipboardEnabled: true,
             Key.clipboardMode: "mac",
+            Key.captureSessions: false,
+            Key.captureDirectory: Self.defaultCaptureDirectory,
         ])
     }
 
@@ -50,6 +60,30 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         set {
             let raw: String = (newValue == .xtermStyle) ? "xterm" : "mac"
             defaults.set(raw, forKey: Key.clipboardMode)
+            NotificationCenter.default.post(name: Self.didChange, object: self)
+        }
+    }
+
+    /// When true, every accepted X client gets its own `.xtap` file in
+    /// `captureDirectory`. CLI `--capture` / `--no-capture` overrides
+    /// this at server startup; the resolved value is fixed for the
+    /// lifetime of that server process.
+    var captureSessions: Bool {
+        get { defaults.bool(forKey: Key.captureSessions) }
+        set {
+            defaults.set(newValue, forKey: Key.captureSessions)
+            NotificationCenter.default.post(name: Self.didChange, object: self)
+        }
+    }
+
+    /// Capture output directory. Default `/tmp/swift-x-captures`. Not
+    /// surfaced in the Preferences UI today (the path is part of the
+    /// "your captures live in /tmp" contract); kept as a UserDefaults
+    /// key so power users can override via `defaults write`.
+    var captureDirectory: String {
+        get { defaults.string(forKey: Key.captureDirectory) ?? Self.defaultCaptureDirectory }
+        set {
+            defaults.set(newValue, forKey: Key.captureDirectory)
             NotificationCenter.default.post(name: Self.didChange, object: self)
         }
     }

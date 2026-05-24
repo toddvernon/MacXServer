@@ -29,7 +29,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "SwiftXServer",
-            dependencies: ["SwiftXServerCore", "Framer"]
+            dependencies: ["SwiftXServerCore", "SwiftXCaptureCore", "Framer"]
         ),
         .testTarget(
             name: "FramerTests",

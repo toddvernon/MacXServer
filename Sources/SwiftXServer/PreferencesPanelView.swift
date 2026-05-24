@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import SwiftXServerCore
 
-// SwiftUI Preferences panel. Three tabs: Cut/Paste (real settings),
+// SwiftUI Preferences panel. Tabs: Cut/Paste (real), Capture (real),
 // Display (placeholder), Network (placeholder). Hero-panel layout
 // inside each tab — SF Symbol header + .title2 + caption — same
 // vocabulary as the Resources editor so the two windows feel like
@@ -21,6 +21,10 @@ struct PreferencesPanelView: View {
             CutPasteTab(model: model)
                 .tabItem {
                     Label("Cut/Paste", systemImage: "doc.on.clipboard")
+                }
+            CaptureTab(model: model)
+                .tabItem {
+                    Label("Capture", systemImage: "recordingtape")
                 }
             PlaceholderTab(
                 icon: "display",
@@ -79,6 +83,48 @@ private struct CutPasteTab: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+// MARK: - Capture tab
+
+private struct CaptureTab: View {
+    @ObservedObject var model: PreferencesPanelModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            PanelHeader(
+                icon: "recordingtape",
+                title: "Capture",
+                caption: "Record every X client's wire traffic to a .xtap file."
+            )
+
+            Toggle("Capture every client to \(model.captureDirectory)", isOn: $model.captureSessions)
+                .toggleStyle(.checkbox)
+
+            Text("Each X client connection writes its own .xtap file you can " +
+                 "send back with a bug report. /tmp is wiped at reboot, so " +
+                 "captures don't accumulate.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Changes take effect for new client connections. Existing sessions keep their original capture setting.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button("Reveal Captures Folder in Finder") {
+                    model.revealCapturesFolder()
+                }
+                Spacer()
+            }
 
             Spacer()
         }
@@ -155,9 +201,32 @@ final class PreferencesPanelModel: ObservableObject {
         }
     }
 
+    @Published var captureSessions: Bool {
+        didSet {
+            if captureSessions != prefs.captureSessions {
+                prefs.captureSessions = captureSessions
+            }
+        }
+    }
+
+    var captureDirectory: String { prefs.captureDirectory }
+
     init(preferences: Preferences) {
         self.prefs = preferences
         self.clipboardEnabled = preferences.clipboardEnabled
         self.copyMode = preferences.copyMode
+        self.captureSessions = preferences.captureSessions
+    }
+
+    /// Open the captures folder in Finder. Creates the directory if it
+    /// doesn't exist yet so the reveal always succeeds — same `mkdir
+    /// -p` behavior `SessionCapture.init` does on the server side.
+    func revealCapturesFolder() {
+        let path = prefs.captureDirectory
+        try? FileManager.default.createDirectory(
+            atPath: path,
+            withIntermediateDirectories: true
+        )
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
     }
 }

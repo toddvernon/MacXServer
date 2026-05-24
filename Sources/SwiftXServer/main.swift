@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import Darwin
 import SwiftXServerCore
+import SwiftXCaptureCore
 
 // CLI for the M2/M3 server. Listens on :6000, accepts one client connection,
 // pops up real NSWindows for top-level X windows, and drives an AppKit
@@ -48,6 +49,10 @@ func primaryLocalIPv4() -> String? {
 
 var host = "0.0.0.0"
 var port: UInt16 = 6000
+// nil = use the Preferences value at startup. `--capture` sets true,
+// `--no-capture` sets false. Resolved into a concrete bool below once
+// the AppDelegate is built and prefs are readable.
+var captureOverride: Bool? = nil
 
 let args = Array(CommandLine.arguments.dropFirst())
 var i = 0
@@ -55,11 +60,15 @@ while i < args.count {
     switch args[i] {
     case "-h", "--help":
         print("""
-        usage: swiftx-server [--host HOST] [--port PORT]
+        usage: swiftx-server [--host HOST] [--port PORT] [--capture | --no-capture]
 
-        Listens for one X client connection on HOST:PORT (default 0.0.0.0:6000
+        Listens for X client connections on HOST:PORT (default 0.0.0.0:6000
         which is X DISPLAY :0). Top-level X windows become real NSWindows on
         the Mac with native chrome.
+
+        --capture / --no-capture override the Preferences toggle for this
+        process. When capture is on, every accepted client writes its own
+        .xtap to /tmp/swift-x-captures/ (configurable in Preferences).
         """)
         exit(0)
     case "--host":
@@ -72,6 +81,10 @@ while i < args.count {
             writeStderr("--port needs a uint16\n"); exit(2)
         }
         port = p
+    case "--capture":
+        captureOverride = true
+    case "--no-capture":
+        captureOverride = false
     default:
         writeStderr("unknown arg: \(args[i])\n")
         exit(2)
@@ -122,6 +135,24 @@ do {
 // the listener thread can pass it to runAccepting. The provider type is Sendable.
 let prefsProvider: ClipboardPreferencesProvider = appDelegate.sharedPreferences
 
+// Resolve capture state: CLI override wins, else Preferences value. The
+// resolved bool is fixed for this process's lifetime — toggling the
+// Preferences checkbox at runtime only affects newly-accepted sessions
+// after a server restart (documented in the Capture tab UI).
+let captureEnabled = captureOverride ?? appDelegate.preferences.captureSessions
+let captureDirectory = appDelegate.preferences.captureDirectory
+if captureEnabled {
+    writeStderr("capture: every client session will be written to \(captureDirectory)\n")
+}
+let captureSinkFactory: ((Int) -> CaptureSink?)? = captureEnabled ? { clientNumber in
+    do {
+        return try SessionCapture(sessionId: clientNumber, directory: captureDirectory)
+    } catch {
+        writeStderr("capture: failed to start session \(clientNumber) capture: \(error)\n")
+        return nil
+    }
+} : nil
+
 // Font mappings: seed ~/.swiftx-fonts on first run and load into the
 // FontResolver cache. Subsequent runs read the user's file; the
 // embedded seed only re-seeds via Revert to Defaults in the editor.
@@ -146,15 +177,18 @@ DispatchQueue.global(qos: .userInitiated).async {
             // Renamed to <wmInstance>-<timestamp>.log when WM_CLASS arrives.
             FileLogSink(sessionNumber: clientNumber)
         },
-        sessionDidStart: { session, clientNumber, sessionLog, _ in
-            // When the client identifies itself via WM_CLASS, retitle the
-            // log file from session-N-<ts>.log to <instance>-<ts>.log so
-            // we can tell at a glance which app produced which trace.
-            // (Capture-file renaming will hook the same callback in
-            // step 2b once --capture lands.)
+        captureSinkFactory: captureSinkFactory,
+        sessionDidStart: { session, clientNumber, sessionLog, captureSink in
+            // When the client identifies itself via WM_CLASS, retitle
+            // both the log file (session-N-<ts>.log → <instance>-<ts>.log)
+            // and the capture file (.in-progress-N.xtap → <ts>-<instance>.xtap)
+            // so the disk artifacts say what app produced them.
             session.onIdentified = { instance, _ in
                 if let fileSink = sessionLog as? FileLogSink {
                     fileSink.rename(toIdentified: instance)
+                }
+                if let sessionCapture = captureSink as? SessionCapture {
+                    sessionCapture.rename(toClientName: instance)
                 }
             }
         }
