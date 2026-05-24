@@ -1,6 +1,6 @@
 import SwiftUI
 
-// @main entry for the swiftx-capture .app bundle target in
+// @main entry for the MacXCapture .app bundle target in
 // MacXServer.xcodeproj. Mirrors what main.swift does for the SPM
 // executable when no args are given: hand the runloop to
 // SwiftXCaptureApp.

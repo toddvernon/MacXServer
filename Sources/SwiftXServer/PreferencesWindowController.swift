@@ -18,7 +18,7 @@ final class PreferencesWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        panel.title = "swiftx-server Preferences"
+        panel.title = "MacXServer Preferences"
         panel.contentView = hostingView
         panel.isReleasedWhenClosed = false
         panel.center()

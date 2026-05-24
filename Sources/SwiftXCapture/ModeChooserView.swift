@@ -18,7 +18,7 @@ struct ModeChooserView: View {
         VStack(alignment: .leading, spacing: 0) {
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("swift-x Capture")
+                Text("MacXCapture")
                     .font(.largeTitle)
                 Text("Choose what you want to do.")
                     .foregroundStyle(.secondary)

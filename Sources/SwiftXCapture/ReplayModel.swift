@@ -54,9 +54,11 @@ enum ReplayStatus: Equatable {
 @MainActor
 final class ReplayModel: ObservableObject {
 
-    // Inputs (persisted across launches).
-    @AppStorage("replay.targetHost") var targetHost: String = "localhost"
-    @AppStorage("replay.targetPort") var targetPort: Int = 6000
+    // Inputs (persisted across launches). UI talks in X display
+    // numbers (host:N) so the same convention reads end-to-end with
+    // the Record screen. The TCP port is derived (port = 6000 + N)
+    // at start() time when we hand off to ReplayEngine.
+    @AppStorage("replay.targetDisplay") var targetDisplay: String = "localhost:0"
     @AppStorage("replay.holdOpen") var holdOpen: Bool = true
     @AppStorage("replay.pacingRaw") private var pacingRaw: String = ReplayPacing.fast.rawValue
 
@@ -109,12 +111,8 @@ final class ReplayModel: ObservableObject {
             status = .failed("No capture file selected.")
             return
         }
-        guard targetPort > 0, targetPort < 65536 else {
-            status = .failed("Target port must be 1–65535.")
-            return
-        }
-        guard !targetHost.trimmingCharacters(in: .whitespaces).isEmpty else {
-            status = .failed("Target host must not be empty.")
+        guard let (targetHost, targetPort) = parseTargetDisplay(targetDisplay) else {
+            status = .failed("Target must be host:N (e.g., 192.168.7.5:0).")
             return
         }
 
@@ -180,5 +178,18 @@ final class ReplayModel: ObservableObject {
         totalFrames = p.totalFrames
         bytesSent = p.bytesSent
         bytesReceived = p.bytesReceived
+    }
+
+    /// "host:N" (display-number form) → (host, port = 6000 + N).
+    /// Nil on malformed input.
+    func parseTargetDisplay(_ s: String) -> (String, Int)? {
+        let trimmed = s.trimmingCharacters(in: .whitespaces)
+        guard let colon = trimmed.lastIndex(of: ":") else { return nil }
+        let host = String(trimmed[..<colon])
+        guard !host.isEmpty,
+              let display = Int(trimmed[trimmed.index(after: colon)...]),
+              display >= 0, display < 1000
+        else { return nil }
+        return (host, 6000 + display)
     }
 }

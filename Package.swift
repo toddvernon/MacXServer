@@ -10,8 +10,8 @@ let package = Package(
         .library(name: "Framer", targets: ["Framer"]),
         .library(name: "SwiftXCaptureCore", targets: ["SwiftXCaptureCore"]),
         .library(name: "SwiftXServerCore", targets: ["SwiftXServerCore"]),
-        .executable(name: "swiftx-capture", targets: ["SwiftXCapture"]),
-        .executable(name: "swiftx-server", targets: ["SwiftXServer"]),
+        .executable(name: "macxcapture", targets: ["SwiftXCapture"]),
+        .executable(name: "macxserver", targets: ["SwiftXServer"]),
     ],
     targets: [
         .target(name: "Framer"),

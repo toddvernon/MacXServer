@@ -1,7 +1,7 @@
 import Foundation
 
 // Per-session log sink. Writes every line to a file under
-// `~/Library/Logs/swiftx-server/`, *and* mirrors to stderr so the running
+// `~/Library/Logs/macxserver/`, *and* mirrors to stderr so the running
 // terminal still has the trace. Each accepted connection gets its own sink
 // (and its own file) — when WM_CLASS arrives the listener calls `rename`
 // to retitle the file from a tentative `session-N-<timestamp>.log` to a
@@ -94,7 +94,7 @@ public final class FileLogSink: ServerLogSink, @unchecked Sendable {
         // worries, easy to clean with rm -rf, easy to point an editor at.
         // Console.app won't index here automatically; that's fine since the
         // primary consumer is `tail -F` from a terminal.
-        URL(fileURLWithPath: "/tmp/swiftx-server", isDirectory: true)
+        URL(fileURLWithPath: "/tmp/macxserver", isDirectory: true)
     }
 
     private static func formatTimestamp(_ date: Date) -> String {

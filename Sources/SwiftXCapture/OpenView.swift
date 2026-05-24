@@ -41,30 +41,33 @@ private struct HeaderBar: View {
     @ObservedObject var model: OpenModel
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .top, spacing: 16) {
+            BackToMenuButton(from: .open)
             Image(systemName: "doc.text.magnifyingglass")
-                .font(.system(size: 28, weight: .regular))
+                .font(.system(size: 36, weight: .regular))
                 .foregroundStyle(.tint)
+                .frame(width: 50)
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.summary?.filename ?? "No capture loaded")
-                    .font(.headline)
+                Text("Open").font(.largeTitle)
                 if let s = model.summary {
-                    Text("\(s.frameCount) frames · \(s.durationDescription) · "
+                    Text("\(s.filename) · \(s.frameCount) frames · \(s.durationDescription) · "
                          + "\(formatBytes(s.totalBytesC2S)) in / \(formatBytes(s.totalBytesS2C)) out")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
                 } else {
-                    Text("Pick a .xtap to inspect.")
+                    Text("Browse a .xtap. Inspect requests, replies, events.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer()
             Button("Open\u{2026}") { model.chooseFileAndOpen() }
                 .keyboardShortcut("o", modifiers: .command)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(20)
     }
 }
 

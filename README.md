@@ -55,7 +55,7 @@ Start it listening on the default X display port (6000 → display
 `:0`):
 
 ```
-.build/release/swiftx-server
+.build/release/macxserver
 ```
 
 Status menu appears in the menu bar with the listen address and a
@@ -71,7 +71,7 @@ xterm -display <mac-ip>:0
 ### Capture, GUI
 
 ```
-.build/release/swiftx-capture
+.build/release/macxcapture
 ```
 
 Launches a chooser with three modes (Record / Open / Replay).
@@ -88,34 +88,34 @@ behaviour even with empty args.
 ```
 # proxy two real X endpoints
 # (./run.sh + connection.json also still works)
-.build/release/swiftx-capture \
+.build/release/macxcapture \
     --listen :6001 \
     --forward sun-b.lan:6000 \
     --output session.xtap
 
 # decoded chronological dump
-.build/release/swiftx-capture dump captures/xterm_long.xtap
+.build/release/macxcapture dump captures/xterm_long.xtap
 
 # aggregate per-opcode summary
-.build/release/swiftx-capture summary captures/quickplot.xtap
+.build/release/macxcapture summary captures/quickplot.xtap
 
 # byte-pump replay into a target server
-.build/release/swiftx-capture replay captures/xterm_long.xtap \
+.build/release/macxcapture replay captures/xterm_long.xtap \
     --target localhost:6000
 ```
 
 `./run-capture.sh` is a build-and-run wrapper that reads
 `connection.json` (`listen` / `forward` / `output`) for proxy
 mode and passes any other args straight through to
-`swiftx-capture`. `./run-server.sh` does the same for the
-server. `./run-all.sh` starts swiftx-server + a proxy capture
+`macxcapture`. `./run-server.sh` does the same for the
+server. `./run-all.sh` starts macxserver + a proxy capture
 forwarding into it — used for "capture what swiftx itself
 produces" diffing against gold Sun captures.
 
 ### Server-side capture
 
 ```
-.build/release/swiftx-server --capture
+.build/release/macxserver --capture
 ```
 
 Every X client connecting to the server gets its own `.xtap` file

@@ -3,7 +3,7 @@ import AppKit
 import SwiftUI
 import SwiftXCaptureCore
 
-// `swiftx-capture` carries both faces: a CLI for the v1 corpus-
+// `macxcapture` carries both faces: a CLI for the v1 corpus-
 // capture workflow (proxy / dump / summary / diff / replay) and a
 // SwiftUI app for the v2 hobbyist-facing experience. The GUI is
 // the default; the CLI is opted into.
@@ -55,7 +55,7 @@ func writeStderr(_ s: String) {
 if args.first == "dump" {
     let rest = Array(args.dropFirst())
     guard rest.count == 1 else {
-        writeStderr("usage: swiftx-capture dump <path-to-xtap>\n")
+        writeStderr("usage: macxcapture dump <path-to-xtap>\n")
         exit(2)
     }
     do {
@@ -71,7 +71,7 @@ if args.first == "dump" {
 if args.first == "summary" {
     let rest = Array(args.dropFirst())
     guard rest.count == 1 else {
-        writeStderr("usage: swiftx-capture summary <path-to-xtap>\n")
+        writeStderr("usage: macxcapture summary <path-to-xtap>\n")
         exit(2)
     }
     do {

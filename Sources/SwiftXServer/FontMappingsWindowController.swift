@@ -17,7 +17,7 @@ final class FontMappingsWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        panel.title = "swiftx-server Font Mappings"
+        panel.title = "MacXServer Font Mappings"
         panel.contentView = hostingView
         panel.isReleasedWhenClosed = false
         panel.minSize = NSSize(width: 580, height: 380)

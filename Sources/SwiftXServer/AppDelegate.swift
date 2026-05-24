@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// e.g. "Listening on :6000 (display :0)". main.swift sets this once
     /// the listener has bound; we copy it into the menu when the menu is
     /// next built.
-    var listenerStatus: String = "swiftx-server" {
+    var listenerStatus: String = "MacXServer" {
         didSet { updateStatusMenu() }
     }
 
@@ -58,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(systemSymbolName: "display",
-                                     accessibilityDescription: "swiftx-server")
+                                     accessibilityDescription: "MacXServer")
         item.button?.image?.isTemplate = true
         statusItem = item
         updateStatusMenu()
@@ -97,7 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // App menu (the bold one, always titled with the process name).
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(NSMenuItem(title: "About swiftx-server",
+        appMenu.addItem(NSMenuItem(title: "About MacXServer",
                                    action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                                    keyEquivalent: ""))
         appMenu.addItem(.separator())
@@ -137,7 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(discardCaptures)
 
         appMenu.addItem(.separator())
-        appMenu.addItem(NSMenuItem(title: "Hide swiftx-server",
+        appMenu.addItem(NSMenuItem(title: "Hide MacXServer",
                                    action: #selector(NSApplication.hide(_:)),
                                    keyEquivalent: "h"))
         let hideOthers = NSMenuItem(title: "Hide Others",
@@ -149,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                    action: #selector(NSApplication.unhideAllApplications(_:)),
                                    keyEquivalent: ""))
         appMenu.addItem(.separator())
-        appMenu.addItem(NSMenuItem(title: "Quit swiftx-server",
+        appMenu.addItem(NSMenuItem(title: "Quit MacXServer",
                                    action: #selector(NSApplication.terminate(_:)),
                                    keyEquivalent: "q"))
         appMenuItem.submenu = appMenu

@@ -72,8 +72,8 @@ public final class SessionCapture: CaptureSink, @unchecked Sendable {
         // tee-source phrasing.
         self.recorder = try Recorder(
             outputPath: inProgressPath,
-            listen: "swiftx-server (in-process tee)",
-            forward: "swiftx-server (in-process tee)"
+            listen: "MacXServer (in-process tee)",
+            forward: "MacXServer (in-process tee)"
         )
     }
 

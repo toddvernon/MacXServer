@@ -35,9 +35,15 @@ final class RecordModel: ObservableObject {
 
     // MARK: - User-editable inputs (persisted)
 
-    @AppStorage("record.listenPort") var listenPort: Int = 6001
-    @AppStorage("record.forwardTarget") var forwardTarget: String = ""
+    // The whole UI talks in X display numbers (:0, :1, ...) — port
+    // numbers are an implementation detail (port = 6000 + display).
+    // Storage matches the UI so there's only one convention to track.
+    @AppStorage("record.listenDisplay") var listenDisplay: Int = 0
+    @AppStorage("record.forwardDisplay") var forwardDisplay: String = ""  // "host:N"
     @AppStorage("record.outputDirectory") var outputDirectory: String = ""
+
+    /// TCP port the proxy actually binds to. Always 6000 + display.
+    var listenPort: Int { 6000 + listenDisplay }
 
     // MARK: - Observed state
 
@@ -65,13 +71,13 @@ final class RecordModel: ObservableObject {
     func start() {
         guard !status.isRunning else { return }
 
-        let parsed = parseForwardTarget(forwardTarget)
+        let parsed = parseForwardDisplay(forwardDisplay)
         guard let (forwardHost, forwardPort) = parsed else {
-            status = .failed("Forward target must be host:port (e.g., sun-b.lan:6000).")
+            status = .failed("Forward target must be host:N (e.g., sun-b.lan:0).")
             return
         }
-        guard listenPort > 0 else {
-            status = .failed("Listen port must be > 0.")
+        guard listenDisplay >= 0, listenDisplay < 1000 else {
+            status = .failed("Listen display must be 0 or higher.")
             return
         }
 
@@ -178,20 +184,21 @@ final class RecordModel: ObservableObject {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
-        let filename = "swiftx-capture-\(f.string(from: Date())).xtap"
+        let filename = "macxcapture-\(f.string(from: Date())).xtap"
         return (outputDirectory as NSString).appendingPathComponent(filename)
     }
 
-    /// "host:port" → (host, port). Returns nil on malformed input.
-    private func parseForwardTarget(_ s: String) -> (String, Int)? {
+    /// "host:N" (display-number form) → (host, port = 6000 + N).
+    /// Returns nil on malformed input.
+    private func parseForwardDisplay(_ s: String) -> (String, Int)? {
         let trimmed = s.trimmingCharacters(in: .whitespaces)
         guard let colon = trimmed.lastIndex(of: ":") else { return nil }
         let host = String(trimmed[..<colon])
         guard !host.isEmpty,
-              let port = Int(trimmed[trimmed.index(after: colon)...]),
-              port > 0, port < 65536
+              let display = Int(trimmed[trimmed.index(after: colon)...]),
+              display >= 0, display < 1000
         else { return nil }
-        return (host, port)
+        return (host, 6000 + display)
     }
 
     // MARK: - Polling

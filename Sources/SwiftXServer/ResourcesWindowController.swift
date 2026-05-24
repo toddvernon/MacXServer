@@ -20,7 +20,7 @@ final class ResourcesWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        panel.title = "swiftx-server Resources"
+        panel.title = "MacXServer Resources"
         panel.contentView = hostingView
         panel.isReleasedWhenClosed = false
         panel.minSize = NSSize(width: 580, height: 420)

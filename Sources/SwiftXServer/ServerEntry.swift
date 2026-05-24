@@ -4,9 +4,9 @@ import Darwin
 import SwiftXServerCore
 import SwiftXCaptureCore
 
-// Callable entry point for swiftx-server. The body that previously
+// Callable entry point for macxserver. The body that previously
 // lived as top-level code in main.swift moved here so both the SPM
-// `swiftx-capture` executable target and an Xcode `.app` bundle's
+// `macxserver` executable target and an Xcode `.app` bundle's
 // `@main` wrapper can call into the same setup. Behaviour is
 // unchanged: parse CLI args, build the NSApplication + listener,
 // run the AppKit runloop until quit.
@@ -85,7 +85,7 @@ enum ServerEntry {
             switch args[i] {
             case "-h", "--help":
                 print("""
-                usage: swiftx-server [--host HOST] [--port PORT] [--capture | --no-capture]
+                usage: macxserver [--host HOST] [--port PORT] [--capture | --no-capture]
 
                 Listens for X client connections on HOST:PORT (default 0.0.0.0:6000
                 which is X DISPLAY :0). Top-level X windows become real NSWindows on
@@ -146,7 +146,7 @@ enum ServerEntry {
             let advertisedHost = isWildcard ? (primaryLocalIPv4() ?? host) : host
             let displayLabel = "Listening on \(advertisedHost):\(actual) — X display :\(display)"
             appDelegate.listenerStatus = displayLabel
-            writeStderr("swiftx-server \(displayLabel)\n")
+            writeStderr("macxserver \(displayLabel)\n")
             writeStderr("display: native \(displayConfig.nativePixelWidth)×\(displayConfig.nativePixelHeight)px → ")
             writeStderr("X-logical \(displayConfig.logicalWidth)×\(displayConfig.logicalHeight) at \(displayConfig.scale)x ")
             writeStderr("(\(displayConfig.deviceWidth)×\(displayConfig.deviceHeight) device px), ~90 DPI\n")
@@ -191,7 +191,7 @@ enum ServerEntry {
 
         // Run the listener on a background thread so the main thread can drive AppKit.
         // runAccepting loops accepting connections; each accept spawns a dedicated
-        // read+write thread pair. Quit via Cmd-Q (or `pkill swiftx-server`).
+        // read+write thread pair. Quit via Cmd-Q (or `pkill macxserver`).
         DispatchQueue.global(qos: .userInitiated).async {
             listener.runAccepting(
                 template: serverConfig,
@@ -199,7 +199,7 @@ enum ServerEntry {
                 coordinator: coordinator,
                 clipboardPrefs: prefsProvider,
                 sessionLogFactory: { clientNumber in
-                    // One file per connection in ~/Library/Logs/swiftx-server/.
+                    // One file per connection in ~/Library/Logs/macxserver/.
                     // Renamed to <wmInstance>-<timestamp>.log when WM_CLASS arrives.
                     FileLogSink(sessionNumber: clientNumber)
                 },

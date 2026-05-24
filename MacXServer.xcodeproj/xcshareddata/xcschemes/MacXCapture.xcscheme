@@ -15,9 +15,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "546BFCEF2A12508060CA0FAF"
-               BuildableName = "swiftx-capture.app"
-               BlueprintName = "swiftx-capture"
+               BlueprintIdentifier = "64235F5DAF8D5F41750949B0"
+               BuildableName = "MacXCapture.app"
+               BlueprintName = "MacXCapture"
                ReferencedContainer = "container:MacXServer.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -32,9 +32,9 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "546BFCEF2A12508060CA0FAF"
-            BuildableName = "swiftx-capture.app"
-            BlueprintName = "swiftx-capture"
+            BlueprintIdentifier = "64235F5DAF8D5F41750949B0"
+            BuildableName = "MacXCapture.app"
+            BlueprintName = "MacXCapture"
             ReferencedContainer = "container:MacXServer.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
@@ -55,9 +55,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "546BFCEF2A12508060CA0FAF"
-            BuildableName = "swiftx-capture.app"
-            BlueprintName = "swiftx-capture"
+            BlueprintIdentifier = "64235F5DAF8D5F41750949B0"
+            BuildableName = "MacXCapture.app"
+            BlueprintName = "MacXCapture"
             ReferencedContainer = "container:MacXServer.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -74,9 +74,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "546BFCEF2A12508060CA0FAF"
-            BuildableName = "swiftx-capture.app"
-            BlueprintName = "swiftx-capture"
+            BlueprintIdentifier = "64235F5DAF8D5F41750949B0"
+            BuildableName = "MacXCapture.app"
+            BlueprintName = "MacXCapture"
             ReferencedContainer = "container:MacXServer.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

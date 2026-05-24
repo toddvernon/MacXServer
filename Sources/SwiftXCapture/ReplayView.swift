@@ -14,6 +14,7 @@ struct ReplayView: View {
 
             // Header
             HStack(alignment: .top, spacing: 16) {
+                BackToMenuButton(from: .replay, disabled: model.status.isRunning)
                 Image(systemName: "play.circle")
                     .font(.system(size: 36, weight: .regular))
                     .foregroundStyle(.tint)
@@ -46,18 +47,20 @@ struct ReplayView: View {
                 }
 
                 LabeledField("Target") {
-                    HStack(spacing: 6) {
-                        TextField("host", text: $model.targetHost)
+                    VStack(alignment: .leading, spacing: 4) {
+                        TextField("host:N (e.g., localhost:0)",
+                                  text: $model.targetDisplay)
                             .textFieldStyle(.roundedBorder)
                             .disabled(model.status.isRunning)
-                        Text(":")
-                            .foregroundStyle(.secondary)
-                        TextField("port",
-                                  value: $model.targetPort,
-                                  format: .number.grouping(.never))
-                            .textFieldStyle(.roundedBorder)
-                            .disabled(model.status.isRunning)
-                            .frame(maxWidth: 80)
+                        if let (host, port) = parsedTarget {
+                            Text("(TCP port \(port) on \(host))")
+                                .font(.callout)
+                                .foregroundStyle(.tertiary)
+                        } else {
+                            Text("Format: hostname:display-number")
+                                .font(.callout)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                 }
 
@@ -138,6 +141,13 @@ struct ReplayView: View {
     private var progressFraction: Double {
         guard model.totalFrames > 0 else { return 0 }
         return Double(model.framesSent) / Double(model.totalFrames)
+    }
+
+    /// Decompose model.targetDisplay for the helper-text hint under
+    /// the Target field. nil while the user is in the middle of
+    /// typing something unparseable.
+    private var parsedTarget: (host: String, port: Int)? {
+        model.parseTargetDisplay(model.targetDisplay)
     }
 }
 

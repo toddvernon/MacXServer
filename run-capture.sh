@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build + run swiftx-capture. Behavior depends on arguments:
+# Build + run macxcapture. Behavior depends on arguments:
 #
 #   ./run-capture.sh                        # CLI proxy mode using connection.json
 #   ./run-capture.sh dump <path.xtap>       # decoded chronological dump
@@ -10,7 +10,7 @@
 #
 # No-args runs proxy capture from connection.json (this script's
 # convenience behaviour). To launch the GUI instead, run the binary
-# directly: `.build/release/swiftx-capture` with no args — the GUI
+# directly: `.build/release/macxcapture` with no args — the GUI
 # is the binary's default when launched bare.
 #
 # connection.json shape:
@@ -24,11 +24,11 @@ cd "$(dirname "$0")"
 
 swift build -c release
 
-# Pass-through: any args land directly on swiftx-capture, which
+# Pass-through: any args land directly on macxcapture, which
 # dispatches to the right subcommand (dump / replay / etc.) or to
 # the GUI (--gui).
 if [ $# -gt 0 ]; then
-    exec .build/release/swiftx-capture "$@"
+    exec .build/release/macxcapture "$@"
 fi
 
 # No args: proxy capture from connection.json.
@@ -51,7 +51,7 @@ LISTEN=$(read_json "$CONFIG" listen)
 FORWARD=$(read_json "$CONFIG" forward)
 OUTPUT=$(read_json "$CONFIG" output)
 
-exec .build/release/swiftx-capture \
+exec .build/release/macxcapture \
     --listen  "$LISTEN" \
     --forward "$FORWARD" \
     --output  "$OUTPUT"

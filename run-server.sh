@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build + run swiftx-server. Listens on the default X display port
+# Build + run macxserver. Listens on the default X display port
 # (6000 = display :0) and lets X clients connect.
 #
 # Args pass through to the server. Common ones:
@@ -16,4 +16,4 @@ cd "$(dirname "$0")"
 
 swift build -c release
 
-exec .build/release/swiftx-server "$@"
+exec .build/release/macxserver "$@"

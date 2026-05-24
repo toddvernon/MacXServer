@@ -2,7 +2,7 @@ import Foundation
 
 // CaptureSink decouples "what consumes wire bytes" from "what writes a
 // `.xtap` file from a proxy session." Recorder is one implementation
-// (the proxy/CLI path); swiftx-server's per-session capture queue will
+// (the proxy/CLI path); macxserver's per-session capture queue will
 // be another.
 //
 // The protocol intentionally matches the existing Recorder's API

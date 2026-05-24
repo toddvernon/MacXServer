@@ -1,8 +1,8 @@
 import SwiftUI
 import AppKit
 
-// SwiftUI capture app — the GUI face of the `swiftx-capture` binary,
-// sharing the SwiftXCaptureCore library with `swiftx-server`'s
+// SwiftUI capture app — the GUI face of the `macxcapture` binary,
+// sharing the SwiftXCaptureCore library with `macxserver`'s
 // server-side capture path. Three modes: Record (proxy capture),
 // Open (browse a `.xtap`), Replay (pipe a `.xtap` into a server).
 //
@@ -21,22 +21,22 @@ struct SwiftXCaptureApp: App {
 
         // The launch window. SwiftUI opens the first scene's first
         // window automatically on app start.
-        Window("Capture Mode", id: WindowID.modeChooser.rawValue) {
+        Window("MacXCapture", id: WindowID.modeChooser.rawValue) {
             ModeChooserView()
         }
         .windowResizability(.contentSize)
         .defaultPosition(.center)
 
-        // One singleton window per mode. Opening from the chooser uses
-        // OpenWindowAction; closing returns the user to whatever was
-        // already on screen (typically nothing, prompting a relaunch
-        // or chooser reopen).
+        // One singleton window per mode. Each mode view shows a Menu
+        // back-button that dismisses itself and reopens the chooser,
+        // so the chooser acts like a hub the user can always return
+        // to without relaunching.
         Window("Record", id: WindowID.record.rawValue) {
             RecordView()
         }
         .windowResizability(.contentSize)
 
-        Window("Open Capture", id: WindowID.open.rawValue) {
+        Window("Open", id: WindowID.open.rawValue) {
             OpenView()
         }
         .windowResizability(.contentSize)
@@ -45,6 +45,39 @@ struct SwiftXCaptureApp: App {
             ReplayView()
         }
         .windowResizability(.contentSize)
+    }
+}
+
+/// Top-left button shown on every mode view. Tapping closes the
+/// current window and reopens the chooser, so the user can switch
+/// modes without relaunching. Disabled-state lets callers block the
+/// return path while a session is running (would silently drop a
+/// live capture / replay).
+struct BackToMenuButton: View {
+    let fromWindow: WindowID
+    var disabled: Bool = false
+
+    init(from window: WindowID, disabled: Bool = false) {
+        self.fromWindow = window
+        self.disabled = disabled
+    }
+
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+
+    var body: some View {
+        Button {
+            openWindow(id: WindowID.modeChooser.rawValue)
+            dismissWindow(id: fromWindow.rawValue)
+        } label: {
+            Label("Menu", systemImage: "chevron.left")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(disabled)
+        .help(disabled
+              ? "Stop the current session before switching modes"
+              : "Back to the mode chooser")
     }
 }
 
@@ -58,7 +91,7 @@ enum WindowID: String {
 }
 
 /// Bring the app to the foreground on launch. Without this, a
-/// terminal-launched swiftx-capture creates its window behind the
+/// terminal-launched macxcapture creates its window behind the
 /// terminal that ran it — the user sees no GUI and assumes the
 /// app is broken.
 final class CaptureAppDelegate: NSObject, NSApplicationDelegate {

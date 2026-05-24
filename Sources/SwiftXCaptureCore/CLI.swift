@@ -35,10 +35,10 @@ public enum CLIError: Error, Equatable, Sendable {
 
 public enum CLI {
     public static let usage = """
-    swiftx-capture --listen <[host:]port> --forward <host:port> --output <path>
-    swiftx-capture dump <path-to-xtap>
-    swiftx-capture diff <a.xtap> <b.xtap> [--only-different]
-    swiftx-capture replay <path-to-xtap> [--target <host:port>]
+    macxcapture --listen <[host:]port> --forward <host:port> --output <path>
+    macxcapture dump <path-to-xtap>
+    macxcapture diff <a.xtap> <b.xtap> [--only-different]
+    macxcapture replay <path-to-xtap> [--target <host:port>]
 
       --listen <[host:]port>    Address to listen for X clients on
       --forward <host:port>     Address of the upstream X server
