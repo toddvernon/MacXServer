@@ -96,7 +96,7 @@ do {
         listenPort: parsed.listenPort,
         forwardHost: parsed.forwardHost,
         forwardPort: parsed.forwardPort,
-        recorder: recorder
+        sink: recorder
     )
 
     let actualPort = try proxy.start()

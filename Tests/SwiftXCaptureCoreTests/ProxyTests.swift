@@ -43,7 +43,7 @@ final class ProxyTests: XCTestCase {
             listenPort: 0,
             forwardHost: "127.0.0.1",
             forwardPort: serverPort,
-            recorder: recorder
+            sink: recorder
         )
         let proxyPort = try proxy.start()
         let proxyDone = DispatchSemaphore(value: 0)
@@ -89,7 +89,7 @@ final class ProxyTests: XCTestCase {
             listenPort: 0,
             forwardHost: "127.0.0.1",
             forwardPort: 1,
-            recorder: nil
+            sink: nil
         )
         let port = try proxy.start()
         defer { proxy.stop() }

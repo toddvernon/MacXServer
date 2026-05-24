@@ -18,7 +18,7 @@ public final class Proxy: @unchecked Sendable {
     public let listenPort: UInt16
     public let forwardHost: String
     public let forwardPort: UInt16
-    private let recorder: Recorder?
+    private let sink: CaptureSink?
 
     private var listenFd: Int32 = -1
 
@@ -27,13 +27,13 @@ public final class Proxy: @unchecked Sendable {
         listenPort: UInt16,
         forwardHost: String,
         forwardPort: UInt16,
-        recorder: Recorder?
+        sink: CaptureSink?
     ) {
         self.listenHost = listenHost
         self.listenPort = listenPort
         self.forwardHost = forwardHost
         self.forwardPort = forwardPort
-        self.recorder = recorder
+        self.sink = sink
     }
 
     public func start() throws -> UInt16 {
@@ -95,7 +95,7 @@ public final class Proxy: @unchecked Sendable {
             }
             if n <= 0 { return }
             let chunk = Array(buf[0..<n])
-            recorder?.record(direction: direction, bytes: chunk)
+            sink?.record(direction: direction, bytes: chunk)
 
             var written = 0
             while written < chunk.count {

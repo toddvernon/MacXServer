@@ -5,7 +5,7 @@ public enum RecorderError: Error, Sendable, Equatable {
     case writeFailed
 }
 
-public final class Recorder: @unchecked Sendable {
+public final class Recorder: CaptureSink, @unchecked Sendable {
     private let lock = NSLock()
     private let outputPath: String
     private let listenDescription: String
