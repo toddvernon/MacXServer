@@ -2085,10 +2085,18 @@ public final class ServerSession: @unchecked Sendable {
             // Portion this ancestor currently owns.
             let portion = remaining.intersected(with: entry.clipList)
             if !portion.isEmpty {
-                // Paint this ancestor's bg over its portion. Paint rects
-                // are in top-level coords (matching paintWindowRects's
-                // existing convention).
-                let bg = windowBackground(currentId, byteOrder: byteOrder)
+                // Effective bg color: if THIS ancestor has an explicit
+                // backPixel, use it. Otherwise walk further up for the
+                // first ancestor that does. Matches X spec
+                // ParentRelative-pixmap semantics — `backPixmap = None
+                // or ParentRelative` (i.e., our nil backPixel) inherits
+                // from the parent's effective bg. Without this, ancestors
+                // with no explicit bg fall back to WHITE in
+                // windowBackground, which paints white rectangles in
+                // gray panel territory and looks like artifacts. Motif
+                // containers (SW, Frame, Manager) frequently have no
+                // explicit CWBackPixel.
+                let bg = effectiveAncestorBg(from: currentId, byteOrder: byteOrder)
                 let paintRects: [WindowBackgroundRect] = portion.rects.map {
                     WindowBackgroundRect(
                         x: Int16(clamping: $0.x1), y: Int16(clamping: $0.y1),
@@ -2476,6 +2484,35 @@ public final class ServerSession: @unchecked Sendable {
         }
         if let pixel = w.backPixel {
             return resolveColor(pixel)
+        }
+        return RGB16(red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF)
+    }
+
+    /// Walk up the parent chain starting from `windowId` (inclusive) looking
+    /// for the first window with an explicit `backPixel`. Returns that
+    /// window's resolved color, or white if no ancestor has bg set (rare —
+    /// top-level usually does). Matches X spec ParentRelative-pixmap
+    /// semantics for windows whose own bg is unset or ParentRelative —
+    /// the effective bg color cascades up the parent chain.
+    ///
+    /// Used by the ancestor walk in `repaintParentOverUncovered` so that
+    /// when we paint "this ancestor's bg," we use the right color even if
+    /// the ancestor itself doesn't carry one. Without this fallback, Motif
+    /// containers without explicit CWBackPixel get the white-fallback
+    /// from `windowBackground` and we paint white rectangles in places
+    /// that should have inherited the parent's panel bg.
+    private func effectiveAncestorBg(from windowId: UInt32, byteOrder: ByteOrder) -> RGB16 {
+        var current = windowId
+        let rootId = config.rootWindowId
+        for _ in 0..<64 {
+            guard let entry = windows.get(current) else { break }
+            if entry.backPixel != nil {
+                return windowBackground(current, byteOrder: byteOrder)
+            }
+            if entry.parent == rootId || entry.parent == current {
+                break
+            }
+            current = entry.parent
         }
         return RGB16(red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF)
     }
