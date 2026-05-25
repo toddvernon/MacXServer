@@ -1704,6 +1704,25 @@ public final class ServerSession: @unchecked Sendable {
     /// ConfigureWindow on its drawing-target descendant; that in turn
     /// triggers the descendant Expose path in `dispatch`.
     public func handleTopLevelResize(id: UInt32, width: UInt16, height: UInt16) {
+        // Snapshot pre-resize clipLists for the WHOLE subtree before any
+        // mutation so the post-recompute delta cascade can paint+Expose
+        // only descendants whose clipList actually CHANGED. Without this
+        // we over-emit Expose to every mapped descendant — and for any
+        // descendant whose draw path is PolyText (no bg fill, e.g. Motif
+        // XmLabel for "Symbols spacing" in quickplot's Lines dialog), the
+        // toolkit re-draws on top of stale pixels every resize, producing
+        // visible overstrike. 2026-05-25.
+        var preResizeClipLists: [UInt32: Region] = [:]
+        do {
+            var stack: [UInt32] = [id]
+            while let next = stack.popLast() {
+                for (childId, w) in windows.windows where w.parent == next && w.mapped {
+                    preResizeClipLists[childId] = w.clipList
+                    stack.append(childId)
+                }
+            }
+        }
+
         guard let result = windows.resize(id, width: width, height: height, x: nil, y: nil) else { return }
         let (old, new) = result
         guard old.width != new.width || old.height != new.height else { return }
@@ -1757,18 +1776,46 @@ public final class ServerSession: @unchecked Sendable {
 
         emitVisibilityChanges(forTopLevel: id)
 
-        // The outer's resize means descendants' visible region changed
-        // too. The bitmap was reallocated and bg-painted (no preserved
-        // content for now — see SHORTCUTS "NSWindow resize discards
-        // prior pixels"), so each descendant's full visible region needs
-        // a redraw signal. Step E2: emit Expose per clipList rect in
-        // window-local coords; fully-covered descendants emit nothing.
+        // Delta cascade: for each mapped descendant, compare its pre-
+        // resize clipList against its post-recompute clipList. Paint+
+        // Expose only the area that's NEWLY VISIBLE (new - old). Skip
+        // descendants whose visible region didn't change — the NW
+        // gravity blit in FlippedXView preserves their pixels, and a
+        // gratuitous Expose triggers PolyText-based widgets (XmLabel,
+        // XmCascadeButton) to redraw text on top of itself, leaving
+        // overstrike. This is what the broad mappedDescendantSnapshots
+        // walk used to do; the delta-cascade replaces it with the
+        // miSlideAndSizeWindow valdata->after equivalent.
         let exposureMask: UInt32 = 1 << 15
-        for descendant in mappedDescendantSnapshots(of: id) {
-            guard descendant.eventMask & exposureMask != 0 else { continue }
-            log?.log("  → emit Expose on descendant 0x\(String(descendant.id, radix: 16)) (\(descendant.exposeRects.count) rect(s))")
+        for (descId, oldClip) in preResizeClipLists {
+            guard let entry = windows.get(descId) else { continue }
+            guard let (_, dx, dy) = topLevelAndOffset(for: descId) else { continue }
+            let grew = entry.clipList.subtracting(oldClip)
+            if grew.isEmpty { continue }
+            // Paint bg over the newly-claimed area in top-level coords.
+            let bg = effectiveAncestorBg(from: descId, byteOrder: order)
+            let paintRects = grew.rects.map {
+                WindowBackgroundRect(
+                    x: Int16(clamping: $0.x1), y: Int16(clamping: $0.y1),
+                    width: UInt16(clamping: $0.x2 - $0.x1),
+                    height: UInt16(clamping: $0.y2 - $0.y1),
+                    color: bg
+                )
+            }
+            if !paintRects.isEmpty {
+                bridge?.paintWindowRects(topLevel: id, rects: paintRects)
+            }
+            // Expose for the grown area in window-local coords.
+            guard entry.eventMask & exposureMask != 0 else { continue }
+            let localRects = grew.rects.map {
+                BoxRec(
+                    x1: $0.x1 - Int32(dx), y1: $0.y1 - Int32(dy),
+                    x2: $0.x2 - Int32(dx), y2: $0.y2 - Int32(dy)
+                )
+            }
+            log?.log("  → emit Expose on descendant 0x\(String(descId, radix: 16)) (\(localRects.count) rect(s), delta-only)")
             MockWindowBridge.emitExposesForRects(
-                window: descendant.id, rects: descendant.exposeRects,
+                window: descId, rects: localRects,
                 byteOrder: order, sequence: sequenceNumber, outbound: outbound
             )
         }
