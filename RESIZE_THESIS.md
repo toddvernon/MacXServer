@@ -403,3 +403,138 @@ single paintRectsForWindow). The lighter-than-expected delta is because
 the bigger surgery the thesis envisioned (per-window bit_gravity, etc.)
 was always work we DIDN'T have to do; the actual code change is just
 stopping one cascade.
+
+---
+
+## 2026-05-25 post-ship: the small gray rectangles + the right fix path
+
+After the strip landed, Todd tested broadly. Most things were fine,
+with one remaining cosmetic: small gray rectangles in a few resize-
+grow scenarios (most visible on dtpad's scrollbar corners; similar
+on quickplot's scrolled history above the command line).
+
+Initial attempt was to tighten `repaintParentOverUncovered` by
+intersecting `uncovered` with the parent's current clipList — the
+intuition being that we shouldn't paint the parent's bg color in
+pixels the parent no longer covers. **That made things worse.**
+Stale preserved chrome bits showed through where the unclipped paint
+had been covering them — dtpad's gray rectangles became "rectangles
+with rendered arrow tips visible," xcalc got a black bg flash in
+button areas mid-resize, dtcalc got menu-title double-draw artifacts.
+Reverted in `ac667a3`.
+
+### What this taught us
+
+The "small gray rectangles" aren't a clip-region bug to be fixed —
+they're a SYMPTOM of the gap in our cascade vs the real X11R6
+miSlideAndSizeWindow cascade. Specifically:
+
+When widget A moves a long way, the pixels at A's old position are
+**not the parent's territory anymore** — the parent moved or the
+clipLists shifted such that some other ancestor (grandparent, top-
+level) or sibling now owns those pixels. The CORRECT bg to paint
+there is whichever window's clipList NOW covers those pixels.
+
+Our current `repaintParentOverUncovered` always uses the immediate
+parent's bg, regardless of whether the parent still occupies that
+area. That's:
+- Visually OK when the parent's bg is similar to whoever truly owns
+  the pixels now (e.g., Form bg matches SW bg)
+- Visually wrong by a small color delta when bgs differ (the gray
+  rectangles)
+
+Real X11R6 gets this right because `miSlideAndSizeWindow` cascades
+through every gravity bucket and every ancestor whose clipList grew.
+Each ancestor's bg-paint and Expose are emitted for the portion of
+the vacated region that ancestor now owns. We collapsed that cascade
+into "immediate parent paints the entire uncovered region" — correct
+most of the time, slightly wrong at the edges where the immediate
+parent doesn't actually cover the vacated pixels anymore.
+
+### The proper fix: ancestor-chain walk in repaintParentOverUncovered
+
+The X-spec-faithful version of this function:
+
+```
+func repaintAncestorsOverUncovered(uncovered: Region, startParent: UInt32):
+    var remaining = uncovered
+    var current = startParent
+    while !remaining.isEmpty {
+        guard let ancestor = windows.get(current) else { return }
+        let portion = remaining.intersected(with: ancestor.clipList)
+        if !portion.isEmpty {
+            // Paint THIS ancestor's bg over its portion of the vacated region.
+            paintWindowRectsFor(window: ancestor, region: portion)
+            // Emit Expose to this ancestor (if it has ExposureMask).
+            emitExposeFor(window: ancestor, region: portion)
+            // Subtract — those pixels are claimed by this ancestor.
+            remaining = remaining.subtracting(portion)
+        }
+        // Walk up.
+        if ancestor.parent == config.rootWindowId || ancestor.parent == current {
+            break
+        }
+        current = ancestor.parent
+    }
+```
+
+The loop's invariant: `remaining` is the portion of the originally
+vacated region that hasn't been claimed by any ancestor yet. Each
+step claims the intersection with the current ancestor's clipList,
+paints that ancestor's bg, emits that ancestor's Expose, then walks
+up. If we reach the root with anything still remaining, those pixels
+are off-screen / outside the top-level — no paint needed.
+
+This mirrors X11R6's mi cascade behavior in a single helper, without
+needing a full region engine + per-gravity-bucket loop.
+
+### Why this is non-trivial to land
+
+The loop above looks small, but the surrounding semantics need care:
+
+1. **Order matters with the existing flow.** Today, `paintRectsForWindow`
+   on `sizeChanged` runs for the moving descendant AFTER
+   repaintParentOverUncovered. If the ancestor walk paints the immediate
+   parent's bg over the vacated area FIRST and then the
+   sizeChanged-descendant paints its OWN bg at its new position, the
+   order has to compose correctly. Currently with immediate-parent
+   only, the cascade is one-deep and ordering is trivial. With multi-
+   step ancestor paints, edge cases get more interesting.
+
+2. **Expose semantics.** Each ancestor's Expose for its portion needs
+   the right rect set in window-local coords. The existing function
+   handles one parent's coord translation; the loop needs to redo that
+   per ancestor.
+
+3. **Border-pixel paint.** `paintRectsForWindow` includes the outer
+   border ring rect when borderWidth > 0. For ancestors, that's only
+   relevant if the vacated portion intersects an ancestor's border —
+   rare, but we'd need to think about it.
+
+4. **Region engine API.** We have `intersected`, `subtracting`,
+   `unioned` (`Region/RegionOp.swift:18-59`). Should be sufficient.
+   But pre-flight against the actual data: are clipLists in canonical
+   form after `recomputeClipsForSubtreeContaining`? Should be, but
+   verify.
+
+### When to do this
+
+Not today. The small gray rectangles are cosmetic and the apps work.
+The ancestor walk is the right fix but it's a real region-correctness
+exercise that needs:
+
+- Unit tests for the helper against constructed clipList scenarios
+- Capture-diff verification on the actual dtpad/quickplot/xcalc cases
+  to confirm the visual improves
+- Care for the order-of-operations interactions with existing paths
+
+Cost estimate: a focused half-day with capture-first discipline.
+Reward: closes the small-gray-rectangles class of artifact across
+every app we host.
+
+### Until then
+
+The current state is the right trade for now: ship the spec-minimal
+position, accept the small gray rectangles where the immediate-parent
+shortcut paints the slightly-wrong color, and pick up the ancestor
+walk when a specific app's polish demands it.
