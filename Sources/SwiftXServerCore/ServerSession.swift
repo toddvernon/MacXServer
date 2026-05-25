@@ -2075,23 +2075,15 @@ public final class ServerSession: @unchecked Sendable {
         var remaining = uncovered
         var currentId = parentId
         let rootId = config.rootWindowId
-        log?.log("  repaintParentOverUncovered: start parent=0x\(String(parentId, radix: 16)) uncovered=\(uncovered.rects)")
         // Bound the walk against pathological parent chains. Real Motif
         // depth is well under 32.
-        for step in 0..<64 {
-            guard !remaining.isEmpty else {
-                log?.log("    [walk] remaining empty after \(step) step(s)")
-                return
-            }
-            guard let entry = windows.get(currentId) else {
-                log?.log("    [walk] entry missing for 0x\(String(currentId, radix: 16)); stopping")
-                return
-            }
+        for _ in 0..<64 {
+            guard !remaining.isEmpty else { return }
+            guard let entry = windows.get(currentId) else { return }
             guard let (topLevelId, dx, dy) = topLevelAndOffset(for: currentId) else { return }
 
             // Portion this ancestor currently owns.
             let portion = remaining.intersected(with: entry.clipList)
-            log?.log("    [walk step=\(step)] at 0x\(String(currentId, radix: 16)) bp=\(entry.backPixel.map { "0x\(String($0, radix: 16))" } ?? "nil") clipList=\(entry.clipList.rects) portion=\(portion.rects)")
             if !portion.isEmpty {
                 // Effective bg color: if THIS ancestor has an explicit
                 // backPixel, use it. Otherwise walk further up for the
@@ -2114,7 +2106,6 @@ public final class ServerSession: @unchecked Sendable {
                     )
                 }
                 if !paintRects.isEmpty {
-                    log?.log("    [walk step=\(step)] PAINT 0x\(String(currentId, radix: 16)) rects=\(paintRects.count) color=#\(String(bg.red >> 8, radix: 16))\(String(bg.green >> 8, radix: 16))\(String(bg.blue >> 8, radix: 16))")
                     bridge?.paintWindowRects(topLevel: topLevelId, rects: paintRects)
                 }
 
@@ -4042,6 +4033,25 @@ public final class ServerSession: @unchecked Sendable {
             // parent newly uncovered by this window's move/resize.
             let preMoveBorderClip = windows.get(r.window)?.borderClip ?? .empty
             let preMoveParent = windows.get(r.window)?.parent
+            // Snapshot pre-move clipLists for every window in this top-level's
+            // subtree. The post-recompute delta cascade compares against this
+            // to find ANY window (sibling, ancestor, distant relative) whose
+            // clipList GREW due to this move/resize, then paints its bg over
+            // the grown area + Exposes it. Mirrors miSlideAndSizeWindow's
+            // per-window paint+Expose pass driven from valdata. Without this,
+            // a moving sibling that vacates pixels its grown sibling now owns
+            // leaves stale pixels — the dtpad gray-rectangles bug, 2026-05-25,
+            // captured at /tmp/macxserver/dtpad-2026-05-25-15-18-59.log.
+            var preMoveClipLists: [UInt32: Region] = [:]
+            let moveSubtreeTop = topLevelAndOffset(for: r.window)?.0
+            if let topId = moveSubtreeTop {
+                for (otherId, w) in windows.windows where w.mapped {
+                    if otherId == r.window { continue }
+                    if let (t, _, _) = topLevelAndOffset(for: otherId), t == topId {
+                        preMoveClipLists[otherId] = w.clipList
+                    }
+                }
+            }
             let result = windows.resize(r.window, width: w, height: h, x: x, y: y)
             if let (old, new) = result, let entry = windows.get(r.window) {
                 if entry.parent != config.rootWindowId {
@@ -4118,6 +4128,54 @@ public final class ServerSession: @unchecked Sendable {
                 // both the E1.5 parent-repaint pass and the E2 size-grow
                 // Expose emission below.
                 recomputeClipsForSubtreeContaining(r.window)
+
+                // E1.4: delta cascade. For every window in the subtree
+                // EXCEPT the moved one, compare its pre-move clipList to
+                // its post-recompute clipList. Any pixels NEWLY OWNED
+                // (new minus old) get bg-painted + Exposed. Catches the
+                // sibling-grew case (e.g. text widget extends into the
+                // area V-scrollbar vacated) that the ancestor walk
+                // misses — ancestor walk only goes UP, but the new
+                // owner is sometimes a SIBLING with a larger reach.
+                // Equivalent to miSlideAndSizeWindow's per-window
+                // paint+Expose pass driven from valdata->after.
+                if let topId = moveSubtreeTop {
+                    for (otherId, oldClip) in preMoveClipLists {
+                        guard let otherEntry = windows.get(otherId) else { continue }
+                        guard let (otherTop, odx, ody) = topLevelAndOffset(for: otherId),
+                              otherTop == topId else { continue }
+                        let grew = otherEntry.clipList.subtracting(oldClip)
+                        if grew.isEmpty { continue }
+                        // Paint this window's own bg (with ParentRelative
+                        // walk if backPixel is nil) over the grown area.
+                        let bg = effectiveAncestorBg(from: otherId, byteOrder: byteOrder)
+                        let paintRects = grew.rects.map {
+                            WindowBackgroundRect(
+                                x: Int16(clamping: $0.x1), y: Int16(clamping: $0.y1),
+                                width: UInt16(clamping: $0.x2 - $0.x1),
+                                height: UInt16(clamping: $0.y2 - $0.y1),
+                                color: bg
+                            )
+                        }
+                        if !paintRects.isEmpty {
+                            bridge?.paintWindowRects(topLevel: topId, rects: paintRects)
+                        }
+                        // Expose the grown area in window-local coords.
+                        if otherEntry.eventMask & MockWindowBridge.exposureMask != 0 {
+                            let localRects = grew.rects.map {
+                                BoxRec(
+                                    x1: $0.x1 - Int32(odx), y1: $0.y1 - Int32(ody),
+                                    x2: $0.x2 - Int32(odx), y2: $0.y2 - Int32(ody)
+                                )
+                            }
+                            MockWindowBridge.emitExposesForRects(
+                                window: otherId, rects: localRects,
+                                byteOrder: byteOrder, sequence: sequenceNumber,
+                                outbound: outbound
+                            )
+                        }
+                    }
+                }
 
                 // (2026-05-25) Pure-move descendant bit-gravity blit was
                 // tried and reverted. The straightforward case (blit when
