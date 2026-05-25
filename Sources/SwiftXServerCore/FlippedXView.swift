@@ -285,13 +285,35 @@ public final class FlippedXView: NSView {
 
     /// Allocate (or re-allocate) the backing CGBitmapContext at
     /// `logicalWidth * scale × logicalHeight * scale` device pixels and
-    /// install the logical-to-device transform. Old backing contents are
-    /// discarded — caller is responsible for issuing Expose so the client
-    /// repaints.
+    /// install the logical-to-device transform.
+    ///
+    /// NorthWest bit-gravity preservation (2026-05-25): when the backing
+    /// is resized, the surviving `min(old, new)` rectangle is blitted from
+    /// the old bitmap into the new bitmap anchored at the visual top-left.
+    /// This honors `bit_gravity = NorthWestGravity`, which Xt's
+    /// Intrinsic.c:217-222 installs on every container widget with no
+    /// expose method (Athena Box → Form, Motif Manager → RowColumn /
+    /// PanedWindow / Form / BulletinBoard). Their comment is explicit:
+    /// "Try to avoid redisplay upon resize." Toolkits count on the server
+    /// to preserve those bits. The newly-claimed L-shape outside the
+    /// survivor starts white; caller is responsible for bg-painting it
+    /// (per-window `paintRectsForWindow` over the L-shape) and emitting
+    /// Expose to whichever clients overlap the L-shape so they repaint
+    /// chrome there.
     public func resizeBacking(logicalWidth: Int, logicalHeight: Int, scale: Double) {
         guard logicalWidth > 0, logicalHeight > 0, scale > 0 else { return }
         let deviceWidth = Int((Double(logicalWidth) * scale).rounded())
         let deviceHeight = Int((Double(logicalHeight) * scale).rounded())
+
+        // Snapshot the old backing as a CGImage BEFORE we allocate the new
+        // one. CGImage retains its pixel data (copy-on-write against the
+        // old bitmap's storage), so dropping the old context here is safe.
+        // First-call case (no prior backing) leaves `oldImage = nil` and
+        // we skip the blit, falling back to the bitmap-allocator's default
+        // (overwritten immediately by the white fill below).
+        let oldImage: CGImage? = backing?.makeImage()
+        let oldDeviceWidth = backingWidth
+        let oldDeviceHeight = backingHeight
 
         let cs = CGColorSpaceCreateDeviceRGB()
         let bytesPerRow = deviceWidth * 4
@@ -305,10 +327,46 @@ public final class FlippedXView: NSView {
             bitmapInfo: info
         ) else { return }
 
-        // Default fill: white. A proper implementation reads BackPixel from
-        // the X window's CWBackPixel attribute. M3 polish.
+        // Initial fill: white. Survivor area gets overwritten by the blit
+        // below; only the L-shape (newly-claimed area on grow) stays white,
+        // and that gets bg-painted explicitly by the caller. A proper
+        // future implementation might read BackPixel from the X top-level's
+        // CWBackPixel; not load-bearing today since paintRectsForWindow
+        // covers it.
         ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: deviceWidth, height: deviceHeight))
+
+        // NorthWest blit. The CGContext is in raw CG y-up coords here (no
+        // CTM applied yet — that happens below). The old CGImage was made
+        // from a context with the same y-up layout, so memory row 0 sits
+        // at CG y=0 (visual bottom) for both old and new.
+        //
+        // Goal: old's visual TOP-LEFT ↔ new's visual TOP-LEFT. Visual top
+        // = high CG y. Old's visual top is at old_y = oldDeviceHeight; new's
+        // visual top is at new_y = deviceHeight. Drawing the old image into
+        // a rect whose Y-MAX is at new_y = deviceHeight aligns the visual
+        // tops. That rect is (0, deviceHeight - oldDeviceHeight,
+        // oldDeviceWidth, oldDeviceHeight).
+        //
+        // Shrink case (deviceHeight < oldDeviceHeight): rect.minY is
+        // negative, the bottom rows of old land below new's bitmap and CG
+        // clips them. The visual top portion of old survives, anchored at
+        // new's top. ✓
+        //
+        // Grow case (deviceHeight > oldDeviceHeight): rect.minY is
+        // positive; old occupies the upper portion of new. The lower band
+        // (new_y in [0, deviceHeight - oldDeviceHeight]) stays white =
+        // newly-claimed area at the visual bottom. Right band similarly
+        // stays white when deviceWidth > oldDeviceWidth. ✓
+        if let oldImage = oldImage, oldDeviceWidth > 0, oldDeviceHeight > 0 {
+            let blitRect = CGRect(
+                x: 0,
+                y: deviceHeight - oldDeviceHeight,
+                width: oldDeviceWidth,
+                height: oldDeviceHeight
+            )
+            ctx.draw(oldImage, in: blitRect)
+        }
 
         // [Y-FLIP #1 of 3] Backing CTM y-flip + logical→device scale.
         //
