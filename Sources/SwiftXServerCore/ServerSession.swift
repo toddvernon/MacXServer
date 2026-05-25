@@ -4048,24 +4048,26 @@ public final class ServerSession: @unchecked Sendable {
                     }
                 }
                 // E2: emit Expose using clipList rects when the window's
-                // size grew OR when it moved. Must mirror the bg-paint
-                // condition above — anything we wiped, we must follow up
-                // with Expose so the client repaints content over the
-                // wipe. Without this, a pure-move (sizeChanged=false,
-                // posChanged=true) wipes the window's full clipList to
-                // bg via paintRectsForWindow but never tells the client
-                // to redraw, and the content stays gone. Symptom in
-                // dtpad: resizing the editor window causes XmText's
-                // inner widget to recentre by a few pixels (pure move,
-                // same size), our bg wipe clears the text, no Expose
-                // fires, the text doesn't come back. Surfaced 2026-05-24
-                // by the resize-uncover agent investigation. clipList ∩
-                // (new - old) would be exact; using clipList alone is a
-                // defensible over-emit (already-painted pixels get
-                // re-Exposed but clients redraw idempotently). Step F
-                // refines this with proper region delta math.
-                if (sizeGrew || posChanged) && (entry.eventMask & MockWindowBridge.exposureMask != 0) {
-                    log?.log("  → emit Expose on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height) (sizeGrew=\(sizeGrew) posChanged=\(posChanged))")
+                // size grew. clipList ∩ (new - old) would be exact; using
+                // clipList alone is a defensible over-emit (already-
+                // painted pixels get re-Exposed but clients redraw
+                // idempotently). Step F refines this with proper region
+                // delta math.
+                //
+                // History 2026-05-24: a previous edit tried to extend
+                // this to `(sizeGrew || posChanged)` to fix Gap B
+                // (dtpad text vanishing on resize when XmText recentres
+                // by a few pixels). That broke dtpad badly — dialog
+                // popups cascade pure-move ConfigureWindows across menu-
+                // bar buttons + work area, the Expose flood made Motif
+                // redraw widgets whose content wasn't actually invalid,
+                // and we ended up with erased content + hung menus.
+                // Reverted. Gap B remains open; the right fix likely
+                // needs to also stop wiping bg on pure-move (X bit-
+                // gravity NorthWest preserves pixels), which is a
+                // bigger change than this hook.
+                if sizeGrew && (entry.eventMask & MockWindowBridge.exposureMask != 0) {
+                    log?.log("  → emit Expose on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height)")
                     let rects = exposeRectsForWindow(r.window)
                     MockWindowBridge.emitExposesForRects(
                         window: r.window, rects: rects,
