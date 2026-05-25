@@ -4061,27 +4061,36 @@ public final class ServerSession: @unchecked Sendable {
                         }
                     }
                 }
-                // E2: emit Expose using clipList rects when the window's
-                // size grew. clipList ∩ (new - old) would be exact; using
+                // E2: emit Expose on size-grow OR on pure-move. Toolkit
+                // gets the signal to repaint widget chrome at its new
+                // position. clipList ∩ (new - old) would be exact; using
                 // clipList alone is a defensible over-emit (already-
                 // painted pixels get re-Exposed but clients redraw
                 // idempotently). Step F refines this with proper region
                 // delta math.
                 //
-                // History 2026-05-24: a previous edit tried to extend
-                // this to `(sizeGrew || posChanged)` to fix Gap B
-                // (dtpad text vanishing on resize when XmText recentres
-                // by a few pixels). That broke dtpad badly — dialog
-                // popups cascade pure-move ConfigureWindows across menu-
-                // bar buttons + work area, the Expose flood made Motif
-                // redraw widgets whose content wasn't actually invalid,
-                // and we ended up with erased content + hung menus.
-                // Reverted. Gap B remains open; the right fix likely
-                // needs to also stop wiping bg on pure-move (X bit-
-                // gravity NorthWest preserves pixels), which is a
-                // bigger change than this hook.
-                if sizeGrew && (entry.eventMask & MockWindowBridge.exposureMask != 0) {
-                    log?.log("  → emit Expose on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height)")
+                // History (2026-05-24 → 2026-05-25):
+                // - 2026-05-24: first tried to extend to `(sizeGrew ||
+                //   posChanged)` alongside the existing bg-paint on the
+                //   same condition. That broke dtpad: pure-move
+                //   ConfigureWindows cascaded across menu bar / work
+                //   area, the bg-paint wiped widget pixels, and Motif's
+                //   redraw on Expose then ran without the cached content
+                //   it expected. Erased menus, hung apps. Reverted.
+                // - 2026-05-25: tightened bg-paint to `sizeGrew` only
+                //   (X bit-gravity NorthWest preserves pixels on pure-
+                //   move, no server paint needed). Dtpad regression
+                //   went away.
+                // - 2026-05-25: this edit re-adds Expose on pure-move,
+                //   now WITHOUT the destructive bg-paint above. Aims to
+                //   fix the resize-smaller stale-chrome bug (scrollbars
+                //   etc. visible across xterm / quickplot / dt-apps):
+                //   when a parent shrinks and Motif reflows children
+                //   via ConfigureWindow, the children need to redraw at
+                //   their new positions; Expose is the standard signal.
+                //   Test broadly after building.
+                if (sizeGrew || posChanged) && (entry.eventMask & MockWindowBridge.exposureMask != 0) {
+                    log?.log("  → emit Expose on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height) (sizeGrew=\(sizeGrew) posChanged=\(posChanged))")
                     let rects = exposeRectsForWindow(r.window)
                     MockWindowBridge.emitExposesForRects(
                         window: r.window, rects: rects,
