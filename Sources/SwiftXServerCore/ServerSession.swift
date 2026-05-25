@@ -2042,12 +2042,35 @@ public final class ServerSession: @unchecked Sendable {
     /// is in top-level coords (the same space WindowEntry.borderClip
     /// lives in). Called from configureWindow after a descendant's
     /// move/resize when the resulting parent-visible delta is non-empty.
+    ///
+    /// `uncovered` is intersected with the parent's current clipList
+    /// before painting. The intersection matters when a descendant moves
+    /// by a large delta — e.g., dtpad's scrollbar arrow buttons whose
+    /// absolute position changes when their parent (XmScrollBar) slides
+    /// far during a parent grow. The arrow's old absolute position is
+    /// then OUTSIDE the new scrollbar's clipList — painting the
+    /// scrollbar's bg color there would leave a stray bg-color rectangle
+    /// in territory that's actually now sibling/grandparent surface.
+    /// Symptom Todd identified 2026-05-25: small grey rectangles between
+    /// dtpad's text area and the frame after resize-grow, in the places
+    /// the scrollbar arrows USED to live. X spec ConfigureWindow says
+    /// parent's bg is painted over the parent's visible region only;
+    /// the intersection enforces that.
     func repaintParentOverUncovered(uncovered: Region, parentId: UInt32, byteOrder: ByteOrder) {
         guard let parentEntry = windows.get(parentId) else { return }
         guard let (topLevelId, parentDx, parentDy) = topLevelAndOffset(for: parentId) else { return }
 
+        // Clip the uncovered region to where the parent actually is now.
+        // The parent's clipList is computed AFTER the descendant move
+        // (recomputeClipsForSubtreeContaining ran in handleConfigureWindow
+        // before this function fires), so it reflects the parent's
+        // current visible interior — exactly the region the parent's
+        // bg is allowed to paint over.
+        let clippedUncovered = uncovered.intersected(with: parentEntry.clipList)
+        guard !clippedUncovered.isEmpty else { return }
+
         let parentBg = windowBackground(parentId, byteOrder: byteOrder)
-        let paintRects: [WindowBackgroundRect] = uncovered.rects.map {
+        let paintRects: [WindowBackgroundRect] = clippedUncovered.rects.map {
             WindowBackgroundRect(
                 x: Int16(clamping: $0.x1), y: Int16(clamping: $0.y1),
                 width: UInt16(clamping: $0.x2 - $0.x1),
@@ -2060,7 +2083,7 @@ public final class ServerSession: @unchecked Sendable {
         }
 
         if parentEntry.eventMask & MockWindowBridge.exposureMask != 0 {
-            let parentLocalRects = uncovered.rects.map {
+            let parentLocalRects = clippedUncovered.rects.map {
                 BoxRec(
                     x1: $0.x1 - Int32(parentDx), y1: $0.y1 - Int32(parentDy),
                     x2: $0.x2 - Int32(parentDx), y2: $0.y2 - Int32(parentDy)
