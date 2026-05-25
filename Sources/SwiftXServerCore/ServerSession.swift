@@ -2037,54 +2037,95 @@ public final class ServerSession: @unchecked Sendable {
         }
     }
 
-    /// E1.5: paint parent's background over the region a descendant just
-    /// uncovered, then emit Expose to parent for that region. `uncovered`
-    /// is in top-level coords (the same space WindowEntry.borderClip
-    /// lives in). Called from configureWindow after a descendant's
-    /// move/resize when the resulting parent-visible delta is non-empty.
+    /// E1.5: when a descendant move/resize uncovers a region, paint the
+    /// right bg + emit Expose for that region. `uncovered` is in top-
+    /// level coords.
     ///
-    /// 2026-05-25 history: tried intersecting `uncovered` with the
-    /// parent's current clipList to clip the paint to the parent's
-    /// actual visible region. That broke things — dtpad's small gray
-    /// rectangles became "small rectangles with the rendered arrow
-    /// chrome visible," xcalc gained black bg flashes mid-resize,
-    /// dtcalc gained menu-title double-draw artifacts, quickplot got a
-    /// new scrolled-history-vs-command-line artifact. The intersection
-    /// left areas un-painted that needed SOMETHING painted there —
-    /// our cascade doesn't currently arrange for sibling/grandparent
-    /// surfaces to paint into the vacated region, so without the
-    /// over-painting we got stale preserved bits showing through.
-    /// Reverted to the unclipped paint; small gray rectangles are
-    /// preferable to stale chrome.
+    /// Ancestor walk (2026-05-25): starts at `parentId`, intersects
+    /// `uncovered` with each ancestor's current clipList in turn, paints
+    /// THAT ancestor's bg over its portion, emits Expose to that
+    /// ancestor, subtracts the claimed portion, and walks up until
+    /// `uncovered` is exhausted or we reach the root. Matches X11R6's
+    /// implicit cascade in `miSlideAndSizeWindow` (where each ancestor
+    /// whose clipList grew gets its own paint+Expose pass).
+    ///
+    /// Why this shape: when a descendant moves a long way (e.g.,
+    /// dtpad's scrollbar arrow buttons whose absolute position changes
+    /// because their parent XmScrollBar slid far during a window grow),
+    /// the immediate parent's clipList may not cover the arrow's old
+    /// absolute position anymore. With just-the-immediate-parent paint,
+    /// either (a) we over-paint with the wrong bg color (V-scrollbar
+    /// gray persists in SW territory — the original "small gray
+    /// rectangles" symptom), or (b) we under-paint (the wrong-bg version
+    /// we tried earlier — left stale arrow chrome pixels visible). The
+    /// walk subdivides `uncovered` correctly across whichever ancestors
+    /// currently own each portion.
+    ///
+    /// 2026-05-25 history of attempts:
+    /// - Original code: paint immediate parent's bg over the entire
+    ///   `uncovered`, regardless of where the parent actually is now.
+    ///   Visible: small gray rectangles in dtpad (V-scrollbar gray
+    ///   painted in SW territory). Bearable cosmetic.
+    /// - Clip-to-parent fix: intersect `uncovered` with the parent's
+    ///   clipList. Left stale preserved chrome visible where parent no
+    ///   longer covered (arrow tips visible in dtpad). Worse — reverted.
+    /// - This ancestor walk: each ancestor paints its own bg in the
+    ///   portion of `uncovered` IT currently owns. Closes both cases.
     func repaintParentOverUncovered(uncovered: Region, parentId: UInt32, byteOrder: ByteOrder) {
-        guard let parentEntry = windows.get(parentId) else { return }
-        guard let (topLevelId, parentDx, parentDy) = topLevelAndOffset(for: parentId) else { return }
+        var remaining = uncovered
+        var currentId = parentId
+        let rootId = config.rootWindowId
+        // Bound the walk against pathological parent chains. Real Motif
+        // depth is well under 32.
+        for _ in 0..<64 {
+            guard !remaining.isEmpty else { return }
+            guard let entry = windows.get(currentId) else { return }
+            guard let (topLevelId, dx, dy) = topLevelAndOffset(for: currentId) else { return }
 
-        let parentBg = windowBackground(parentId, byteOrder: byteOrder)
-        let paintRects: [WindowBackgroundRect] = uncovered.rects.map {
-            WindowBackgroundRect(
-                x: Int16(clamping: $0.x1), y: Int16(clamping: $0.y1),
-                width: UInt16(clamping: $0.x2 - $0.x1),
-                height: UInt16(clamping: $0.y2 - $0.y1),
-                color: parentBg
-            )
-        }
-        if !paintRects.isEmpty {
-            bridge?.paintWindowRects(topLevel: topLevelId, rects: paintRects)
-        }
+            // Portion this ancestor currently owns.
+            let portion = remaining.intersected(with: entry.clipList)
+            if !portion.isEmpty {
+                // Paint this ancestor's bg over its portion. Paint rects
+                // are in top-level coords (matching paintWindowRects's
+                // existing convention).
+                let bg = windowBackground(currentId, byteOrder: byteOrder)
+                let paintRects: [WindowBackgroundRect] = portion.rects.map {
+                    WindowBackgroundRect(
+                        x: Int16(clamping: $0.x1), y: Int16(clamping: $0.y1),
+                        width: UInt16(clamping: $0.x2 - $0.x1),
+                        height: UInt16(clamping: $0.y2 - $0.y1),
+                        color: bg
+                    )
+                }
+                if !paintRects.isEmpty {
+                    bridge?.paintWindowRects(topLevel: topLevelId, rects: paintRects)
+                }
 
-        if parentEntry.eventMask & MockWindowBridge.exposureMask != 0 {
-            let parentLocalRects = uncovered.rects.map {
-                BoxRec(
-                    x1: $0.x1 - Int32(parentDx), y1: $0.y1 - Int32(parentDy),
-                    x2: $0.x2 - Int32(parentDx), y2: $0.y2 - Int32(parentDy)
-                )
+                // Emit Expose to this ancestor over its portion (window-
+                // local coords).
+                if entry.eventMask & MockWindowBridge.exposureMask != 0 {
+                    let localRects = portion.rects.map {
+                        BoxRec(
+                            x1: $0.x1 - Int32(dx), y1: $0.y1 - Int32(dy),
+                            x2: $0.x2 - Int32(dx), y2: $0.y2 - Int32(dy)
+                        )
+                    }
+                    MockWindowBridge.emitExposesForRects(
+                        window: currentId, rects: localRects,
+                        byteOrder: byteOrder, sequence: sequenceNumber,
+                        outbound: outbound
+                    )
+                }
+
+                // This ancestor claimed its portion; subtract from remaining.
+                remaining = remaining.subtracting(portion)
             }
-            MockWindowBridge.emitExposesForRects(
-                window: parentId, rects: parentLocalRects,
-                byteOrder: byteOrder, sequence: sequenceNumber,
-                outbound: outbound
-            )
+
+            // Walk up. Stop at root or on a self-loop (data corruption guard).
+            if entry.parent == rootId || entry.parent == currentId {
+                return
+            }
+            currentId = entry.parent
         }
     }
 
