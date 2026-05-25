@@ -4004,6 +4004,45 @@ public final class ServerSession: @unchecked Sendable {
                 // Expose emission below.
                 recomputeClipsForSubtreeContaining(r.window)
 
+                // NorthWest bit-gravity blit on pure-move (posChanged &&
+                // !sizeChanged). Move the widget's pixels from old absolute
+                // position to new absolute position in the top-level
+                // bitmap, so the toolkit's expected NWG preservation
+                // actually happens. Without this, a widget that slides
+                // into a region of the bitmap previously occupied by
+                // other content (e.g. quickplot's XmText command line
+                // moving up into the plot area when the parent y-shrinks)
+                // ends up with stale pixels under it; the toolkit redraws
+                // label/caret on Expose but everything below the chrome
+                // layer (the widget's bg, prior glyphs, plot grid behind)
+                // comes from whatever pixels happened to be at the new
+                // position previously. X11R6's mi/miwindow.c::miCopyWindow
+                // does this for every window with non-Forget bit_gravity
+                // on every move. Done BEFORE repaintParentOverUncovered
+                // so the source read predates the parent paint that would
+                // wipe the old position to parent bg. Skipped for top-
+                // levels (no bitmap-internal position; NSWindow moves
+                // on screen, bitmap pixels don't shift) and for changes
+                // that include a size component (sizeChanged path's
+                // paintRectsForWindow handles those).
+                if posChanged, !sizeChanged,
+                   let parentId = preMoveParent, parentId != config.rootWindowId,
+                   let (top, newDx, newDy) = topLevelAndOffset(for: r.window) {
+                    // After the geometry update above, `topLevelAndOffset`
+                    // gives r.window's NEW absolute position. The parent's
+                    // own top-level offset didn't change in this request,
+                    // so r.window's old absolute position is the new one
+                    // minus the local-coord delta on each axis.
+                    let oldAbsX = Int(newDx) - Int(new.x) + Int(old.x)
+                    let oldAbsY = Int(newDy) - Int(new.y) + Int(old.y)
+                    bridge?.blitWindowRegion(
+                        topLevel: top,
+                        fromX: Int32(oldAbsX), fromY: Int32(oldAbsY),
+                        width: UInt32(old.width), height: UInt32(old.height),
+                        toX: Int32(newDx), toY: Int32(newDy)
+                    )
+                }
+
                 // E1.5: if a non-top-level window moved/resized, the
                 // parent has newly-uncovered area where this window used
                 // to be. Paint parent's bg over that delta and emit

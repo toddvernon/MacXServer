@@ -2072,6 +2072,58 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// NorthWest bit-gravity blit for descendant pure-move. Snapshots the
+    /// source rect in the backing as a CGImage, then draws it at the dest
+    /// position. CGImage snapshot is COW against the bitmap's storage, so
+    /// even when source and dest overlap (small position shifts) the read
+    /// is independent of the subsequent write. All coords in X-logical
+    /// top-level space; the backing CTM already maps logical→device.
+    public func blitWindowRegion(
+        topLevel: UInt32,
+        fromX: Int32, fromY: Int32,
+        width: UInt32, height: UInt32,
+        toX: Int32, toY: Int32
+    ) {
+        guard width > 0, height > 0 else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let view = self.slot(topLevel)?.view,
+                  let ctx = view.backing,
+                  let full = ctx.makeImage() else { return }
+            // The full snapshot covers the whole bitmap. Crop to the source
+            // rect in DEVICE pixels (the CTM on `ctx` maps logical → device,
+            // but `makeImage` captures the raw device-pixel buffer, so the
+            // crop must be in device coords). The cropped image then draws
+            // back into the same context using the live CTM, which carries
+            // it through logical → device on the dest side.
+            let scale = view.scaleFactor
+            let bw = view.backingWidth
+            let bh = view.backingHeight
+            let srcDevX = Int((Double(fromX) * scale).rounded())
+            let srcDevY_top = Int((Double(fromY) * scale).rounded())
+            let srcDevW = Int((Double(width) * scale).rounded())
+            let srcDevH = Int((Double(height) * scale).rounded())
+            // CGImage cropping uses y-up CG coords (origin bottom-left). The
+            // bitmap stores rows with row-0 at the BOTTOM, but our drawing
+            // is y-flipped so visually-top of the widget at fromY corresponds
+            // to bitmap-y `bh - srcDevY_top - srcDevH` (i.e. the CGImage row
+            // range that holds the widget).
+            let srcCGY = max(0, bh - srcDevY_top - srcDevH)
+            let cropRect = CGRect(x: max(0, srcDevX), y: srcCGY,
+                                  width: min(srcDevW, bw - max(0, srcDevX)),
+                                  height: min(srcDevH, bh - srcCGY))
+            guard cropRect.width > 0, cropRect.height > 0,
+                  let sub = full.cropping(to: cropRect) else { return }
+            // Draw sub at the dest position in logical coords. The context's
+            // CTM (translate + y-flip + scaleBy(scale)) handles the mapping.
+            ctx.saveGState()
+            ctx.draw(sub, in: CGRect(x: CGFloat(toX), y: CGFloat(toY),
+                                     width: CGFloat(width), height: CGFloat(height)))
+            ctx.restoreGState()
+            view.setNeedsDisplay(view.bounds)
+        }
+    }
+
     /// Cache of CTFont instances keyed by (macFontName, pointSize). Avoids
     /// re-instantiating the same font on every ImageText8 dispatch.
     nonisolated(unsafe) private static let ctFontCache = NSCache<NSString, CTFont>()

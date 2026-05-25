@@ -424,6 +424,23 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// pixel BEFORE the client draws on top.
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect])
 
+    /// Copy a `width × height` rect from `(fromX, fromY)` to `(toX, toY)` in
+    /// the top-level's backing context. All coords in X-logical top-level
+    /// space (same coord system as paintWindowRects). Implements NorthWest
+    /// bit-gravity preservation when a descendant window pure-moves
+    /// (position changes, size unchanged): X11R6 server's miCopyWindow
+    /// equivalent. Without it, a widget that slides into a region of the
+    /// bitmap previously occupied by other content (e.g. quickplot's XmText
+    /// command line moving up into the plot area when the window y-shrinks)
+    /// renders text over the wrong pixels because the toolkit assumes its
+    /// content bits move with the window.
+    func blitWindowRegion(
+        topLevel: UInt32,
+        fromX: Int32, fromY: Int32,
+        width: UInt32, height: UInt32,
+        toX: Int32, toY: Int32
+    )
+
     /// Audible alert. Mapped to NSBeep. Called on Bell with positive
     /// percent (per spec, zero/negative percent requests a softer bell;
     /// macOS has no volume control so we just stay silent on those).
@@ -605,6 +622,12 @@ public extension WindowBridge {
         clipRectangles: [Rectangle]?
     ) {}
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {}
+    func blitWindowRegion(
+        topLevel: UInt32,
+        fromX: Int32, fromY: Int32,
+        width: UInt32, height: UInt32,
+        toX: Int32, toY: Int32
+    ) {}
     func setCursor(topLevel: UInt32, glyph: UInt16?) {}
     func setTopLevelWindowBackground(id: UInt32, color: RGB16) {}
     func reconfigureTopLevel(id: UInt32, geometry: TopLevelGeometry) {}
