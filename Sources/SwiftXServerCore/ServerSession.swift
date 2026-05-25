@@ -2075,15 +2075,23 @@ public final class ServerSession: @unchecked Sendable {
         var remaining = uncovered
         var currentId = parentId
         let rootId = config.rootWindowId
+        log?.log("  repaintParentOverUncovered: start parent=0x\(String(parentId, radix: 16)) uncovered=\(uncovered.rects)")
         // Bound the walk against pathological parent chains. Real Motif
         // depth is well under 32.
-        for _ in 0..<64 {
-            guard !remaining.isEmpty else { return }
-            guard let entry = windows.get(currentId) else { return }
+        for step in 0..<64 {
+            guard !remaining.isEmpty else {
+                log?.log("    [walk] remaining empty after \(step) step(s)")
+                return
+            }
+            guard let entry = windows.get(currentId) else {
+                log?.log("    [walk] entry missing for 0x\(String(currentId, radix: 16)); stopping")
+                return
+            }
             guard let (topLevelId, dx, dy) = topLevelAndOffset(for: currentId) else { return }
 
             // Portion this ancestor currently owns.
             let portion = remaining.intersected(with: entry.clipList)
+            log?.log("    [walk step=\(step)] at 0x\(String(currentId, radix: 16)) bp=\(entry.backPixel.map { "0x\(String($0, radix: 16))" } ?? "nil") clipList=\(entry.clipList.rects) portion=\(portion.rects)")
             if !portion.isEmpty {
                 // Effective bg color: if THIS ancestor has an explicit
                 // backPixel, use it. Otherwise walk further up for the
@@ -2106,6 +2114,7 @@ public final class ServerSession: @unchecked Sendable {
                     )
                 }
                 if !paintRects.isEmpty {
+                    log?.log("    [walk step=\(step)] PAINT 0x\(String(currentId, radix: 16)) rects=\(paintRects.count) color=#\(String(bg.red >> 8, radix: 16))\(String(bg.green >> 8, radix: 16))\(String(bg.blue >> 8, radix: 16))")
                     bridge?.paintWindowRects(topLevel: topLevelId, rects: paintRects)
                 }
 
