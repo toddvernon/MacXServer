@@ -4027,7 +4027,8 @@ public final class ServerSession: @unchecked Sendable {
                 // paintRectsForWindow handles those).
                 if posChanged, !sizeChanged,
                    let parentId = preMoveParent, parentId != config.rootWindowId,
-                   let (top, newDx, newDy) = topLevelAndOffset(for: r.window) {
+                   let (top, newDx, newDy) = topLevelAndOffset(for: r.window),
+                   let postEntry = windows.get(r.window) {
                     // After the geometry update above, `topLevelAndOffset`
                     // gives r.window's NEW absolute position. The parent's
                     // own top-level offset didn't change in this request,
@@ -4035,11 +4036,28 @@ public final class ServerSession: @unchecked Sendable {
                     // minus the local-coord delta on each axis.
                     let oldAbsX = Int(newDx) - Int(new.x) + Int(old.x)
                     let oldAbsY = Int(newDy) - Int(new.y) + Int(old.y)
+                    // Fallback bg rects: paintRectsForWindow at the new
+                    // geometry gives us the widget's bg+border rects. The
+                    // bridge paints these BEFORE the blit so any portion
+                    // of the source that's out of the bitmap (e.g.
+                    // quickplot's command line whose old position was
+                    // below the new shrunken top-level bitmap) gets the
+                    // widget's bg color rather than leftover plot-area
+                    // pixels. For in-bounds source (e.g. dtpad's small
+                    // menu-bar shift) the blit immediately overwrites the
+                    // bg with the widget's actual old content, so the
+                    // wipe is transient and invisible.
+                    let bgRects = paintRectsForWindow(
+                        entry: postEntry,
+                        dx: newDx, dy: newDy,
+                        byteOrder: byteOrder
+                    )
                     bridge?.blitWindowRegion(
                         topLevel: top,
                         fromX: Int32(oldAbsX), fromY: Int32(oldAbsY),
                         width: UInt32(old.width), height: UInt32(old.height),
-                        toX: Int32(newDx), toY: Int32(newDy)
+                        toX: Int32(newDx), toY: Int32(newDy),
+                        fallbackBgRects: bgRects
                     )
                 }
 

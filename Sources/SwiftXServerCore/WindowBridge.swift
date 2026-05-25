@@ -424,21 +424,33 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// pixel BEFORE the client draws on top.
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect])
 
-    /// Copy a `width × height` rect from `(fromX, fromY)` to `(toX, toY)` in
-    /// the top-level's backing context. All coords in X-logical top-level
-    /// space (same coord system as paintWindowRects). Implements NorthWest
-    /// bit-gravity preservation when a descendant window pure-moves
-    /// (position changes, size unchanged): X11R6 server's miCopyWindow
-    /// equivalent. Without it, a widget that slides into a region of the
-    /// bitmap previously occupied by other content (e.g. quickplot's XmText
-    /// command line moving up into the plot area when the window y-shrinks)
-    /// renders text over the wrong pixels because the toolkit assumes its
-    /// content bits move with the window.
+    /// Move a `width × height` rect from `(fromX, fromY)` to `(toX, toY)` in
+    /// the top-level's backing context, with fallback bg-paint for any
+    /// portion of the source that's out-of-bounds. All coords in X-logical
+    /// top-level space (same coord system as paintWindowRects).
+    ///
+    /// Implements NorthWest bit-gravity preservation when a descendant
+    /// window pure-moves (position changes, size unchanged): X11R6 server's
+    /// miCopyWindow equivalent. Without it, a widget that slides into a
+    /// region of the bitmap previously occupied by other content (e.g.
+    /// quickplot's XmText command line moving up into the plot area when
+    /// the window y-shrinks) renders text over the wrong pixels because
+    /// the toolkit assumes its content bits move with the window.
+    ///
+    /// `fallbackBgRects` are painted at the dest BEFORE the blit. If the
+    /// source rect is in-bounds, the subsequent blit overwrites the
+    /// fallback with the widget's actual old content. If the source is
+    /// out-of-bounds (e.g. the old position was below the top-level's new
+    /// shrunken bitmap height — the quickplot case), the blit no-ops and
+    /// the fallback stands. The order is enforced atomically inside the
+    /// bridge: snapshot first (captures source before the paint), then
+    /// paint, then blit-from-snapshot.
     func blitWindowRegion(
         topLevel: UInt32,
         fromX: Int32, fromY: Int32,
         width: UInt32, height: UInt32,
-        toX: Int32, toY: Int32
+        toX: Int32, toY: Int32,
+        fallbackBgRects: [WindowBackgroundRect]
     )
 
     /// Audible alert. Mapped to NSBeep. Called on Bell with positive
@@ -626,7 +638,8 @@ public extension WindowBridge {
         topLevel: UInt32,
         fromX: Int32, fromY: Int32,
         width: UInt32, height: UInt32,
-        toX: Int32, toY: Int32
+        toX: Int32, toY: Int32,
+        fallbackBgRects: [WindowBackgroundRect]
     ) {}
     func setCursor(topLevel: UInt32, glyph: UInt16?) {}
     func setTopLevelWindowBackground(id: UInt32, color: RGB16) {}
