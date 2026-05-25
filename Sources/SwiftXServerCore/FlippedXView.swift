@@ -126,6 +126,18 @@ public final class FlippedXView: NSView {
         // our draw cycle catches up to the new bounds.
         wantsLayer = true
         layer?.backgroundColor = liveResizeBackground
+        // Anchor the layer's contents to the top-left during view resize.
+        // Default is .scaleAxesIndependently which stretches the rendered
+        // bitmap to fit the new view bounds during a live-resize drag —
+        // visually you'd see the X-rendered content squish/stretch until
+        // the bitmap reallocation at drag-end. .topLeft matches what
+        // NorthWest bit-gravity expects: content stays anchored top-left,
+        // growing the view exposes empty space on the right/bottom,
+        // shrinking clips bottom/right pixels. Combined with the NW blit
+        // in resizeBacking, this gives us NWG-style preservation at the
+        // top-level for free via Core Animation — no X-protocol-level
+        // bit_gravity machinery needed.
+        layerContentsPlacement = .topLeft
         // Clip drawing to the layer's bounds. During a live shrink the view's
         // bounds shrink but the backing bitmap stays at the old (larger) size
         // until live-resize ends (handleNSWindowDidEndLiveResize defers the
