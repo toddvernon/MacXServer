@@ -464,12 +464,21 @@ public final class FlippedXView: NSView {
         // This is the ONLY transform applied at blit time. The other two
         // y-flips (backing CTM, text local-flip in drawImageText8) serve
         // separate purposes — none cancels another.
+        // Translate by the IMAGE's height (not the view's height) so the
+        // image anchors at top-left of the view. Pre-2026-05-25 this used
+        // `bounds.height`, which anchored the image to the visual
+        // bottom-left — visible during live-resize as "content travels
+        // with the lower-left corner of the view as it resizes." With
+        // `imgPointsH` the bottom-left of imgRect lands at view-y =
+        // imgPointsH (below visual top by imgH), and the top-right lands
+        // at view-y = 0 (visual top), so the image ends up anchored at
+        // visual top-left. Matches X11 NorthWestGravity and pairs with
+        // the resizeBacking NW blit + the layerContentsPlacement = .topLeft
+        // CoreAnimation backstop. Anything outside imgRect in the view's
+        // bounds shows the layer's bg color.
         cg.saveGState()
-        cg.translateBy(x: 0, y: bounds.height)
+        cg.translateBy(x: 0, y: imgPointsH)
         cg.scaleBy(x: 1, y: -1)
-        // Drawing at imgRect (origin 0,0 in transformed coords, native size)
-        // lands at the TOP of the view in flipped screen coords. Anything
-        // outside imgRect in the view's bounds shows the layer's bg color.
         cg.draw(img, in: imgRect)
         cg.restoreGState()
     }
