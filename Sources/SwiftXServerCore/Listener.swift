@@ -41,6 +41,14 @@ public final class Listener: @unchecked Sendable {
     private var fd: Int32 = -1
     private var stopRequested = false
 
+    // Registry of active per-client read sources so a menu action can
+    // drop all clients at once. Each entry's cancel handler removes
+    // itself, so the dict stays tight even across many connect/disconnect
+    // cycles. Lock-protected because accept runs on a listener thread
+    // and cancel handlers run on per-session protocolQueues.
+    private let sourcesLock = NSLock()
+    private var activeSources: [UUID: DispatchSourceRead] = [:]
+
     public init(host: String, port: UInt16, log: ServerLogSink? = nil) {
         self.host = host
         self.port = port
@@ -57,6 +65,27 @@ public final class Listener: @unchecked Sendable {
         if fd >= 0 {
             Darwin.close(fd)
             fd = -1
+        }
+    }
+
+    /// Cancel every currently-attached client read source. Each cancel
+    /// fires its handler, which closes the socket and runs
+    /// `cleanupOnDisconnect` on the corresponding session — so X clients
+    /// see EOF and their windows go away. The listener itself stays up
+    /// and continues accepting new connections. Used by the AppDelegate
+    /// "Drop All Clients" menu action when a stuck client needs a hard
+    /// reset (typically a WM-emulation bug leaving orphan top-levels).
+    public func dropAllClients() {
+        sourcesLock.lock()
+        let snapshot = Array(activeSources.values)
+        // Don't clear the dict — each cancel handler removes its own
+        // entry, which keeps `isCancelled` checks consistent and works
+        // correctly if a session was already mid-disconnect when we
+        // grabbed the snapshot.
+        sourcesLock.unlock()
+        log?.log("dropAllClients: cancelling \(snapshot.count) active session(s)")
+        for src in snapshot where !src.isCancelled {
+            src.cancel()
         }
     }
 
@@ -220,6 +249,13 @@ public final class Listener: @unchecked Sendable {
         // the source after firing. Without it the source captures itself.
         let sourceHolder = ReadSourceHolder(source: readSource)
 
+        // Register in the listener's active-source map so dropAllClients
+        // can find this session later. Removed in the cancel handler.
+        let registryKey = UUID()
+        sourcesLock.lock()
+        activeSources[registryKey] = readSource
+        sourcesLock.unlock()
+
         readSource.setEventHandler {
             var readBuffer = [UInt8](repeating: 0, count: 65536)
             let n = readBuffer.withUnsafeMutableBufferPointer { ptr -> Int in
@@ -252,7 +288,10 @@ public final class Listener: @unchecked Sendable {
             }
         }
 
-        readSource.setCancelHandler {
+        readSource.setCancelHandler { [weak self] in
+            self?.sourcesLock.lock()
+            self?.activeSources.removeValue(forKey: registryKey)
+            self?.sourcesLock.unlock()
             sessionLog?.log("client disconnected")
             // Per X11 spec, default close-down mode is DestroyAll — the
             // server destroys all the client's resources. The most visible

@@ -142,6 +142,7 @@ enum ServerEntry {
         // snapshots `current` at mapTopLevel time, so the live values are
         // always honored for new windows.
         bridge.motifFramePrefs = appDelegate.preferences.motifFrameProvider
+        appDelegate.listener = listener
         app.delegate = appDelegate
         // `.regular`: standard Mac app. `.accessory` would hide the Dock icon but
         // per Apple's docs also hides the menu bar entirely, which is wrong here —

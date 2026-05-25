@@ -33,6 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         didSet { updateStatusMenu() }
     }
 
+    /// Listener handle so the "Drop All Clients" menu action can reach
+    /// it. Held weakly because the listener owns its own lifetime in
+    /// ServerEntry.run and the AppDelegate shouldn't keep it alive.
+    weak var listener: Listener?
+
     override init() {
         self.preferences = Preferences()
         super.init()
@@ -135,6 +140,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                          keyEquivalent: "")
         discardCaptures.target = self
         appMenu.addItem(discardCaptures)
+
+        appMenu.addItem(.separator())
+
+        // One-and-done: cancel every active client read source. Listener
+        // keeps accepting new connections. Useful when a stuck client
+        // (orphan top-levels from a WM-emulation bug, a Sun ssh session
+        // that got wedged) won't clean itself up.
+        let dropClients = NSMenuItem(title: "Drop All Clients",
+                                     action: #selector(dropAllClients(_:)),
+                                     keyEquivalent: "")
+        dropClients.target = self
+        appMenu.addItem(dropClients)
 
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: "Hide MacXServer",
@@ -259,5 +276,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let full = (path as NSString).appendingPathComponent(name)
             try? fm.removeItem(atPath: full)
         }
+    }
+
+    @objc private func dropAllClients(_ sender: Any?) {
+        // One-and-done. listener.dropAllClients() does the work — cancels
+        // each active read source, which cascades into per-session
+        // cleanup (windows go away, resources freed, capture finalized).
+        // Listener stays bound and accepting new clients.
+        listener?.dropAllClients()
     }
 }
