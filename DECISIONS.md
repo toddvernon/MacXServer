@@ -591,6 +591,40 @@ Full design spec: `PRODUCT_1_CAPTURE.md` § "v2: Public-ready capture."
 
 **Residual bug to NOT conflate with this one**: `STATUS.md:179` (2026-05-19) and `project_dt_apps_theme_pass_open.md` both flag a resize-uncover repaint gap (dthelpview buttons thinner after resize; dtpad text-area paint loss on resize). That's `ServerSession.handleConfigureWindow`'s descendant-uncover branch, not Expose architecture. Separate investigation when it gets prioritized.
 
+## 2026-05-25 — Resize architecture: minimal-spec position, matching XQuartz consensus
+
+**Decision**: strip the `mappedBackgroundPaints` descendant-cascade from `handleTopLevelResize`. Keep `Step 1` (top-level NW blit in `FlippedXView.resizeBacking`) as local Mac-compositor latency-hiding. Keep `paintRectsForWindow` on descendant `sizeChanged` (the xcalc fix). Keep `mappedDescendantSnapshots` Expose cascade. Add `layerContentsPlacement = .topLeft` and fix the draw-method anchor (translate by image height, not view height) so all three layers (CoreAnimation gravity, draw, blit) agree on top-left anchoring during resize. Continue advertising `backingStores = .never` and `saveUnders = false`.
+
+**Background**: two days (2026-05-24 → 25) of stacking optimizations on the descendant resize path produced a series of regressions: dtpad menu-bar erase on dialog popup, xcalc upper-left-only buttons, quickplot SlateBlue bleed. Each was caused by some flavor of "try to preserve widget bits across pure-move." Reverting each in turn led to writing up the minimal-spec position as `RESIZE_THESIS.md` and putting it to two background agents (validation + 3-way MIT/XQuartz/us comparison).
+
+**Why this is the right landing point** (per the 3-way comparison agent):
+
+XQuartz has shipped this architecture for ~20 years. `RootlessNoCopyWindow` in `reference/xquartz-xserver/miext/rootless/rootlessWindow.c:635` is literally a no-op CopyWindow callback — every gravity-bucket bit-blit miSlideAndSizeWindow tries to do gets dropped on the floor. Modern xorg-server defaults to `backingStoreSupport = NotUseful` (`dix/window.c:646`) and `saveUnderSupport = NotUseful` unconditionally. The X11R6 `backingStoreSupport = Always` default was a single-framebuffer optimization that has been abandoned everywhere it stopped being economic — which is "any X server that's not single-framebuffer," which includes us.
+
+Per-window bit preservation is economically rational only in single-framebuffer designs where preserving bits is free. We aren't in that architecture; XQuartz isn't either. The 2026-05-14 entry above already documented "skip backing-store advertise"; this entry extends that decision to the resize/move semantics across the rest of the protocol.
+
+**Why two specific things stay** (per the validation agent):
+
+1. **`paintRectsForWindow` on descendant `sizeChanged`** — Athena Command's `Redisplay` paints an interior highlight rectangle but NOT the X-window border. The 1-pixel CWBorderPixel ring is server-painted per the bg-paint contract. Without this call, xcalc on shrink shows "button surrounds either not there at all or only the top-left is partially rendered" — exactly the symptom observed 2026-05-25 before `25c3822` fixed it.
+
+2. **`mappedDescendantSnapshots` Expose cascade** in `handleTopLevelResize` — Xt's `XtResizeWidget`/`XtConfigureWidget` (`reference/X11R6/xc/lib/Xt/Geometry.c:434-585`) only emit XConfigureWindow on the wire when geometry actually changes. For NorthWest-anchored top-left children that don't move on parent grow, the toolkit's per-child loop is a no-op — zero wire traffic. Without our cascade Expose, those children get no wake-up call when the top-level's bitmap was reallocated.
+
+**Three things kept that aren't strictly minimal but defensible**:
+
+- Step 1 NW blit in `FlippedXView.resizeBacking` — local Mac-compositor latency-hiding for the gap between AppKit's resize event and the Sun's redraw. Invisible to the X protocol. Analogous to XQuartz's `xp_window_changes.bit_gravity` plumbing (`reference/xquartz-xserver/hw/xquartz/xpr/xprFrame.c:246-262`) but in-process rather than handed to Quartz.
+- `layerContentsPlacement = .topLeft` on FlippedXView — CoreAnimation backstop that matches NWG.
+- `draw(_:)` anchors image to top-left via `translateBy(0, imgPointsH)` rather than `bounds.height` — fixes a pre-existing bug where the comment said "top-left anchor" but the math anchored bottom-left.
+
+**Future enhancement (not built)**: per-resize-edge gravity in Step 1, matching XQuartz's `ResizeWeighting` (`rootlessWindow.c:765`). Currently we always pin top-left; XQuartz picks NW/NE/SE/SW based on which corner stayed pinned during the drag. Not load-bearing for any current bug.
+
+**What stays open**:
+
+- dtpad Gap B (text-area paint loss on resize). Predates `ef0d6eb`, not caused by preservation work, separate fix.
+- dtpad menu-bar erase on dialog popup. Different code path (dialog map/unmap), unaffected by this decision.
+- Horizontal scrollbar reverse-image rendering. Multi-app, pure rendering, separate.
+
+**Code delta**: ~20 lines (the strip is much smaller than the thesis estimated because most of the optimization machinery the thesis envisioned was already not implemented — only one cascade was actually running).
+
 ---
 
 ## Decisions still to make

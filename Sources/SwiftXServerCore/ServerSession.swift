@@ -1730,15 +1730,29 @@ public final class ServerSession: @unchecked Sendable {
         // handleConfigureWindow's grow-paint block).
         ClipListEngine.recomputeClips(forTopLevel: id, in: windows)
 
-        // FlippedXView.resizeBacking allocates a fresh bitmap and fills it
-        // with white as a placeholder. For windows whose CWBackPixel isn't
-        // white (e.g., xterm with `-bg black`), the newly-exposed pixels
-        // around the original content flash white until the client redraws.
-        // Paint the top-level + every mapped descendant's bg now so the
-        // bitmap matches the X-protocol expectation BEFORE we send Expose.
-        let paints = mappedBackgroundPaints(topLevelId: id, byteOrder: order)
-        if !paints.isEmpty {
-            bridge?.paintWindowRects(topLevel: id, rects: paints)
+        // FlippedXView.resizeBacking allocates a fresh bitmap and (for
+        // the newly-claimed L-shape on grow) fills it with white. Paint
+        // the TOP-LEVEL's bg only — covers the L-shape with the right
+        // color for windows whose CWBackPixel isn't white (xterm
+        // `-bg black`, dt-apps with grey panels).
+        //
+        // Notably this NO LONGER walks mapped descendants. Previously
+        // we'd cascade-paint every descendant's bg into its (cropped)
+        // clipList. That over-painted survivor bits Step 1's NW blit had
+        // preserved, and it fought the toolkit's own redraw cascade
+        // when descendants needed Expose-driven repaint. The
+        // 2026-05-25 thesis (RESIZE_THESIS.md) + agent validation walked
+        // through why this cascade was a load-bearing cause of the
+        // dtpad-erase / quickplot-bleed regressions. We strip the
+        // descendant walk; descendants get bg-paint via their own
+        // per-descendant ConfigureWindow processing (sizeChanged path
+        // in handleConfigureWindow, which Athena Command's CWBorderPixel
+        // ring relies on per the agent's xcalc analysis).
+        if let topEntry = windows.get(id) {
+            let paints = paintRectsForWindow(entry: topEntry, dx: 0, dy: 0, byteOrder: order)
+            if !paints.isEmpty {
+                bridge?.paintWindowRects(topLevel: id, rects: paints)
+            }
         }
 
         emitVisibilityChanges(forTopLevel: id)

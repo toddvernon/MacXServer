@@ -1,8 +1,13 @@
 # Resize and redraw: the minimal-spec position
 
-Status: proposal, 2026-05-25. Authored as the close-out of two days of
-bit-preservation thrash that ended with the SlateBlue bleed in quickplot
-and the revert of every descendant-level optimization.
+Status: SHIPPED 2026-05-25 after both background agents (thesis-validation
+and 3-way MIT/XQuartz/us comparison) reviewed and concurred, with the two
+carve-outs documented below. The thesis below is preserved as authored;
+the post-review carve-outs and reframing are appended at the bottom.
+
+Originally authored as the close-out of two days of bit-preservation
+thrash that ended with the SlateBlue bleed in quickplot and the revert
+of every descendant-level optimization.
 
 ## The thesis
 
@@ -260,3 +265,141 @@ When this lands:
 
 Total code delta: ~200 lines net removal, no new features, no behavior
 changes for the apps we test today.
+
+---
+
+## Post-review amendments (2026-05-25)
+
+Two background agents reviewed this thesis:
+
+- **3-way comparison agent** (MIT X11R6 vs XQuartz vs us) returned with
+  strong external validation: XQuartz has been shipping this exact
+  architecture for ~20 years. `RootlessNoCopyWindow`
+  (`reference/xquartz-xserver/miext/rootless/rootlessWindow.c:635`) is
+  literally a no-op CopyWindow callback. Modern xorg-server defaults to
+  `backingStoreSupport = NotUseful` (`dix/window.c:646`),
+  `saveUnderSupport = NotUseful` unconditionally. The X11R6 `Always`
+  default was abandoned a long time ago. We're matching the
+  deployed-software consensus.
+
+- **Thesis-validation agent** stress-tested every claim against the X
+  spec, our code, and the apps we host. Found two specific holes
+  documented below.
+
+### Reframe: not "underperforming spec" — "matching deployed consensus"
+
+The thesis original framing ("today we slightly outperform our
+advertisement; after the strip, we'll exactly match it") undersells the
+position. Every macOS-aware X server has shipped this approach for a
+decade. Per-window bit-preservation is economically rational only in
+single-framebuffer designs where preserving bits is free (one bitmap, in-
+memory blit). We aren't in that architecture. XQuartz isn't either.
+XQuartz's answer is `RootlessNoCopyWindow`; ours should be the same.
+
+### Carve-out 1: KEEP `paintRectsForWindow` on descendant `sizeChanged`
+
+The thesis's "Strip" list named "the `paintRectsForWindow` call on
+descendant ConfigureWindow that's solely for non-grow cases" as a
+removal target. Both agents flagged this is load-bearing:
+
+- Athena Command's `Redisplay` (`reference/X11R6/xc/lib/Xaw/Command.c:396-472`)
+  paints an INTERIOR highlight rectangle (offset+inset draw of the
+  command rect) but NOT the X-window border itself.
+- The 1-pixel CWBorderPixel ring around the X window is **server-painted
+  per the bg-paint contract**.
+- Xt Core's `borderWidth` defaults to 1; xcalc's Command widgets inherit
+  that default (no XCalc.ad override).
+- Without `paintRectsForWindow` on `sizeChanged`, xcalc on shrink shows
+  exactly the 2026-05-25 symptom: "button surrounds are either not there
+  at all or only the top-left is partially rendered." Step 1's NW blit
+  preserves the OLD position's border-ring pixels; the new (smaller)
+  position has no fresh server-painted ring.
+
+So `paintRectsForWindow` on `sizeChanged` stays in `handleConfigureWindow`.
+The original commit `25c3822` that added this on shrink was correct;
+keep it.
+
+### Carve-out 2: KEEP `mappedDescendantSnapshots` Expose cascade
+
+The thesis assumed descendants would get Expose via their own per-
+descendant `ConfigureWindow` processing after the toolkit's Resize
+cascade. The validation agent found this is **only true for descendants
+whose geometry actually changes**:
+
+- Xt's `XtResizeWidget`/`XtConfigureWidget`
+  (`reference/X11R6/xc/lib/Xt/Geometry.c:434-585`) gate the
+  `XConfigureWindow` wire call on `req.changeMask != 0` — i.e., only
+  emit when w/h/x/y differ.
+- For a NorthWest-anchored container (Athena Form, Motif RowColumn,
+  BulletinBoard), TOP-LEFT children typically don't move OR resize on
+  parent grow. The geometry manager's per-child loop is a no-op for
+  them — zero wire traffic from the toolkit.
+- Without our cascade Expose, those NWG-anchored children get no
+  wake-up call when the top-level's bitmap was reallocated. Their
+  preserved bits from Step 1 will look right if the bitmap survived,
+  but any client-side state that needed re-derivation against the new
+  parent dimensions won't fire.
+- Practically: keep the Expose cascade as insurance for the case where
+  the toolkit's per-child wire traffic doesn't tell those NWG children
+  anything happened.
+
+So `mappedDescendantSnapshots` and its Expose loop stay. Only
+`mappedBackgroundPaints`'s descendant walk is stripped from the resize
+path. (The function itself stays — used by MapWindow paths.)
+
+### Future enhancement (flagged, not built)
+
+**Per-resize-edge gravity in Step 1.** XQuartz's `ResizeWeighting`
+(`reference/xquartz-xserver/miext/rootless/rootlessWindow.c:765`)
+computes which corner stayed pinned during the resize (NW/NE/SE/SW)
+based on AppKit's resize-edge metadata and feeds the resulting gravity
+to Quartz as `xp_window_changes.bit_gravity`. Drag the bottom-right
+corner outward → pin top-left (current Step 1). Drag the top-left
+corner inward → pin bottom-right.
+
+We always pin top-left. For most user-driven resizes (drag right edge,
+drag bottom edge, drag bottom-right corner), top-left is correct. For
+top-left-corner drags, we visually "slide" content during the drag. Not
+load-bearing for any current bug; cheap future win.
+
+### Final landing position
+
+`handleTopLevelResize`:
+- Emit ConfigureNotify on top-level ✓
+- `recomputeClipsForSubtreeContaining` ✓
+- ~~Cascade `mappedBackgroundPaints` walk over every descendant~~ →
+  **paint only the top-level's bg over its own clipList** (one paint
+  call). Top-level's `clipList` is "interior minus descendants" so this
+  cleanly covers the newly-claimed L-shape without overpainting child
+  windows.
+- `emitVisibilityChanges` ✓
+- `mappedDescendantSnapshots` Expose cascade ✓ (keep — load-bearing per
+  validation agent)
+
+`handleConfigureWindow` (descendant path):
+- ConfigureNotify ✓
+- recomputeClips ✓
+- `repaintParentOverUncovered` ✓ (parent paints bg over child's vacated
+  area)
+- `paintRectsForWindow` on `sizeChanged` ✓ (keep — xcalc border per
+  validation agent)
+- Expose on `(sizeGrew || posChanged)` ✓
+- No bit-preservation blit (already reverted)
+- No paint on pure-move (already reverted)
+
+`FlippedXView`:
+- `resizeBacking` NW blit (Step 1) ✓ (kept — local Mac-compositor
+  latency hiding, invisible to X protocol)
+- `layerContentsPlacement = .topLeft` ✓ (compositor-level NWG backstop)
+- `draw(_:)` anchors image to top-left via `translate(0, imgPointsH)`
+  ✓ (fixed 2026-05-25)
+
+`ServerConfig.SetupAccepted`:
+- `backingStores = .never` (unchanged, now honest)
+- `saveUnders = false` (unchanged, now honest)
+
+Total mechanical strip: ~20 lines (one cascade call replaced with a
+single paintRectsForWindow). The lighter-than-expected delta is because
+the bigger surgery the thesis envisioned (per-window bit_gravity, etc.)
+was always work we DIDN'T have to do; the actual code change is just
+stopping one cascade.
