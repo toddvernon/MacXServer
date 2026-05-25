@@ -1777,24 +1777,25 @@ public final class ServerSession: @unchecked Sendable {
         emitVisibilityChanges(forTopLevel: id)
 
         // Delta cascade: for each mapped descendant, compare its pre-
-        // resize clipList against its post-recompute clipList. Paint+
-        // Expose only the area that's NEWLY VISIBLE (new - old). Skip
-        // descendants whose visible region didn't change — the NW
-        // gravity blit in FlippedXView preserves their pixels, and a
-        // gratuitous Expose triggers PolyText-based widgets (XmLabel,
-        // XmCascadeButton) to redraw text on top of itself, leaving
-        // overstrike. This is what the broad mappedDescendantSnapshots
-        // walk used to do; the delta-cascade replaces it with the
-        // miSlideAndSizeWindow valdata->after equivalent.
+        // resize clipList against its post-recompute clipList. If the
+        // clipList CHANGED in any way, paint+Expose the FULL new
+        // clipList. Skip descendants whose visible region didn't change
+        // — the NW gravity blit in FlippedXView preserves their pixels,
+        // and a gratuitous Expose triggers PolyText-based widgets
+        // (XmLabel, XmCascadeButton) to redraw text on top of itself,
+        // leaving overstrike. Painting the FULL new clipList (not just
+        // delta=new-old) handles the case where a window MOVED with
+        // overlap — the overlap region holds stale pixels from the old
+        // position that would otherwise show through under PolyText.
         let exposureMask: UInt32 = 1 << 15
         for (descId, oldClip) in preResizeClipLists {
             guard let entry = windows.get(descId) else { continue }
             guard let (_, dx, dy) = topLevelAndOffset(for: descId) else { continue }
-            let grew = entry.clipList.subtracting(oldClip)
-            if grew.isEmpty { continue }
-            // Paint bg over the newly-claimed area in top-level coords.
+            let newClip = entry.clipList
+            if newClip == oldClip { continue }
+            // Paint bg over the FULL new clipList in top-level coords.
             let bg = effectiveAncestorBg(from: descId, byteOrder: order)
-            let paintRects = grew.rects.map {
+            let paintRects = newClip.rects.map {
                 WindowBackgroundRect(
                     x: Int16(clamping: $0.x1), y: Int16(clamping: $0.y1),
                     width: UInt16(clamping: $0.x2 - $0.x1),
@@ -1805,15 +1806,15 @@ public final class ServerSession: @unchecked Sendable {
             if !paintRects.isEmpty {
                 bridge?.paintWindowRects(topLevel: id, rects: paintRects)
             }
-            // Expose for the grown area in window-local coords.
+            // Expose for the FULL new clipList in window-local coords.
             guard entry.eventMask & exposureMask != 0 else { continue }
-            let localRects = grew.rects.map {
+            let localRects = newClip.rects.map {
                 BoxRec(
                     x1: $0.x1 - Int32(dx), y1: $0.y1 - Int32(dy),
                     x2: $0.x2 - Int32(dx), y2: $0.y2 - Int32(dy)
                 )
             }
-            log?.log("  → emit Expose on descendant 0x\(String(descId, radix: 16)) (\(localRects.count) rect(s), delta-only)")
+            log?.log("  → emit Expose on descendant 0x\(String(descId, radix: 16)) (\(localRects.count) rect(s), full-new-clipList)")
             MockWindowBridge.emitExposesForRects(
                 window: descId, rects: localRects,
                 byteOrder: order, sequence: sequenceNumber, outbound: outbound
@@ -4178,25 +4179,40 @@ public final class ServerSession: @unchecked Sendable {
 
                 // E1.4: delta cascade. For every window in the subtree
                 // EXCEPT the moved one, compare its pre-move clipList to
-                // its post-recompute clipList. Any pixels NEWLY OWNED
-                // (new minus old) get bg-painted + Exposed. Catches the
-                // sibling-grew case (e.g. text widget extends into the
-                // area V-scrollbar vacated) that the ancestor walk
-                // misses — ancestor walk only goes UP, but the new
-                // owner is sometimes a SIBLING with a larger reach.
-                // Equivalent to miSlideAndSizeWindow's per-window
-                // paint+Expose pass driven from valdata->after.
+                // its post-recompute clipList. If the clipList CHANGED
+                // in any way (moved, grew, or shrank), paint+Expose the
+                // window's FULL new clipList. Mirrors what
+                // miSlideAndSizeWindow does via valdata->after, plus
+                // the bit-gravity carry pass.
+                //
+                // Why full new (not delta=new-old): when a window MOVES
+                // such that new ∩ old is non-empty (Motif Form reflows
+                // labels by ~14px on incremental resizes), the OVERLAP
+                // area holds STALE pixels from the old position — the
+                // toolkit's PolyText glyphs drawn at the old position
+                // before this resize. Painting only (new - old) leaves
+                // the overlap dirty; the toolkit then PolyTexts the
+                // new content on top → overstrike. Painting the FULL
+                // new clipList wipes the overlap, and the subsequent
+                // Expose drives the toolkit to redraw cleanly.
+                //
+                // (This is also why we paint+Expose on a clipList that
+                // SHRANK or whose OLD contained the NEW — the surviving
+                // area's pixels are intact under bit_gravity NorthWest,
+                // but we don't preserve pixels across window moves, so
+                // overstrike-class bugs would surface there too.)
                 if let topId = moveSubtreeTop {
                     for (otherId, oldClip) in preMoveClipLists {
                         guard let otherEntry = windows.get(otherId) else { continue }
                         guard let (otherTop, odx, ody) = topLevelAndOffset(for: otherId),
                               otherTop == topId else { continue }
-                        let grew = otherEntry.clipList.subtracting(oldClip)
-                        if grew.isEmpty { continue }
+                        let newClip = otherEntry.clipList
+                        if newClip == oldClip { continue }
                         // Paint this window's own bg (with ParentRelative
-                        // walk if backPixel is nil) over the grown area.
+                        // walk if backPixel is nil) over the FULL new
+                        // clipList.
                         let bg = effectiveAncestorBg(from: otherId, byteOrder: byteOrder)
-                        let paintRects = grew.rects.map {
+                        let paintRects = newClip.rects.map {
                             WindowBackgroundRect(
                                 x: Int16(clamping: $0.x1), y: Int16(clamping: $0.y1),
                                 width: UInt16(clamping: $0.x2 - $0.x1),
@@ -4207,9 +4223,9 @@ public final class ServerSession: @unchecked Sendable {
                         if !paintRects.isEmpty {
                             bridge?.paintWindowRects(topLevel: topId, rects: paintRects)
                         }
-                        // Expose the grown area in window-local coords.
+                        // Expose the FULL new clipList in window-local coords.
                         if otherEntry.eventMask & MockWindowBridge.exposureMask != 0 {
-                            let localRects = grew.rects.map {
+                            let localRects = newClip.rects.map {
                                 BoxRec(
                                     x1: $0.x1 - Int32(odx), y1: $0.y1 - Int32(ody),
                                     x2: $0.x2 - Int32(odx), y2: $0.y2 - Int32(ody)
