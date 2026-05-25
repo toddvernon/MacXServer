@@ -2189,6 +2189,28 @@ public final class ServerSession: @unchecked Sendable {
     ///
     /// `(dx, dy)` is the window's content top-left in top-level pixel coords
     /// (already includes any ancestor offsets).
+    /// Walk up the parent chain starting from `startingParent` looking for
+    /// the first window that has an explicit `backPixel`. Returns its
+    /// resolved RGB16 color, or nil if no ancestor has bg set (root
+    /// reached without finding one — uncommon). Used as the fallback bg
+    /// for pure-move blits when the moved widget itself has no explicit
+    /// CWBackPixel (ParentRelative semantics per X spec).
+    private func ancestorBackPixelColor(startingParent: UInt32, byteOrder: ByteOrder) -> RGB16? {
+        var current = startingParent
+        // Bound the walk — pathological chains shouldn't lock us up.
+        for _ in 0..<64 {
+            guard let entry = windows.get(current) else { return nil }
+            if entry.backPixel != nil {
+                return windowBackground(entry.id, byteOrder: byteOrder)
+            }
+            if entry.parent == current || entry.parent == config.rootWindowId {
+                return nil
+            }
+            current = entry.parent
+        }
+        return nil
+    }
+
     private func paintRectsForWindow(entry: WindowEntry, dx: Int16, dy: Int16, byteOrder: ByteOrder) -> [WindowBackgroundRect] {
         var out: [WindowBackgroundRect] = []
         let bw = entry.borderWidth
@@ -4067,9 +4089,8 @@ public final class ServerSession: @unchecked Sendable {
                     // Expose-driven text glyphs land on whatever was
                     // there before (plot grid).
                     if postEntry.backPixel == nil,
-                       let parentEntry = windows.get(parentId),
-                       parentEntry.backPixel != nil {
-                        let parentBg = windowBackground(parentEntry.id, byteOrder: byteOrder)
+                       let ancestorBg = ancestorBackPixelColor(
+                           startingParent: parentId, byteOrder: byteOrder) {
                         for box in postEntry.clipList.rects {
                             let w = box.x2 - box.x1
                             let h = box.y2 - box.y1
@@ -4079,7 +4100,7 @@ public final class ServerSession: @unchecked Sendable {
                                 y: Int16(clamping: box.y1),
                                 width: UInt16(clamping: w),
                                 height: UInt16(clamping: h),
-                                color: parentBg
+                                color: ancestorBg
                             ))
                         }
                     }
