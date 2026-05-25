@@ -4022,23 +4022,37 @@ public final class ServerSession: @unchecked Sendable {
                     }
                 }
 
-                // Per X11 server contract (mi/mfb): when a window grows or
-                // moves, the server paints the window's bg-pixel into the
-                // newly-claimed visible region BEFORE the client gets the
+                // Per X11 server contract (mi/mfb): when a window GROWS,
+                // the server paints the window's bg-pixel into the newly-
+                // claimed visible region BEFORE the client gets the
                 // Expose. The client only paints content on top; the bg
                 // is the server's responsibility on every visibility
-                // transition. Without this, the newly-claimed pixels stay
-                // as whatever the bitmap had — the dthelpview 2026-05-20
-                // bug where the form's bg was blue but the L-shape of
-                // grown pixels stayed fresh-bitmap-white because we never
-                // painted them. Phase 1 paints the FULL new clipList
-                // (matches bit-grav=Forget semantics); for bit-grav=
-                // NorthWest windows with content this over-paints, but
-                // the subsequent Expose triggers the client to redraw on
-                // top. Step F (when it lands) will refine to paint only
-                // the (new clipList - old clipList) delta.
+                // transition. Without this, the newly-claimed pixels
+                // stay as whatever the bitmap had — the dthelpview
+                // 2026-05-20 bug where the form's bg was blue but the
+                // L-shape of grown pixels stayed fresh-bitmap-white
+                // because we never painted them. Phase 1 paints the
+                // FULL new clipList (matches bit-grav=Forget semantics);
+                // for bit-grav=NorthWest windows with content this
+                // over-paints, but the subsequent Expose triggers the
+                // client to redraw on top. Step F (when it lands) will
+                // refine to paint only the (new clipList - old clipList)
+                // delta.
+                //
+                // Pure-move (posChanged && !sizeGrew) is NOT a paint
+                // trigger. Under default NorthWest bit-gravity the
+                // window's pixels move with it; the server preserves
+                // content and only the parent's newly-uncovered region
+                // needs paint (handled above by
+                // repaintParentOverUncovered). The 2026-05-19 ef0d6eb
+                // commit included posChanged here; 2026-05-25 backed it
+                // out after the menu-bar-erase regression in dtpad —
+                // Motif's geometry manager generates a cascade of pure-
+                // move ConfigureWindows when a dialog pops (parent
+                // reflows children to make room), and wiping every one
+                // to bg destroyed the menu-bar / work-area content.
                 let sizeGrew = new.width > old.width || new.height > old.height
-                if sizeGrew || posChanged {
+                if sizeGrew {
                     if let (top, dx, dy) = topLevelAndOffset(for: r.window),
                        let postEntry = windows.get(r.window) {
                         let rects = paintRectsForWindow(entry: postEntry, dx: dx, dy: dy, byteOrder: byteOrder)
