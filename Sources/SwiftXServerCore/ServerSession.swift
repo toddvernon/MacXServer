@@ -4039,7 +4039,7 @@ public final class ServerSession: @unchecked Sendable {
                 // refine to paint only the (new clipList - old clipList)
                 // delta.
                 //
-                // Pure-move (posChanged && !sizeGrew) is NOT a paint
+                // Pure-move (posChanged && !sizeChanged) is NOT a paint
                 // trigger. Under default NorthWest bit-gravity the
                 // window's pixels move with it; the server preserves
                 // content and only the parent's newly-uncovered region
@@ -4051,8 +4051,21 @@ public final class ServerSession: @unchecked Sendable {
                 // move ConfigureWindows when a dialog pops (parent
                 // reflows children to make room), and wiping every one
                 // to bg destroyed the menu-bar / work-area content.
+                //
+                // Shrink (sizeChanged && !sizeGrew) IS a paint trigger.
+                // paintRectsForWindow emits both the outer border ring
+                // and the inner bg rect; on shrink, the new (smaller)
+                // border ring and the new interior bg both need to be
+                // drawn at the new geometry. Without this, Athena
+                // Command widgets in xcalc (and any widget that relies
+                // on the X window's CWBorderPixel for its visual border)
+                // lose their border on shrink — the toolkit's Redisplay
+                // paints the label assuming the server already laid down
+                // the bg + border. Surfaced 2026-05-25 by Todd's xcalc
+                // observation "button surrounds either not there at all
+                // or only the top-left is partially rendered."
                 let sizeGrew = new.width > old.width || new.height > old.height
-                if sizeGrew {
+                if sizeChanged {
                     if let (top, dx, dy) = topLevelAndOffset(for: r.window),
                        let postEntry = windows.get(r.window) {
                         let rects = paintRectsForWindow(entry: postEntry, dx: dx, dy: dy, byteOrder: byteOrder)
