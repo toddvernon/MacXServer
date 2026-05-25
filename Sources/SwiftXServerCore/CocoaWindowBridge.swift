@@ -2072,27 +2072,15 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
-    /// NorthWest bit-gravity move for descendant pure-move, with fallback
-    /// bg-paint for out-of-bounds source. Three steps in order, atomically
-    /// inside one main-queue dispatch:
-    ///
-    ///   1. Snapshot the bitmap (captures the source rect's current pixels
-    ///      BEFORE any subsequent paint changes them).
-    ///   2. Paint the fallback bg rects at the dest. For widgets whose
-    ///      source is fully in-bounds, this is a transient wipe — the blit
-    ///      in step 3 immediately overwrites it. For widgets whose source
-    ///      is fully or partially out-of-bounds, the paint is the final
-    ///      contribution at those pixels.
-    ///   3. Crop the snapshot to the source rect (in device coords) and
-    ///      draw it at the dest. `CGImage.cropping` clamps the crop rect
-    ///      to the image bounds — out-of-bounds source pixels just don't
-    ///      get drawn, leaving the fallback bg-paint intact.
-    ///
-    /// The snapshot-then-paint-then-blit order is critical. If we painted
-    /// first and snapshotted second, the snapshot would capture the bg
-    /// color rather than the widget's old content — and dtpad's small-
-    /// position-shift menu-bar regression would return.
-    public func blitWindowRegion(
+    /// (2026-05-25) Reverted. Caused widget bg colors to bleed into
+    /// adjacent siblings' regions in quickplot during resize. The
+    /// snapshot/paint/blit logic is plausibly correct on paper but
+    /// interacts with our clipList / paintRectsForWindow output in some
+    /// way that paints past the moved widget's actual visible extent.
+    /// Keep the implementation around (rather than fully delete) so we
+    /// can re-enable behind a config flag once we've capture-diffed the
+    /// bleed source.
+    private func _unused_blitWindowRegion(
         topLevel: UInt32,
         fromX: Int32, fromY: Int32,
         width: UInt32, height: UInt32,

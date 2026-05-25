@@ -2189,28 +2189,6 @@ public final class ServerSession: @unchecked Sendable {
     ///
     /// `(dx, dy)` is the window's content top-left in top-level pixel coords
     /// (already includes any ancestor offsets).
-    /// Walk up the parent chain starting from `startingParent` looking for
-    /// the first window that has an explicit `backPixel`. Returns its
-    /// resolved RGB16 color, or nil if no ancestor has bg set (root
-    /// reached without finding one — uncommon). Used as the fallback bg
-    /// for pure-move blits when the moved widget itself has no explicit
-    /// CWBackPixel (ParentRelative semantics per X spec).
-    private func ancestorBackPixelColor(startingParent: UInt32, byteOrder: ByteOrder) -> RGB16? {
-        var current = startingParent
-        // Bound the walk — pathological chains shouldn't lock us up.
-        for _ in 0..<64 {
-            guard let entry = windows.get(current) else { return nil }
-            if entry.backPixel != nil {
-                return windowBackground(entry.id, byteOrder: byteOrder)
-            }
-            if entry.parent == current || entry.parent == config.rootWindowId {
-                return nil
-            }
-            current = entry.parent
-        }
-        return nil
-    }
-
     private func paintRectsForWindow(entry: WindowEntry, dx: Int16, dy: Int16, byteOrder: ByteOrder) -> [WindowBackgroundRect] {
         var out: [WindowBackgroundRect] = []
         let bw = entry.borderWidth
@@ -4026,92 +4004,19 @@ public final class ServerSession: @unchecked Sendable {
                 // Expose emission below.
                 recomputeClipsForSubtreeContaining(r.window)
 
-                // NorthWest bit-gravity blit on pure-move (posChanged &&
-                // !sizeChanged). Move the widget's pixels from old absolute
-                // position to new absolute position in the top-level
-                // bitmap, so the toolkit's expected NWG preservation
-                // actually happens. Without this, a widget that slides
-                // into a region of the bitmap previously occupied by
-                // other content (e.g. quickplot's XmText command line
-                // moving up into the plot area when the parent y-shrinks)
-                // ends up with stale pixels under it; the toolkit redraws
-                // label/caret on Expose but everything below the chrome
-                // layer (the widget's bg, prior glyphs, plot grid behind)
-                // comes from whatever pixels happened to be at the new
-                // position previously. X11R6's mi/miwindow.c::miCopyWindow
-                // does this for every window with non-Forget bit_gravity
-                // on every move. Done BEFORE repaintParentOverUncovered
-                // so the source read predates the parent paint that would
-                // wipe the old position to parent bg. Skipped for top-
-                // levels (no bitmap-internal position; NSWindow moves
-                // on screen, bitmap pixels don't shift) and for changes
-                // that include a size component (sizeChanged path's
-                // paintRectsForWindow handles those).
-                if posChanged, !sizeChanged,
-                   let parentId = preMoveParent, parentId != config.rootWindowId,
-                   let (top, newDx, newDy) = topLevelAndOffset(for: r.window),
-                   let postEntry = windows.get(r.window) {
-                    // After the geometry update above, `topLevelAndOffset`
-                    // gives r.window's NEW absolute position. The parent's
-                    // own top-level offset didn't change in this request,
-                    // so r.window's old absolute position is the new one
-                    // minus the local-coord delta on each axis.
-                    let oldAbsX = Int(newDx) - Int(new.x) + Int(old.x)
-                    let oldAbsY = Int(newDy) - Int(new.y) + Int(old.y)
-                    // Fallback bg rects: paintRectsForWindow at the new
-                    // geometry gives us the widget's bg+border rects. The
-                    // bridge paints these BEFORE the blit so any portion
-                    // of the source that's out of the bitmap (e.g.
-                    // quickplot's command line whose old position was
-                    // below the new shrunken top-level bitmap) gets the
-                    // widget's bg color rather than leftover plot-area
-                    // pixels. For in-bounds source (e.g. dtpad's small
-                    // menu-bar shift) the blit immediately overwrites the
-                    // bg with the widget's actual old content, so the
-                    // wipe is transient and invisible.
-                    var bgRects = paintRectsForWindow(
-                        entry: postEntry,
-                        dx: newDx, dy: newDy,
-                        byteOrder: byteOrder
-                    )
-                    // ParentRelative-style fallback: if the widget itself
-                    // has no explicit backPixel (CWBackPixel unset, or
-                    // CWBackPixmap = ParentRelative), paintRectsForWindow
-                    // returns no inner rects. In that case fall back to
-                    // the parent's bg color over the widget's new clipList
-                    // — matches X spec's "ParentRelative pixmap takes the
-                    // parent's bg" semantics for the practical case where
-                    // the parent's bg is a solid color. Without this, an
-                    // XmText widget with no explicit bg whose old position
-                    // was outside the new bitmap (quickplot command line
-                    // case) ends up with stale pixels under it; the blit
-                    // can't read source, the fallback paints nothing, and
-                    // Expose-driven text glyphs land on whatever was
-                    // there before (plot grid).
-                    if postEntry.backPixel == nil,
-                       let ancestorBg = ancestorBackPixelColor(
-                           startingParent: parentId, byteOrder: byteOrder) {
-                        for box in postEntry.clipList.rects {
-                            let w = box.x2 - box.x1
-                            let h = box.y2 - box.y1
-                            guard w > 0, h > 0 else { continue }
-                            bgRects.append(WindowBackgroundRect(
-                                x: Int16(clamping: box.x1),
-                                y: Int16(clamping: box.y1),
-                                width: UInt16(clamping: w),
-                                height: UInt16(clamping: h),
-                                color: ancestorBg
-                            ))
-                        }
-                    }
-                    bridge?.blitWindowRegion(
-                        topLevel: top,
-                        fromX: Int32(oldAbsX), fromY: Int32(oldAbsY),
-                        width: UInt32(old.width), height: UInt32(old.height),
-                        toX: Int32(newDx), toY: Int32(newDy),
-                        fallbackBgRects: bgRects
-                    )
-                }
+                // (2026-05-25) Pure-move descendant bit-gravity blit was
+                // tried and reverted. The straightforward case (blit when
+                // source in-bounds, fallback bg-paint when out-of-bounds,
+                // walk the parent chain for ParentRelative bg) worked for
+                // xcalc and dtpad shrink, but introduced a fresh visual
+                // artifact in quickplot: menu-bar SlateBlue and XmText
+                // DarkSeaGreen bleed through into adjacent widgets'
+                // regions during the resize cascade. Probable cause is
+                // the paint-rect set extending past the actual visible
+                // extent of the moved widget — likely an interaction
+                // with sibling z-order or a clipList edge case. Backed
+                // out pending a wire capture diff. See commits bc75692,
+                // 6434c3e, 0a0a152, 4031fdb for what we tried.
 
                 // E1.5: if a non-top-level window moved/resized, the
                 // parent has newly-uncovered area where this window used
