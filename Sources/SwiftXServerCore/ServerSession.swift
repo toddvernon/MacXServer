@@ -4047,11 +4047,42 @@ public final class ServerSession: @unchecked Sendable {
                     // menu-bar shift) the blit immediately overwrites the
                     // bg with the widget's actual old content, so the
                     // wipe is transient and invisible.
-                    let bgRects = paintRectsForWindow(
+                    var bgRects = paintRectsForWindow(
                         entry: postEntry,
                         dx: newDx, dy: newDy,
                         byteOrder: byteOrder
                     )
+                    // ParentRelative-style fallback: if the widget itself
+                    // has no explicit backPixel (CWBackPixel unset, or
+                    // CWBackPixmap = ParentRelative), paintRectsForWindow
+                    // returns no inner rects. In that case fall back to
+                    // the parent's bg color over the widget's new clipList
+                    // — matches X spec's "ParentRelative pixmap takes the
+                    // parent's bg" semantics for the practical case where
+                    // the parent's bg is a solid color. Without this, an
+                    // XmText widget with no explicit bg whose old position
+                    // was outside the new bitmap (quickplot command line
+                    // case) ends up with stale pixels under it; the blit
+                    // can't read source, the fallback paints nothing, and
+                    // Expose-driven text glyphs land on whatever was
+                    // there before (plot grid).
+                    if postEntry.backPixel == nil,
+                       let parentEntry = windows.get(parentId),
+                       parentEntry.backPixel != nil {
+                        let parentBg = windowBackground(parentEntry.id, byteOrder: byteOrder)
+                        for box in postEntry.clipList.rects {
+                            let w = box.x2 - box.x1
+                            let h = box.y2 - box.y1
+                            guard w > 0, h > 0 else { continue }
+                            bgRects.append(WindowBackgroundRect(
+                                x: Int16(clamping: box.x1),
+                                y: Int16(clamping: box.y1),
+                                width: UInt16(clamping: w),
+                                height: UInt16(clamping: h),
+                                color: parentBg
+                            ))
+                        }
+                    }
                     bridge?.blitWindowRegion(
                         topLevel: top,
                         fromX: Int32(oldAbsX), fromY: Int32(oldAbsY),
