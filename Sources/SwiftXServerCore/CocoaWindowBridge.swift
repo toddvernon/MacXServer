@@ -1173,6 +1173,17 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             x: CGFloat(dstX), y: CGFloat(dstY),
             width: CGFloat(width), height: CGFloat(height)
         )
+        // DIAG: sample top-left and bottom-left pixels of the cropped image
+        if case .pixmap = dst {} else if width > 10 && height < 20 {
+            let bpr = subImage.bytesPerRow
+            if let dp = subImage.dataProvider, let data = dp.data,
+               let ptr = CFDataGetBytePtr(data) {
+                let topRow = (ptr[0], ptr[1], ptr[2], ptr[3])
+                let botOff = (Int(subImage.height) - 1) * bpr
+                let botRow = (ptr[botOff], ptr[botOff+1], ptr[botOff+2], ptr[botOff+3])
+                log?.log("  DIAG blitCroppedImage \(width)x\(height) src=(\(srcX),\(srcY)) dst=(\(dstX),\(dstY)) imgSize=\(srcImage.width)x\(srcImage.height) crop=\(cropRect) topPx=\(topRow) botPx=\(botRow)")
+            }
+        }
         withDrawContext(dst, clipRectangles: clipRectangles) { ctx in
             ctx.draw(subImage, in: dstRect)
         }
