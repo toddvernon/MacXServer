@@ -117,7 +117,10 @@ public struct GCState: Equatable, Sendable {
                 Rectangle(x: $0.x &+ cox, y: $0.y &+ coy, width: $0.width, height: $0.height)
             }
         }
-        state.dashes = entry.dashes
+        let lineStyle = entry.values[GCBits.lineStyle] ?? 0
+        if lineStyle != 0 {
+            state.dashes = entry.dashes
+        }
         return state
     }
 }

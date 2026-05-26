@@ -941,7 +941,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// as a uniform on-period, so we duplicate single-byte patterns for
     /// spec-compliant behavior.
     private func applyDashes(_ ctx: CGContext, _ dashes: [UInt8]?, dashOffset: UInt32) {
-        guard let dashes = dashes, !dashes.isEmpty else { return }
+        guard let dashes = dashes, !dashes.isEmpty else {
+            ctx.setLineDash(phase: 0, lengths: [])
+            return
+        }
         let lengths: [CGFloat]
         if dashes.count == 1 {
             let v = CGFloat(dashes[0])
