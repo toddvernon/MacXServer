@@ -1173,19 +1173,21 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             x: CGFloat(dstX), y: CGFloat(dstY),
             width: CGFloat(width), height: CGFloat(height)
         )
-        // DIAG: sample top-left and bottom-left pixels of the cropped image
-        if case .pixmap = dst {} else if width > 10 && height < 20 {
-            let bpr = subImage.bytesPerRow
-            if let dp = subImage.dataProvider, let data = dp.data,
-               let ptr = CFDataGetBytePtr(data) {
-                let topRow = (ptr[0], ptr[1], ptr[2], ptr[3])
-                let botOff = (Int(subImage.height) - 1) * bpr
-                let botRow = (ptr[botOff], ptr[botOff+1], ptr[botOff+2], ptr[botOff+3])
-                log?.log("  DIAG blitCroppedImage \(width)x\(height) src=(\(srcX),\(srcY)) dst=(\(dstX),\(dstY)) imgSize=\(srcImage.width)x\(srcImage.height) crop=\(cropRect) topPx=\(topRow) botPx=\(botRow)")
-            }
-        }
         withDrawContext(dst, clipRectangles: clipRectangles) { ctx in
+            // [Y-FLIP for CopyArea images] CGContext.draw(image:in:)
+            // places the image assuming CG's natural y-up layout. Our
+            // backing contexts use a y-flipped CTM (y-down, X11 style),
+            // so without compensation the image rows land upside-down
+            // in the backing. Flip vertically within the destination
+            // rect so the image orientation matches the backing's
+            // coordinate convention. The backing's own y-flip on
+            // display (FlippedXView.draw, Y-FLIP #2) then produces
+            // the correct on-screen result.
+            ctx.saveGState()
+            ctx.translateBy(x: 0, y: 2 * CGFloat(dstY) + CGFloat(height))
+            ctx.scaleBy(x: 1, y: -1)
             ctx.draw(subImage, in: dstRect)
+            ctx.restoreGState()
         }
     }
 
