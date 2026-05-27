@@ -1,3 +1,79 @@
+# Status 2026-05-27 — dt-app theme dead-rule sweep; CopyArea y-flip reverted
+
+Cleanup session. Two commits, both pushed.
+
+**Retired dead dt-app dialog-button foreground rules (`9aa90c3`).** Spent
+the afternoon debugging dtpad's `save_warn` dialog buttons — none of our
+`Dtpad*save_warn*…foreground` rules took, no matter the binding
+tightness. Kitchen-sink diagnostic at every level from `*OK.foreground`
+up to the fully-tight `Dtpad.save_warn_popup.save_warn.OK.foreground`
+all failed to land. A paired `background:MidnightBlue` test also didn't
+move. But shape rules (`shadowThickness:8`, `marginWidth:20`,
+`marginHeight:15`) DID land and visibly bloomed the buttons. That's the
+mechanism evidence: Motif sets dialog-button fg/bg programmatically via
+`XmGetColors()` at widget-create time (`XtSetArg` under the hood),
+which beats every Xrm rule we can write. Shape rules flow through Xrm
+normally because they're not in the auto-color path.
+
+So I pulled every never-firing dialog-button fg rule from both the
+seed (`DefaultMotifResources.swift`) and the running config
+(`~/.swiftx-resources`): `*XmDialogShell*XmPushButton(Gadget).foreground`,
+`Dtpad*save_warn*…foreground`, `Dthelpview*XmPushButton(Gadget).foreground`,
+the per-instance Dthelpview close/back/print triple, plus all the
+`*fontList` Helvetica-italic companions for those rules. Kept the
+font/shape rules that actually work. Dialog buttons now render
+Black-on-Gray Motif-fallback, which is SS2 visual parity anyway —
+this isn't a regression, it's accurate documentation of what we can
+and can't control.
+
+**Sealed off SDT Pixel Set impersonation with a giant banner.**
+`installCDECustomizationDaemonImpersonation` in
+`SelectionMediator.swift` is dormant (retired 2026-05-18, never
+called) but kept reading like current architecture across sessions
+and dragging diagnoses back toward SDT-Pixel-Set fixes that don't
+apply. Now commented out under a `RETIRED` ASCII banner with an
+explicit "ask Todd before considering this" gate. Original doc-block
+preserved verbatim as historical citation. New memory
+`feedback_sdt_pixel_set_retired.md` plus a CLAUDE.md edit so the
+trap can't keep firing.
+
+**Reverted the y-flip in `blitCroppedImage` (`2532ba6`).** `be8fdce`
+(2026-05-26) added a local y-flip in `blitCroppedImage` to make
+Motif horizontal scrollbar thumb shadows render right-side-up. The
+fix applies to **every** CopyArea image blit through that path —
+quickplot's button-bar bitmaps (and likely other PutImage-sourced
+pixmap copies) now render vertically flipped. Backed out the flip.
+Scrollbar thumb shadow bug re-opens with it. The button-bar visual
+regression was the larger defect; this is the right trade.
+
+**Root cause is unresolved.** Different upstream pixmap writers
+(`FillRectangle` / `PolyLine` / etc. vs `PutImage`) appear to
+disagree on row order in the pixmap backing, so no single blit-side
+rule can be correct for both. The real fix is to make pixmap
+writers consistent in y-orientation. Investigate next session by
+diffing the pixel buffer of a `FillRectangle`-built thumb pixmap
+against a `PutImage`-built button-bar icon during a fresh quickplot
+startup.
+
+## What's still open
+
+1. **Pixmap writer y-orientation inconsistency.** The root cause
+   behind the scrollbar-thumb-shadow vs button-bar-bitmap conflict.
+   Next session priority. Capture quickplot startup; inspect the
+   backing buffers of one `FillRectangle`-populated pixmap and one
+   `PutImage`-populated pixmap; identify which writer is producing
+   inverted row order; normalize on a single y-down convention.
+   Then `blitCroppedImage` gets one rule that's correct everywhere.
+
+2. **Horizontal scrollbar thumb shadow** (re-opened). Top/bottom
+   shadow colors inverted on Motif horizontal scrollbar thumbs.
+   Will close automatically when (1) is fixed.
+
+3. **Carry-overs from prior status entries** — resize-uncover
+   repaint gap (dthelpview thinner buttons after resize, dtpad
+   text-area paint loss); framer-shared bug investigation; other
+   dt-apps smoke tests post-clipping.
+
 # Status 2026-05-24 — Optional Motif frame; SIGPIPE fix; parked-bug closures
 
 Three things landed today.
