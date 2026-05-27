@@ -76,13 +76,12 @@ or quickplot's plot scrollbars (be8fdce bug closed).
 
 ## What's still open
 
-1. **Visual verification of the pixmap-writer fix.** Tests can't
-   catch pixel orientation. Open quickplot from u5: button-bar
-   icons should be right-side-up; horizontal scrollbar thumb
-   shadow should be top+left highlight, bottom+right shadow (SS2
-   parity). If both look right, the fix is shipped.
+1. ~~**Visual verification of the pixmap-writer fix.**~~ **Closed
+   2026-05-27.** Verified live from u5: quickplot button-bar icons
+   right-side-up, horizontal scrollbar thumb shadow correct (top+left
+   highlight, bottom+right shadow, SS2 parity). Fix is shipped.
 
-2. **Carry-overs from prior status entries** — resize-uncover
+2. **Carry-overs from prior status entries** -- resize-uncover
    repaint gap (dthelpview thinner buttons after resize, dtpad
    text-area paint loss); framer-shared bug investigation; other
    dt-apps smoke tests post-clipping.
