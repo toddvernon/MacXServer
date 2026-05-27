@@ -241,11 +241,9 @@ The two are honest after the strip. Today they aren't quite.
 
 ## Outstanding small bugs that this thesis doesn't address
 
-- dtpad menu-bar erase on dialog popup. Pre-existing, separate code path
-  (dialog map/unmap), unaffected by resize work.
-- Horizontal scrollbar reverse-image. Pure rendering, multi-app, separate.
-- dtpad small artifacts between text area and frame on grow. Probably the
-  scrollbar-arrow sub-widget repaint case. Separate.
+- ~~dtpad menu-bar erase on dialog popup.~~ Closed 2026-05-27, verified fixed.
+- ~~Horizontal scrollbar reverse-image.~~ Closed 2026-05-27 (pixmap-writer y-flip fix).
+- ~~dtpad small artifacts between text area and frame on grow.~~ Closed 2026-05-27, verified fixed.
 
 ## Done state
 
@@ -407,6 +405,12 @@ stopping one cascade.
 ---
 
 ## 2026-05-25 post-ship: the small gray rectangles + the right fix path
+
+**Update 2026-05-27: Todd reports this is fixed.** The small gray
+rectangles are no longer visible. The y-flip pixmap-writer fix
+(2026-05-27) or the preceding work likely closed the remaining cases.
+
+Original text preserved below for context:
 
 After the strip landed, Todd tested broadly. Most things were fine,
 with one remaining cosmetic: small gray rectangles in a few resize-

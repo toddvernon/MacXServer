@@ -81,10 +81,10 @@ or quickplot's plot scrollbars (be8fdce bug closed).
    right-side-up, horizontal scrollbar thumb shadow correct (top+left
    highlight, bottom+right shadow, SS2 parity). Fix is shipped.
 
-2. **Carry-overs from prior status entries** -- resize-uncover
-   repaint gap (dthelpview thinner buttons after resize, dtpad
-   text-area paint loss); framer-shared bug investigation; other
-   dt-apps smoke tests post-clipping.
+2. **Carry-overs from prior status entries** -- ~~resize-uncover
+   repaint gap~~ (closed 2026-05-27, verified fixed); framer-shared
+   bug investigation (still open); ~~dt-apps smoke tests post-clipping~~
+   (closed 2026-05-27, all look good).
 
 # Status 2026-05-24 — Optional Motif frame; SIGPIPE fix; parked-bug closures
 
