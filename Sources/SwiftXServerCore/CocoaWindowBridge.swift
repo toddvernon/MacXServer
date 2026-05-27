@@ -1177,19 +1177,9 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             width: CGFloat(width), height: CGFloat(height)
         )
         withDrawContext(dst, clipRectangles: clipRectangles) { ctx in
-            // [Y-FLIP for CopyArea images] Same counter-flip as drawPutImage
-            // (re-landed from be8fdce after 2532ba6 reverted it). With every
-            // image-based pixmap writer now compensating for the y-flipped
-            // CTM, pixmap memory is consistently top-down — so the single
-            // flip here renders both FillRect-built pixmaps (scrollbar
-            // shadows) AND PutImage-built pixmaps (quickplot button-bar
-            // icons) right-side-up. See STATUS 2026-05-27 for the prior
-            // asymmetry that made one site-fix insufficient.
-            ctx.saveGState()
-            ctx.translateBy(x: 0, y: 2 * CGFloat(dstY) + CGFloat(height))
-            ctx.scaleBy(x: 1, y: -1)
-            ctx.draw(subImage, in: dstRect)
-            ctx.restoreGState()
+            // See GRAPHICS_Y_FLIP.md. The helper compensates for the
+            // y-flipped backing CTM so image rows land top-down in memory.
+            ctx.drawImageRespectingYFlip(subImage, in: dstRect)
         }
     }
 
@@ -1728,20 +1718,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // upscaled destination (window backings are device-scale, pixmaps
             // are 1:1 logical — both want hard pixel edges for an icon).
             ctx.interpolationQuality = .none
-            // Counter-flip the y-flipped backing CTM for the duration of the
-            // image draw. Without it, ctx.draw(image:in:) lays rows in CG's
-            // natural y-up order — which renders upside-down through our
-            // X11-style y-down CTM and, more importantly, writes pixmap
-            // memory upside-down. That asymmetry between image-based writers
-            // (PutImage) and fill-based writers (FillRectangle, PolySegment)
-            // is the root of the scrollbar-thumb-shadow vs button-bar-bitmap
-            // conflict — see STATUS 2026-05-27. Keep all pixmap writers
-            // consistently top-down; the blit side then has one rule.
-            ctx.saveGState()
-            ctx.translateBy(x: 0, y: 2 * CGFloat(dstY) + CGFloat(h))
-            ctx.scaleBy(x: 1, y: -1)
-            ctx.draw(cgImage, in: dstRect)
-            ctx.restoreGState()
+            // See GRAPHICS_Y_FLIP.md. Without this helper PutImage would
+            // write pixmap memory upside-down (the bug that made
+            // be8fdce's blit-only fix fail).
+            ctx.drawImageRespectingYFlip(cgImage, in: dstRect)
         }
     }
 

@@ -26,8 +26,7 @@ final class PixelBufferTests: XCTestCase {
     func testDrawsAreReadableFromBackingMemory() throws {
         // Verify that draws into PixelBuffer.context actually land in the
         // bitmap memory we can read back. Fill the entire buffer with red,
-        // confirm every pixel reads as red — independent of y-flip layout,
-        // which is verified in production via FlippedXView round-trip.
+        // confirm every pixel reads as red.
         let buf = try XCTUnwrap(PixelBuffer(width: 4, height: 4))
         buf.context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
         buf.context.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
@@ -41,6 +40,31 @@ final class PixelBufferTests: XCTestCase {
             XCTAssertGreaterThan(px.r, px.g, "pixel \(i) red should dominate green")
             XCTAssertGreaterThan(px.r, px.b, "pixel \(i) red should dominate blue")
             XCTAssertGreaterThanOrEqual(px.r, 0xF0, "pixel \(i) red intensity")
+        }
+    }
+
+    /// PixelBuffer's CTM is configured so user-space (0,0) writes to
+    /// memory row 0 — X11's y-down convention. A fill at user-y=0 must
+    /// land in the FIRST memory row, not the last. See GRAPHICS_Y_FLIP.md.
+    /// Broader image-source orientation tests live in
+    /// YFlipOrientationTests; this one nails down the CTM itself.
+    func testFillAtUserYZeroLandsInMemoryRowZero() throws {
+        let buf = try XCTUnwrap(PixelBuffer(width: 4, height: 4))
+        // Fill ONLY user-y row 0 with red. Leave rows 1-3 untouched
+        // (default zero / transparent black).
+        buf.context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        buf.context.fill(CGRect(x: 0, y: 0, width: 4, height: 1))
+
+        let pixels = readARGBPixels(from: buf)
+        // Memory row 0 (pixels 0..3) must be red.
+        for col in 0..<4 {
+            XCTAssertGreaterThan(pixels[col].r, pixels[col].b,
+                "memory row 0 col \(col) should be red — user-y=0 must map to memory row 0")
+        }
+        // Memory row 3 (the last row, pixels 12..15) must be untouched.
+        for col in 0..<4 {
+            XCTAssertEqual(pixels[3 * 4 + col].r, 0,
+                "memory row 3 col \(col) should be untouched (alpha=0 default)")
         }
     }
 

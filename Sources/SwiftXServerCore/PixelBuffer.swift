@@ -19,6 +19,32 @@ import CoreGraphics
 // them to scaled windows where the blit happens to upscale. That keeps
 // the format simple and avoids subpixel artifacts in CopyArea.
 
+// Counter-flipped image draw helper. The canonical macOS gotcha:
+// `CGContext.draw(image:in:)` against a context whose CTM has been
+// y-flipped (PixelBuffer's CTM, FlippedXView.backing's CTM, anywhere
+// the X11 y-down convention is in force) paints image rows upside-down
+// in memory. Fill/stroke ops don't have this problem because they have
+// no internal orientation — only images and patterns do.
+//
+// Every image-draw site against a y-flipped backing MUST go through
+// this helper. Bypassing it with a direct `ctx.draw(image, in:)`
+// reintroduces the asymmetry that caused the 2026-05-27 scrollbar-
+// thumb-vs-button-bar incident (see GRAPHICS_Y_FLIP.md). Future
+// graphics ops that draw an image into a pixmap or window backing
+// should call this helper, period.
+//
+// If you find yourself wanting to call `ctx.draw(image, in:)` directly
+// against a backing context, STOP and read GRAPHICS_Y_FLIP.md first.
+extension CGContext {
+    public func drawImageRespectingYFlip(_ image: CGImage, in rect: CGRect) {
+        saveGState()
+        translateBy(x: 0, y: 2 * rect.origin.y + rect.size.height)
+        scaleBy(x: 1, y: -1)
+        draw(image, in: rect)
+        restoreGState()
+    }
+}
+
 public struct PixelBuffer {
 
     public let context: CGContext
