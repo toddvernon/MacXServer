@@ -158,6 +158,8 @@ enum ServerEntry {
             // any/local/wildcard, respect it; otherwise deduce the primary LAN IP.
             let isWildcard = (host == "0.0.0.0" || host == "::" || host.isEmpty)
             let advertisedHost = isWildcard ? (primaryLocalIPv4() ?? host) : host
+            appDelegate.advertisedHost = advertisedHost
+            appDelegate.displayNumber = display
             let displayLabel = "Listening on \(advertisedHost):\(actual) — X display :\(display)"
             appDelegate.listenerStatus = displayLabel
             writeStderr("macxserver \(displayLabel)\n")

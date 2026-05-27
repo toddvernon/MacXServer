@@ -16,6 +16,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var prefsController: PreferencesWindowController?
     private var resourcesController: ResourcesWindowController?
     private var fontMappingsController: FontMappingsWindowController?
+    private var launchersController: LaunchersWindowController?
+    private var currentLauncherFile: LauncherFile?
+    private var launchersMenu: NSMenu?
+    private var activeLauncher: TelnetLauncher?
+    private var progressController: LaunchProgressWindowController?
+
+    var advertisedHost: String = "localhost"
+    var displayNumber: String = "0"
 
     /// Display string shown in the status-bar menu's first (disabled) row,
     /// e.g. "Listening on :6000 (display :0)". main.swift sets this once
@@ -50,6 +58,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         installStatusItem()
         installMainMenu()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(launchersFileChanged(_:)),
+            name: .launchersFileDidChange, object: nil
+        )
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -189,7 +201,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenuItem.submenu = editMenu
         main.addItem(editMenuItem)
 
-        // Window menu — minimise / close are handy when an X window is up.
+        // Launchers submenu -- one-click launch of X apps on remote Suns.
+        let launchersMenuItem = NSMenuItem()
+        let lMenu = NSMenu(title: "Launchers")
+        self.launchersMenu = lMenu
+        rebuildLaunchersMenu(lMenu)
+        launchersMenuItem.submenu = lMenu
+        main.addItem(launchersMenuItem)
+
+        // Window menu -- minimise / close are handy when an X window is up.
         let windowMenuItem = NSMenuItem()
         let windowMenu = NSMenu(title: "Window")
         windowMenu.addItem(NSMenuItem(title: "Minimize",
@@ -279,10 +299,117 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func dropAllClients(_ sender: Any?) {
-        // One-and-done. listener.dropAllClients() does the work — cancels
-        // each active read source, which cascades into per-session
-        // cleanup (windows go away, resources freed, capture finalized).
-        // Listener stays bound and accepting new clients.
         listener?.dropAllClients()
     }
+
+    // MARK: - Launchers
+
+    private func rebuildLaunchersMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let file = LauncherFileLoader.loadOrSeed(seed: DefaultLaunchers.seedContent)
+        currentLauncherFile = file
+        for entry in file.entries {
+            let item = NSMenuItem(title: entry.name,
+                                  action: #selector(launchRemoteApp(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = entry.name as NSString
+            menu.addItem(item)
+        }
+        if !file.entries.isEmpty { menu.addItem(.separator()) }
+        let edit = NSMenuItem(title: "Edit Launchers\u{2026}",
+                              action: #selector(openLaunchers(_:)),
+                              keyEquivalent: "")
+        edit.target = self
+        menu.addItem(edit)
+    }
+
+    @objc private func launchersFileChanged(_ note: Notification) {
+        if let menu = launchersMenu { rebuildLaunchersMenu(menu) }
+    }
+
+    @MainActor
+    @objc private func openLaunchers(_ sender: Any?) {
+        if launchersController == nil {
+            launchersController = LaunchersWindowController()
+        }
+        launchersController?.showWindow()
+    }
+
+    @MainActor
+    @objc private func launchRemoteApp(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String,
+              let entry = currentLauncherFile?.entries.first(where: { $0.name == name })
+        else { return }
+        let account = "\(entry.user)@\(entry.host)"
+        if let password = KeychainHelper.retrieve(account: account) {
+            executeLaunch(entry: entry, password: password)
+        } else {
+            promptForPassword(entry: entry, account: account)
+        }
+    }
+
+    private func promptForPassword(entry: LauncherEntry, account: String) {
+        let alert = NSAlert()
+        alert.messageText = "Password for \(account)"
+        alert.informativeText = "Enter the login password for \(entry.user) on \(entry.host).\nIt will be stored in the macOS Keychain."
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else { return }
+        let password = field.stringValue
+        guard !password.isEmpty else { return }
+        try? KeychainHelper.store(account: account, password: password)
+        executeLaunch(entry: entry, password: password)
+    }
+
+    private func executeLaunch(entry: LauncherEntry, password: String) {
+        let display = "\(advertisedHost):\(displayNumber)"
+        let launcher = TelnetLauncher(entry: entry, password: password, displayString: display)
+        activeLauncher = launcher
+
+        if entry.verbose {
+            let ctrl = LaunchProgressWindowController(title: entry.name)
+            progressController = ctrl
+            ctrl.showWindow()
+            launcher.onStatus { [weak ctrl] message in
+                ctrl?.appendStatusLine(message)
+            }
+            launcher.onText { [weak ctrl] text, bold in
+                if bold { ctrl?.appendBoldText(text) }
+                else { ctrl?.appendText(text) }
+            }
+        }
+
+        launcher.launch { [weak self] result in
+            self?.activeLauncher = nil
+            switch result {
+            case .success:
+                self?.progressController?.markDone(failed: false)
+            case .failure(let error):
+                if self?.progressController != nil {
+                    self?.progressController?.appendStatusLine("FAILED: \(error.localizedDescription)")
+                    self?.progressController?.markDone(failed: true)
+                } else {
+                    self?.showLaunchError("Launch failed for \(entry.name): \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func showLaunchError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Launcher Error"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+}
+
+extension Notification.Name {
+    static let launchersFileDidChange = Notification.Name("SwiftXLaunchersFileDidChange")
 }

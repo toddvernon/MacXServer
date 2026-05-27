@@ -103,6 +103,14 @@
 		830C3B9E4539A6C7E9CE45E1 /* CodeEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF4AD16031FB7F7EF0DAECC6 /* CodeEditorView.swift */; };
 		8416682E2222FED362A4EE6C /* SelectionMediator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B285FD582FAF4933BADFEC56 /* SelectionMediator.swift */; };
 		855D5C96B247907D25F2E066 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA59B9723B98DBA33C9A52E9 /* AppDelegate.swift */; };
+		858828032FC78D33005F1797 /* LauncherSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 858828022FC78D33005F1797 /* LauncherSyntaxHighlighter.swift */; };
+		858828042FC78D33005F1797 /* LaunchersPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 858828002FC78D33005F1797 /* LaunchersPanelView.swift */; };
+		858828052FC78D33005F1797 /* LaunchersWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 858828012FC78D33005F1797 /* LaunchersWindowController.swift */; };
+		8588280A2FC78DAC005F1797 /* LauncherFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 858828082FC78DAC005F1797 /* LauncherFile.swift */; };
+		8588280B2FC78DAC005F1797 /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 858828072FC78DAC005F1797 /* KeychainHelper.swift */; };
+		8588280C2FC78DAC005F1797 /* DefaultLaunchers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 858828062FC78DAC005F1797 /* DefaultLaunchers.swift */; };
+		8588280D2FC78DAC005F1797 /* LauncherTokenizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 858828092FC78DAC005F1797 /* LauncherTokenizer.swift */; };
+		8588280F2FC78DE8005F1797 /* TelnetLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8588280E2FC78DE8005F1797 /* TelnetLauncher.swift */; };
 		85AF64B3C6BB3A4F4AE5F134 /* ByteReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3314A110446CF6CF19916688 /* ByteReader.swift */; };
 		87661BEC3946555280C986CB /* ClearArea.swift in Sources */ = {isa = PBXBuildFile; fileRef = C119D24A49FD7C1637E62A3C /* ClearArea.swift */; };
 		87A1DD9EB10D2164474F1FE8 /* FontMappingsPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 800EAF3DF38A3331010EBCEF /* FontMappingsPanelView.swift */; };
@@ -393,6 +401,14 @@
 		800EAF3DF38A3331010EBCEF /* FontMappingsPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontMappingsPanelView.swift; sourceTree = "<group>"; };
 		843A6A5119906FB4B846C458 /* ServerConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerConfig.swift; sourceTree = "<group>"; };
 		85685B90E8B5A9069F010AD9 /* SyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxHighlighter.swift; sourceTree = "<group>"; };
+		858828002FC78D33005F1797 /* LaunchersPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchersPanelView.swift; sourceTree = "<group>"; };
+		858828012FC78D33005F1797 /* LaunchersWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchersWindowController.swift; sourceTree = "<group>"; };
+		858828022FC78D33005F1797 /* LauncherSyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherSyntaxHighlighter.swift; sourceTree = "<group>"; };
+		858828062FC78DAC005F1797 /* DefaultLaunchers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultLaunchers.swift; sourceTree = "<group>"; };
+		858828072FC78DAC005F1797 /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
+		858828082FC78DAC005F1797 /* LauncherFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherFile.swift; sourceTree = "<group>"; };
+		858828092FC78DAC005F1797 /* LauncherTokenizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherTokenizer.swift; sourceTree = "<group>"; };
+		8588280E2FC78DE8005F1797 /* TelnetLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelnetLauncher.swift; sourceTree = "<group>"; };
 		8691A06AF61F8A1AAD3C9122 /* DrawTarget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawTarget.swift; sourceTree = "<group>"; };
 		879DD92FB0B2E7F7ED0D4279 /* RecentRequestSink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentRequestSink.swift; sourceTree = "<group>"; };
 		88E2FA8704FBC71C8A3C5B5F /* GetProperty.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GetProperty.swift; sourceTree = "<group>"; };
@@ -517,6 +533,11 @@
 		171B859ACD8078F7DCA8673A /* SwiftXServerCore */ = {
 			isa = PBXGroup;
 			children = (
+				8588280E2FC78DE8005F1797 /* TelnetLauncher.swift */,
+				858828062FC78DAC005F1797 /* DefaultLaunchers.swift */,
+				858828072FC78DAC005F1797 /* KeychainHelper.swift */,
+				858828082FC78DAC005F1797 /* LauncherFile.swift */,
+				858828092FC78DAC005F1797 /* LauncherTokenizer.swift */,
 				59D9C33A154D37D9FD24A61B /* MotifFrame */,
 				D0B077D22943344CF0A6D22B /* Region */,
 				ED9981372DE4075EA32CA4AB /* AtomTable.swift */,
@@ -596,6 +617,9 @@
 		54BDAB0338F73BE5D61CF60A /* SwiftXServer */ = {
 			isa = PBXGroup;
 			children = (
+				858828002FC78D33005F1797 /* LaunchersPanelView.swift */,
+				858828012FC78D33005F1797 /* LaunchersWindowController.swift */,
+				858828022FC78D33005F1797 /* LauncherSyntaxHighlighter.swift */,
 				EA59B9723B98DBA33C9A52E9 /* AppDelegate.swift */,
 				AF4AD16031FB7F7EF0DAECC6 /* CodeEditorView.swift */,
 				6B2D3A9FDC645417BDAA49FF /* EditorTheme.swift */,
@@ -1009,6 +1033,10 @@
 				952169E1A79ED92A2765265F /* CDEResourceManagerFixture.swift in Sources */,
 				5DFB3901BFF84E0EC0F79375 /* ClipList.swift in Sources */,
 				DA8B8A39A3346E2DDBC566BA /* ClipboardPreferences.swift in Sources */,
+				8588280A2FC78DAC005F1797 /* LauncherFile.swift in Sources */,
+				8588280B2FC78DAC005F1797 /* KeychainHelper.swift in Sources */,
+				8588280C2FC78DAC005F1797 /* DefaultLaunchers.swift in Sources */,
+				8588280D2FC78DAC005F1797 /* LauncherTokenizer.swift in Sources */,
 				34B046119200D2455D2DF59C /* CocoaWindowBridge.swift in Sources */,
 				C41239F3ABD02DED708EF10F /* ColorTable.swift in Sources */,
 				6D8EB1AA90E85822D3EEA446 /* DefaultFontMappings.swift in Sources */,
@@ -1030,6 +1058,7 @@
 				7F4D07B422D14F33CEF69270 /* MotifWindow.swift in Sources */,
 				CACEBA76A7907DA83D4654B0 /* OutboundQueue.swift in Sources */,
 				CE591857F0C41C97E597EE90 /* PixelBuffer.swift in Sources */,
+				8588280F2FC78DE8005F1797 /* TelnetLauncher.swift in Sources */,
 				FF215B9CEEF7EE25F44B75A8 /* Region.swift in Sources */,
 				49D5735C4F198471DDF8CA3B /* RegionDebug.swift in Sources */,
 				6E61174D7B5199937EDA7642 /* RegionOp.swift in Sources */,
@@ -1194,6 +1223,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				858828032FC78D33005F1797 /* LauncherSyntaxHighlighter.swift in Sources */,
+				858828042FC78D33005F1797 /* LaunchersPanelView.swift in Sources */,
+				858828052FC78D33005F1797 /* LaunchersWindowController.swift in Sources */,
 				855D5C96B247907D25F2E066 /* AppDelegate.swift in Sources */,
 				830C3B9E4539A6C7E9CE45E1 /* CodeEditorView.swift in Sources */,
 				C0ED154278C1CB45E3441EAC /* EditorTheme.swift in Sources */,
@@ -1267,9 +1299,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Xcode/Server-Info.plist";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"@executable_path/../Frameworks",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.server;
 				PRODUCT_NAME = MacXServer;
 				SDKROOT = macosx;
@@ -1459,9 +1489,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Xcode/Capture-Info.plist";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"@executable_path/../Frameworks",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.capture;
 				PRODUCT_NAME = MacXCapture;
 				SDKROOT = macosx;
@@ -1476,9 +1504,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Xcode/Server-Info.plist";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"@executable_path/../Frameworks",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.server;
 				PRODUCT_NAME = MacXServer;
 				SDKROOT = macosx;
@@ -1589,9 +1615,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Xcode/Capture-Info.plist";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"@executable_path/../Frameworks",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.capture;
 				PRODUCT_NAME = MacXCapture;
 				SDKROOT = macosx;
