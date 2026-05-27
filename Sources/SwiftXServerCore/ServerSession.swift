@@ -331,6 +331,7 @@ public final class ServerSession: @unchecked Sendable {
                 )
             }
         }
+        coordinator.registerRootPropertyObserver(token: bridgeHandlerToken, observer: self)
         // All AppKit-side callbacks hop onto protocolQueue, run the handler,
         // and flush any bytes the handler appended to outbound. Since
         // protocolQueue is the only writer, no lock is needed at the socket.
@@ -442,12 +443,12 @@ public final class ServerSession: @unchecked Sendable {
                 UInt8((id >> 8) & 0xFF),  UInt8(id & 0xFF)
             ]
         }()
-        properties.change(
+        coordinator.changeRootProperty(
             window: config.rootWindowId,
             property: dragWindowAtom,
             type: xaWindowAtom,
             format: 32,
-            mode: 0,             // PropModeReplace
+            mode: 0,
             value: rootBytes
         )
 
@@ -494,10 +495,10 @@ public final class ServerSession: @unchecked Sendable {
             b.append(UInt8( wmWin        & 0xFF))
             return b
         }()
-        properties.change(
+        coordinator.changeRootProperty(
             window: config.rootWindowId,
             property: motifWmInfoAtom,
-            type: motifWmInfoAtom,   // type is the same atom by convention
+            type: motifWmInfoAtom,
             format: 32,
             mode: 0,
             value: mwmInfoBytes
@@ -520,7 +521,7 @@ public final class ServerSession: @unchecked Sendable {
         )
         let resourceManagerAtom: UInt32 = 23   // predefined RESOURCE_MANAGER
         let stringAtom: UInt32 = 31            // predefined STRING
-        properties.change(
+        coordinator.changeRootProperty(
             window: config.rootWindowId,
             property: resourceManagerAtom,
             type: stringAtom,
@@ -1337,8 +1338,15 @@ public final class ServerSession: @unchecked Sendable {
     /// X11 spec section 10.10. Xt's PROPERTY_CHANGE_TIMESTAMP timestamp-
     /// probe path consumes these.
     private func emitPropertyNotify(window: UInt32, atom: UInt32, state: PropertyState, byteOrder: ByteOrder) {
-        guard let entry = windows.get(window),
-              entry.eventMask & Self.propertyChangeMask != 0 else { return }
+        let mask: UInt32
+        if window == config.rootWindowId {
+            mask = rootEventMask
+        } else if let entry = windows.get(window) {
+            mask = entry.eventMask
+        } else {
+            return
+        }
+        guard mask & Self.propertyChangeMask != 0 else { return }
         let event = PropertyNotifyEvent(
             sequenceNumber: sequenceNumber,
             window: window, atom: atom,
@@ -3216,6 +3224,7 @@ public final class ServerSession: @unchecked Sendable {
         bridge?.unregisterPixmapBufferLookup(token: bridgeHandlerToken)
         bridge?.unregisterColorTableLookup(token: bridgeHandlerToken)
         bridge?.unregisterWindowClipLookup(token: bridgeHandlerToken)
+        coordinator.unregisterRootPropertyObserver(token: bridgeHandlerToken)
         guard let bridge = bridge, let bo = byteOrder else { return }
         // Snapshot top-level ids first (mutating windows during walk would
         // be a bug). Top-levels = direct children of the root window.
@@ -4413,22 +4422,26 @@ public final class ServerSession: @unchecked Sendable {
             if r.type != 0 {
                 guard validateAtom(r.type, majorOpcode: ChangeProperty.opcode) else { break }
             }
-            let changeResult = properties.change(
-                window: r.window, property: r.property, type: r.type,
-                format: r.format.rawValue, mode: r.mode.rawValue, value: r.data
-            )
+            let changeResult: PropertyTable.ChangeResult
+            if r.window == config.rootWindowId {
+                changeResult = coordinator.changeRootProperty(
+                    window: r.window, property: r.property, type: r.type,
+                    format: r.format.rawValue, mode: r.mode.rawValue, value: r.data
+                )
+            } else {
+                changeResult = properties.change(
+                    window: r.window, property: r.property, type: r.type,
+                    format: r.format.rawValue, mode: r.mode.rawValue, value: r.data
+                )
+            }
             if changeResult == .mismatch {
-                // Spec 10.10: BadMatch on Prepend/Append when request's
-                // type or format doesn't match the existing entry's. The
-                // entry is left untouched; no PropertyNotify.
                 emitError(.match, majorOpcode: ChangeProperty.opcode)
                 break
             }
-            // Per X11 spec section 10.10: ChangeProperty emits PropertyNotify
-            // with state=NewValue to clients with PropertyChangeMask on the
-            // window (atom 1<<22 in eventMask). Xt's PROPERTY_CHANGE_TIMESTAMP
-            // mechanism listens for these to capture a fresh server timestamp.
             emitPropertyNotify(window: r.window, atom: r.property, state: .newValue, byteOrder: byteOrder)
+            if r.window == config.rootWindowId {
+                coordinator.fanOutRootPropertyNotify(atom: r.property, state: .newValue, excludeToken: bridgeHandlerToken)
+            }
             // WM_NAME or WM_ICON_NAME (39 / 37) → push to NSWindow title.
             // Strip trailing nulls — real Xlib clients sometimes include the
             // C string terminator in the property data, sometimes not.
@@ -4477,10 +4490,19 @@ public final class ServerSession: @unchecked Sendable {
             guard validateAtom(r.property, majorOpcode: DeleteProperty.opcode) else { break }
             // Per spec: PropertyNotify with state=Deleted fires only if the
             // property actually existed before the delete.
-            let existed = properties.get(window: r.window, property: r.property) != nil
-            properties.delete(window: r.window, property: r.property)
+            let existed: Bool
+            if r.window == config.rootWindowId {
+                existed = coordinator.rootPropertyExists(window: r.window, property: r.property)
+                coordinator.deleteRootProperty(window: r.window, property: r.property)
+            } else {
+                existed = properties.get(window: r.window, property: r.property) != nil
+                properties.delete(window: r.window, property: r.property)
+            }
             if existed {
                 emitPropertyNotify(window: r.window, atom: r.property, state: .deleted, byteOrder: byteOrder)
+                if r.window == config.rootWindowId {
+                    coordinator.fanOutRootPropertyNotify(atom: r.property, state: .deleted, excludeToken: bridgeHandlerToken)
+                }
             }
 
         case .getProperty(let r):
@@ -4491,7 +4513,12 @@ public final class ServerSession: @unchecked Sendable {
                 guard validateAtom(r.type, majorOpcode: GetProperty.opcode) else { break }
             }
             let reply: GetPropertyReply
-            let existing = properties.get(window: r.window, property: r.property)
+            let existing: PropertyEntry?
+            if r.window == config.rootWindowId {
+                existing = coordinator.getRootProperty(window: r.window, property: r.property)
+            } else {
+                existing = properties.get(window: r.window, property: r.property)
+            }
             log?.log("  GetProperty win=0x\(String(r.window, radix: 16)) prop=\(r.property) (\(atoms.name(for: r.property) ?? "?")) → \(existing.map { "\($0.value.count) bytes" } ?? "empty")")
             if let entry = existing {
                 reply = GetPropertyReply(
@@ -4505,15 +4532,16 @@ public final class ServerSession: @unchecked Sendable {
                 reply = GetPropertyReply.empty(sequenceNumber: sequenceNumber)
             }
             outbound.append(reply.encode(byteOrder: byteOrder))
-            // Per X11 spec: when delete=True and the property existed, the
-            // property is removed after the reply and PropertyNotify(state=
-            // Deleted) is emitted (only when the type matched or AnyType
-            // was requested — our reply ignores the type filter today, so
-            // the simpler rule "existed → delete + notify" is what we
-            // implement).
             if r.delete, existing != nil {
-                properties.delete(window: r.window, property: r.property)
+                if r.window == config.rootWindowId {
+                    coordinator.deleteRootProperty(window: r.window, property: r.property)
+                } else {
+                    properties.delete(window: r.window, property: r.property)
+                }
                 emitPropertyNotify(window: r.window, atom: r.property, state: .deleted, byteOrder: byteOrder)
+                if r.window == config.rootWindowId {
+                    coordinator.fanOutRootPropertyNotify(atom: r.property, state: .deleted, excludeToken: bridgeHandlerToken)
+                }
             }
 
         case .openFont(let r):
@@ -6197,5 +6225,28 @@ private func opcodeName(_ request: Request) -> String {
     case .imageText16: return "ImageText16"
     case .copyPlane: return "CopyPlane"
     case .unknown(let op, _): return "unknown(\(op))"
+    }
+}
+
+// MARK: - RootPropertyObserver conformance
+
+extension ServerSession: RootPropertyObserver {
+    public var hasPropertyChangeMaskOnRoot: Bool {
+        rootEventMask & Self.propertyChangeMask != 0
+    }
+
+    public func deliverRootPropertyNotify(atom: UInt32, state: PropertyState) {
+        protocolQueue.async { [weak self] in
+            guard let self = self, let bo = self.byteOrder else { return }
+            let event = PropertyNotifyEvent(
+                sequenceNumber: self.sequenceNumber,
+                window: self.config.rootWindowId,
+                atom: atom,
+                time: self.serverTime,
+                state: state
+            )
+            self.outbound.append(event.encode(byteOrder: bo))
+            self.flushOutbound()
+        }
     }
 }

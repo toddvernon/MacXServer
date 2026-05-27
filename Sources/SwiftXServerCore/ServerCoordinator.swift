@@ -1,4 +1,5 @@
 import Foundation
+import Framer
 
 // Cross-session shared state for a multi-client server.
 //
@@ -110,4 +111,65 @@ public final class ServerCoordinator: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return selectionOwners.compactMap { $0.value.window == window ? $0.key : nil }
     }
+
+    // MARK: - Root-window properties (server-global)
+
+    private let rootProperties = PropertyTable()
+    private var rootObservers: [UInt64: WeakObserver] = [:]
+
+    private struct WeakObserver {
+        weak var value: RootPropertyObserver?
+    }
+
+    @discardableResult
+    public func changeRootProperty(window: UInt32, property: UInt32, type: UInt32, format: UInt8, mode: UInt8, value: [UInt8]) -> PropertyTable.ChangeResult {
+        lock.lock(); defer { lock.unlock() }
+        return rootProperties.change(window: window, property: property, type: type, format: format, mode: mode, value: value)
+    }
+
+    public func getRootProperty(window: UInt32, property: UInt32) -> PropertyEntry? {
+        lock.lock(); defer { lock.unlock() }
+        return rootProperties.get(window: window, property: property)
+    }
+
+    public func deleteRootProperty(window: UInt32, property: UInt32) {
+        lock.lock(); defer { lock.unlock() }
+        rootProperties.delete(window: window, property: property)
+    }
+
+    public func rootPropertyExists(window: UInt32, property: UInt32) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return rootProperties.get(window: window, property: property) != nil
+    }
+
+    public func registerRootPropertyObserver(token: UInt64, observer: RootPropertyObserver) {
+        lock.lock(); defer { lock.unlock() }
+        rootObservers[token] = WeakObserver(value: observer)
+    }
+
+    public func unregisterRootPropertyObserver(token: UInt64) {
+        lock.lock(); defer { lock.unlock() }
+        rootObservers.removeValue(forKey: token)
+    }
+
+    public func fanOutRootPropertyNotify(atom: UInt32, state: PropertyState, excludeToken: UInt64) {
+        lock.lock()
+        let live = rootObservers.compactMap { (tok, w) -> (UInt64, RootPropertyObserver)? in
+            guard let obs = w.value else { return nil }
+            return (tok, obs)
+        }
+        rootObservers = rootObservers.filter { $0.value.value != nil }
+        lock.unlock()
+        for (tok, obs) in live {
+            if tok == excludeToken { continue }
+            if obs.hasPropertyChangeMaskOnRoot {
+                obs.deliverRootPropertyNotify(atom: atom, state: state)
+            }
+        }
+    }
+}
+
+public protocol RootPropertyObserver: AnyObject {
+    var hasPropertyChangeMaskOnRoot: Bool { get }
+    func deliverRootPropertyNotify(atom: UInt32, state: PropertyState)
 }
