@@ -1177,20 +1177,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             width: CGFloat(width), height: CGFloat(height)
         )
         withDrawContext(dst, clipRectangles: clipRectangles) { ctx in
-            // [Y-FLIP for CopyArea images] CGContext.draw(image:in:)
-            // places the image assuming CG's natural y-up layout. Our
-            // backing contexts use a y-flipped CTM (y-down, X11 style),
-            // so without compensation the image rows land upside-down
-            // in the backing. Flip vertically within the destination
-            // rect so the image orientation matches the backing's
-            // coordinate convention. The backing's own y-flip on
-            // display (FlippedXView.draw, Y-FLIP #2) then produces
-            // the correct on-screen result.
-            ctx.saveGState()
-            ctx.translateBy(x: 0, y: 2 * CGFloat(dstY) + CGFloat(height))
-            ctx.scaleBy(x: 1, y: -1)
             ctx.draw(subImage, in: dstRect)
-            ctx.restoreGState()
         }
     }
 
