@@ -58,19 +58,19 @@ public final class MotifFrameView: NSView {
 
     // MARK: - Theme aliases (kept short for the drawing math)
 
-    private var bv: CGFloat   { MotifTheme.bevelWidth }
-    private var band: CGFloat { MotifTheme.band }
-    private var bs: CGFloat   { MotifTheme.buttonSize }
-    private var bi: CGFloat   { MotifTheme.buttonInset }
+    private var bv: CGFloat   { MotifTheme.current.bevelWidth }
+    private var band: CGFloat { MotifTheme.current.band }
+    private var bs: CGFloat   { MotifTheme.current.buttonSize }
+    private var bi: CGFloat   { MotifTheme.current.buttonInset }
 
     // MARK: - Layout rects
 
     public var clientRect: NSRect {
         NSRect(
-            x: MotifTheme.clientLeftInset,
-            y: MotifTheme.clientTopInset,
-            width: max(0, bounds.width - MotifTheme.horizontalPadding),
-            height: max(0, bounds.height - MotifTheme.verticalPadding)
+            x: MotifTheme.current.clientLeftInset,
+            y: MotifTheme.current.clientTopInset,
+            width: max(0, bounds.width - MotifTheme.current.horizontalPadding),
+            height: max(0, bounds.height - MotifTheme.current.verticalPadding)
         )
     }
 
@@ -105,15 +105,15 @@ public final class MotifFrameView: NSView {
         let W = bounds.width, H = bounds.height
 
         // Band body
-        fill(ctx, bounds, MotifTheme.fill)
+        fill(ctx, bounds, MotifTheme.current.fill)
 
         // Outer raised bevel
-        bevel(ctx, bounds, topLeft: MotifTheme.highlight, bottomRight: MotifTheme.shadow)
+        bevel(ctx, bounds, topLeft: MotifTheme.current.highlight, bottomRight: MotifTheme.current.shadow)
 
         // Inner sunken bevel — combined with the outer raised, the band reads
         // as a slab raised from both sides simultaneously.
         let inner = CGRect(x: band, y: band, width: W - 2*band, height: H - 2*band)
-        bevel(ctx, inner, topLeft: MotifTheme.shadow, bottomRight: MotifTheme.highlight)
+        bevel(ctx, inner, topLeft: MotifTheme.current.shadow, bottomRight: MotifTheme.current.highlight)
 
         drawCornerGrooves(ctx, W: W, H: H)
         drawTitleBar(ctx)
@@ -130,9 +130,9 @@ public final class MotifFrameView: NSView {
 
         switch buttonStyle {
         case .motif:
-            raisedTileCentered(ctx, in: menuR, width: MotifTheme.menuDashW, height: MotifTheme.menuDashH)
-            raisedTileCentered(ctx, in: maxR,  width: MotifTheme.maximizeSq, height: MotifTheme.maximizeSq)
-            raisedTileCentered(ctx, in: restR, width: MotifTheme.restoreSq, height: MotifTheme.restoreSq)
+            raisedTileCentered(ctx, in: menuR, width: MotifTheme.current.menuDashW, height: MotifTheme.current.menuDashH)
+            raisedTileCentered(ctx, in: maxR,  width: MotifTheme.current.maximizeSq, height: MotifTheme.current.maximizeSq)
+            raisedTileCentered(ctx, in: restR, width: MotifTheme.current.restoreSq, height: MotifTheme.current.restoreSq)
         case .trafficLights:
             dot(ctx, in: menuR, color: MotifTheme.macRed)
             dot(ctx, in: restR, color: MotifTheme.macYellow)
@@ -145,7 +145,7 @@ public final class MotifFrameView: NSView {
     }
 
     private func dot(_ ctx: CGContext, in rect: CGRect, color: NSColor) {
-        let d = round(MotifTheme.titleBarHeight * 0.45)
+        let d = round(MotifTheme.current.titleBarHeight * 0.45)
         let outerD = d + 2 * bv
         let outerR = CGRect(x: rect.midX - outerD/2, y: rect.midY - outerD/2,
                             width: outerD, height: outerD)
@@ -161,7 +161,7 @@ public final class MotifFrameView: NSView {
         ctx.clip(using: .evenOdd)
         let gradient = CGGradient(
             colorsSpace: CGColorSpaceCreateDeviceRGB(),
-            colors: [MotifTheme.shadow.cgColor, MotifTheme.highlight.cgColor] as CFArray,
+            colors: [MotifTheme.current.shadow.cgColor, MotifTheme.current.highlight.cgColor] as CFArray,
             locations: [0, 1])!
         ctx.drawLinearGradient(
             gradient,
@@ -182,8 +182,8 @@ public final class MotifFrameView: NSView {
         // the title-bar rect. See reference/cde/cde/programs/dtwm/WmGraphics.c
         // (WmDrawXmString) + WmCDecor.c (GetTextBox).
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: MotifTheme.titleFontSize, weight: .medium),
-            .foregroundColor: MotifTheme.titleColor,
+            .font: NSFont.systemFont(ofSize: MotifTheme.current.titleFontSize, weight: .medium),
+            .foregroundColor: MotifTheme.current.titleColor,
         ]
         let text = windowTitle as NSString
         let sz = text.size(withAttributes: attrs)
@@ -227,10 +227,10 @@ public final class MotifFrameView: NSView {
     // MARK: - Bevel primitives
 
     private func raisedTile(_ ctx: CGContext, _ r: CGRect, pressed: Bool = false) {
-        fill(ctx, r, MotifTheme.fill)
+        fill(ctx, r, MotifTheme.current.fill)
         bevel(ctx, r,
-              topLeft:     pressed ? MotifTheme.shadow    : MotifTheme.highlight,
-              bottomRight: pressed ? MotifTheme.highlight : MotifTheme.shadow)
+              topLeft:     pressed ? MotifTheme.current.shadow    : MotifTheme.current.highlight,
+              bottomRight: pressed ? MotifTheme.current.highlight : MotifTheme.current.shadow)
     }
 
     private func raisedTileCentered(_ ctx: CGContext, in outer: CGRect,
@@ -262,8 +262,8 @@ public final class MotifFrameView: NSView {
                                   x: CGFloat, y: CGFloat, length: CGFloat) {
         for i in 0..<Int(bv) {
             let o = CGFloat(i)
-            fill(ctx, CGRect(x: x, y: y + o,      width: length, height: 1), MotifTheme.shadow)
-            fill(ctx, CGRect(x: x, y: y + bv + o, width: length, height: 1), MotifTheme.highlight)
+            fill(ctx, CGRect(x: x, y: y + o,      width: length, height: 1), MotifTheme.current.shadow)
+            fill(ctx, CGRect(x: x, y: y + bv + o, width: length, height: 1), MotifTheme.current.highlight)
         }
     }
 
@@ -271,8 +271,8 @@ public final class MotifFrameView: NSView {
                                 x: CGFloat, y: CGFloat, length: CGFloat) {
         for i in 0..<Int(bv) {
             let o = CGFloat(i)
-            fill(ctx, CGRect(x: x + o,      y: y, width: 1, height: length), MotifTheme.shadow)
-            fill(ctx, CGRect(x: x + bv + o, y: y, width: 1, height: length), MotifTheme.highlight)
+            fill(ctx, CGRect(x: x + o,      y: y, width: 1, height: length), MotifTheme.current.shadow)
+            fill(ctx, CGRect(x: x + bv + o, y: y, width: 1, height: length), MotifTheme.current.highlight)
         }
     }
 
@@ -383,8 +383,8 @@ public final class MotifFrameView: NSView {
         // edge shrinks height (anchoring the top by sliding the origin up).
         guard let window = window else { return }
         var f = resizeInitialFrame
-        let minW: CGFloat = MotifTheme.horizontalPadding + 60
-        let minH: CGFloat = MotifTheme.verticalPadding + 40
+        let minW: CGFloat = MotifTheme.current.horizontalPadding + 60
+        let minH: CGFloat = MotifTheme.current.verticalPadding + 40
         func cL(_ d: CGFloat) {
             let nw = max(minW, f.width - d); f.origin.x += f.width - nw; f.size.width = nw
         }

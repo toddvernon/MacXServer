@@ -29,6 +29,7 @@ public struct ResourceFile {
         case config             // [swiftx-config]
         case global             // [global]
         case theme(String)      // [theme:NAME]
+        case motifFrame         // [motif-frame]
         case unknown(String)    // anything we don't recognize; preserved but unused
     }
 
@@ -71,6 +72,27 @@ public struct ResourceFile {
             if case .theme(let name) = section.kind { return name }
             return nil
         }
+    }
+
+    /// Key-value pairs from the `[motif-frame]` section. Keys are the
+    /// Xrm resource name (e.g. `Mwm*background`), values are trimmed
+    /// strings. Returns empty dict if no `[motif-frame]` section exists.
+    public var motifFrameSettings: [String: String] {
+        for section in sections {
+            guard case .motifFrame = section.kind else { continue }
+            var result: [String: String] = [:]
+            for line in section.bodyLines {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("!") { continue }
+                guard let colon = trimmed.firstIndex(of: ":") else { continue }
+                let key = trimmed[..<colon].trimmingCharacters(in: .whitespaces)
+                let value = trimmed[trimmed.index(after: colon)...]
+                    .trimmingCharacters(in: .whitespaces)
+                if !key.isEmpty { result[key] = value }
+            }
+            return result
+        }
+        return [:]
     }
 
     /// Build the bytes to publish on the X root's RESOURCE_MANAGER
@@ -140,6 +162,7 @@ public struct ResourceFile {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         if trimmed == "swiftx-config" { return .config }
         if trimmed == "global" { return .global }
+        if trimmed == "motif-frame" { return .motifFrame }
         if trimmed.hasPrefix("theme:") {
             let themeName = String(trimmed.dropFirst("theme:".count))
                 .trimmingCharacters(in: .whitespaces)

@@ -515,10 +515,19 @@ public final class ServerSession: @unchecked Sendable {
         // Phase 1 of the themes work: file is loaded once per session
         // at startup. Reload-on-save and the Preferences editor land in
         // a later commit; the file-driven pipeline itself lives here.
-        let file = ResourceFileLoader.loadOrSeed(
+        var file = ResourceFileLoader.loadOrSeed(
             seed: DefaultThemes.seedContent,
             log: log
         )
+        if file.motifFrameSettings.isEmpty {
+            let path = ResourceFileLoader.defaultPath
+            if let existing = try? String(contentsOfFile: path, encoding: .utf8) {
+                let appended = existing + "\n\n" + DefaultThemes.motifFrameSection
+                try? appended.write(toFile: path, atomically: true, encoding: .utf8)
+                file = ResourceFile.parse(appended)
+                log?.log("resources: appended [motif-frame] section to \(path)")
+            }
+        }
         let resourceManagerAtom: UInt32 = 23   // predefined RESOURCE_MANAGER
         let stringAtom: UInt32 = 31            // predefined STRING
         coordinator.changeRootProperty(
@@ -529,6 +538,10 @@ public final class ServerSession: @unchecked Sendable {
             mode: 0,
             value: file.resourceManagerBytes()
         )
+        let frameSettings = file.motifFrameSettings
+        if !frameSettings.isEmpty {
+            MotifTheme.install(MotifTheme.fromResourceFile(frameSettings))
+        }
     }
 
     /// User asked to close one of our NSWindows (red traffic-light button,

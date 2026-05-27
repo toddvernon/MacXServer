@@ -563,7 +563,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // (and we're not a popup), wrap the X client in a MotifWindow
             // (.closable/.miniaturizable/.resizable, no .titled — that mask
             // gives square corners and working close/min/zoom). The NSWindow
-            // content rect grows by `MotifTheme.horizontalPadding` /
+            // content rect grows by `MotifTheme.current.horizontalPadding` /
             // `verticalPadding` so the X client area inside the frame is
             // still exactly its requested geometry, matching what a
             // reparenting WM does in real X (ICCCM §4.2.1).
@@ -595,13 +595,13 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // same on-screen position it would have had with native chrome.
             let contentRect: NSRect
             if motifEnabled {
-                let leftPad = MotifTheme.clientLeftInset
-                let bottomPad = MotifTheme.clientBottomInset
+                let leftPad = MotifTheme.current.clientLeftInset
+                let bottomPad = MotifTheme.current.clientBottomInset
                 contentRect = NSRect(
                     x: xClientOriginX - leftPad,
                     y: xClientOriginY - bottomPad,
-                    width: pointsW + MotifTheme.horizontalPadding,
-                    height: pointsH + MotifTheme.verticalPadding
+                    width: pointsW + MotifTheme.current.horizontalPadding,
+                    height: pointsH + MotifTheme.current.verticalPadding
                 )
             } else {
                 contentRect = NSRect(
@@ -776,13 +776,13 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // grow the rect to wrap the X geometry from the outside.
             let contentRect: NSRect
             if win is MotifWindow {
-                let leftPad = MotifTheme.clientLeftInset
-                let bottomPad = MotifTheme.clientBottomInset
+                let leftPad = MotifTheme.current.clientLeftInset
+                let bottomPad = MotifTheme.current.clientBottomInset
                 contentRect = NSRect(
                     x: xClientOriginX - leftPad,
                     y: xClientOriginY - bottomPad,
-                    width: pointsW + MotifTheme.horizontalPadding,
-                    height: pointsH + MotifTheme.verticalPadding
+                    width: pointsW + MotifTheme.current.horizontalPadding,
+                    height: pointsH + MotifTheme.current.verticalPadding
                 )
             } else {
                 contentRect = NSRect(x: xClientOriginX, y: xClientOriginY,
@@ -2282,10 +2282,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // The NSWindow content rect wraps the X-client area on all four
             // sides; shrink back to the inner X-client area before reporting
             // root coords so cached widget positions match what we mapped.
-            contentRect.origin.x += MotifTheme.clientLeftInset
-            contentRect.origin.y += MotifTheme.clientBottomInset
-            contentRect.size.width  -= MotifTheme.horizontalPadding
-            contentRect.size.height -= MotifTheme.verticalPadding
+            contentRect.origin.x += MotifTheme.current.clientLeftInset
+            contentRect.origin.y += MotifTheme.current.clientBottomInset
+            contentRect.size.width  -= MotifTheme.current.horizontalPadding
+            contentRect.size.height -= MotifTheme.current.verticalPadding
         }
         let originX = contentRect.origin.x
         let originY = contentRect.origin.y

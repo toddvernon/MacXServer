@@ -51,6 +51,36 @@ public enum DefaultThemes {
 
         [theme:quickplot]
         \(DefaultMotifResources.text)
+
+        [motif-frame]
+        ! Motif window-manager frame appearance. These control the optional
+        ! Mac-side frame drawn around X windows (Preferences > Display).
+        ! Colors are #RRGGBB hex. Restart the server to see changes.
+        !
+        Mwm*background:         #B8BAC0
+        Mwm*topShadowColor:     #ECECEE
+        Mwm*bottomShadowColor:  #46474C
+        Mwm*title*foreground:   #101010
+        Mwm*frameBorderWidth:   2
+        Mwm*resizeBorderWidth:  2
+        Mwm*titleBarHeight:     32
+        Mwm*buttonStyle:        motif
         """
     }
+
+    public static let motifFrameSection = """
+        [motif-frame]
+        ! Motif window-manager frame appearance. These control the optional
+        ! Mac-side frame drawn around X windows (Preferences > Display).
+        ! Colors are #RRGGBB hex. Restart the server to see changes.
+        !
+        Mwm*background:         #B8BAC0
+        Mwm*topShadowColor:     #ECECEE
+        Mwm*bottomShadowColor:  #46474C
+        Mwm*title*foreground:   #101010
+        Mwm*frameBorderWidth:   2
+        Mwm*resizeBorderWidth:  2
+        Mwm*titleBarHeight:     32
+        Mwm*buttonStyle:        motif
+        """
 }

@@ -23,7 +23,7 @@ public final class MotifWindow: NSWindow {
     }
 
     /// Initialize with the NSWindow content rect (already grown to include
-    /// frame insets per MotifTheme.horizontalPadding / verticalPadding) and
+    /// frame insets per MotifTheme.current.horizontalPadding / verticalPadding) and
     /// the X client view that will live at the frame's clientRect.
     public init(contentRect: NSRect, clientView: NSView) {
         let frameView = MotifFrameView(
