@@ -1,4 +1,45 @@
-# Status 2026-05-27 — dt-app theme dead-rule sweep; pixmap-writer y-flip closed
+# Status 2026-05-27 — root properties to coordinator; Motif clipboard works; y-flip closed; doc audit
+
+Morning started as cleanup, turned into a real feature day.
+
+**Root-window properties moved to ServerCoordinator.** The oldest
+architectural bug in the server: root-window properties were per-session
+(PropertyTable on ServerSession), so anything one client wrote to root
+was invisible to another client. Fixed by adding a server-global
+PropertyTable on ServerCoordinator with NSLock guarding, a
+RootPropertyObserver protocol for PropertyNotify fan-out across
+sessions, and routing all ChangeProperty/GetProperty/DeleteProperty
+on root through the coordinator. Session-init properties
+(_MOTIF_DRAG_WINDOW, _MOTIF_WM_INFO, RESOURCE_MANAGER) also moved.
+
+**Motif clipboard copy/paste between apps now works.** The unlock.
+Motif's CutPaste.c stores all clipboard state as root-window properties
+(_MOTIF_CLIP_HEADER, _MOTIF_CLIP_LOCK, _MOTIF_CLIP_ITEM_*, etc.) and
+uses a PropertyNotify-on-root timestamp probe (ClipboardGetCurrentTime)
+that blocked forever because we never emitted PropertyNotify for root.
+Two fixes: (1) emitPropertyNotify now checks rootEventMask for root
+windows (was only checking WindowEntry, which doesn't exist for root);
+(2) the root property migration above makes clipboard data visible
+across sessions. Verified: two dtpads from u5, Copy in one, Paste in
+the other transfers text correctly.
+
+**Pixmap-writer y-flip verified live.** quickplot button-bar icons
+right-side-up, horizontal scrollbar thumb shadow correct orientation.
+Closes the 2026-05-27 morning investigation.
+
+**Doc audit sweep.** Went through all docs and compiled a 26-item open
+bug list. Todd verified 4 items are already fixed (resize repaint gap,
+small gray rectangles, dtpad menu-bar erase, window placement). Agent
+audit of the remaining 22 found 2 more already fixed in code (NoExpose
+gating on graphicsExposures, SetupAccepted display-adaptive) and one
+stale count (cursor glyph mapping is 22 values not ~10). All docs
+updated.
+
+Previous status entry (morning) preserved below.
+
+---
+
+# Status 2026-05-27 (morning) — dt-app theme dead-rule sweep; pixmap-writer y-flip closed
 
 Cleanup session. Two commits, both pushed.
 
