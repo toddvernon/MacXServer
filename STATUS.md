@@ -1,6 +1,23 @@
-# Status 2026-05-27 — root properties to coordinator; Motif clipboard works; y-flip closed; doc audit
+# Status 2026-05-27 — remote launcher; Motif clipboard; root properties; configurable frame; doc audit
 
-Morning started as cleanup, turned into a real feature day.
+Started as cleanup, turned into the biggest feature day of the project.
+
+**Remote app launcher.** New Launchers submenu in the app menu. Each
+entry telnets to a vintage Sun, logs in, sets DISPLAY, launches the
+X app in background, disconnects. Config file `~/.swiftx-launchers`
+(INI format, same editor pattern as fonts/resources). Passwords in
+macOS Keychain. Configurable prompt patterns for non-standard shells
+(`login_prompt`, `password_prompt`, `shell_prompt`). Optional verbose
+flag shows a progress window with the telnet session log -- typed text
+in bold, echo suppressed at the byte level, ANSI escapes stripped.
+Telnet IAC negotiation handles SunOS 4.1.4 through Solaris 2.6.
+Tested live against u5. Nine new files, ~1100 lines.
+
+**Motif frame chrome now configurable.** `MotifTheme` converted from
+static constants to a loaded struct driven by `[motif-frame]` section
+in `~/.swiftx-resources`. Colors (hex or X11 named), bevel width,
+frame width, title bar height, button style all editable. Existing
+installs get the section auto-appended on first startup.
 
 **Root-window properties moved to ServerCoordinator.** The oldest
 architectural bug in the server: root-window properties were per-session
