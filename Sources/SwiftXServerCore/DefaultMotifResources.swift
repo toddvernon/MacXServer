@@ -82,16 +82,17 @@ enum DefaultMotifResources {
     ! xterm uses the simpler `cursorColor` resource; cover both.
     *cursorForeground:            cyan
     *cursorColor:                 cyan
-    ! Dialog accents: labels and buttons inside popup dialog shells get
-    ! Blue text. Main-application labels/buttons stay Black (the
-    ! *foreground default above) since they're not under an XmDialogShell.
-    ! Most dt-app dialog buttons are Gadgets (XmPushButtonGadget) — the
-    ! Help/QuickHelp close/back/print, Print dialog page-size buttons,
-    ! dtcalc info-dialog Cancel, etc. — so cover both classes.
+    ! Dialog labels (labels and label gadgets inside popup dialog shells)
+    ! get Blue text. Main-application labels stay Black (the *foreground
+    ! default above) since they're not under an XmDialogShell. Button
+    ! foreground rules removed 2026-05-26: Motif sets dialog-button fg/bg
+    ! programmatically via XmGetColors at widget-create (XtSetArg beats
+    ! Xrm), so *XmDialogShell*XmPushButton(Gadget).foreground rules
+    ! never fired. Verified empirically against dtpad's rich dialog set —
+    ! no Blue button text anywhere. Labels may or may not honor Xrm fg
+    ! depending on the widget class; left in until shown otherwise.
     *XmDialogShell*XmLabel.foreground:             Blue
     *XmDialogShell*XmLabelGadget.foreground:       Blue
-    *XmDialogShell*XmPushButton.foreground:        Blue
-    *XmDialogShell*XmPushButtonGadget.foreground:  Blue
     !
     ! ---- Fonts ----
     ! Motif distinguishes widgets (have an X window each) from gadgets
@@ -192,17 +193,14 @@ enum DefaultMotifResources {
     ! the cascade — instance-name lookup wins more reliably. Also thin the
     ! shadow + highlight rings so the buttons don't sit in the deep
     ! trough Motif draws by default; matches quickplot's lighter look.
-    Dthelpview*XmPushButton.foreground:        Blue
+    ! Foreground rules removed 2026-05-26 — Motif's XmGetColors pin (see
+    ! save_warn block below) applies here too; per-instance / per-class
+    ! Dthelpview*…foreground: Blue rules never fired. Verified
+    ! empirically: no Blue button text anywhere across dtpad's richest
+    ! dialog set. Kept fontList and shape rules — those flow through
+    ! Xrm normally.
     Dthelpview*XmPushButton.fontList:          -adobe-helvetica-medium-o-normal--12-*-*-*-p-*-iso8859-1
-    Dthelpview*XmPushButtonGadget.foreground:  Blue
     Dthelpview*XmPushButtonGadget.fontList:    -adobe-helvetica-medium-o-normal--12-*-*-*-p-*-iso8859-1
-    ! Per-instance .foreground triple still listed — earlier empirical
-    ! testing showed the class-based rule didn't beat `*foreground: Black`
-    ! reliably for these specific buttons. If we ever sort out why the
-    ! class lookup loses the cascade fight, these three can go away.
-    Dthelpview*closeButton.foreground:         Blue
-    Dthelpview*backButton.foreground:          Blue
-    Dthelpview*printButton.foreground:         Blue
     ! Shadow/highlight thinning collapsed to class-based rules. The audit
     ! confirmed the per-instance triple was equivalent and brittle to
     ! button renames. highlightThickness bumped 0 → 1 (2026-05-22) for
@@ -405,28 +403,22 @@ enum DefaultMotifResources {
     Dtpad*save_warn*XmPushButtonGadget.defaultButtonShadowThickness: 1
     Dtpad*save_warn*XmSeparator.shadowThickness:                1
     Dtpad*save_warn*XmSeparatorGadget.shadowThickness:          1
-    ! save_warn is a PromptDialog (XmSelectionBox flavor), not an
-    ! XmMessageBox — dtpad creates it via XmCreatePromptDialog
-    ! (cde/cde/programs/dtpad/fileDlg.c:648). The four logical answers
-    ! map onto SelectionBox slots: Yes→OK, No→Apply, Cancel→Cancel,
-    ! Help→Help (fileDlg.c:631-643). Button widgets are PushButtonGadgets
-    ! literally named "OK"/"Apply"/"Cancel"/"Help" — case-sensitive,
-    ! capitalized (SelectioB.c:942/959/978/994 via _XmBB_CreateButtonG →
-    ! BBUtil.c:131). Same Blue+italic Helvetica look as the rest of dtpad.
-    Dtpad*save_warn*XmPushButton.foreground:         Blue
-    Dtpad*save_warn*XmPushButton.fontList:           -adobe-helvetica-medium-o-normal--12-*-*-*-p-*-iso8859-1
-    Dtpad*save_warn*XmPushButtonGadget.foreground:   Blue
-    Dtpad*save_warn*XmPushButtonGadget.fontList:     -adobe-helvetica-medium-o-normal--12-*-*-*-p-*-iso8859-1
-    Dtpad*save_warn*OK.foreground:      Blue
-    Dtpad*save_warn*Apply.foreground:   Blue
-    Dtpad*save_warn*Cancel.foreground:  Blue
-    Dtpad*save_warn*Help.foreground:    Blue
-    ! Belt-and-suspenders for any other Dtpad SelectionBox / MessageBox
-    ! dialogs (covers Warn, which is a real XmMessageBox at fileDlg.c:117).
-    Dtpad*XmSelectionBox*XmPushButtonGadget.foreground:  Blue
-    Dtpad*XmSelectionBox*XmPushButtonGadget.fontList:    -adobe-helvetica-medium-o-normal--12-*-*-*-p-*-iso8859-1
-    Dtpad*XmMessageBox*XmPushButtonGadget.foreground:    Blue
-    Dtpad*XmMessageBox*XmPushButtonGadget.fontList:      -adobe-helvetica-medium-o-normal--12-*-*-*-p-*-iso8859-1
+    ! Why no foreground/background/fontList rules for save_warn / Warn /
+    ! XmSelectionBox / XmMessageBox dialog buttons here: Motif sets fg AND
+    ! bg programmatically via XmGetColors() at widget-create time
+    ! (XtSetArg under the hood) — see ColorObj system in libDtSvc. That
+    ! beats every Xrm rule we publish. Verified 2026-05-26: kitchen-sink
+    ! diagnostic colors at every binding tightness up to the fully-tight
+    ! Dtpad.save_warn_popup.save_warn.OK.foreground failed to land; a
+    ! paired Dtpad*save_warn*XmPushButtonGadget.background:MidnightBlue
+    ! also did not land. Shape rules (shadow/margin/highlightThickness)
+    ! DO flow through Xrm because Motif doesn't programmatically pin
+    ! those — those we keep above. Dialog buttons render Black-on-Gray
+    ! Motif-fallback, which matches SS2 visual parity.
+    ! Widget-class facts (still accurate, kept for reference): save_warn
+    ! is XmCreatePromptDialog (SelectionBox flavor), button gadgets are
+    ! literal "OK"/"Apply"/"Cancel"/"Help" — SelectioB.c:942/959/978/994
+    ! via _XmBB_CreateButtonG → BBUtil.c:131.
     Dtpad*ad_dial*XmPushButton.shadowThickness:                 1
     Dtpad*ad_dial*XmPushButton.highlightThickness:              1
     Dtpad*ad_dial*XmPushButton.defaultButtonShadowThickness:    1

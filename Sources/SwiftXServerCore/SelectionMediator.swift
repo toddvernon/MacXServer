@@ -87,62 +87,98 @@ public final class SelectionMediator {
         return .forwardToRealOwner(ownerWindow: ownerState.window)
     }
 
-    // MARK: - Stub-daemon setup
+    // MARK: - Stub-daemon setup (RETIRED — commented out below)
 
-    /// Impersonate the CDE customization daemon for the "Customize
-    /// Data:N" selection.
-    ///
-    /// Background. dtcalc / dtterm / probably all dt-apps probe this
-    /// selection at init: gold shows GetSelectionOwner returning a daemon
-    /// window, then a direct GetProperty(SDT Pixel Set) on that window.
-    /// When the selection has no owner (our prior behaviour), dt apps
-    /// fall back to a formal ConvertSelection that we answered with
-    /// property=None per spec — Xt then wedges indefinitely (verified by
-    /// capture+wait 2 minutes 2026-05-10). The "no daemon" fallback in
-    /// Solaris Xt is apparently untested in real installs (dtsession is
-    /// always running under CDE), so its timeout-or-fall-through path
-    /// doesn't actually fire.
-    ///
-    /// Fix: pretend a daemon is here. Register a stub window as owner of
-    /// Customize Data:0. The ConvertSelection short-circuit (above)
-    /// answers stub-owned conversions with empty bytes + a successful
-    /// SelectionNotify, and dt-apps proceed.
-    ///
-    /// The "SDT Pixel Set" property is also pre-published on the stub
-    /// window because dt-apps read it via direct GetProperty BEFORE the
-    /// formal ConvertSelection. Bytes captured 2026-05-10 from u5's
-    /// real CDE customization daemon via dtcalc-sun.xtap seq=29
-    /// GetProperty reply.
-    public func installCDECustomizationDaemonImpersonation() {
-        let cdeDaemonWindow: UInt32 = 0xFFFE_0003
-        windows.insert(WindowEntry(
-            id: cdeDaemonWindow,
-            parent: config.rootWindowId,
-            depth: 0,
-            x: -1, y: -1, width: 1, height: 1,
-            borderWidth: 0,
-            windowClass: .inputOnly,
-            visual: 0,
-            valueMask: 0,
-            valueList: [],
-            mapped: false,
-            eventMask: 0
-        ))
-        let customizeAtom = atoms.intern("Customize Data:0")
-        coordinator.setSelectionOwner(customizeAtom, window: cdeDaemonWindow, time: 0)
-
-        let sdtPixelSetAtom = atoms.intern("SDT Pixel Set")
-        let stringAtom: UInt32 = 31  // X11 predefined STRING atom
-        let sdtPixelSetBytes = Array(
-            "2_4_8_6_7_5_9_d_b_c_a_e_12_10_11_f_13_17_15_16_14_9_d_b_c_a_9_d_b_c_a_e_12_10_11_f_9_d_b_c_a_1".utf8
-        )
-        properties.change(
-            window: cdeDaemonWindow,
-            property: sdtPixelSetAtom,
-            type: stringAtom,
-            format: 8,
-            mode: 0,
-            value: sdtPixelSetBytes
-        )
-    }
+    /* ============================================================
+     *
+     *   ██████  ███████ ████████ ██ ██████  ███████ ██████
+     *   ██   ██ ██         ██    ██ ██   ██ ██      ██   ██
+     *   ██████  █████      ██    ██ ██████  █████   ██   ██
+     *   ██   ██ ██         ██    ██ ██   ██ ██      ██   ██
+     *   ██   ██ ███████    ██    ██ ██   ██ ███████ ██████
+     *
+     * ============================================================
+     *
+     * The CDE customization daemon impersonation is RETIRED as of
+     * 2026-05-18 (see DECISIONS.md entry of that date and the
+     * SHORTCUTS.md "Fake CDE customization daemon... retired" line).
+     *
+     *   ┌─────────────────────────────────────────────────────────┐
+     *   │  DO NOT REVIVE THIS WITHOUT EXPLICITLY ASKING TODD.     │
+     *   │                                                         │
+     *   │  AI/assistant note: this is a recurring trap. The doc-  │
+     *   │  block reads like current architecture, but the code    │
+     *   │  is dead. It has been re-suggested across many          │
+     *   │  sessions and corrected each time. STOP. Before         │
+     *   │  proposing SDT Pixel Set, Customize Data:N selection    │
+     *   │  ownership, or any flavor of CDE-daemon impersonation   │
+     *   │  as a fix for ANY visual/theming/wedge symptom: ask     │
+     *   │  Todd. The 2026-05-10 diagnosis that drove this was     │
+     *   │  wrong — the real wedge was the MATCH_SELECT time-      │
+     *   │  field bug, fixed separately. dt-apps work correctly    │
+     *   │  WITHOUT any of this. See:                              │
+     *   │    .claude-memory/feedback_sdt_pixel_set_retired.md     │
+     *   │    DECISIONS.md 2026-05-18                              │
+     *   │    SHORTCUTS.md (retired-section line dated 2026-05-18) │
+     *   └─────────────────────────────────────────────────────────┘
+     *
+     * Original doc-block follows, kept verbatim for historical
+     * citation in case Todd ever wants to study the diagnostic
+     * reasoning that led to this dead end:
+     *
+     * Background. dtcalc / dtterm / probably all dt-apps probe this
+     * selection at init: gold shows GetSelectionOwner returning a daemon
+     * window, then a direct GetProperty(SDT Pixel Set) on that window.
+     * When the selection has no owner (our prior behaviour), dt apps
+     * fall back to a formal ConvertSelection that we answered with
+     * property=None per spec — Xt then wedges indefinitely (verified by
+     * capture+wait 2 minutes 2026-05-10). The "no daemon" fallback in
+     * Solaris Xt is apparently untested in real installs (dtsession is
+     * always running under CDE), so its timeout-or-fall-through path
+     * doesn't actually fire.
+     *
+     * Fix: pretend a daemon is here. Register a stub window as owner of
+     * Customize Data:0. The ConvertSelection short-circuit (above)
+     * answers stub-owned conversions with empty bytes + a successful
+     * SelectionNotify, and dt-apps proceed.
+     *
+     * The "SDT Pixel Set" property is also pre-published on the stub
+     * window because dt-apps read it via direct GetProperty BEFORE the
+     * formal ConvertSelection. Bytes captured 2026-05-10 from u5's
+     * real CDE customization daemon via dtcalc-sun.xtap seq=29
+     * GetProperty reply.
+     *
+     * public func installCDECustomizationDaemonImpersonation() {
+     *     let cdeDaemonWindow: UInt32 = 0xFFFE_0003
+     *     windows.insert(WindowEntry(
+     *         id: cdeDaemonWindow,
+     *         parent: config.rootWindowId,
+     *         depth: 0,
+     *         x: -1, y: -1, width: 1, height: 1,
+     *         borderWidth: 0,
+     *         windowClass: .inputOnly,
+     *         visual: 0,
+     *         valueMask: 0,
+     *         valueList: [],
+     *         mapped: false,
+     *         eventMask: 0
+     *     ))
+     *     let customizeAtom = atoms.intern("Customize Data:0")
+     *     coordinator.setSelectionOwner(customizeAtom, window: cdeDaemonWindow, time: 0)
+     *
+     *     let sdtPixelSetAtom = atoms.intern("SDT Pixel Set")
+     *     let stringAtom: UInt32 = 31  // X11 predefined STRING atom
+     *     let sdtPixelSetBytes = Array(
+     *         "2_4_8_6_7_5_9_d_b_c_a_e_12_10_11_f_13_17_15_16_14_9_d_b_c_a_9_d_b_c_a_e_12_10_11_f_9_d_b_c_a_1".utf8
+     *     )
+     *     properties.change(
+     *         window: cdeDaemonWindow,
+     *         property: sdtPixelSetAtom,
+     *         type: stringAtom,
+     *         format: 8,
+     *         mode: 0,
+     *         value: sdtPixelSetBytes
+     *     )
+     * }
+     */
 }
