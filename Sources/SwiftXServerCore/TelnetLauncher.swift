@@ -193,21 +193,40 @@ public final class TelnetLauncher: @unchecked Sendable {
         }
     }
 
-    private static func stripANSI(_ text: String) -> String {
+    static func stripANSI(_ text: String) -> String {
         var result = ""
         var i = text.startIndex
         while i < text.endIndex {
-            if text[i] == "\u{1B}", text.index(after: i) < text.endIndex, text[text.index(after: i)] == "[" {
-                i = text.index(i, offsetBy: 2)
-                while i < text.endIndex {
-                    let c = text[i]
-                    i = text.index(after: i)
-                    if c >= "@" && c <= "~" { break }
+            if text[i] == "\u{1B}", text.index(after: i) < text.endIndex {
+                let next = text[text.index(after: i)]
+                if next == "[" {
+                    // CSI: ESC [ ... final byte in @-~
+                    i = text.index(i, offsetBy: 2)
+                    while i < text.endIndex {
+                        let c = text[i]
+                        i = text.index(after: i)
+                        if c >= "@" && c <= "~" { break }
+                    }
+                    continue
+                } else if next == "]" {
+                    // OSC: ESC ] ... terminated by BEL or ST (ESC \). The
+                    // xterm-branch prompt in .cshrc sets the window title this
+                    // way; strip it so the progress window stays readable.
+                    i = text.index(i, offsetBy: 2)
+                    while i < text.endIndex {
+                        let c = text[i]
+                        if c == "\u{07}" { i = text.index(after: i); break }
+                        if c == "\u{1B}", text.index(after: i) < text.endIndex,
+                           text[text.index(after: i)] == "\\" {
+                            i = text.index(i, offsetBy: 2); break
+                        }
+                        i = text.index(after: i)
+                    }
+                    continue
                 }
-            } else {
-                result.append(text[i])
-                i = text.index(after: i)
             }
+            result.append(text[i])
+            i = text.index(after: i)
         }
         return result
     }
@@ -232,12 +251,15 @@ public final class TelnetLauncher: @unchecked Sendable {
                 if i + 2 < bytes.count { respondToDo(bytes[i + 2]); i += 3 } else { i = bytes.count }
             case 0xFE: // DONT
                 i += min(3, bytes.count - i)
-            case 0xFA: // SB -- skip to IAC SE
-                i += 2
-                while i + 1 < bytes.count {
-                    if bytes[i] == 0xFF && bytes[i + 1] == 0xF0 { i += 2; break }
-                    i += 1
+            case 0xFA: // SB <option> ... IAC SE
+                var j = i + 2
+                var sub: [UInt8] = []
+                while j + 1 < bytes.count {
+                    if bytes[j] == 0xFF && bytes[j + 1] == 0xF0 { break }
+                    sub.append(bytes[j]); j += 1
                 }
+                handleSubnegotiation(sub)
+                i = j + 1 < bytes.count ? j + 2 : bytes.count
             case 0xFF: // escaped 0xFF
                 clean.append(0xFF); i += 2
             default:
@@ -248,7 +270,11 @@ public final class TelnetLauncher: @unchecked Sendable {
     }
 
     private func respondToDo(_ option: UInt8) {
-        if option == 1 || option == 3 {
+        // 1 = echo, 3 = suppress-go-ahead, 24 = terminal-type.
+        // We accept terminal-type so SunOS telnetd sets TERM=xterm for the
+        // login shell; otherwise .cshrc's `if ($TERM == "xterm")` block never
+        // runs and the `setprompt` alias it defines goes missing.
+        if option == 1 || option == 3 || option == 24 {
             sendBytes([0xFF, 0xFB, option]) // IAC WILL
         } else {
             sendBytes([0xFF, 0xFC, option]) // IAC WONT
@@ -261,6 +287,21 @@ public final class TelnetLauncher: @unchecked Sendable {
         } else {
             sendBytes([0xFF, 0xFE, option]) // IAC DONT
         }
+    }
+
+    private func handleSubnegotiation(_ sub: [UInt8]) {
+        // TERMINAL-TYPE (24) SEND (1) -> reply with IS "xterm" (RFC 1091).
+        if sub.count >= 2 && sub[0] == 24 && sub[1] == 1 {
+            sendBytes(Self.terminalTypeSubnegotiation("xterm"))
+        }
+    }
+
+    static func terminalTypeSubnegotiation(_ term: String) -> [UInt8] {
+        // IAC SB TERMINAL-TYPE IS <term> IAC SE
+        var bytes: [UInt8] = [0xFF, 0xFA, 24, 0x00]
+        bytes.append(contentsOf: Array(term.utf8))
+        bytes.append(contentsOf: [0xFF, 0xF0])
+        return bytes
     }
 
     // MARK: - Send helpers
