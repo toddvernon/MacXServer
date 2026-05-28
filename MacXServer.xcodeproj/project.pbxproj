@@ -103,6 +103,7 @@
 		830C3B9E4539A6C7E9CE45E1 /* CodeEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF4AD16031FB7F7EF0DAECC6 /* CodeEditorView.swift */; };
 		8416682E2222FED362A4EE6C /* SelectionMediator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B285FD582FAF4933BADFEC56 /* SelectionMediator.swift */; };
 		855D5C96B247907D25F2E066 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA59B9723B98DBA33C9A52E9 /* AppDelegate.swift */; };
+		8576E8272FC8989300CD0AFF /* LaunchProgressWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8576E8262FC8989300CD0AFF /* LaunchProgressWindowController.swift */; };
 		858828032FC78D33005F1797 /* LauncherSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 858828022FC78D33005F1797 /* LauncherSyntaxHighlighter.swift */; };
 		858828042FC78D33005F1797 /* LaunchersPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 858828002FC78D33005F1797 /* LaunchersPanelView.swift */; };
 		858828052FC78D33005F1797 /* LaunchersWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 858828012FC78D33005F1797 /* LaunchersWindowController.swift */; };
@@ -401,6 +402,7 @@
 		800EAF3DF38A3331010EBCEF /* FontMappingsPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontMappingsPanelView.swift; sourceTree = "<group>"; };
 		843A6A5119906FB4B846C458 /* ServerConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerConfig.swift; sourceTree = "<group>"; };
 		85685B90E8B5A9069F010AD9 /* SyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxHighlighter.swift; sourceTree = "<group>"; };
+		8576E8262FC8989300CD0AFF /* LaunchProgressWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchProgressWindowController.swift; sourceTree = "<group>"; };
 		858828002FC78D33005F1797 /* LaunchersPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchersPanelView.swift; sourceTree = "<group>"; };
 		858828012FC78D33005F1797 /* LaunchersWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchersWindowController.swift; sourceTree = "<group>"; };
 		858828022FC78D33005F1797 /* LauncherSyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherSyntaxHighlighter.swift; sourceTree = "<group>"; };
@@ -617,6 +619,7 @@
 		54BDAB0338F73BE5D61CF60A /* SwiftXServer */ = {
 			isa = PBXGroup;
 			children = (
+				8576E8262FC8989300CD0AFF /* LaunchProgressWindowController.swift */,
 				858828002FC78D33005F1797 /* LaunchersPanelView.swift */,
 				858828012FC78D33005F1797 /* LaunchersWindowController.swift */,
 				858828022FC78D33005F1797 /* LauncherSyntaxHighlighter.swift */,
@@ -1234,6 +1237,7 @@
 				D4D553D0E4374B73B34236E1 /* FontMappingsWindowController.swift in Sources */,
 				46BE813CE2BD0175A43F5161 /* LineNumberGutter.swift in Sources */,
 				56315B7804BF724D4B3756B7 /* Preferences.swift in Sources */,
+				8576E8272FC8989300CD0AFF /* LaunchProgressWindowController.swift in Sources */,
 				FFF54155AA31D610309C2145 /* PreferencesPanelView.swift in Sources */,
 				A84C057C6D06F21BC74016DE /* PreferencesWindowController.swift in Sources */,
 				41242B184A4ED29DEF85D137 /* ResourceSyntaxHighlighter.swift in Sources */,
