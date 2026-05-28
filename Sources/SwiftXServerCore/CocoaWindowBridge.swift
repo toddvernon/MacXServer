@@ -2075,6 +2075,11 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // rects (logical) drive hit-testing and the shaped flag.
             slot.view?.boundingShapeDeviceRects = deviceRects
             slot.view?.boundingShapeRects = rects
+            // Motif-frame clone: tell the frame view to draw mwm-style (title
+            // bar only) when the client is shaped, matching SetFrameShape.
+            if let motif = slot.window as? MotifWindow {
+                motif.frameView.clientIsShaped = (rects != nil)
+            }
             guard let win = slot.window else { return }
             if rects != nil {
                 win.isOpaque = false

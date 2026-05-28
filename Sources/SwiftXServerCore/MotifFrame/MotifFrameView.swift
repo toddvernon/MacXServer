@@ -22,6 +22,22 @@ public final class MotifFrameView: NSView {
         didSet { needsDisplay = true }
     }
 
+    /// True when the X client has a SHAPE bounding region. Following mwm's
+    /// SetFrameShape (frame = rectangular title bar OR'ed with the client's
+    /// shape, punting on the resize border), we then draw ONLY the title bar
+    /// and leave the rest transparent so the (separately-clipped) shaped
+    /// client shows with the desktop around it. Driven by the bridge.
+    public var clientIsShaped: Bool = false {
+        didSet {
+            guard clientIsShaped != oldValue else { return }
+            needsDisplay = true
+        }
+    }
+
+    // Non-opaque while shaped so the area outside the title bar + client shape
+    // composites through to the desktop (the NSWindow is made non-opaque too).
+    public override var isOpaque: Bool { !clientIsShaped }
+
     /// The X client view. Installed at init and kept sized to `clientRect`
     /// on every layout pass. Cocoa routes mouse events to it normally as
     /// long as the pointer is inside its frame; events on the surrounding
@@ -103,6 +119,40 @@ public final class MotifFrameView: NSView {
     public override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let W = bounds.width, H = bounds.height
+
+        // Shaped client: mwm draws only the rectangular title bar and lets the
+        // client shape show below it, with no surrounding border or resize
+        // grooves (SetFrameShape "punts on the resize handle"). Clear to
+        // transparent, draw the title-bar strip, done — the shaped client view
+        // composites on top in its clientRect.
+        if clientIsShaped {
+            // Render the EXACT normal top-of-frame chrome (outer raised + inner
+            // sunken bevel band + title bar), but clipped to the title-bar
+            // strip so the raised band border wraps above and to the sides of
+            // the title row just like the unshaped frame. Everything below the
+            // client top stays transparent — mwm shapes away the side/bottom
+            // border + resize handles for a shaped client (SetFrameShape).
+            ctx.clear(bounds)
+            ctx.saveGState()
+            // Clip the strip to the bottom of the button row (not all the way
+            // to clientTopInset) — clientTopInset includes a bevelWidth of band
+            // below the buttons, which otherwise shows as a stray sliver of
+            // frame fill above the shaped client. Ending at the button bottoms
+            // gives the clean lower edge.
+            let stripBottom = MotifTheme.current.clientTopInset - MotifTheme.current.bevelWidth
+            ctx.clip(to: CGRect(x: 0, y: 0, width: W, height: stripBottom))
+            fill(ctx, bounds, MotifTheme.current.fill)
+            bevel(ctx, bounds, topLeft: MotifTheme.current.highlight, bottomRight: MotifTheme.current.shadow)
+            let innerTop = CGRect(x: band, y: band, width: W - 2*band, height: H - 2*band)
+            bevel(ctx, innerTop, topLeft: MotifTheme.current.shadow, bottomRight: MotifTheme.current.highlight)
+            // Corner grooves: the clip keeps the two TOP grab-handle grooves
+            // (where the buttons meet the outer frame) and drops the bottom
+            // pair, matching mwm punting on the lower resize handles.
+            drawCornerGrooves(ctx, W: W, H: H)
+            drawTitleBar(ctx)
+            ctx.restoreGState()
+            return
+        }
 
         // Band body
         fill(ctx, bounds, MotifTheme.current.fill)
