@@ -627,6 +627,21 @@ Per-window bit preservation is economically rational only in single-framebuffer 
 
 ---
 
+## 2026-05-28: SHAPE extension — implement, bounding-on-top-level first
+
+**Context**: SHAPE was committed back on 2026-05-05 (only SHAPE + BIG-REQUESTS, skip the rest). Implemented it now. oclock (round clock) and xeyes (oval, just the eyes) are the test apps — both hit the identical path: render a circle/oval into a depth-1 pixmap, then `XShapeCombineMask(..., ShapeBounding, ShapeSet)` on the top-level. (Confirmed against `reference/X11R6/xc/lib/Xmu/ShapeWidg.c` that xeyes DOES use SHAPE — an earlier `.claude-memory` note claiming it never did was wrong and was corrected.)
+
+**Chosen**:
+- **Major opcode 128, event base 64, no errors.** We advertise exactly one extension, so a fixed major opcode beats a dynamic allocator. Event base 64 = the X server's `EXTENSION_EVENT_BASE`, so ShapeNotify = 64. SHAPE defines no errors (reports core BadWindow / BadValue / BadPixmap / BadMatch). The gold SS2 captures happen to also assign SHAPE = 128, so our captured-replay tests for xcalc/xeyes now exercise the real handlers (zero XErrors).
+- **Full protocol, phased visual application.** All 9 requests implemented and the region state stored/queryable. The *visual* application covers the **bounding** shape on a **top-level** only (the demoable win). Clip shape and descendant-window shape are stored but not yet applied to rendering. Rejected "protocol-only" (no payoff) and "everything visual at once" (drags clip-shape into the resize/clipList machinery for no client benefit today). See SHORTCUTS for the exit plan.
+- **Mask via clipping the blit in `FlippedXView.draw(_:)`, NOT a CAShapeLayer mask.** The view is `isFlipped` and presents its backing through `draw(_:)`, so clipping there happens in the view's natural X-aligned (top-left, y-down) coordinate space — the shape rects map directly with no y-inversion. A CAShapeLayer mask would have reintroduced CALayer geometry-flip confusion (the exact class of bug `GRAPHICS_Y_FLIP.md` exists to prevent). The window is made non-opaque + clear-background so the clipped-away area shows the desktop through.
+- **Shape-aware hit-test (swallow), not passthrough.** Clicks inside the NSWindow rect but outside the bounding region are dropped (no X event), matching that those pixels aren't part of the window. True click-through to windows behind was rejected as more work for no benefit on the target apps.
+- **Region algebra is a faithful port of `Xext/shape.c:RegionOperate`** onto our existing `Region` engine (the 5 ops × nil/concrete destination), per the lift-don't-intellectualize rule.
+
+**Rejected**: dynamic opcode allocation (one extension, no need); CAShapeLayer mask (y-flip risk); MIRegion-first (the existing `Region` already has union/intersect/subtract/inverse/translate — no new engine needed).
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

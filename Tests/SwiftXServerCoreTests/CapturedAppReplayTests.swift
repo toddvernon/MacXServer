@@ -11,10 +11,12 @@ import Framer
 //   * SetupAccepted emitted
 //   * Zero XErrors on the wire
 //   * No unknown opcodes in the CORE protocol range (< 128).
-//     Extension-range opcodes (>= 128) are allowed because we explicitly
-//     don't implement extensions (QueryExtension returns present=false) —
-//     but the captured C2S stream contains extension requests because the
-//     gold Sun server told the client SHAPE=129 / SolarisIA=135 / etc.
+//     Extension-range opcodes (>= 128) that we DON'T implement are allowed
+//     as drift, because the captured C2S stream contains extension requests
+//     the gold Sun server negotiated (e.g. SolarisIA). SHAPE is the one
+//     extension we implement: the gold captures assigned it major opcode
+//     128 (the same value we hand out), so SHAPE traffic in xcalc/xeyes is
+//     now handled, not drift — those baselines list [] for extension drift.
 //   * Resource counts match the baseline snapshot
 //
 // These tests don't render anything, so they can't tell us if the visuals
@@ -59,7 +61,7 @@ final class CapturedAppReplayTests: XCTestCase {
         try runReplay(capture: "xcalc-running-on-ss2-display-on-ss2.xtap", expecting: ReplayBaseline(
             windows: 1, colors: 3, pixmaps: 0, fonts: 3, gcs: 0,
             atoms: 82, requests: 1415,
-            allowedExtensionOpcodes: [128]
+            allowedExtensionOpcodes: []   // SHAPE (128) is now handled, not drift
         ))
     }
 
@@ -83,7 +85,7 @@ final class CapturedAppReplayTests: XCTestCase {
         try runReplay(capture: "xeyes-running-on-ss2-display-on-ss2.xtap", expecting: ReplayBaseline(
             windows: 1, colors: 3, pixmaps: 0, fonts: 0, gcs: 0,
             atoms: 74, requests: 300,
-            allowedExtensionOpcodes: [128]
+            allowedExtensionOpcodes: []   // SHAPE (128) is now handled, not drift
         ))
     }
 

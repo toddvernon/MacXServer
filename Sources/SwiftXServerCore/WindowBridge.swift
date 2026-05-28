@@ -484,6 +484,14 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// every pointer-window transition.
     func setCursor(topLevel: UInt32, glyph: UInt16?)
 
+    /// Apply (or clear) a top-level's SHAPE bounding region. `rects` are in X
+    /// window-local logical coords; nil clears the shape (rectangular window),
+    /// an empty array shapes it to nothing. The bridge clips the window's blit
+    /// to the region and makes the NSWindow non-opaque so the area outside the
+    /// shape shows through (e.g. oclock's round face, xeyes' oval). Default
+    /// no-op for mock/test bridges. SHAPE extension; window-local coords.
+    func setWindowBoundingShape(topLevel: UInt32, rects: [Rectangle]?)
+
     /// Set the AppKit NSWindow's `backgroundColor` for a top-level X window.
     /// This is distinct from the X bg pixel (which paints into the backing
     /// bitmap): NSWindow.backgroundColor shows during live-resize before our
@@ -611,6 +619,7 @@ public extension WindowBridge {
         clipRectangles: [Rectangle]?
     ) {}
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {}
+    func setWindowBoundingShape(topLevel: UInt32, rects: [Rectangle]?) {}
     func setCursor(topLevel: UInt32, glyph: UInt16?) {}
     func setTopLevelWindowBackground(id: UInt32, color: RGB16) {}
     func reconfigureTopLevel(id: UInt32, geometry: TopLevelGeometry) {}

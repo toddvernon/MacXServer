@@ -83,6 +83,18 @@ public struct WindowEntry: Equatable, Sendable {
     /// under moved descendant" repaint once Step E lands.
     public var borderClip: Region
 
+    // MARK: - SHAPE extension state
+    //
+    // Per-window bounding and clip shapes set via the SHAPE extension. Both
+    // are in window-local coordinates. nil == unshaped: the window keeps its
+    // default rectangular bounding (border-inclusive) / clip (interior)
+    // region. This matches the `wBoundingShape(pWin) == 0` convention in
+    // reference/X11R6/xc/programs/Xserver/Xext/shape.c — a nil region means
+    // "no shape set," NOT "empty shape." An explicitly-empty Region means the
+    // window is shaped down to nothing (fully clipped away).
+    public var boundingShape: Region?
+    public var clipShape: Region?
+
     /// Last VisibilityNotify state emitted for this window (raw value of
     /// VisibilityState: 0=Unobscured, 1=PartiallyObscured, 2=FullyObscured).
     /// nil = no state yet (initial, or window is currently unmapped). Used
@@ -135,6 +147,8 @@ public struct WindowEntry: Equatable, Sendable {
         doNotPropagateMask: UInt16 = 0,
         clipList: Region = .empty,
         borderClip: Region = .empty,
+        boundingShape: Region? = nil,
+        clipShape: Region? = nil,
         lastVisibilityState: UInt8? = nil,
         prevSib: UInt32? = nil,
         nextSib: UInt32? = nil,
@@ -160,6 +174,8 @@ public struct WindowEntry: Equatable, Sendable {
         self.doNotPropagateMask = doNotPropagateMask
         self.clipList = clipList
         self.borderClip = borderClip
+        self.boundingShape = boundingShape
+        self.clipShape = clipShape
         self.lastVisibilityState = lastVisibilityState
         self.prevSib = prevSib
         self.nextSib = nextSib
@@ -307,6 +323,22 @@ public final class WindowTable: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
         w.borderClip = region
+        _windows[id] = w
+    }
+
+    /// Set (or clear, with nil) a window's SHAPE bounding region.
+    public func setBoundingShape(_ id: UInt32, _ region: Region?) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.boundingShape = region
+        _windows[id] = w
+    }
+
+    /// Set (or clear, with nil) a window's SHAPE clip region.
+    public func setClipShape(_ id: UInt32, _ region: Region?) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.clipShape = region
         _windows[id] = w
     }
 

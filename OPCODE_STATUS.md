@@ -78,7 +78,7 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | 60 | FreeGC | impl | medium | 2026-05-14 | Removes from table. Unknown GC → BadGC per XError-honesty policy. |
 | 72 | PutImage | accepted, no-op | low | 2026-05-07 | Bytes are decoded by framer but pixels are dropped. xclock writes icon bitmaps; we don't surface them anywhere yet. |
 | 84 | AllocColor | impl | high | 2026-05-19 | Shared read-only cells on the default colormap: requested RGB looked up in `rgbToPixel`, returns existing pixel if matched. New RGB allocates from `nextPixel = 16`. whitePixel (0), blackPixel (1), and defensive 0xFFFFFF=white pinned at init; canonical lowest-pixel-wins for white. ColorTable lives on `ServerCoordinator` (server-global, thread-safe), so multi-client sessions share the colormap correctly. Still missing: freelist, AllocColorCells writable cells, 256-cell cap. |
-| 98 | QueryExtension | impl (stub) | medium | 2026-05-07 | Reports `present=false` for everything. |
+| 98 | QueryExtension | impl | high | 2026-05-28 | `SHAPE` → `present=true, major=128, firstEvent=64, firstError=0`. Everything else → `present=false`. See the SHAPE extension section below. |
 | 65 | PolyLine | impl (window + pixmap) | medium | 2026-05-17 | Strokes a connected line strip via CGContext. Origin and Previous coordinate-modes both supported. Line-width from GC (0 → 1px). Routes through `CocoaWindowBridge.withDrawContext(target)`; pixmap path added Stage 1b (2026-05-17). |
 | 66 | PolySegment | impl (window + pixmap) | medium | 2026-05-17 | Strokes independent line segments via CGContext.move+addLine+strokePath. Routes through `CocoaWindowBridge.withDrawContext(target)`; pixmap path added Stage 1b (2026-05-17). Heavily used by Motif PushButton for top-shadow / bottom-shadow chrome lines drawn into backing pixmaps. |
 | 69 | FillPoly | impl (window + pixmap) | low | 2026-05-17 | Fills with foreground; uses GC fill-rule (default EvenOdd). Convex/Nonconvex/Complex shape attribute not yet specialised. Routes through `CocoaWindowBridge.withDrawContext(target)`; pixmap path added Stage 1b (2026-05-17). |
@@ -89,7 +89,7 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | 15 | QueryTree | impl | medium | 2026-05-14 | Walks WindowTable for direct children of the requested window. Returns root + parent + children list. Stacking order is iteration order, not real bottom-to-top — every Xt/Motif use of QueryTree we've seen consumes the LIST not its order. Replaces a prior silent-drop that hung any client calling it. Unknown window → BadWindow; root accepted. |
 | 17 | GetAtomName | impl | medium | 2026-05-14 | Looks up name from AtomTable. Unknown atom (or atom=0, the None sentinel) → BadAtom per XError-honesty policy (previously returned empty name as a documented lie). Predefined atoms 1..68 are pre-seeded and resolve normally. |
 | 38 | QueryPointer | impl | low | 2026-05-14 | Reports last-known pointer position (top-level local under our (0,0)-per-top-level convention) + deepest mapped descendant + mod/button mask. winX/winY relative to the queried window when query target is in the same top-level. Cross-top-level queries report root coords as winX/winY (best-effort). Replaces a prior silent-drop that broke Motif's gadget hit-testing. Unknown window → BadWindow; root accepted. |
-| 99 | ListExtensions | impl | high | 2026-05-10 | Returns empty list. We support no X extensions (no XKB, no SHAPE, no MIT-SHM); empty list is the correct answer. Replaces a prior silent-drop. |
+| 99 | ListExtensions | impl | high | 2026-05-28 | Returns `["SHAPE"]`. SHAPE is the one extension we implement; no XKB / MIT-SHM / BIG-REQUESTS yet. |
 | 44 | QueryKeymap | impl | low | 2026-05-10 | Returns all-zero 32-byte keymap (no keys held). Defensible best-effort — clients see "idle keyboard." Phase 4: track held keycodes on KeyPress/KeyRelease and mirror them. Replaces a prior silent-drop. |
 | 97 | QueryBestSize | impl | medium | 2026-05-14 | Cursor class → 16×16. Tile/Stipple → echoes requested width×height. Doesn't actually consult the drawable for screen/depth context (we have one screen anyway). Unknown drawable now emits BadDrawable per XError-honesty policy. |
 | 40 | TranslateCoordinates | impl | medium | 2026-05-14 | Computes (srcX, srcY) in dstWindow's coords by walking each window's top-level-local origin chain. Top-levels are at (0,0) in root coords (matches our `rootX`/`rootY` event stamping convention). Always sameScreen=true. child=0 — we don't currently identify the child of dst containing the destination point; would need a hit-test walk. Replaces a prior silent-drop that blocked quickplot at request 2086 forever. Unknown src or dst window → BadWindow; root accepted on either side. |
@@ -152,6 +152,34 @@ Pre-populated with the opcodes xclock will hit during M1. Other opcodes get rows
 | 90 | StoreNamedColor | impl (BadAccess) | high | 2026-05-22 | Same shape as StoreColors: default cmap + no r/w cells → BadAccess; non-default cmap → BadColor. Spec-correct refusal. |
 
 (Add rows as opcodes get encountered.)
+
+## SHAPE extension (major opcode 128, event base 64)
+
+Shipped 2026-05-28. Non-rectangular windows. Major opcode 128, ShapeNotify
+event = 64, no errors of its own (reports core BadWindow / BadValue /
+BadPixmap / BadMatch / BadLength). Wire codec in `Sources/Framer/{Requests,
+Replies,Events}/Shape*.swift`; server logic in `ShapeExtension.swift`.
+Validated end-to-end: the real xcalc and xeyes SS2 captures replay their
+SHAPE traffic with zero XErrors (CapturedAppReplayTests).
+
+| Minor | Request | Status | Confidence | Notes |
+|-------|---------|--------|-----------|-------|
+| 0 | ShapeQueryVersion | impl | high | Replies 1.0. |
+| 1 | ShapeRectangles | impl | high | Builds region from the rect list (always normalized; we don't enforce the `ordering` claim, strictly more lenient than VerifyRectOrder). Validates destKind, ordering ≤ 3, 8-byte rect alignment (BadLength). |
+| 2 | ShapeMask | impl | high | Depth-1 pixmap → region via `bitmapToRegion` (reads back through `bridge.readDrawablePixels`, "set" = fully black, same convention as the FillStippled reader; samples one pixel per logical coord). `src=None` clears the shape. BadPixmap / BadMatch (depth≠1). This is the oclock / xeyes path. |
+| 3 | ShapeCombine | impl | high | Source window's bounding/clip shape (or its default rect when unshaped) combined into dest. BadWindow on bad src. |
+| 4 | ShapeOffset | impl | high | Translates an existing region; unshaped window stays unshaped. ShapeNotify either way. |
+| 5 | ShapeQueryExtents | impl | high | Bounding/clip extents, or the default rect (border-inclusive bounding / interior clip) when unshaped. |
+| 6 | ShapeSelectInput | impl | medium | Per-session interest set. Cross-session ShapeNotify (a separate client watching another's window) not delivered — see SHORTCUTS. |
+| 7 | ShapeInputSelected | impl | medium | Reports this session's interest. |
+| 8 | ShapeGetRectangles | impl | high | Region's rects (YXBanded), or the single default rect when unshaped. |
+
+Visual application: **bounding shape on a top-level** is applied (the
+FlippedXView blit is clipped to the region; the NSWindow goes non-opaque so
+the area outside shows through; clicks outside the region are swallowed).
+**Clip shape and descendant-window shape are stored and queryable but not yet
+visually applied** — see SHORTCUTS. The region algebra (the 5 ops × nil/concrete
+destination) is a faithful port of `Xext/shape.c:RegionOperate`.
 
 ## Per-opcode notes
 

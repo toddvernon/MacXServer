@@ -2065,6 +2065,27 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    public func setWindowBoundingShape(topLevel: UInt32, rects: [Framer.Rectangle]?) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let slot = self.slot(topLevel) else { return }
+            slot.view?.boundingShapeRects = rects
+            guard let win = slot.window else { return }
+            if rects != nil {
+                // Shaped: the window must be non-opaque so the area the blit
+                // clips away shows the desktop behind it, and the view's layer
+                // must not fill that area with an opaque bg.
+                win.isOpaque = false
+                win.backgroundColor = .clear
+                slot.view?.layer?.backgroundColor = CGColor(gray: 0, alpha: 0)
+            } else {
+                // Unshaped: restore the opaque window + live-resize bg fill.
+                win.isOpaque = true
+                slot.view?.layer?.backgroundColor = slot.view?.liveResizeBackground
+            }
+            slot.view?.needsDisplay = true
+        }
+    }
+
     public func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,

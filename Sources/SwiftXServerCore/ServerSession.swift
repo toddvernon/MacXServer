@@ -234,7 +234,7 @@ public final class ServerSession: @unchecked Sendable {
     /// (which we did before) causes some Xt-based clients to treat events
     /// as duplicates and drop them.
     private let connectionStart = Date()
-    private var serverTime: UInt32 {
+    var serverTime: UInt32 {
         UInt32(truncatingIfNeeded: Int(Date().timeIntervalSince(connectionStart) * 1000))
     }
 
@@ -248,6 +248,15 @@ public final class ServerSession: @unchecked Sendable {
     public private(set) var requestsProcessed: Int = 0
     public private(set) var unknownOpcodes: [UInt8] = []
     public private(set) var errorsEmitted: Int = 0
+
+    /// Windows this client has selected ShapeNotify input on (ShapeSelectInput
+    /// enable=true). The X server tracks shape-event interest per-window
+    /// across all clients; we track it per-session, which covers the common
+    /// case (a client watching the shape of its own windows). Cross-session
+    /// shape-notify (a separate client, e.g. a WM, watching another client's
+    /// window) isn't delivered — see SHORTCUTS.md. In rootless mode macOS is
+    /// the WM, so there's no X WM selecting shape input on our clients.
+    var shapeSelectedWindows: Set<UInt32> = []
 
     public weak var log: ServerLogSink?
 
@@ -1344,6 +1353,17 @@ public final class ServerSession: @unchecked Sendable {
 
     /// X11 PropertyChangeMask bit per xproto X.h.
     static let propertyChangeMask: UInt32 = 1 << 22
+
+    // MARK: - SHAPE extension
+    //
+    // We advertise exactly one extension (SHAPE), so we hand out a fixed major
+    // opcode rather than allocating dynamically. Event codes for extensions
+    // start at EXTENSION_EVENT_BASE (64) in the X server; SHAPE is our only
+    // extension so ShapeNotify == 64. SHAPE defines no errors of its own, so
+    // firstError is 0 (it reports core errors like BadWindow / BadValue).
+    static let shapeMajorOpcode: UInt8 = 128
+    static let shapeEventBase: UInt8 = 64       // ShapeNotify = shapeEventBase + 0
+    static let shapeFirstError: UInt8 = 0
 
     /// Emit PropertyNotify to a window if its event mask has
     /// PropertyChangeMask. Called from ChangeProperty (state=NewValue) and
@@ -4857,11 +4877,25 @@ public final class ServerSession: @unchecked Sendable {
             )
             outbound.append(reply.encode(byteOrder: byteOrder))
 
-        case .queryExtension:
-            let reply = QueryExtensionReply(
-                sequenceNumber: sequenceNumber,
-                present: false, majorOpcode: 0, firstEvent: 0, firstError: 0
-            )
+        case .queryExtension(let r):
+            // Case-sensitive name match per the spec. SHAPE is the only
+            // extension we advertise; everything else reports not-present.
+            let name = String(decoding: r.name, as: UTF8.self)
+            let reply: QueryExtensionReply
+            if name == "SHAPE" {
+                reply = QueryExtensionReply(
+                    sequenceNumber: sequenceNumber,
+                    present: true,
+                    majorOpcode: Self.shapeMajorOpcode,
+                    firstEvent: Self.shapeEventBase,
+                    firstError: Self.shapeFirstError
+                )
+            } else {
+                reply = QueryExtensionReply(
+                    sequenceNumber: sequenceNumber,
+                    present: false, majorOpcode: 0, firstEvent: 0, firstError: 0
+                )
+            }
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .polySegment(let r):
@@ -6094,10 +6128,9 @@ public final class ServerSession: @unchecked Sendable {
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .listExtensions:
-            // Empty list — we don't implement any X extensions (no XKB,
-            // no SHAPE, no MIT-SHM, etc.). Clients that ListExtensions get
-            // back nothing and proceed without extension features.
-            let reply = ListExtensionsReply(sequenceNumber: sequenceNumber, names: [])
+            // We advertise SHAPE (non-rectangular windows) and nothing else
+            // — no XKB, no MIT-SHM, no BIG-REQUESTS yet.
+            let reply = ListExtensionsReply(sequenceNumber: sequenceNumber, names: [Array("SHAPE".utf8)])
             outbound.append(reply.encode(byteOrder: byteOrder))
 
         case .queryKeymap:
@@ -6114,7 +6147,14 @@ public final class ServerSession: @unchecked Sendable {
             )
             outbound.append(reply.encode(byteOrder: byteOrder))
 
-        case .unknown(let op, _):
+        case .unknown(let op, let bytes):
+            // SHAPE requests arrive here: their major opcode is the one we
+            // handed out at QueryExtension time, so they don't decode into a
+            // core Request case. Sub-dispatch on the minor opcode.
+            if op == Self.shapeMajorOpcode {
+                handleShapeRequest(bytes: bytes, byteOrder: byteOrder)
+                break
+            }
             unknownOpcodes.append(op)
             let n = opcodeName(op) ?? "unknown"
             log?.log("dispatch: unknown opcode \(op) (\(n))")

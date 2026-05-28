@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import Framer
 
 // NSView subclass that:
 //   * uses X11's top-left origin convention (isFlipped = true) so X coords
@@ -101,6 +102,16 @@ public final class FlippedXView: NSView {
         didSet {
             if wantsLayer { layer?.backgroundColor = liveResizeBackground }
         }
+    }
+
+    /// SHAPE bounding region for this top-level, in X window-local LOGICAL
+    /// coordinates (y-down, top-left origin — same space the view draws in).
+    /// nil = unshaped (no clip, rectangular window). A non-nil value clips the
+    /// blit in `draw(_:)` to the union of these rects; an empty array means the
+    /// window is shaped to nothing (fully transparent). The bridge separately
+    /// makes the NSWindow non-opaque so the clipped-away area shows through.
+    public var boundingShapeRects: [Framer.Rectangle]? {
+        didSet { needsDisplay = true }
     }
 
     /// Logical X-protocol dimensions (what the client sees).
@@ -263,13 +274,29 @@ public final class FlippedXView: NSView {
     private func dispatchMouse(_ event: NSEvent, button: UInt8, isDown: Bool) {
         guard let handler = mouseHandler else { return }
         let (x, y) = logicalLocation(of: event)
+        // Swallow clicks that land outside the SHAPE bounding region: those
+        // pixels aren't part of the window, so no X button event is generated.
+        guard isInsideShape(logicalX: x, logicalY: y) else { return }
         handler(x, y, button, isDown)
     }
 
     private func dispatchDrag(_ event: NSEvent, button: UInt8) {
         guard let handler = mouseDraggedHandler else { return }
         let (x, y) = logicalLocation(of: event)
+        guard isInsideShape(logicalX: x, logicalY: y) else { return }
         handler(x, y, button)
+    }
+
+    /// True if the logical point is inside the bounding shape, or the window
+    /// is unshaped. Drives the click-swallow behavior in dispatchMouse/Drag.
+    private func isInsideShape(logicalX: Int16, logicalY: Int16) -> Bool {
+        guard let rects = boundingShapeRects else { return true }
+        let x = Int(logicalX), y = Int(logicalY)
+        for r in rects {
+            if x >= Int(r.x), x < Int(r.x) + Int(r.width),
+               y >= Int(r.y), y < Int(r.y) + Int(r.height) { return true }
+        }
+        return false
     }
 
     /// Convert an NSEvent's locationInWindow (window-points, bottom-left
@@ -477,6 +504,22 @@ public final class FlippedXView: NSView {
         // CoreAnimation backstop. Anything outside imgRect in the view's
         // bounds shows the layer's bg color.
         cg.saveGState()
+        // SHAPE bounding clip. Set BEFORE the y-flip below so it lives in the
+        // view's natural flipped (top-left, y-down) point space, matching the
+        // X logical coords the shape rects are in. logical -> points scale is
+        // imgPointsW / logicalWidth (== scaleFactor / backingScale). An empty
+        // rect list adds no subpaths, so clip() reduces to the empty region
+        // and the window blits nothing (shaped-to-nothing = transparent).
+        if let shapeRects = boundingShapeRects {
+            let s = logicalWidth > 0 ? imgPointsW / CGFloat(logicalWidth) : 1
+            let clip = CGMutablePath()
+            for r in shapeRects {
+                clip.addRect(CGRect(x: CGFloat(r.x) * s, y: CGFloat(r.y) * s,
+                                    width: CGFloat(r.width) * s, height: CGFloat(r.height) * s))
+            }
+            cg.addPath(clip)
+            cg.clip()
+        }
         cg.translateBy(x: 0, y: imgPointsH)
         cg.scaleBy(x: 1, y: -1)
         cg.draw(img, in: imgRect)
