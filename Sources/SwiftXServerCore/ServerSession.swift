@@ -3813,6 +3813,15 @@ public final class ServerSession: @unchecked Sendable {
                     id: r.window,
                     color: windowBackground(r.window, byteOrder: byteOrder)
                 )
+                // Re-apply any SHAPE bounding region set before the map. The
+                // NSWindow/view is created lazily inside mapTopLevel, so a
+                // ShapeMask/ShapeRectangles that arrived while the window was
+                // still unmapped (the common case — oclock and xeyes shape
+                // their shell before mapping it) had no view to mask and was
+                // dropped. mapTopLevel + setTopLevelWindowBackground + this
+                // call all dispatch to main in FIFO order, so the view exists
+                // by the time this runs. No-op (forwards nil) when unshaped.
+                setWindowShape(windowId: r.window)
                 // Paint top-level bg + every mapped descendant's bg. The
                 // bridge dispatches paint to main async; mapTopLevel was
                 // dispatched first so its view-creation block runs before

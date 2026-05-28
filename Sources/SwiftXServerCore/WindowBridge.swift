@@ -485,12 +485,20 @@ public protocol WindowBridge: AnyObject, Sendable {
     func setCursor(topLevel: UInt32, glyph: UInt16?)
 
     /// Apply (or clear) a top-level's SHAPE bounding region. `rects` are in X
-    /// window-local logical coords; nil clears the shape (rectangular window),
-    /// an empty array shapes it to nothing. The bridge clips the window's blit
-    /// to the region and makes the NSWindow non-opaque so the area outside the
-    /// shape shows through (e.g. oclock's round face, xeyes' oval). Default
-    /// no-op for mock/test bridges. SHAPE extension; window-local coords.
-    func setWindowBoundingShape(topLevel: UInt32, rects: [Rectangle]?)
+    /// window-local LOGICAL coords and drive input hit-testing (clicks outside
+    /// are swallowed) plus serve as the "is shaped" flag. `deviceRects`, when
+    /// non-nil, are the same region in window-local DEVICE pixels and drive
+    /// the visual clip at full backing resolution (avoids stair-stepping when
+    /// the logical shape is magnified by the display scale); when nil the
+    /// bridge scales `rects` up instead. `rects == nil` clears the shape
+    /// (rectangular window). Default no-op for mock/test bridges.
+    func setWindowBoundingShape(topLevel: UInt32, rects: [Rectangle]?, deviceRects: [Rectangle]?)
+
+    /// Read a depth-1 pixmap's full backing at DEVICE resolution (one UInt32
+    /// per device pixel, 0xAARRGGBB). Used by the SHAPE path to build a
+    /// device-resolution bounding mask before the source pixmap is freed.
+    /// Returns nil if the pixmap isn't known. Default nil for mock bridges.
+    func readDepth1MaskDevicePixels(pixmapId: UInt32) -> (pixels: [UInt32], width: Int, height: Int)?
 
     /// Set the AppKit NSWindow's `backgroundColor` for a top-level X window.
     /// This is distinct from the X bg pixel (which paints into the backing
@@ -619,7 +627,8 @@ public extension WindowBridge {
         clipRectangles: [Rectangle]?
     ) {}
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {}
-    func setWindowBoundingShape(topLevel: UInt32, rects: [Rectangle]?) {}
+    func setWindowBoundingShape(topLevel: UInt32, rects: [Rectangle]?, deviceRects: [Rectangle]?) {}
+    func readDepth1MaskDevicePixels(pixmapId: UInt32) -> (pixels: [UInt32], width: Int, height: Int)? { nil }
     func setCursor(topLevel: UInt32, glyph: UInt16?) {}
     func setTopLevelWindowBackground(id: UInt32, color: RGB16) {}
     func reconfigureTopLevel(id: UInt32, geometry: TopLevelGeometry) {}

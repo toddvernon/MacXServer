@@ -109,8 +109,16 @@ extension ServerSession {
             }
             srcRgn = bitmapToRegion(pixmapId: r.src, width: Int(pix.width), height: Int(pix.height))
         }
+        // For the dominant case (Set the bounding shape from a pixmap) also
+        // capture a device-resolution mask now, while the pixmap is alive, so
+        // the NSWindow clip follows the curve at full backing resolution.
+        var deviceRects: [Rectangle]? = nil
+        if r.op == ShapeOp.set, r.destKind == ShapeKind.bounding, r.src != 0 {
+            deviceRects = bitmapToDeviceRects(pixmapId: r.src, xOff: r.xOff, yOff: r.yOff)
+        }
         combineShape(dest: r.dest, destKind: r.destKind, src: srcRgn,
-                     op: r.op, xOff: r.xOff, yOff: r.yOff, minor: ShapeMinor.mask)
+                     op: r.op, xOff: r.xOff, yOff: r.yOff, minor: ShapeMinor.mask,
+                     deviceRects: deviceRects)
     }
 
     private func handleShapeCombine(_ r: ShapeCombine, byteOrder: ByteOrder) {
@@ -154,8 +162,14 @@ extension ServerSession {
         // window stays unshaped. Either way a ShapeNotify is sent.
         if let region = existing {
             let moved = region.translated(dx: Int32(r.xOff), dy: Int32(r.yOff))
-            if r.destKind == ShapeKind.bounding { windows.setBoundingShape(r.dest, moved) }
-            else { windows.setClipShape(r.dest, moved) }
+            if r.destKind == ShapeKind.bounding {
+                windows.setBoundingShape(r.dest, moved)
+                // The cached device mask no longer matches the moved region;
+                // drop it so the view falls back to the scaled logical region.
+                windows.setBoundingShapeDeviceRects(r.dest, nil)
+            } else {
+                windows.setClipShape(r.dest, moved)
+            }
             setWindowShape(windowId: r.dest)
         }
         sendShapeNotify(windowId: r.dest, kind: r.destKind)
@@ -235,7 +249,8 @@ extension ServerSession {
     /// apply to rendering and send ShapeNotify. Faithful to shape.c's
     /// RegionOperate including the per-op nil-destination handling.
     private func combineShape(dest: UInt32, destKind: UInt8, src: Region?,
-                              op: UInt8, xOff: Int16, yOff: Int16, minor: UInt8) {
+                              op: UInt8, xOff: Int16, yOff: Int16, minor: UInt8,
+                              deviceRects: [Rectangle]? = nil) {
         guard op <= ShapeOp.invert else {
             emitError(.value, majorOpcode: Self.shapeMajorOpcode, badResourceId: UInt32(op), minorOpcode: UInt16(minor))
             return
@@ -256,8 +271,16 @@ extension ServerSession {
         }
         let newShape = shapeRegionOperate(current: current, src: translatedSrc, op: op, defaultRegion: defaultRegion)
 
-        if destKind == ShapeKind.bounding { windows.setBoundingShape(dest, newShape) }
-        else { windows.setClipShape(dest, newShape) }
+        if destKind == ShapeKind.bounding {
+            windows.setBoundingShape(dest, newShape)
+            // Update the device-resolution visual mask: the mask path provides
+            // it (op=Set from a pixmap); every other bounding mutation
+            // invalidates it (nil) so the view falls back to the scaled
+            // logical region.
+            windows.setBoundingShapeDeviceRects(dest, deviceRects)
+        } else {
+            windows.setClipShape(dest, newShape)
+        }
 
         setWindowShape(windowId: dest)
         sendShapeNotify(windowId: dest, kind: destKind)
@@ -323,7 +346,7 @@ extension ServerSession {
         let rects: [Rectangle]? = win.boundingShape.map { region in
             region.rects.map { boxToRect($0) }
         }
-        bridge.setWindowBoundingShape(topLevel: windowId, rects: rects)
+        bridge.setWindowBoundingShape(topLevel: windowId, rects: rects, deviceRects: win.boundingShapeDeviceRects)
     }
 
     // MARK: - ShapeNotify
@@ -380,6 +403,41 @@ extension ServerSession {
             }
         }
         return Region.rects(boxes, order: .yxSorted)
+    }
+
+    /// Build a device-resolution visual mask from a depth-1 pixmap: one
+    /// 1-device-pixel-tall band per run of set bits, in window-local DEVICE
+    /// pixels (the pixmap-local device coords plus the logical offset scaled to
+    /// device). Same "fully black = set" convention as bitmapToRegion. nil if
+    /// the pixmap's device pixels can't be read. Used only for the NSWindow
+    /// clip — the X-protocol region stays logical (bitmapToRegion).
+    private func bitmapToDeviceRects(pixmapId: UInt32, xOff: Int16, yOff: Int16) -> [Rectangle]? {
+        guard let bridge = bridge,
+              let grid = bridge.readDepth1MaskDevicePixels(pixmapId: pixmapId) else { return nil }
+        let w = grid.width, h = grid.height
+        guard w > 0, h > 0, grid.pixels.count >= w * h else { return nil }
+        let scaleInt = max(1, Int(bridge.scaleFactor.rounded()))
+        let offX = Int(xOff) * scaleInt
+        let offY = Int(yOff) * scaleInt
+        var rects: [Rectangle] = []
+        for y in 0..<h {
+            var runStart = -1
+            for x in 0..<w {
+                let set = (grid.pixels[y * w + x] & 0x00FFFFFF) == 0
+                if set {
+                    if runStart < 0 { runStart = x }
+                } else if runStart >= 0 {
+                    rects.append(Rectangle(x: Int16(clamping: offX + runStart), y: Int16(clamping: offY + y),
+                                           width: UInt16(clamping: x - runStart), height: 1))
+                    runStart = -1
+                }
+            }
+            if runStart >= 0 {
+                rects.append(Rectangle(x: Int16(clamping: offX + runStart), y: Int16(clamping: offY + y),
+                                       width: UInt16(clamping: w - runStart), height: 1))
+            }
+        }
+        return rects
     }
 
     // MARK: - Small helpers

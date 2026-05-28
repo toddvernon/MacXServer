@@ -100,8 +100,18 @@ public final class FlippedXView: NSView {
     /// bitmap gets resized + repainted on windowDidEndLiveResize.
     public var liveResizeBackground: CGColor = .white {
         didSet {
-            if wantsLayer { layer?.backgroundColor = liveResizeBackground }
+            // While shaped the layer must stay transparent so the area outside
+            // the bounding region composites through to the desktop. The X
+            // background fill only applies to the rectangular (unshaped) case.
+            if wantsLayer { layer?.backgroundColor = layerBackgroundForShapeState }
         }
+    }
+
+    /// Transparent while a bounding shape is set, the live-resize fill
+    /// otherwise. Single source of truth for the layer's background so the
+    /// shape state and the X background color don't fight over it.
+    private var layerBackgroundForShapeState: CGColor {
+        boundingShapeRects == nil ? liveResizeBackground : CGColor(gray: 0, alpha: 0)
     }
 
     /// SHAPE bounding region for this top-level, in X window-local LOGICAL
@@ -111,8 +121,18 @@ public final class FlippedXView: NSView {
     /// window is shaped to nothing (fully transparent). The bridge separately
     /// makes the NSWindow non-opaque so the clipped-away area shows through.
     public var boundingShapeRects: [Framer.Rectangle]? {
-        didSet { needsDisplay = true }
+        didSet {
+            if wantsLayer { layer?.backgroundColor = layerBackgroundForShapeState }
+            needsDisplay = true
+        }
     }
+
+    /// Device-resolution version of the bounding shape (window-local DEVICE
+    /// pixels), used for the visual clip so the window edge follows the curve
+    /// at full backing resolution instead of magnified logical-pixel steps.
+    /// nil = fall back to scaling `boundingShapeRects` (logical) up. Set in
+    /// lockstep with `boundingShapeRects` by the bridge.
+    public var boundingShapeDeviceRects: [Framer.Rectangle]?
 
     /// Logical X-protocol dimensions (what the client sees).
     public private(set) var logicalWidth: Int = 0
@@ -511,11 +531,30 @@ public final class FlippedXView: NSView {
         // rect list adds no subpaths, so clip() reduces to the empty region
         // and the window blits nothing (shaped-to-nothing = transparent).
         if let shapeRects = boundingShapeRects {
-            let s = logicalWidth > 0 ? imgPointsW / CGFloat(logicalWidth) : 1
+            // Clear the layer backing to transparent first. AppKit doesn't
+            // erase the area outside the clip, so without this a prior
+            // (unshaped) opaque blit would still show through around the
+            // shape. Paired with the clear layer.backgroundColor + non-opaque
+            // NSWindow, this makes everything outside the region see-through.
+            cg.clear(bounds)
             let clip = CGMutablePath()
-            for r in shapeRects {
-                clip.addRect(CGRect(x: CGFloat(r.x) * s, y: CGFloat(r.y) * s,
-                                    width: CGFloat(r.width) * s, height: CGFloat(r.height) * s))
+            if let dev = boundingShapeDeviceRects {
+                // Device-pixel mask: convert device px -> points (÷ backing
+                // scale). Same units the blit lands in (imgRect spans
+                // deviceWidth/backingScale points), so the clip follows the
+                // curve at full backing resolution.
+                let bs = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+                for r in dev {
+                    clip.addRect(CGRect(x: CGFloat(r.x) / bs, y: CGFloat(r.y) / bs,
+                                        width: CGFloat(r.width) / bs, height: CGFloat(r.height) / bs))
+                }
+            } else {
+                // No device mask (rect-based shape): scale the logical rects.
+                let s = logicalWidth > 0 ? imgPointsW / CGFloat(logicalWidth) : 1
+                for r in shapeRects {
+                    clip.addRect(CGRect(x: CGFloat(r.x) * s, y: CGFloat(r.y) * s,
+                                        width: CGFloat(r.width) * s, height: CGFloat(r.height) * s))
+                }
             }
             cg.addPath(clip)
             cg.clip()

@@ -20,10 +20,12 @@ final class ShapeExtensionTests: XCTestCase {
         var lastShapeRects: [Framer.Rectangle]?
         init(grid: [UInt32] = [], width: Int = 0) { self.grid = grid; self.gw = width }
         var scaleFactor: Double { 1 }
-        func setWindowBoundingShape(topLevel: UInt32, rects: [Framer.Rectangle]?) {
+        var lastShapeDeviceRects: [Framer.Rectangle]?
+        func setWindowBoundingShape(topLevel: UInt32, rects: [Framer.Rectangle]?, deviceRects: [Framer.Rectangle]?) {
             shapeCallCount += 1
             lastShapeTopLevel = topLevel
             lastShapeRects = rects
+            lastShapeDeviceRects = deviceRects
         }
         func registerTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32) {}
         func mapTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32,
@@ -320,6 +322,60 @@ final class ShapeExtensionTests: XCTestCase {
                                    dest: 0xB00B0, xOff: 0, yOff: 0, src: 0)
             .encode(majorOpcode: major, byteOrder: .lsbFirst))
         XCTAssertNil(bridge.lastShapeRects, "clearing the shape forwards nil")
+    }
+
+    // MARK: - Real-bridge bitmap->region (xeyes mask pattern)
+
+    private func u32le(_ v: UInt32) -> [UInt8] {
+        [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)]
+    }
+
+    // Replicates exactly what xeyes does to build its shape mask, against a
+    // real CocoaWindowBridge: create a depth-1 pixmap, fill it with the
+    // default GC (foreground 0 = white = clear), switch foreground to 1
+    // (black = set), draw the shape, then ShapeMask Set/Bounding onto a
+    // top-level. The resulting bounding region must be the drawn shape, not
+    // the whole rectangle.
+    func testShapeMaskRegionFromRealBridgeBitmap() throws {
+        let bridge = CocoaWindowBridge()
+        let session = ServerSession(bridge: bridge)
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        _ = session.outbound.drain()
+
+        let win: UInt32 = 0x900001
+        let pix: UInt32 = 0x900002
+        let gc: UInt32 = 0x900003
+
+        _ = session.feed(CreateWindow(depth: 0, wid: win, parent: root, x: 0, y: 0,
+                                      width: 64, height: 64, borderWidth: 0,
+                                      windowClass: .inputOutput, visual: 0,
+                                      valueMask: 0, valueList: []).encode(byteOrder: .lsbFirst))
+        _ = session.feed(CreatePixmap(depth: 1, pid: pix, drawable: win, width: 64, height: 64).encode(byteOrder: .lsbFirst))
+        // Default GC: foreground 0 (white / clear).
+        _ = session.feed(CreateGC(cid: gc, drawable: pix, valueMask: 0, valueList: []).encode(byteOrder: .lsbFirst))
+        // Clear the whole pixmap (fg=0 -> white).
+        _ = session.feed(PolyFillRectangle(drawable: pix, gc: gc,
+                                           rectangles: [Rectangle(x: 0, y: 0, width: 64, height: 64)]).encode(byteOrder: .lsbFirst))
+        // Switch foreground to 1 (black / set).
+        _ = session.feed(ChangeGC(gc: gc, valueMask: GCBits.foreground, valueList: u32le(1)).encode(byteOrder: .lsbFirst))
+        // Draw the shape: a 20x20 black square at (10,10).
+        _ = session.feed(PolyFillRectangle(drawable: pix, gc: gc,
+                                           rectangles: [Rectangle(x: 10, y: 10, width: 20, height: 20)]).encode(byteOrder: .lsbFirst))
+        // Apply as the top-level's bounding shape.
+        _ = session.feed(ShapeMask(op: ShapeOp.set, destKind: ShapeKind.bounding,
+                                   dest: win, xOff: 0, yOff: 0, src: pix).encode(majorOpcode: major, byteOrder: .lsbFirst))
+
+        let stored = session.windows.get(win)
+        let shape = stored?.boundingShape
+        XCTAssertNotNil(shape, "ShapeMask should have set a bounding region")
+        // The region must be the drawn 20x20 square, NOT the full 64x64 rect.
+        XCTAssertEqual(shape?.boundingBox, BoxRec(x1: 10, y1: 10, x2: 30, y2: 30),
+                       "bitmapToRegion should yield the black shape, not the whole pixmap")
+        // A Set/Bounding mask also captures the device-resolution visual mask.
+        XCTAssertNotNil(stored?.boundingShapeDeviceRects,
+                        "Set/Bounding ShapeMask should cache a device-resolution mask")
+        XCTAssertFalse(stored?.boundingShapeDeviceRects?.isEmpty ?? true,
+                       "device mask should cover the drawn square")
     }
 
     // MARK: - Errors

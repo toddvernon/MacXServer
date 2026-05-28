@@ -2065,25 +2065,42 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
-    public func setWindowBoundingShape(topLevel: UInt32, rects: [Framer.Rectangle]?) {
+    public func setWindowBoundingShape(topLevel: UInt32, rects: [Framer.Rectangle]?, deviceRects: [Framer.Rectangle]?) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self, let slot = self.slot(topLevel) else { return }
+            // Setting boundingShapeRects drives the view's layer background
+            // (clear while shaped) via its didSet; we just toggle the NSWindow
+            // opacity so the cleared area composites through to the desktop.
+            // deviceRects (device-resolution mask) drives the visual clip;
+            // rects (logical) drive hit-testing and the shaped flag.
+            slot.view?.boundingShapeDeviceRects = deviceRects
             slot.view?.boundingShapeRects = rects
             guard let win = slot.window else { return }
             if rects != nil {
-                // Shaped: the window must be non-opaque so the area the blit
-                // clips away shows the desktop behind it, and the view's layer
-                // must not fill that area with an opaque bg.
                 win.isOpaque = false
                 win.backgroundColor = .clear
-                slot.view?.layer?.backgroundColor = CGColor(gray: 0, alpha: 0)
             } else {
-                // Unshaped: restore the opaque window + live-resize bg fill.
                 win.isOpaque = true
-                slot.view?.layer?.backgroundColor = slot.view?.liveResizeBackground
             }
             slot.view?.needsDisplay = true
         }
+    }
+
+    public func readDepth1MaskDevicePixels(pixmapId: UInt32) -> (pixels: [UInt32], width: Int, height: Int)? {
+        guard let buf = lookupPixmapBuffer(pixmapId), let data = buf.context.data else { return nil }
+        let w = buf.context.width, h = buf.context.height       // device pixels
+        guard w > 0, h > 0 else { return nil }
+        let bpr = buf.context.bytesPerRow
+        let base = data.assumingMemoryBound(to: UInt8.self)
+        var out = [UInt32](repeating: 0, count: w * h)
+        for y in 0..<h {
+            let row = base.advanced(by: y * bpr)
+            for x in 0..<w {
+                out[y * w + x] = row.advanced(by: x * 4)
+                    .withMemoryRebound(to: UInt32.self, capacity: 1) { $0.pointee }
+            }
+        }
+        return (out, w, h)
     }
 
     public func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {

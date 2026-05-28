@@ -95,6 +95,16 @@ public struct WindowEntry: Equatable, Sendable {
     public var boundingShape: Region?
     public var clipShape: Region?
 
+    /// High-fidelity visual mask for the bounding shape, in window-local
+    /// DEVICE pixels (one band per device row). Captured from the source
+    /// pixmap at device resolution when a ShapeMask op=Set/Bounding lands, so
+    /// the NSWindow clip can follow the curve at full backing resolution
+    /// instead of the 1-logical-pixel stair-steps the protocol `boundingShape`
+    /// region carries. nil = no device mask cached (use the logical region
+    /// scaled up). Invalidated on any non-mask bounding mutation. Purely a
+    /// rendering aid — the X-protocol shape is `boundingShape`.
+    public var boundingShapeDeviceRects: [Rectangle]?
+
     /// Last VisibilityNotify state emitted for this window (raw value of
     /// VisibilityState: 0=Unobscured, 1=PartiallyObscured, 2=FullyObscured).
     /// nil = no state yet (initial, or window is currently unmapped). Used
@@ -149,6 +159,7 @@ public struct WindowEntry: Equatable, Sendable {
         borderClip: Region = .empty,
         boundingShape: Region? = nil,
         clipShape: Region? = nil,
+        boundingShapeDeviceRects: [Rectangle]? = nil,
         lastVisibilityState: UInt8? = nil,
         prevSib: UInt32? = nil,
         nextSib: UInt32? = nil,
@@ -176,6 +187,7 @@ public struct WindowEntry: Equatable, Sendable {
         self.borderClip = borderClip
         self.boundingShape = boundingShape
         self.clipShape = clipShape
+        self.boundingShapeDeviceRects = boundingShapeDeviceRects
         self.lastVisibilityState = lastVisibilityState
         self.prevSib = prevSib
         self.nextSib = nextSib
@@ -339,6 +351,15 @@ public final class WindowTable: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
         w.clipShape = region
+        _windows[id] = w
+    }
+
+    /// Set (or clear, with nil) the device-resolution visual mask for the
+    /// bounding shape (see WindowEntry.boundingShapeDeviceRects).
+    public func setBoundingShapeDeviceRects(_ id: UInt32, _ rects: [Rectangle]?) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.boundingShapeDeviceRects = rects
         _windows[id] = w
     }
 

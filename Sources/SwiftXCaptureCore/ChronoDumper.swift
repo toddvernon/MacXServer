@@ -429,10 +429,77 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
         body = "ImageText16              drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) at (\(r.x),\(r.y)) nChars=\(r.characters.count)"
     case .copyPlane(let r):
         body = "CopyPlane                src=0x\(String(r.srcDrawable, radix: 16)) dst=0x\(String(r.dstDrawable, radix: 16)) srcXY=(\(r.srcX),\(r.srcY)) dstXY=(\(r.dstX),\(r.dstY)) \(r.width)x\(r.height) bitPlane=0x\(String(r.bitPlane, radix: 16))"
-    case .unknown(let op, _):
-        body = "Request opcode=\(op) (untyped)"
+    case .unknown(let op, let raw):
+        // Decode extension requests when we've seen the QueryExtension reply
+        // that negotiated their major opcode. SHAPE gets full per-request
+        // decoding; other known extensions at least get named.
+        if ctx.extensionMajorToName[op] == "SHAPE" {
+            body = formatShapeRequest(raw, byteOrder: byteOrder)
+        } else if let extName = ctx.extensionMajorToName[op] {
+            let minor = raw.count >= 2 ? String(raw[1]) : "?"
+            body = "\(extName)                    opcode=\(op) minor=\(minor)"
+        } else {
+            body = "Request opcode=\(op) (untyped)"
+        }
     }
     return "\(seqStr) \(body)"
+}
+
+// MARK: - SHAPE extension request decoding
+
+private func shapeKindName(_ k: UInt8) -> String {
+    switch k { case 0: return "Bounding"; case 1: return "Clip"; default: return "kind=\(k)" }
+}
+private func shapeOpName(_ o: UInt8) -> String {
+    switch o {
+    case 0: return "Set"; case 1: return "Union"; case 2: return "Intersect"
+    case 3: return "Subtract"; case 4: return "Invert"; default: return "op=\(o)"
+    }
+}
+
+func formatShapeRequest(_ bytes: [UInt8], byteOrder: ByteOrder) -> String {
+    guard bytes.count >= 2 else { return "SHAPE                    (truncated)" }
+    func hex(_ v: UInt32) -> String { "0x\(String(v, radix: 16))" }
+    switch bytes[1] {
+    case ShapeMinor.queryVersion:
+        return "ShapeQueryVersion"
+    case ShapeMinor.rectangles:
+        if let r = try? ShapeRectangles.decode(from: bytes, byteOrder: byteOrder) {
+            return "ShapeRectangles          dest=\(hex(r.dest)) \(shapeKindName(r.destKind)) \(shapeOpName(r.op)) off=(\(r.xOff),\(r.yOff)) rects=\(r.rectangles.count)"
+        }
+    case ShapeMinor.mask:
+        if let r = try? ShapeMask.decode(from: bytes, byteOrder: byteOrder) {
+            let src = r.src == 0 ? "None" : hex(r.src)
+            return "ShapeMask                dest=\(hex(r.dest)) \(shapeKindName(r.destKind)) \(shapeOpName(r.op)) off=(\(r.xOff),\(r.yOff)) src=\(src)"
+        }
+    case ShapeMinor.combine:
+        if let r = try? ShapeCombine.decode(from: bytes, byteOrder: byteOrder) {
+            return "ShapeCombine             dest=\(hex(r.dest)) \(shapeKindName(r.destKind)) \(shapeOpName(r.op)) off=(\(r.xOff),\(r.yOff)) src=\(hex(r.src)) \(shapeKindName(r.srcKind))"
+        }
+    case ShapeMinor.offset:
+        if let r = try? ShapeOffset.decode(from: bytes, byteOrder: byteOrder) {
+            return "ShapeOffset              dest=\(hex(r.dest)) \(shapeKindName(r.destKind)) off=(\(r.xOff),\(r.yOff))"
+        }
+    case ShapeMinor.queryExtents:
+        if let r = try? ShapeQueryExtents.decode(from: bytes, byteOrder: byteOrder) {
+            return "ShapeQueryExtents        window=\(hex(r.window))"
+        }
+    case ShapeMinor.selectInput:
+        if let r = try? ShapeSelectInput.decode(from: bytes, byteOrder: byteOrder) {
+            return "ShapeSelectInput         window=\(hex(r.window)) enable=\(r.enable)"
+        }
+    case ShapeMinor.inputSelected:
+        if let r = try? ShapeInputSelected.decode(from: bytes, byteOrder: byteOrder) {
+            return "ShapeInputSelected       window=\(hex(r.window))"
+        }
+    case ShapeMinor.getRectangles:
+        if let r = try? ShapeGetRectangles.decode(from: bytes, byteOrder: byteOrder) {
+            return "ShapeGetRectangles       window=\(hex(r.window)) \(shapeKindName(r.kind))"
+        }
+    default:
+        break
+    }
+    return "SHAPE                    minor=\(bytes[1]) (undecoded)"
 }
 
 func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout ChronoContext) -> String {
