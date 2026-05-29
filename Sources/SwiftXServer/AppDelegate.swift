@@ -389,6 +389,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let name = sender.representedObject as? String,
               let entry = currentLauncherFile?.entries.first(where: { $0.name == name })
         else { return }
+        // An explicit password in the launcher file wins (dev convenience —
+        // skips the prompt every launch). Otherwise fall back to the Keychain,
+        // prompting and storing on first use.
+        if let pw = entry.password, !pw.isEmpty {
+            executeLaunch(entry: entry, password: pw)
+            return
+        }
         let account = "\(entry.user)@\(entry.host)"
         if let password = KeychainHelper.retrieve(account: account) {
             executeLaunch(entry: entry, password: password)

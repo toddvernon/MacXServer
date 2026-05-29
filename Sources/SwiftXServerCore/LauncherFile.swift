@@ -10,16 +10,23 @@ public struct LauncherEntry: Equatable, Sendable {
     public let loginPrompt: String
     public let passwordPrompt: String
     public let shellPrompt: String
+    /// Optional cleartext password from the launcher file. nil = none given,
+    /// so the launch flow falls back to the macOS Keychain (and prompts if
+    /// absent). Putting a password here is a development convenience to avoid
+    /// re-typing it every launch; it lives in a plaintext dotfile, so it's
+    /// not recommended on shared machines.
+    public let password: String?
 
     public init(name: String, host: String, command: String, user: String,
                 port: UInt16 = 23, verbose: Bool = false,
                 loginPrompt: String = "ogin:",
                 passwordPrompt: String = "assword:",
-                shellPrompt: String = "$ ") {
+                shellPrompt: String = "$ ",
+                password: String? = nil) {
         self.name = name; self.host = host; self.command = command
         self.user = user; self.port = port; self.verbose = verbose
         self.loginPrompt = loginPrompt; self.passwordPrompt = passwordPrompt
-        self.shellPrompt = shellPrompt
+        self.shellPrompt = shellPrompt; self.password = password
     }
 }
 
@@ -40,24 +47,14 @@ public struct LauncherFile: Sendable {
             }
             let port = pairs["port"].flatMap { UInt16($0) } ?? 23
             let verbose = ["true", "yes", "1"].contains(pairs["verbose"]?.lowercased() ?? "")
-            var entry = LauncherEntry(
-                name: name, host: host, command: command, user: user, port: port, verbose: verbose
+            let entry = LauncherEntry(
+                name: name, host: host, command: command, user: user,
+                port: port, verbose: verbose,
+                loginPrompt: pairs["login_prompt"] ?? "ogin:",
+                passwordPrompt: pairs["password_prompt"] ?? "assword:",
+                shellPrompt: pairs["shell_prompt"] ?? "$ ",
+                password: pairs["password"]
             )
-            if let v = pairs["login_prompt"] { entry = LauncherEntry(
-                name: entry.name, host: entry.host, command: entry.command, user: entry.user,
-                port: entry.port, verbose: entry.verbose,
-                loginPrompt: v, passwordPrompt: entry.passwordPrompt, shellPrompt: entry.shellPrompt
-            )}
-            if let v = pairs["password_prompt"] { entry = LauncherEntry(
-                name: entry.name, host: entry.host, command: entry.command, user: entry.user,
-                port: entry.port, verbose: entry.verbose,
-                loginPrompt: entry.loginPrompt, passwordPrompt: v, shellPrompt: entry.shellPrompt
-            )}
-            if let v = pairs["shell_prompt"] { entry = LauncherEntry(
-                name: entry.name, host: entry.host, command: entry.command, user: entry.user,
-                port: entry.port, verbose: entry.verbose,
-                loginPrompt: entry.loginPrompt, passwordPrompt: entry.passwordPrompt, shellPrompt: v
-            )}
             entries.append(entry)
             currentName = nil; pairs.removeAll()
         }

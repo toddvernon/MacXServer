@@ -12,9 +12,13 @@ public enum DefaultLaunchers {
         #   login_prompt    = substring to match for login (default: ogin:)
         #   password_prompt = substring to match for password (default: assword:)
         #   shell_prompt    = substring to match for shell ready (default: "$ ")
+        #   password = login password (optional) -- see below
         #
-        # Passwords are stored in the macOS Keychain, not in this file.
-        # On first use of a launcher you will be prompted for the password.
+        # If you omit `password`, it's read from the macOS Keychain; on first
+        # use of a launcher you're prompted once and it's stored there.
+        # Setting `password` here skips that prompt every launch -- handy
+        # during development, but it's plaintext in this file, so don't use it
+        # on a shared machine.
         #
         # Example:
         #
