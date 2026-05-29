@@ -99,7 +99,7 @@ targets:
         excludes:
           - main.swift
       - path: Xcode/CaptureMain.swift
-      - path: Xcode/Assets.xcassets
+      - path: Xcode/CaptureAssets.xcassets
     dependencies:
       - target: Framer
         embed: true
