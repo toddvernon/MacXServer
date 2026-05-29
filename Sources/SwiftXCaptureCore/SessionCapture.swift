@@ -50,14 +50,24 @@ public final class SessionCapture: CaptureSink, @unchecked Sendable {
     private let recorder: Recorder
     private let inProgressPath: String
     private var renamed: Bool = false
+    /// Tracks the recorder's current planned output path so finalize() can
+    /// locate the just-written `.xtap` (to derive the `.txt` sidecar when
+    /// decodeToText is on). Updated on every successful setOutputPath.
+    private var currentPath: String
+    /// When true, finalize() also writes a human-readable decoded chrono log
+    /// (`<name>.txt`) next to the `.xtap`. The `.xtap` stays the source of
+    /// truth; the `.txt` is a derived convenience view. Decoding happens at
+    /// finalize (session disconnect), off the capture hot path.
+    private let decodeToText: Bool
 
     /// Construct a capture for session `sessionId` rooted at
     /// `directory`. Creates the directory on first use if missing. The
     /// initial filename is `.in-progress-<sessionId>.xtap`; call
     /// `rename(toClientName:)` once the client identifies itself.
-    public init(sessionId: Int, directory: String) throws {
+    public init(sessionId: Int, directory: String, decodeToText: Bool = false) throws {
         self.sessionId = sessionId
         self.directory = directory
+        self.decodeToText = decodeToText
 
         try FileManager.default.createDirectory(
             atPath: directory,
@@ -66,6 +76,7 @@ public final class SessionCapture: CaptureSink, @unchecked Sendable {
 
         self.inProgressPath = (directory as NSString)
             .appendingPathComponent(".in-progress-\(sessionId).xtap")
+        self.currentPath = inProgressPath
 
         // listen/forward strings end up in the sidecar JSON. For
         // server-side capture they don't describe a proxy, so use the
@@ -92,6 +103,7 @@ public final class SessionCapture: CaptureSink, @unchecked Sendable {
             .appendingPathComponent("\(timestamp)-\(sanitized).xtap")
         do {
             try recorder.setOutputPath(newPath)
+            currentPath = newPath
             renamed = true
         } catch {
             // setOutputPath only throws on createDirectory failure;
@@ -124,12 +136,29 @@ public final class SessionCapture: CaptureSink, @unchecked Sendable {
                 try recorder.setOutputPath(fallback)
                 lock.lock()
                 renamed = true
+                currentPath = fallback
                 lock.unlock()
             } catch {
                 // Best effort; recorder.finalize() below still runs.
             }
         }
         try recorder.finalize()
+
+        // Optionally emit a decoded chrono log alongside the .xtap. Done here
+        // (after the bytes are on disk, at disconnect) so the decode never
+        // touches the capture hot path. Best-effort: a decode failure must not
+        // fail the capture — the authoritative .xtap is already written.
+        if decodeToText {
+            lock.lock(); let xtapPath = currentPath; lock.unlock()
+            let txtPath = (xtapPath as NSString).deletingPathExtension + ".txt"
+            do {
+                let decoded = try ChronoDumper.dump(path: xtapPath)
+                try decoded.write(toFile: txtPath, atomically: true, encoding: .utf8)
+            } catch {
+                // Leave only the .xtap; it can be decoded later with
+                // `macxcapture dump`.
+            }
+        }
     }
 
     // MARK: - Filename helpers

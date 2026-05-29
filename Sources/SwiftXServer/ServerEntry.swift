@@ -182,13 +182,14 @@ enum ServerEntry {
         // after a server restart (documented in the Capture tab UI).
         let captureEnabled = captureOverride ?? appDelegate.preferences.captureSessions
         let captureDirectory = appDelegate.preferences.captureDirectory
+        let captureDecodeToText = appDelegate.preferences.captureDecodeToText
         appDelegate.captureActive = captureEnabled
         if captureEnabled {
-            writeStderr("capture: every client session will be written to \(captureDirectory)\n")
+            writeStderr("capture: every client session will be written to \(captureDirectory)\(captureDecodeToText ? " (+ decoded .txt)" : "")\n")
         }
         let captureSinkFactory: ((Int) -> CaptureSink?)? = captureEnabled ? { clientNumber in
             do {
-                return try SessionCapture(sessionId: clientNumber, directory: captureDirectory)
+                return try SessionCapture(sessionId: clientNumber, directory: captureDirectory, decodeToText: captureDecodeToText)
             } catch {
                 writeStderr("capture: failed to start session \(clientNumber) capture: \(error)\n")
                 return nil
