@@ -1,0 +1,9 @@
+{
+  "duration_ns" : 16018951334,
+  "forward" : "MacXServer (in-process tee)",
+  "listen" : "MacXServer (in-process tee)",
+  "recorded_at" : "2026-05-29T22:17:12Z",
+  "tool_version" : "0.1.0",
+  "total_bytes_c2s" : 30860,
+  "total_bytes_s2c" : 92588
+}

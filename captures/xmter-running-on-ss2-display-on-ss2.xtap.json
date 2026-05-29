@@ -1,0 +1,9 @@
+{
+  "duration_ns" : 6290886583,
+  "forward" : "ss2.example.com:6000",
+  "listen" : ":6000",
+  "recorded_at" : "2026-05-29T21:17:30Z",
+  "tool_version" : "0.1.0",
+  "total_bytes_c2s" : 27120,
+  "total_bytes_s2c" : 24636
+}

@@ -81,49 +81,78 @@ What we learned from the re-baseline:
 
 ## Recapturing
 
-Edit `connection.json` in the project root:
+Use **macXcapture** (the GUI wizard) — point the client's `DISPLAY` at this
+Mac on port 6000/6001, forward to the real X server, name the capture, hit
+Start. Files land in `/tmp/swift-x-captures/` with the wizard's naming;
+move them into this directory with the convention above.
 
-```json
-{
-  "listen": ":6000",
-  "forward": "ss2:6000",
-  "output": "captures/<app>-running-on-<client>-display-on-ss2.xtap"
-}
-```
-
-Then `./run-all.sh` from the project root. Since `forward` is non-local,
-the script skips starting `swiftx-server` and just runs the capture proxy
-between the client and the target server.
-
-From the client host (set `DISPLAY=<mac>:0.0` where `<mac>` is your Mac's
-hostname or IP), launch the app, exercise it briefly, quit. Stop the
-proxy with Ctrl-C. Move to the next app.
-
-## Archive
-
-`archive/` holds pre-2026-05-17 captures of mixed and now-unknown
-provenance (variously captured against u5 or SS2 in different sessions
-with the older `-sun.xtap` naming). Kept for historical reference only;
-not used by tests.
+For `display-on-swiftx` captures we let **macXserver** itself record each
+session it serves — it writes a `.xtap` per X client connection with an
+autoname (the app name from `WM_CLASS`, or `unidentified-<N>` when we
+can't tell). Rename those to the `<app>-running-on-<src>-display-on-swiftx.xtap`
+form when promoting to gold.
 
 ## Current gold set
 
-| App | Capture | Notes |
-|-----|---------|-------|
-| xeyes | `xeyes-running-on-ss2-display-on-ss2.xtap` | basic, short |
-| xclock | `xclock-running-on-ss2-display-on-ss2.xtap` | basic, short |
-| xterm | `xterm-running-on-ss2-display-on-ss2.xtap` | basic, short |
-| xcalc | `xcalc-running-on-ss2-display-on-ss2.xtap` | Athena widget set |
-| xfontsel | `xfontsel-running-on-ss2-display-on-ss2.xtap` | font list + ListFonts coverage |
-| dtcalc | `dtcalc-running-on-u5-display-on-ss2.xtap` | CDE app, Motif |
-| dtterm | `dtterm-running-on-u5-display-on-ss2.xtap` | CDE app, Motif text widget |
-| dtfile | `dtfile-running-on-u5-display-on-ss2.xtap` | CDE app, file browser |
-| dthelpview | `dthelpview-running-on-u5-display-on-ss2.xtap` | CDE app, help viewer |
-| dticon | `dticon-running-on-u5-display-on-ss2.xtap` | PARTIAL — ToolTalk timeout through proxy |
-| dtmail | `dtmail-running-on-u5-display-on-ss2.xtap` | PARTIAL — same |
-| dtpad | `dtpad-running-on-u5-display-on-ss2.xtap` | PARTIAL — same |
-| quickplot | `quickplot-running-on-u5-display-on-ss2.xtap` | Motif, plotting |
+The ss2→ss2 batch (2026-05-29) covers every X client we've found on the SS2
+disk that exposes a useful surface. Per-app working/broken status is in the
+**App status** section below; each app has one or both of:
 
-The PARTIAL captures stop short of clean app exit (apps hung on ToolTalk
-and were terminated). Their initial-setup bytes are valid X11 and serve
-as replay test fixtures for the boot sequence.
+- `<app>-running-on-ss2-display-on-ss2.xtap` — macXcapture proxy between ss2
+  client and ss2's real X server (the gold reference).
+- `<app>-running-on-ss2-display-on-swiftx.xtap` — macXserver's own recording
+  of the same client running against our server (the comparison baseline).
+
+The u5/CDE apps (`dtcalc`, `dtterm`, `dtfile`, `dthelpview`, `dticon`,
+`dtmail`, `dtpad`) and `quickplot` are **pending u5 recapture** — their
+captures were wiped in this rebaseline and need to be re-recorded from u5
+before the replay tests that depended on them can come back.
+
+## App status (2026-05-29 batch)
+
+Direct from `/tmp/swift-x-captures/notes` at capture time. "ss2" means
+ss2→ss2 (gold), "swiftx" means ss2→macXserver.
+
+| App | ss2 | swiftx | Notes |
+|-----|-----|--------|-------|
+| auto_box   | works | (no capture) | phigs not in framer, proxy can't capture |
+| beach_ball | works | (no capture) | phigs not in framer, proxy can't capture |
+| bitmap     | works | works | menus turn white on drag (minor) |
+| dogs       | works | works | |
+| editres    | works | LOCKS UP | hangs on macXserver when clicking a widget for its tree |
+| fileview   | works | works | |
+| ico        | works | works | |
+| maze       | works | works | |
+| motifanim  | works | partial | can't see dog bitmap on macXserver, likely bitmap-loading issue |
+| motifbur   | works | works | |
+| motifshell | works | works | |
+| periodic   | works | works | |
+| puzzle     | works | BROKEN | fails on opcode 57 (X_CopyGC) — recurring missing-op signature |
+| textedit   | works | BROKEN | "BaseFrom not passed parent window in environment, unable to create window" at startup |
+| viewres    | works | works | |
+| xev        | works | works | |
+| xfontsel   | works | works | |
+| xgas       | works | works | |
+| xgc        | works | works | |
+| xlogo      | works | works | |
+| xlsatoms   | works | works | |
+| xlsclients | works | SILENT | silent on macXserver — likely missing opcode dropped silently |
+| xmag       | works | BROKEN | no mag window on macXserver — likely missing opcode |
+| xmeditor   | works | works | |
+| xmforc     | works | works | |
+| xmmap      | works | partial | scroll smears all the redraws on macXserver |
+| xmpiano    | works | BROKEN | fails on opcode 103 (X_GetKeyboardControl) |
+| xmtr       | works | partial | on ss2 no menu bar (we show one); on macXserver just a round window, no animations |
+| xprop      | works | HANGS | hangs on macXserver |
+| xterm      | works | works* | *rogue popup that survives reparent — black window persists after xterm exits |
+| xwininfo   | works | works | |
+
+The `xterm-running-on-ss2-display-on-swiftx.xtap` capture in this batch is
+intentionally the **later** of two runs because it contains the rogue
+reparent-survivor popup.
+
+There are also `unidentified-N-running-on-ss2-display-on-swiftx.xtap`
+captures from the macXserver side where the connection's `WM_CLASS` didn't
+resolve to a known app. They're kept as-is; figure out which app each one
+is when chasing the bug it documents (or just recapture with a known
+client).

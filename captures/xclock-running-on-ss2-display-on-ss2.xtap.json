@@ -1,9 +1,9 @@
 {
-  "duration_ns" : 8593409209,
-  "forward" : "192.168.7.10:6000",
-  "listen" : "0.0.0.0:6000",
-  "recorded_at" : "2026-05-17T22:22:17Z",
+  "duration_ns" : 5360873334,
+  "forward" : "ss2.example.com:6000",
+  "listen" : ":6000",
+  "recorded_at" : "2026-05-29T20:51:28Z",
   "tool_version" : "0.1.0",
-  "total_bytes_c2s" : 3128,
-  "total_bytes_s2c" : 4176
+  "total_bytes_c2s" : 3232,
+  "total_bytes_s2c" : 4288
 }

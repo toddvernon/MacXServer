@@ -1,9 +1,0 @@
-{
-  "duration_ns" : 52456864083,
-  "forward" : "127.0.0.1:6001",
-  "listen" : "0.0.0.0:6000",
-  "recorded_at" : "2026-05-20T20:25:37Z",
-  "tool_version" : "0.1.0",
-  "total_bytes_c2s" : 66348,
-  "total_bytes_s2c" : 39688
-}
