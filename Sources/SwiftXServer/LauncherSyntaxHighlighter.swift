@@ -1,5 +1,6 @@
 import AppKit
 import SwiftXServerCore
+import SwiftXCaptureUI
 
 final class LauncherSyntaxHighlighter: NSObject, SyntaxHighlighter {
 

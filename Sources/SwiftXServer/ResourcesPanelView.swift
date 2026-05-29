@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import SwiftXServerCore
+import SwiftXCaptureUI
 
 // SwiftUI root for the resources editor panel. Layout follows the
 // Covey hero-panel vocabulary: SF Symbol header, .title2 title,

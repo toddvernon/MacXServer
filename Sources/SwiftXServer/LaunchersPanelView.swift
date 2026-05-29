@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import SwiftXServerCore
+import SwiftXCaptureUI
 
 struct LaunchersPanelView: View {
 

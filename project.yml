@@ -73,6 +73,24 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         MARKETING_VERSION: "0.1.0"
 
+  SwiftXCaptureUI:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Sources/SwiftXCaptureUI
+    dependencies:
+      - target: Framer
+      - target: SwiftXCaptureCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.toddvernon.swiftx.SwiftXCaptureUI
+        SKIP_INSTALL: YES
+        DEFINES_MODULE: YES
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        GENERATE_INFOPLIST_FILE: YES
+        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.1.0"
+
   MacXCapture:
     type: application
     platform: macOS
@@ -86,6 +104,8 @@ targets:
       - target: Framer
         embed: true
       - target: SwiftXCaptureCore
+        embed: true
+      - target: SwiftXCaptureUI
         embed: true
     settings:
       base:
@@ -113,6 +133,8 @@ targets:
       - target: SwiftXCaptureCore
         embed: true
       - target: SwiftXServerCore
+        embed: true
+      - target: SwiftXCaptureUI
         embed: true
     settings:
       base:

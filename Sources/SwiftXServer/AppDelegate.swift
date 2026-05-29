@@ -2,6 +2,7 @@ import AppKit
 import UniformTypeIdentifiers
 import SwiftXServerCore
 import SwiftXCaptureCore
+import SwiftXCaptureUI
 
 // Wires up the menu-bar (status item) presence and the standard Mac main
 // menu. The app runs as `.accessory` so there's no Dock icon; the status

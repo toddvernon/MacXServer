@@ -1,5 +1,6 @@
 import AppKit
 import SwiftXServerCore
+import SwiftXCaptureUI
 
 // NSTextStorageDelegate that paints the font mappings file. Same shape
 // as ResourceSyntaxHighlighter — retokenize whole buffer on each char

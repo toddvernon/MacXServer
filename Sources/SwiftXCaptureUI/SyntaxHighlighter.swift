@@ -6,7 +6,7 @@ import AppKit
 // for `~/.swiftx-resources`, FontMappingSyntaxHighlighter for
 // `~/.swiftx-fonts`. The protocol lets CodeEditorView remain agnostic.
 
-protocol SyntaxHighlighter: NSTextStorageDelegate {
+public protocol SyntaxHighlighter: NSTextStorageDelegate {
     /// Re-apply highlighting to the entire storage. Called once after
     /// makeNSView sets initial text, and whenever updateNSView replaces
     /// the buffer (Reload from Disk / Revert).

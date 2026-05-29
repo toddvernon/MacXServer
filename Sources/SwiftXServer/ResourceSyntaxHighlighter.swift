@@ -1,5 +1,26 @@
 import AppKit
 import SwiftXServerCore
+import SwiftXCaptureUI
+
+// The resource-file token → palette mapping. Lives here (not on EditorTheme,
+// which is the generic shared theme in SwiftXCaptureUI) so the shared editor
+// stays decoupled from SwiftXServerCore's ResourceTokenKind.
+private extension EditorTheme {
+    func isItalic(_ token: ResourceTokenKind) -> Bool { token == .comment }
+
+    func color(for token: ResourceTokenKind) -> NSColor {
+        switch token {
+        case .sectionHeader:    return sectionHeader
+        case .comment:          return comment
+        case .keyPrefix:        return keyPrefix
+        case .key:              return key
+        case .separator:        return separator
+        case .value:            return value
+        case .colorValueHex,
+             .colorValueNamed:  return value   // overridden per-line
+        }
+    }
+}
 
 // NSTextStorageDelegate that paints the resources file syntax. The
 // tokenizer lives in SwiftXServerCore so the chrome stays thin:

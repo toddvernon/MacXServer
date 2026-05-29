@@ -10,13 +10,19 @@ import AppKit
 //                  a session to a new gold recording), plus its .json sidecar.
 //   Export as Text… writes the decoded chrono dump as a .txt.
 
-struct CaptureViewerPanelView: View {
+public struct CaptureViewerPanelView: View {
 
     let title: String       // capture filename
     let sourcePath: String  // path of the .xtap on disk
     let text: String        // decoded chrono dump
 
-    var body: some View {
+    public init(title: String, sourcePath: String, text: String) {
+        self.title = title
+        self.sourcePath = sourcePath
+        self.text = text
+    }
+
+    public var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
             CodeEditorView(

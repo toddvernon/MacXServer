@@ -21,7 +21,7 @@ import Foundation
 // view sidesteps the problem: the scroll view's own layout is left
 // untouched, and the gutter just observes the clip view's bounds.
 
-struct CodeEditorView: NSViewRepresentable {
+public struct CodeEditorView: NSViewRepresentable {
 
     @Binding var text: String
     let theme: EditorTheme
@@ -38,11 +38,23 @@ struct CodeEditorView: NSViewRepresentable {
     /// tells you where you are. The capture viewer turns this on.
     var alwaysShowVerticalScroller: Bool = false
 
-    func makeCoordinator() -> Coordinator {
+    public init(text: Binding<String>,
+                theme: EditorTheme,
+                makeHighlighter: @escaping (EditorTheme, NSFont) -> SyntaxHighlighter,
+                isEditable: Bool = true,
+                alwaysShowVerticalScroller: Bool = false) {
+        self._text = text
+        self.theme = theme
+        self.makeHighlighter = makeHighlighter
+        self.isEditable = isEditable
+        self.alwaysShowVerticalScroller = alwaysShowVerticalScroller
+    }
+
+    public func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
 
-    func makeNSView(context: Context) -> EditorContainer {
+    public func makeNSView(context: Context) -> EditorContainer {
         let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
 
         // Text view sized large enough to support unbounded horizontal
@@ -125,7 +137,7 @@ struct CodeEditorView: NSViewRepresentable {
         return container
     }
 
-    func updateNSView(_ container: EditorContainer, context: Context) {
+    public func updateNSView(_ container: EditorContainer, context: Context) {
         guard let textView = container.scrollView.documentView as? NSTextView else { return }
         // Only push the binding back into the text view when it really
         // changed externally (Reload, Revert). If we wrote unconditionally
@@ -139,7 +151,7 @@ struct CodeEditorView: NSViewRepresentable {
         }
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: EditorContainer, context: Context) -> CGSize? {
+    public func sizeThatFits(_ proposal: ProposedViewSize, nsView: EditorContainer, context: Context) -> CGSize? {
         // Tell SwiftUI to use whatever frame the parent VStack proposes,
         // not the container's fittingSize. Without this the editor can
         // still over-claim height in some layout passes.
@@ -148,7 +160,7 @@ struct CodeEditorView: NSViewRepresentable {
 
     // MARK: - Coordinator
 
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    public final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CodeEditorView
         var highlighter: (any SyntaxHighlighter)?
 
@@ -156,7 +168,7 @@ struct CodeEditorView: NSViewRepresentable {
             self.parent = parent
         }
 
-        func textDidChange(_ notification: Notification) {
+        public func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             // Push edits back into the SwiftUI binding. The highlighter
             // already ran via its NSTextStorageDelegate hook by the time
@@ -174,7 +186,7 @@ struct CodeEditorView: NSViewRepresentable {
 /// (whose fittingSize doesn't bubble the document height up the way
 /// NSScrollView's does), and gives the gutter a stable place to live
 /// without entangling with the scroll view's internal layout.
-final class EditorContainer: NSView {
+public final class EditorContainer: NSView {
 
     let gutter: LineNumberGutter
     let scrollView: NSScrollView
@@ -202,12 +214,12 @@ final class EditorContainer: NSView {
     // claim the entire VStack vertical space — pushing the surrounding
     // header off-screen. Forcing both to "I have no preferred size" is
     // what makes SwiftUI give us only the proposed frame.
-    override var intrinsicContentSize: NSSize {
+    public override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
     }
-    override var fittingSize: NSSize { .zero }
+    public override var fittingSize: NSSize { .zero }
 
-    override func layout() {
+    public override func layout() {
         super.layout()
         let gw = gutter.preferredWidth
         gutter.frame = NSRect(x: 0, y: 0, width: gw, height: bounds.height)

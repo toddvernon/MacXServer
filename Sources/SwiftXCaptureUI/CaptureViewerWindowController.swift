@@ -7,12 +7,12 @@ import SwiftUI
 // windows (compare two captures), so AppDelegate keeps a list and uses
 // `onClose` to drop the controller when its window closes.
 
-final class CaptureViewerWindowController: NSWindowController, NSWindowDelegate {
+public final class CaptureViewerWindowController: NSWindowController, NSWindowDelegate {
 
     /// Called when the window closes so the owner can release this controller.
-    var onClose: (() -> Void)?
+    public var onClose: (() -> Void)?
 
-    init(title: String, sourcePath: String, text: String) {
+    public init(title: String, sourcePath: String, text: String) {
         let hostingView = NSHostingView(rootView: CaptureViewerPanelView(title: title, sourcePath: sourcePath, text: text))
 
         // A first-class NSWindow (not a utility NSPanel): it stays on screen
@@ -37,7 +37,7 @@ final class CaptureViewerWindowController: NSWindowController, NSWindowDelegate 
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
-    func showWindow() {
+    public func showWindow() {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -45,7 +45,7 @@ final class CaptureViewerWindowController: NSWindowController, NSWindowDelegate 
 
     // MARK: - NSWindowDelegate
 
-    func windowWillClose(_ notification: Notification) {
+    public func windowWillClose(_ notification: Notification) {
         onClose?()
     }
 }

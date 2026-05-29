@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import SwiftXServerCore
+import SwiftXCaptureUI
 
 // SwiftUI root for the font mappings editor panel. Parallels
 // ResourcesPanelView — same hero-panel layout (SF Symbol + title +

@@ -38,8 +38,9 @@ final class OpenModel: ObservableObject {
 
     @Published var loadedPath: String?
     @Published var summary: CaptureSummary?
-    @Published var rows: [CaptureRow] = []
-    @Published var selectedRowId: CaptureRow.ID?
+    /// Full decoded chrono dump (same text the shared viewer / .txt export
+    /// use). Built once per load.
+    @Published var decodedText: String = ""
     @Published var errorMessage: String?
 
     /// Show the system Open panel and load whatever the user picks.
@@ -66,36 +67,26 @@ final class OpenModel: ObservableObject {
     func load(path: String) {
         loadedPath = path
         errorMessage = nil
-        selectedRowId = nil
 
         let frames: [CaptureFrame]
         do {
             frames = try CaptureReader.read(from: path)
         } catch {
             errorMessage = "Could not read \(path): \(error)"
-            rows = []
+            decodedText = ""
             summary = nil
             return
         }
 
-        let decoded: String
         do {
-            decoded = try ChronoDumper.dump(path: path)
+            decodedText = try ChronoDumper.dump(path: path)
         } catch {
             errorMessage = "Capture file parses but decode failed: \(error)"
-            rows = []
+            decodedText = ""
             summary = computeSummary(path: path, frames: frames)
             return
         }
 
-        let lines = decoded.split(separator: "\n", omittingEmptySubsequences: true)
-        // First line is the "=== path ===" banner ChronoDumper emits.
-        // Skip it for the row list.
-        let dataLines = lines.first?.hasPrefix("===") == true ? lines.dropFirst() : lines[...]
-        rows = dataLines.enumerated().map { (i, line) in
-            CaptureRow(id: i, lineText: String(line))
-        }
-        selectedRowId = rows.first?.id
         summary = computeSummary(path: path, frames: frames)
     }
 

@@ -1,16 +1,10 @@
 import SwiftUI
 import SwiftXCaptureCore
+import SwiftXCaptureUI
 
-// Open mode (step 7). Pick a `.xtap` and browse what's in it.
-//
-// Layout: a header bar with the file summary, then a split between
-// a scrollable row list on the left and a detail pane on the right.
-// Each row corresponds to one X11 packet decoded by ChronoDumper.
-// Selecting a row shows its full line in the detail pane.
-//
-// Tree-by-phase grouping and the timeline scrubber from the spec
-// are post-v2 polish. The detail pane's annotated/hex tabs are too;
-// step 7 ships with just the structured-text view.
+// Open mode. Pick a `.xtap` and read its decoded X11 traffic in the shared
+// dark, syntax-highlighted viewer (the same one the server app uses), with
+// Save As… / Export as Text… from the viewer's action row.
 
 struct OpenView: View {
 
@@ -18,56 +12,43 @@ struct OpenView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HeaderBar(model: model)
+            navBar
             Divider()
-            if model.loadedPath == nil {
-                EmptyOpenState(model: model)
+            if let path = model.loadedPath, model.errorMessage == nil {
+                CaptureViewerPanelView(
+                    title: (path as NSString).lastPathComponent,
+                    sourcePath: path,
+                    text: model.decodedText
+                )
+                .id(path)   // rebuild the viewer when a different file loads
             } else {
-                HSplitView {
-                    RowList(model: model)
-                        .frame(minWidth: 320, idealWidth: 420)
-                    DetailPane(model: model)
-                        .frame(minWidth: 260)
-                }
+                EmptyOpenState(model: model)
             }
         }
         .frame(minWidth: 760, idealWidth: 960, minHeight: 540, idealHeight: 640)
     }
-}
 
-// MARK: - Header
-
-private struct HeaderBar: View {
-    @ObservedObject var model: OpenModel
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 16) {
+    // Compact mode bar: back to the chooser, the capture summary, and a way
+    // to open another file. The viewer below shows the filename + actions.
+    private var navBar: some View {
+        HStack(spacing: 12) {
             BackToMenuButton(from: .open)
-            Image(systemName: "doc.text.magnifyingglass")
-                .font(.system(size: 36, weight: .regular))
-                .foregroundStyle(.tint)
-                .frame(width: 50)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Open").font(.largeTitle)
-                if let s = model.summary {
-                    Text("\(s.filename) · \(s.frameCount) frames · \(s.durationDescription) · "
-                         + "\(formatBytes(s.totalBytesC2S)) in / \(formatBytes(s.totalBytesS2C)) out")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                } else {
-                    Text("Browse a .xtap. Inspect requests, replies, events.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            if let s = model.summary {
+                Text("\(s.filename) · \(s.frameCount) frames · \(s.durationDescription) · "
+                     + "\(formatBytes(s.totalBytesC2S)) in / \(formatBytes(s.totalBytesS2C)) out")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } else {
+                Text("Open").font(.title2)
             }
             Spacer()
             Button("Open\u{2026}") { model.chooseFileAndOpen() }
                 .keyboardShortcut("o", modifiers: .command)
         }
-        .padding(20)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
     }
 }
 
@@ -92,77 +73,6 @@ private struct EmptyOpenState: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-// MARK: - Row list (left pane)
-
-private struct RowList: View {
-    @ObservedObject var model: OpenModel
-
-    var body: some View {
-        List(model.rows, selection: $model.selectedRowId) { row in
-            // One-line row. Title (e.g. PolyFillRectangle) in primary
-            // weight, the trailing detail muted and truncated.
-            HStack(spacing: 8) {
-                Text(row.title)
-                    .font(.system(.body, design: .monospaced))
-                    .lineLimit(1)
-                Text(row.detail)
-                    .font(.system(.callout, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            .tag(row.id)
-        }
-        .listStyle(.inset)
-    }
-}
-
-// MARK: - Detail pane (right)
-
-private struct DetailPane: View {
-    @ObservedObject var model: OpenModel
-
-    private var selectedRow: CaptureRow? {
-        guard let id = model.selectedRowId else { return nil }
-        return model.rows.first { $0.id == id }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let row = selectedRow {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(row.title)
-                        .font(.system(.title2, design: .monospaced))
-                        .fontWeight(.semibold)
-                    Text("Row \(row.id + 1) of \(model.rows.count)")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(20)
-                Divider()
-                ScrollView {
-                    Text(row.lineText)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(20)
-                }
-            } else {
-                VStack(spacing: 8) {
-                    Spacer()
-                    Image(systemName: "cursorarrow.click")
-                        .font(.system(size: 28, weight: .light))
-                        .foregroundStyle(.tertiary)
-                    Text("Pick a row to see details")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
-            }
-        }
     }
 }
 
