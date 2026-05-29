@@ -285,9 +285,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         do {
-            // Decode the same way the .txt sidecar is written.
             let decoded = try ChronoDumper.dump(path: url.path)
-            let controller = CaptureViewerWindowController(title: url.lastPathComponent, text: decoded)
+            let controller = CaptureViewerWindowController(
+                title: url.lastPathComponent, sourcePath: url.path, text: decoded)
             controller.onClose = { [weak self, weak controller] in
                 self?.captureViewers.removeAll { $0 === controller }
             }

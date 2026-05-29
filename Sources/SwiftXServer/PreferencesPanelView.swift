@@ -103,19 +103,6 @@ private struct CaptureTab: View {
             Toggle("Capture every client to \(model.captureDirectory)", isOn: $model.captureSessions)
                 .toggleStyle(.checkbox)
 
-            Toggle("Also write a decoded, human-readable .txt log next to each .xtap", isOn: $model.captureDecodeToText)
-                .toggleStyle(.checkbox)
-                .disabled(!model.captureSessions)
-                .padding(.leading, 18)
-
-            Text("The .xtap stays the source of truth (replayable, lossless). " +
-                 "The .txt is a convenience view — the same decode you'd get from " +
-                 "`macxcapture dump` — written when the client disconnects.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.leading, 18)
-
             Text("Each X client connection writes its own .xtap file you can " +
                  "send back with a bug report. /tmp is wiped at reboot, so " +
                  "captures don't accumulate.")
@@ -297,14 +284,6 @@ final class PreferencesPanelModel: ObservableObject {
         }
     }
 
-    @Published var captureDecodeToText: Bool {
-        didSet {
-            if captureDecodeToText != prefs.captureDecodeToText {
-                prefs.captureDecodeToText = captureDecodeToText
-            }
-        }
-    }
-
     @Published var motifFrameEnabled: Bool {
         didSet {
             if motifFrameEnabled != prefs.motifFrameEnabled {
@@ -336,7 +315,6 @@ final class PreferencesPanelModel: ObservableObject {
         self.clipboardEnabled = preferences.clipboardEnabled
         self.copyMode = preferences.copyMode
         self.captureSessions = preferences.captureSessions
-        self.captureDecodeToText = preferences.captureDecodeToText
         self.motifFrameEnabled = preferences.motifFrameEnabled
         self.motifFrameButtonStyle = preferences.motifFrameButtonStyle
     }

@@ -20,7 +20,6 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         static let clipboardMode    = "clipboard.mode"        // "mac" | "xterm"
         static let captureSessions  = "capture.sessions"      // bool
         static let captureDirectory = "capture.directory"     // string
-        static let captureDecodeToText = "capture.decodeToText" // bool
         static let motifFrameEnabled     = "motifFrame.enabled"     // bool
         static let motifFrameButtonStyle = "motifFrame.buttonStyle" // "motif" | "trafficLights"
     }
@@ -42,7 +41,6 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
             Key.clipboardMode: "mac",
             Key.captureSessions: false,
             Key.captureDirectory: Self.defaultCaptureDirectory,
-            Key.captureDecodeToText: false,
             Key.motifFrameEnabled: false,
             Key.motifFrameButtonStyle: "motif",
         ])
@@ -78,19 +76,6 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         get { defaults.bool(forKey: Key.captureSessions) }
         set {
             defaults.set(newValue, forKey: Key.captureSessions)
-            NotificationCenter.default.post(name: Self.didChange, object: self)
-        }
-    }
-
-    /// When true (and capture is on), each session also gets a decoded,
-    /// human-readable chrono log (`<name>.txt`) written next to its `.xtap`
-    /// at disconnect. The `.xtap` remains the authoritative, replayable
-    /// artifact; the `.txt` is a convenience view (same output as
-    /// `macxcapture dump`). Read once per accepted session at connect time.
-    var captureDecodeToText: Bool {
-        get { defaults.bool(forKey: Key.captureDecodeToText) }
-        set {
-            defaults.set(newValue, forKey: Key.captureDecodeToText)
             NotificationCenter.default.post(name: Self.didChange, object: self)
         }
     }

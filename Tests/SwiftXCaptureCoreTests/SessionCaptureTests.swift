@@ -1,6 +1,5 @@
 import XCTest
 import Foundation
-import Framer
 @testable import SwiftXCaptureCore
 
 // SessionCapture is the per-session sink wrapper the server uses.
@@ -104,40 +103,6 @@ final class SessionCaptureTests: XCTestCase {
         XCTAssertEqual(landed.count, 1)
         XCTAssertTrue(landed[0].hasSuffix("-unidentified-9.xtap"),
                       "expected unidentified-9 fallback, got: \(landed[0])")
-        try? FileManager.default.removeItem(atPath: dir)
-    }
-
-    // MARK: - decodeToText
-
-    func testDecodeToTextWritesSiblingTxt() throws {
-        // With decodeToText on, finalize() writes a decoded chrono .txt next
-        // to the .xtap (same basename), and the .xtap is still authoritative.
-        let dir = uniqueTempDirPath()
-        let cap = try SessionCapture(sessionId: 5, directory: dir, decodeToText: true)
-        cap.record(direction: .clientToServer, bytes: SetupRequest(byteOrder: .lsbFirst).encode())
-        cap.rename(toClientName: "xeyes")
-        try cap.finalize()
-
-        let all = try FileManager.default.contentsOfDirectory(atPath: dir)
-        let xtaps = all.filter { $0.hasSuffix(".xtap") }
-        let txts  = all.filter { $0.hasSuffix(".txt") }
-        XCTAssertEqual(xtaps.count, 1)
-        XCTAssertEqual(txts.count, 1, "decodeToText should write one sibling .txt")
-        XCTAssertEqual((xtaps[0] as NSString).deletingPathExtension,
-                       (txts[0] as NSString).deletingPathExtension,
-                       ".txt should share the .xtap's basename")
-        let content = try String(contentsOfFile: (dir as NSString).appendingPathComponent(txts[0]), encoding: .utf8)
-        XCTAssertFalse(content.isEmpty, "decoded log should not be empty")
-        try? FileManager.default.removeItem(atPath: dir)
-    }
-
-    func testDecodeToTextOffWritesNoTxt() throws {
-        let dir = uniqueTempDirPath()
-        let cap = try SessionCapture(sessionId: 6, directory: dir)   // default: off
-        cap.record(direction: .clientToServer, bytes: SetupRequest(byteOrder: .lsbFirst).encode())
-        try cap.finalize()
-        let txts = try FileManager.default.contentsOfDirectory(atPath: dir).filter { $0.hasSuffix(".txt") }
-        XCTAssertTrue(txts.isEmpty, "decodeToText off must not write a .txt")
         try? FileManager.default.removeItem(atPath: dir)
     }
 

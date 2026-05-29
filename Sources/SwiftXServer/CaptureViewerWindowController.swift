@@ -12,8 +12,8 @@ final class CaptureViewerWindowController: NSWindowController, NSWindowDelegate 
     /// Called when the window closes so the owner can release this controller.
     var onClose: (() -> Void)?
 
-    init(title: String, text: String) {
-        let hostingView = NSHostingView(rootView: CaptureViewerPanelView(title: title, text: text))
+    init(title: String, sourcePath: String, text: String) {
+        let hostingView = NSHostingView(rootView: CaptureViewerPanelView(title: title, sourcePath: sourcePath, text: text))
 
         // A first-class NSWindow (not a utility NSPanel): it stays on screen
         // when MacXServer isn't the foreground app, so you can read a capture
