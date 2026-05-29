@@ -1,5 +1,7 @@
 import AppKit
+import UniformTypeIdentifiers
 import SwiftXServerCore
+import SwiftXCaptureCore
 
 // Wires up the menu-bar (status item) presence and the standard Mac main
 // menu. The app runs as `.accessory` so there's no Dock icon; the status
@@ -17,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var resourcesController: ResourcesWindowController?
     private var fontMappingsController: FontMappingsWindowController?
     private var launchersController: LaunchersWindowController?
+    /// Open capture-viewer windows. The viewer supports multiple windows so
+    /// several captures can be compared; each removes itself here on close.
+    private var captureViewers: [CaptureViewerWindowController] = []
     private var currentLauncherFile: LauncherFile?
     private var launchersMenu: NSMenu?
     private var activeLauncher: TelnetLauncher?
@@ -141,6 +146,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Capture actions — the toggle lives in Preferences (Capture
         // tab). These are pure actions on the captures folder so they
         // belong here, not on the status-bar menu.
+        let openCapture = NSMenuItem(title: "Open Capture\u{2026}",
+                                     action: #selector(openCapture(_:)),
+                                     keyEquivalent: "")
+        openCapture.target = self
+        appMenu.addItem(openCapture)
+
         let revealCaptures = NSMenuItem(title: "Reveal Captures Folder",
                                         action: #selector(revealCapturesFolder(_:)),
                                         keyEquivalent: "")
@@ -253,6 +264,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             fontMappingsController = FontMappingsWindowController()
         }
         fontMappingsController?.showWindow()
+    }
+
+    @MainActor
+    @objc private func openCapture(_ sender: Any?) {
+        let dir = preferences.captureDirectory
+        // mkdir so the picker opens cleanly even before any capture has run.
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+
+        let panel = NSOpenPanel()
+        panel.title = "Open Capture"
+        panel.prompt = "Open"
+        panel.directoryURL = URL(fileURLWithPath: dir)
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        if let xtap = UTType(filenameExtension: "xtap") {
+            panel.allowedContentTypes = [xtap]
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            // Decode the same way the .txt sidecar is written.
+            let decoded = try ChronoDumper.dump(path: url.path)
+            let controller = CaptureViewerWindowController(title: url.lastPathComponent, text: decoded)
+            controller.onClose = { [weak self, weak controller] in
+                self?.captureViewers.removeAll { $0 === controller }
+            }
+            captureViewers.append(controller)
+            controller.showWindow()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't decode capture"
+            alert.informativeText = "\(url.lastPathComponent): \(error.localizedDescription)"
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
     }
 
     @MainActor

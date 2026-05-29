@@ -212,105 +212,158 @@ func atomDisplay(_ atom: UInt32, ctx: ChronoContext) -> String {
 }
 
 func windowDisplay(_ w: UInt32) -> String {
-    return String(format: "0x%X", w)
+    return hx(w)
 }
 
+// MARK: - Chrono dump field vocabulary
+//
+// One consistent set of formatters so opcode lines don't drift: a fixed
+// name column, uppercase `0x` for every resource id and mask/flag value,
+// `(x,y)` for points, `WxH` for sizes, and `WxH at (x,y)` for placed
+// geometry. Change a convention here and every opcode follows.
+
+/// Width the message name is padded to before its fields. The longest core
+/// name is "ChangeActivePointerGrab" (23), so 24 leaves at least one space.
+private let dumpNameColumn = 24
+
+/// `name` padded to the field column, then its fields. Empty fields → just
+/// the name (e.g. NoOperation, GrabServer).
+private func row(_ name: String, _ fields: String = "") -> String {
+    guard !fields.isEmpty else { return name }
+    let pad = name.count < dumpNameColumn
+        ? String(repeating: " ", count: dumpNameColumn - name.count)
+        : " "
+    return name + pad + fields
+}
+
+/// Resource id or mask/flag value in uppercase `0x` form. Generic so it
+/// takes any width (CARD8/16/32) without per-call casts.
+func hx<T: BinaryInteger>(_ v: T) -> String { "0x" + String(v, radix: 16, uppercase: true) }
+
+/// A point `(x,y)`. Coordinates are INT16 in some requests, CARD16 in
+/// others (Expose etc.), so accept any integer type.
+private func pt<T: BinaryInteger>(_ x: T, _ y: T) -> String { "(\(x),\(y))" }
+/// A size `WxH`.
+private func sz<T: BinaryInteger>(_ w: T, _ h: T) -> String { "\(w)x\(h)" }
+/// Placed geometry `WxH at (x,y)`.
+private func geom<S: BinaryInteger, P: BinaryInteger>(_ w: S, _ h: S, _ x: P, _ y: P) -> String {
+    "\(sz(w, h)) at \(pt(x, y))"
+}
+
+/// Drop leading spaces; detail strings are built as " field=..." but `row`
+/// adds the column gap itself, so the leading space would double up.
+private func stripLead(_ s: String) -> String {
+    String(s.drop(while: { $0 == " " }))
+}
+
+/// Fixed-width "[seq=N]" field so everything after it lines up vertically
+/// across request / reply / error lines. The 6-digit field covers the full
+/// UInt16 sequence range (max 65535 = 5 digits) with a column of headroom.
+private func seqField(_ seq: UInt16) -> String {
+    String(format: "[seq=%-6d]", seq)
+}
+
+/// Blank the width of `seqField(...)` + its trailing space (12 + 1), used to
+/// indent event lines — which carry no request sequence number — so their
+/// bodies align in the same column as the seq-bearing lines.
+private let seqBlank = String(repeating: " ", count: 13)
+
 func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: ByteOrder = .msbFirst) -> String {
-    let seqStr = String(format: "[seq=%-4d]", seq)
+    let seqStr = seqField(seq)
     let body: String
     switch req {
     case .createWindow(let r):
-        body = "CreateWindow             wid=\(windowDisplay(r.wid)) parent=\(windowDisplay(r.parent)) \(r.width)x\(r.height) at (\(r.x),\(r.y)) class=\(r.windowClass) mask=0x\(String(r.valueMask, radix: 16))\(decodeWindowAttrs(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))"
+        body = row("CreateWindow", "wid=\(windowDisplay(r.wid)) parent=\(windowDisplay(r.parent)) \(geom(r.width, r.height, r.x, r.y)) class=\(r.windowClass) mask=\(hx(r.valueMask))\(decodeWindowAttrs(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))")
     case .changeWindowAttributes(let r):
-        body = "ChangeWindowAttributes   window=\(windowDisplay(r.window)) mask=0x\(String(r.valueMask, radix: 16))\(decodeWindowAttrs(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))"
+        body = row("ChangeWindowAttributes", "window=\(windowDisplay(r.window)) mask=\(hx(r.valueMask))\(decodeWindowAttrs(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))")
     case .getWindowAttributes(let r):
-        body = "GetWindowAttributes      window=\(windowDisplay(r.window))"
+        body = row("GetWindowAttributes", "window=\(windowDisplay(r.window))")
     case .destroyWindow(let r):
-        body = "DestroyWindow            window=\(windowDisplay(r.window))"
+        body = row("DestroyWindow", "window=\(windowDisplay(r.window))")
     case .destroySubwindows(let r):
-        body = "DestroySubwindows        window=\(windowDisplay(r.window))"
+        body = row("DestroySubwindows", "window=\(windowDisplay(r.window))")
     case .reparentWindow(let r):
-        body = "ReparentWindow           window=\(windowDisplay(r.window)) parent=\(windowDisplay(r.parent)) at (\(r.x),\(r.y))"
+        body = row("ReparentWindow", "window=\(windowDisplay(r.window)) parent=\(windowDisplay(r.parent)) at \(pt(r.x, r.y))")
     case .mapWindow(let r):
-        body = "MapWindow                window=\(windowDisplay(r.window))"
+        body = row("MapWindow", "window=\(windowDisplay(r.window))")
     case .mapSubwindows(let r):
-        body = "MapSubwindows            window=\(windowDisplay(r.window))"
+        body = row("MapSubwindows", "window=\(windowDisplay(r.window))")
     case .unmapWindow(let r):
-        body = "UnmapWindow              window=\(windowDisplay(r.window))"
+        body = row("UnmapWindow", "window=\(windowDisplay(r.window))")
     case .unmapSubwindows(let r):
-        body = "UnmapSubwindows          window=\(windowDisplay(r.window))"
+        body = row("UnmapSubwindows", "window=\(windowDisplay(r.window))")
     case .configureWindow(let r):
-        body = "ConfigureWindow          window=\(windowDisplay(r.window)) mask=0x\(String(r.valueMask, radix: 16))\(decodeConfigureWindow(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))"
+        body = row("ConfigureWindow", "window=\(windowDisplay(r.window)) mask=\(hx(r.valueMask))\(decodeConfigureWindow(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))")
     case .getGeometry(let r):
-        body = "GetGeometry              drawable=\(windowDisplay(r.drawable))"
+        body = row("GetGeometry", "drawable=\(windowDisplay(r.drawable))")
     case .queryTree(let r):
-        body = "QueryTree                window=\(windowDisplay(r.window))"
+        body = row("QueryTree", "window=\(windowDisplay(r.window))")
     case .internAtom(let r):
         let name = String(decoding: r.name, as: UTF8.self)
-        body = "InternAtom               \"\(name)\"\(r.onlyIfExists ? " (only-if-exists)" : "")"
+        body = row("InternAtom", "\"\(name)\"\(r.onlyIfExists ? " (only-if-exists)" : "")")
     case .getAtomName(let r):
-        body = "GetAtomName              atom=\(atomDisplay(r.atom, ctx: ctx))"
+        body = row("GetAtomName", "atom=\(atomDisplay(r.atom, ctx: ctx))")
     case .changeProperty(let r):
         let dataPreview = previewBytes(r.data, format: r.format)
-        body = "ChangeProperty           window=\(windowDisplay(r.window)) prop=\(atomDisplay(r.property, ctx: ctx)) type=\(atomDisplay(r.type, ctx: ctx)) format=\(r.format.rawValue) \(dataPreview)"
+        body = row("ChangeProperty", "window=\(windowDisplay(r.window)) prop=\(atomDisplay(r.property, ctx: ctx)) type=\(atomDisplay(r.type, ctx: ctx)) format=\(r.format.rawValue) \(dataPreview)")
     case .deleteProperty(let r):
-        body = "DeleteProperty           window=\(windowDisplay(r.window)) prop=\(atomDisplay(r.property, ctx: ctx))"
+        body = row("DeleteProperty", "window=\(windowDisplay(r.window)) prop=\(atomDisplay(r.property, ctx: ctx))")
     case .getProperty(let r):
-        body = "GetProperty              window=\(windowDisplay(r.window)) prop=\(atomDisplay(r.property, ctx: ctx))\(r.delete ? " (delete)" : "")"
+        body = row("GetProperty", "window=\(windowDisplay(r.window)) prop=\(atomDisplay(r.property, ctx: ctx))\(r.delete ? " (delete)" : "")")
     case .setSelectionOwner(let r):
-        body = "SetSelectionOwner        selection=\(atomDisplay(r.selection, ctx: ctx)) owner=\(windowDisplay(r.owner))"
+        body = row("SetSelectionOwner", "selection=\(atomDisplay(r.selection, ctx: ctx)) owner=\(windowDisplay(r.owner))")
     case .getSelectionOwner(let r):
-        body = "GetSelectionOwner        selection=\(atomDisplay(r.selection, ctx: ctx))"
+        body = row("GetSelectionOwner", "selection=\(atomDisplay(r.selection, ctx: ctx))")
     case .convertSelection(let r):
-        body = "ConvertSelection         selection=\(atomDisplay(r.selection, ctx: ctx)) target=\(atomDisplay(r.target, ctx: ctx)) prop=\(atomDisplay(r.property, ctx: ctx)) requestor=\(windowDisplay(r.requestor))"
+        body = row("ConvertSelection", "selection=\(atomDisplay(r.selection, ctx: ctx)) target=\(atomDisplay(r.target, ctx: ctx)) prop=\(atomDisplay(r.property, ctx: ctx)) requestor=\(windowDisplay(r.requestor))")
     case .sendEvent(let r):
-        body = "SendEvent                dest=\(windowDisplay(r.destination)) propagate=\(r.propagate)"
+        body = row("SendEvent", "dest=\(windowDisplay(r.destination)) propagate=\(r.propagate)")
     case .grabPointer:
-        body = "GrabPointer"
+        body = row("GrabPointer")
     case .ungrabPointer:
-        body = "UngrabPointer"
+        body = row("UngrabPointer")
     case .grabButton(let r):
-        body = "GrabButton               window=\(windowDisplay(r.grabWindow)) button=\(r.button) modifiers=0x\(String(r.modifiers, radix: 16))"
+        body = row("GrabButton", "window=\(windowDisplay(r.grabWindow)) button=\(r.button) modifiers=\(hx(r.modifiers))")
     case .changeActivePointerGrab(let r):
-        body = "ChangeActivePointerGrab  cursor=0x\(String(r.cursor, radix: 16)) eventMask=0x\(String(r.eventMask, radix: 16))"
+        body = row("ChangeActivePointerGrab", "cursor=\(windowDisplay(r.cursor)) eventMask=\(hx(r.eventMask))")
     case .grabKeyboard(let r):
-        body = "GrabKeyboard             window=\(windowDisplay(r.grabWindow))"
+        body = row("GrabKeyboard", "window=\(windowDisplay(r.grabWindow))")
     case .ungrabKeyboard:
-        body = "UngrabKeyboard"
+        body = row("UngrabKeyboard")
     case .grabKey(let r):
-        body = "GrabKey                  window=\(windowDisplay(r.grabWindow)) key=\(r.key) modifiers=0x\(String(r.modifiers, radix: 16))"
+        body = row("GrabKey", "window=\(windowDisplay(r.grabWindow)) key=\(r.key) modifiers=\(hx(r.modifiers))")
     case .allowEvents(let r):
-        body = "AllowEvents              mode=\(r.mode)"
-    case .grabServer:    body = "GrabServer"
-    case .ungrabServer:  body = "UngrabServer"
+        body = row("AllowEvents", "mode=\(r.mode)")
+    case .grabServer:    body = row("GrabServer")
+    case .ungrabServer:  body = row("UngrabServer")
     case .queryPointer(let r):
-        body = "QueryPointer             window=\(windowDisplay(r.window))"
+        body = row("QueryPointer", "window=\(windowDisplay(r.window))")
     case .translateCoordinates(let r):
-        body = "TranslateCoordinates     src=\(windowDisplay(r.srcWindow)) dst=\(windowDisplay(r.dstWindow)) (\(r.srcX),\(r.srcY))"
+        body = row("TranslateCoordinates", "src=\(windowDisplay(r.srcWindow)) dst=\(windowDisplay(r.dstWindow)) \(pt(r.srcX, r.srcY))")
     case .warpPointer(let r):
-        body = "WarpPointer              dst=\(windowDisplay(r.dstWindow)) (\(r.dstX),\(r.dstY))"
+        body = row("WarpPointer", "dst=\(windowDisplay(r.dstWindow)) \(pt(r.dstX, r.dstY))")
     case .setInputFocus(let r):
-        body = "SetInputFocus            focus=\(windowDisplay(r.focus)) revertTo=\(r.revertTo)"
-    case .getInputFocus:    body = "GetInputFocus"
-    case .queryKeymap:      body = "QueryKeymap"
+        body = row("SetInputFocus", "focus=\(windowDisplay(r.focus)) revertTo=\(r.revertTo)")
+    case .getInputFocus:    body = row("GetInputFocus")
+    case .queryKeymap:      body = row("QueryKeymap")
     case .openFont(let r):
-        body = "OpenFont                 fid=\(windowDisplay(r.fid)) name=\"\(String(decoding: r.name, as: UTF8.self))\""
+        body = row("OpenFont", "fid=\(windowDisplay(r.fid)) name=\"\(String(decoding: r.name, as: UTF8.self))\"")
     case .closeFont(let r):
-        body = "CloseFont                font=\(windowDisplay(r.font))"
+        body = row("CloseFont", "font=\(windowDisplay(r.font))")
     case .queryFont(let r):
-        body = "QueryFont                font=\(windowDisplay(r.font))"
+        body = row("QueryFont", "font=\(windowDisplay(r.font))")
     case .listFonts(let r):
-        body = "ListFonts                pattern=\"\(String(decoding: r.pattern, as: UTF8.self))\" max=\(r.maxNames)"
+        body = row("ListFonts", "pattern=\"\(String(decoding: r.pattern, as: UTF8.self))\" max=\(r.maxNames)")
     case .listFontsWithInfo(let r):
-        body = "ListFontsWithInfo        pattern=\"\(String(decoding: r.pattern, as: UTF8.self))\" max=\(r.maxNames)"
+        body = row("ListFontsWithInfo", "pattern=\"\(String(decoding: r.pattern, as: UTF8.self))\" max=\(r.maxNames)")
     case .createPixmap(let r):
-        body = "CreatePixmap             pid=\(windowDisplay(r.pid)) drawable=\(windowDisplay(r.drawable)) \(r.width)x\(r.height) depth=\(r.depth)"
+        body = row("CreatePixmap", "pid=\(windowDisplay(r.pid)) drawable=\(windowDisplay(r.drawable)) \(sz(r.width, r.height)) depth=\(r.depth)")
     case .freePixmap(let r):
-        body = "FreePixmap               pixmap=\(windowDisplay(r.pixmap))"
+        body = row("FreePixmap", "pixmap=\(windowDisplay(r.pixmap))")
     case .createGC(let r):
-        body = "CreateGC                 cid=\(windowDisplay(r.cid)) drawable=\(windowDisplay(r.drawable)) mask=0x\(String(r.valueMask, radix: 16))\(decodeGCFgBg(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))"
+        body = row("CreateGC", "cid=\(windowDisplay(r.cid)) drawable=\(windowDisplay(r.drawable)) mask=\(hx(r.valueMask))\(decodeGCFgBg(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))")
     case .changeGC(let r):
-        body = "ChangeGC                 gc=\(windowDisplay(r.gc)) mask=0x\(String(r.valueMask, radix: 16))\(decodeGCFgBg(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))"
+        body = row("ChangeGC", "gc=\(windowDisplay(r.gc)) mask=\(hx(r.valueMask))\(decodeGCFgBg(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))")
     // The fg/bg annotation above is intentional and load-bearing: it's how
     // we tell whether a Motif client wrote whitePixel vs blackPixel into
     // its drawing GC. Useful for the dtcalc-LCD class of bugs where the
@@ -318,117 +371,117 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
     // diff'ing fg/bg on each ChangeGC narrows the bug to either the
     // server's GC update path or its rendering path.
     case .freeGC(let r):
-        body = "FreeGC                   gc=\(windowDisplay(r.gc))"
+        body = row("FreeGC", "gc=\(windowDisplay(r.gc))")
     case .setDashes(let r):
-        body = "SetDashes                gc=\(windowDisplay(r.gc)) offset=\(r.dashOffset) dashes=\(r.dashes.count)"
+        body = row("SetDashes", "gc=\(windowDisplay(r.gc)) offset=\(r.dashOffset) dashes=\(r.dashes.count)")
     case .setClipRectangles(let r):
-        body = "SetClipRectangles        gc=\(windowDisplay(r.gc)) origin=(\(r.clipXOrigin),\(r.clipYOrigin)) rects=\(r.rectangles.count)"
+        body = row("SetClipRectangles", "gc=\(windowDisplay(r.gc)) origin=\(pt(r.clipXOrigin, r.clipYOrigin)) rects=\(r.rectangles.count)")
     case .clearArea(let r):
-        body = "ClearArea                window=\(windowDisplay(r.window)) (\(r.x),\(r.y)) \(r.width)x\(r.height) exposures=\(r.exposures)"
+        body = row("ClearArea", "window=\(windowDisplay(r.window)) \(geom(r.width, r.height, r.x, r.y)) exposures=\(r.exposures)")
     case .copyArea(let r):
-        body = "CopyArea                 src=\(windowDisplay(r.srcDrawable)) dst=\(windowDisplay(r.dstDrawable)) gc=\(windowDisplay(r.gc)) (\(r.srcX),\(r.srcY))→(\(r.dstX),\(r.dstY)) \(r.width)x\(r.height)"
+        body = row("CopyArea", "src=\(windowDisplay(r.srcDrawable)) dst=\(windowDisplay(r.dstDrawable)) gc=\(windowDisplay(r.gc)) \(pt(r.srcX, r.srcY))→\(pt(r.dstX, r.dstY)) \(sz(r.width, r.height))")
     case .polyLine(let r):
-        body = "PolyLine                 drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) points=\(r.points.count)"
+        body = row("PolyLine", "drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) points=\(r.points.count)")
     case .polySegment(let r):
-        body = "PolySegment              drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) segments=\(r.segments.count)"
+        body = row("PolySegment", "drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) segments=\(r.segments.count)")
     case .polyArc(let r):
-        body = "PolyArc                  drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) arcs=\(r.arcs.count)"
+        body = row("PolyArc", "drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) arcs=\(r.arcs.count)")
     case .fillPoly(let r):
-        body = "FillPoly                 drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) points=\(r.points.count) shape=\(r.shape)"
+        body = row("FillPoly", "drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) points=\(r.points.count) shape=\(r.shape)")
     case .polyRectangle(let r):
-        body = "PolyRectangle            drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) rects=\(r.rectangles.count)"
+        body = row("PolyRectangle", "drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) rects=\(r.rectangles.count)")
     case .polyFillRectangle(let r):
-        body = "PolyFillRectangle        drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) rects=\(r.rectangles.count)"
+        body = row("PolyFillRectangle", "drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) rects=\(r.rectangles.count)")
     case .polyFillArc(let r):
-        body = "PolyFillArc              drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) arcs=\(r.arcs.count)"
+        body = row("PolyFillArc", "drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) arcs=\(r.arcs.count)")
     case .putImage(let r):
-        body = "PutImage                 drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) \(r.width)x\(r.height) at (\(r.dstX),\(r.dstY)) format=\(r.format) depth=\(r.depth) data=\(r.data.count)b"
+        body = row("PutImage", "drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) \(geom(r.width, r.height, r.dstX, r.dstY)) format=\(r.format) depth=\(r.depth) data=\(r.data.count)b")
     case .polyText8(let r):
-        body = "PolyText8                drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) at (\(r.x),\(r.y)) items=\(r.items.count)b"
+        body = row("PolyText8", "drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) at \(pt(r.x, r.y)) items=\(r.items.count)b")
     case .imageText8(let r):
         let s = String(decoding: r.string, as: UTF8.self)
-        body = "ImageText8               drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) at (\(r.x),\(r.y)) \"\(s)\""
+        body = row("ImageText8", "drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) at \(pt(r.x, r.y)) \"\(s)\"")
     case .allocColor(let r):
-        body = "AllocColor               cmap=\(windowDisplay(r.cmap)) rgb=(\(r.red),\(r.green),\(r.blue))"
+        body = row("AllocColor", "cmap=\(windowDisplay(r.cmap)) rgb=(\(r.red),\(r.green),\(r.blue))")
     case .allocNamedColor(let r):
-        body = "AllocNamedColor          cmap=\(windowDisplay(r.cmap)) name=\"\(String(decoding: r.name, as: UTF8.self))\""
+        body = row("AllocNamedColor", "cmap=\(windowDisplay(r.cmap)) name=\"\(String(decoding: r.name, as: UTF8.self))\"")
     case .queryColors(let r):
-        body = "QueryColors              cmap=\(windowDisplay(r.cmap)) pixels=\(r.pixels.count)"
+        body = row("QueryColors", "cmap=\(windowDisplay(r.cmap)) pixels=\(r.pixels.count)")
     case .lookupColor(let r):
-        body = "LookupColor              cmap=\(windowDisplay(r.cmap)) name=\"\(String(decoding: r.name, as: UTF8.self))\""
+        body = row("LookupColor", "cmap=\(windowDisplay(r.cmap)) name=\"\(String(decoding: r.name, as: UTF8.self))\"")
     case .createCursor(let r):
-        body = "CreateCursor             cid=\(windowDisplay(r.cid)) source=\(windowDisplay(r.source)) mask=\(windowDisplay(r.mask)) hotspot=(\(r.x),\(r.y))"
+        body = row("CreateCursor", "cid=\(windowDisplay(r.cid)) source=\(windowDisplay(r.source)) mask=\(windowDisplay(r.mask)) hotspot=\(pt(r.x, r.y))")
     case .createGlyphCursor(let r):
-        body = "CreateGlyphCursor        cid=\(windowDisplay(r.cid)) sourceFont=\(windowDisplay(r.sourceFont)) char=\(r.sourceChar)"
+        body = row("CreateGlyphCursor", "cid=\(windowDisplay(r.cid)) sourceFont=\(windowDisplay(r.sourceFont)) char=\(r.sourceChar)")
     case .freeCursor(let r):
-        body = "FreeCursor               cursor=\(windowDisplay(r.cursor))"
+        body = row("FreeCursor", "cursor=\(windowDisplay(r.cursor))")
     case .recolorCursor(let r):
-        body = "RecolorCursor            cursor=\(windowDisplay(r.cursor))"
+        body = row("RecolorCursor", "cursor=\(windowDisplay(r.cursor))")
     case .queryBestSize(let r):
-        body = "QueryBestSize            class=\(r.sizeClass) drawable=\(windowDisplay(r.drawable)) \(r.width)x\(r.height)"
+        body = row("QueryBestSize", "class=\(r.sizeClass) drawable=\(windowDisplay(r.drawable)) \(sz(r.width, r.height))")
     case .queryExtension(let r):
-        body = "QueryExtension           name=\"\(String(decoding: r.name, as: UTF8.self))\""
-    case .listExtensions:    body = "ListExtensions"
+        body = row("QueryExtension", "name=\"\(String(decoding: r.name, as: UTF8.self))\"")
+    case .listExtensions:    body = row("ListExtensions")
     case .getKeyboardMapping(let r):
-        body = "GetKeyboardMapping       firstKeycode=\(r.firstKeycode) count=\(r.count)"
-    case .getModifierMapping: body = "GetModifierMapping"
-    case .getPointerMapping:  body = "GetPointerMapping"
+        body = row("GetKeyboardMapping", "firstKeycode=\(r.firstKeycode) count=\(r.count)")
+    case .getModifierMapping: body = row("GetModifierMapping")
+    case .getPointerMapping:  body = row("GetPointerMapping")
     case .ungrabButton(let r):
-        body = "UngrabButton             button=\(r.button) grabWindow=0x\(String(r.grabWindow, radix: 16)) modifiers=0x\(String(r.modifiers, radix: 16))"
+        body = row("UngrabButton", "button=\(r.button) grabWindow=\(windowDisplay(r.grabWindow)) modifiers=\(hx(r.modifiers))")
     case .ungrabKey(let r):
-        body = "UngrabKey                key=\(r.key) grabWindow=0x\(String(r.grabWindow, radix: 16)) modifiers=0x\(String(r.modifiers, radix: 16))"
+        body = row("UngrabKey", "key=\(r.key) grabWindow=\(windowDisplay(r.grabWindow)) modifiers=\(hx(r.modifiers))")
     case .getMotionEvents(let r):
-        body = "GetMotionEvents          window=0x\(String(r.window, radix: 16)) start=\(r.start) stop=\(r.stop)"
+        body = row("GetMotionEvents", "window=\(windowDisplay(r.window)) start=\(r.start) stop=\(r.stop)")
     case .allocColorCells(let r):
-        body = "AllocColorCells          cmap=0x\(String(r.cmap, radix: 16)) colors=\(r.colors) planes=\(r.planes) contiguous=\(r.contiguous)"
+        body = row("AllocColorCells", "cmap=\(windowDisplay(r.cmap)) colors=\(r.colors) planes=\(r.planes) contiguous=\(r.contiguous)")
     case .setCloseDownMode(let r):
-        body = "SetCloseDownMode         mode=\(r.mode)"
+        body = row("SetCloseDownMode", "mode=\(r.mode)")
     case .killClient(let r):
-        body = "KillClient               resource=0x\(String(r.resource, radix: 16))"
+        body = row("KillClient", "resource=\(windowDisplay(r.resource))")
     case .noOperation:
-        body = "NoOperation"
+        body = row("NoOperation")
     case .createColormap(let r):
-        body = "CreateColormap           mid=0x\(String(r.mid, radix: 16)) window=0x\(String(r.window, radix: 16)) visual=0x\(String(r.visual, radix: 16)) alloc=\(r.alloc)"
+        body = row("CreateColormap", "mid=\(windowDisplay(r.mid)) window=\(windowDisplay(r.window)) visual=\(windowDisplay(r.visual)) alloc=\(r.alloc)")
     case .freeColormap(let r):
-        body = "FreeColormap             cmap=0x\(String(r.cmap, radix: 16))"
+        body = row("FreeColormap", "cmap=\(windowDisplay(r.cmap))")
     case .copyColormapAndFree(let r):
-        body = "CopyColormapAndFree      mid=0x\(String(r.mid, radix: 16)) srcCmap=0x\(String(r.srcCmap, radix: 16))"
+        body = row("CopyColormapAndFree", "mid=\(windowDisplay(r.mid)) srcCmap=\(windowDisplay(r.srcCmap))")
     case .installColormap(let r):
-        body = "InstallColormap          cmap=0x\(String(r.cmap, radix: 16))"
+        body = row("InstallColormap", "cmap=\(windowDisplay(r.cmap))")
     case .uninstallColormap(let r):
-        body = "UninstallColormap        cmap=0x\(String(r.cmap, radix: 16))"
+        body = row("UninstallColormap", "cmap=\(windowDisplay(r.cmap))")
     case .listInstalledColormaps(let r):
-        body = "ListInstalledColormaps   window=0x\(String(r.window, radix: 16))"
+        body = row("ListInstalledColormaps", "window=\(windowDisplay(r.window))")
     case .allocColorPlanes(let r):
-        body = "AllocColorPlanes         cmap=0x\(String(r.cmap, radix: 16)) colors=\(r.colors) rgb=\(r.red)/\(r.green)/\(r.blue) contiguous=\(r.contiguous)"
+        body = row("AllocColorPlanes", "cmap=\(windowDisplay(r.cmap)) colors=\(r.colors) rgb=(\(r.red),\(r.green),\(r.blue)) contiguous=\(r.contiguous)")
     case .freeColors(let r):
-        body = "FreeColors               cmap=0x\(String(r.cmap, radix: 16)) planeMask=0x\(String(r.planeMask, radix: 16)) pixels=\(r.pixels.count)"
+        body = row("FreeColors", "cmap=\(windowDisplay(r.cmap)) planeMask=\(hx(r.planeMask)) pixels=\(r.pixels.count)")
     case .storeColors(let r):
-        body = "StoreColors              cmap=0x\(String(r.cmap, radix: 16)) items=\(r.rawItems.count / 12)"
+        body = row("StoreColors", "cmap=\(windowDisplay(r.cmap)) items=\(r.rawItems.count / 12)")
     case .storeNamedColor(let r):
-        body = "StoreNamedColor          cmap=0x\(String(r.cmap, radix: 16)) pixel=\(r.pixel) name=\"\(String(decoding: r.name, as: UTF8.self))\" flags=0x\(String(r.flags, radix: 16))"
+        body = row("StoreNamedColor", "cmap=\(windowDisplay(r.cmap)) pixel=\(r.pixel) name=\"\(String(decoding: r.name, as: UTF8.self))\" flags=\(hx(r.flags))")
     case .circulateWindow(let r):
-        body = "CirculateWindow          window=0x\(String(r.window, radix: 16)) direction=\(r.direction == 0 ? "RaiseLowest" : "LowerHighest")"
+        body = row("CirculateWindow", "window=\(windowDisplay(r.window)) direction=\(r.direction == 0 ? "RaiseLowest" : "LowerHighest")")
     case .queryTextExtents(let r):
-        body = "QueryTextExtents         fid=0x\(String(r.fid, radix: 16)) nChars=\(r.stringBytes.count / 2)"
+        body = row("QueryTextExtents", "fid=\(windowDisplay(r.fid)) nChars=\(r.stringBytes.count / 2)")
     case .polyPoint(let r):
-        body = "PolyPoint                drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) mode=\(r.coordinateMode) n=\(r.points.count)"
+        body = row("PolyPoint", "drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) mode=\(r.coordinateMode) points=\(r.points.count)")
     case .bell(let r):
-        body = "Bell                     percent=\(r.percent)"
+        body = row("Bell", "percent=\(r.percent)")
     case .getScreenSaver:
-        body = "GetScreenSaver"
+        body = row("GetScreenSaver")
     case .setScreenSaver(let r):
-        body = "SetScreenSaver           timeout=\(r.timeout) interval=\(r.interval) preferBlanking=\(r.preferBlanking) allowExposures=\(r.allowExposures)"
+        body = row("SetScreenSaver", "timeout=\(r.timeout) interval=\(r.interval) preferBlanking=\(r.preferBlanking) allowExposures=\(r.allowExposures)")
     case .forceScreenSaver(let r):
-        body = "ForceScreenSaver         mode=\(r.mode == 0 ? "Reset" : "Activate")"
+        body = row("ForceScreenSaver", "mode=\(r.mode == 0 ? "Reset" : "Activate")")
     case .getImage(let r):
-        body = "GetImage                 drawable=0x\(String(r.drawable, radix: 16)) \(r.width)x\(r.height) at (\(r.x),\(r.y)) format=\(r.format) planeMask=0x\(String(r.planeMask, radix: 16))"
+        body = row("GetImage", "drawable=\(windowDisplay(r.drawable)) \(geom(r.width, r.height, r.x, r.y)) format=\(r.format) planeMask=\(hx(r.planeMask))")
     case .polyText16(let r):
-        body = "PolyText16               drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) at (\(r.x),\(r.y)) itemsBytes=\(r.items.count)"
+        body = row("PolyText16", "drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) at \(pt(r.x, r.y)) items=\(r.items.count)b")
     case .imageText16(let r):
-        body = "ImageText16              drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) at (\(r.x),\(r.y)) nChars=\(r.characters.count)"
+        body = row("ImageText16", "drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) at \(pt(r.x, r.y)) nChars=\(r.characters.count)")
     case .copyPlane(let r):
-        body = "CopyPlane                src=0x\(String(r.srcDrawable, radix: 16)) dst=0x\(String(r.dstDrawable, radix: 16)) srcXY=(\(r.srcX),\(r.srcY)) dstXY=(\(r.dstX),\(r.dstY)) \(r.width)x\(r.height) bitPlane=0x\(String(r.bitPlane, radix: 16))"
+        body = row("CopyPlane", "src=\(windowDisplay(r.srcDrawable)) dst=\(windowDisplay(r.dstDrawable)) gc=\(windowDisplay(r.gc)) \(pt(r.srcX, r.srcY))→\(pt(r.dstX, r.dstY)) \(sz(r.width, r.height)) bitPlane=\(hx(r.bitPlane))")
     case .unknown(let op, let raw):
         // Decode extension requests when we've seen the QueryExtension reply
         // that negotiated their major opcode. SHAPE gets full per-request
@@ -542,7 +595,7 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
                 }
             }
         }
-        return "[seq=\(seq)] Reply (\(opName))\(detail)"
+        return "\(seqField(seq)) \(row("Reply (\(opName))", stripLead(detail)))"
     case .event(let e):
         let codeName = eventName(e.code) ?? "Event#\(e.code)"
         let prefix = e.sentEvent ? "[SendEvent] " : ""
@@ -550,19 +603,19 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
         if let decoded = try? DecodedEvent.decode(from: e, byteOrder: byteOrder) {
             switch decoded {
             case .keyPress(let i), .keyRelease(let i), .buttonPress(let i), .buttonRelease(let i), .motionNotify(let i):
-                detail = " keycode/btn=\(i.detail) state=0x\(String(i.state, radix: 16)) at (\(i.eventX),\(i.eventY)) window=\(windowDisplay(i.event))"
+                detail = " window=\(windowDisplay(i.event)) at \(pt(i.eventX, i.eventY)) keycode/btn=\(i.detail) state=\(hx(i.state))"
             case .enterNotify(let c), .leaveNotify(let c):
-                detail = " window=\(windowDisplay(c.event)) at (\(c.eventX),\(c.eventY)) mode=\(c.mode)"
+                detail = " window=\(windowDisplay(c.event)) at \(pt(c.eventX, c.eventY)) mode=\(c.mode)"
             case .focusIn(let f), .focusOut(let f):
                 detail = " window=\(windowDisplay(f.event)) detail=\(f.detail) mode=\(f.mode)"
             case .expose(let ex):
-                detail = " window=\(windowDisplay(ex.window)) (\(ex.x),\(ex.y)) \(ex.width)x\(ex.height) count=\(ex.count)"
+                detail = " window=\(windowDisplay(ex.window)) \(geom(ex.width, ex.height, ex.x, ex.y)) count=\(ex.count)"
             case .graphicsExposure(let ge):
-                detail = " drawable=\(windowDisplay(ge.drawable)) (\(ge.x),\(ge.y)) \(ge.width)x\(ge.height)"
+                detail = " drawable=\(windowDisplay(ge.drawable)) \(geom(ge.width, ge.height, ge.x, ge.y))"
             case .noExposure(let ne):
                 detail = " drawable=\(windowDisplay(ne.drawable))"
             case .createNotify(let cn):
-                detail = " parent=\(windowDisplay(cn.parent)) window=\(windowDisplay(cn.window)) \(cn.width)x\(cn.height) at (\(cn.x),\(cn.y))"
+                detail = " window=\(windowDisplay(cn.window)) parent=\(windowDisplay(cn.parent)) \(geom(cn.width, cn.height, cn.x, cn.y))"
             case .destroyNotify(let dn):
                 detail = " window=\(windowDisplay(dn.window))"
             case .unmapNotify(let un):
@@ -572,9 +625,9 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
             case .mapRequest(let mr):
                 detail = " window=\(windowDisplay(mr.window)) parent=\(windowDisplay(mr.parent))"
             case .reparentNotify(let rn):
-                detail = " window=\(windowDisplay(rn.window)) parent=\(windowDisplay(rn.parent)) at (\(rn.x),\(rn.y))"
+                detail = " window=\(windowDisplay(rn.window)) parent=\(windowDisplay(rn.parent)) at \(pt(rn.x, rn.y))"
             case .configureNotify(let cn):
-                detail = " window=\(windowDisplay(cn.window)) \(cn.width)x\(cn.height) at (\(cn.x),\(cn.y))"
+                detail = " window=\(windowDisplay(cn.window)) \(geom(cn.width, cn.height, cn.x, cn.y))"
             case .circulateNotify(let cn):
                 detail = " window=\(windowDisplay(cn.window)) place=\(cn.place == 0 ? "Top" : "Bottom")"
             case .propertyNotify(let pn):
@@ -597,12 +650,20 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
                 detail = ""
             }
         }
-        return "\(prefix)\(codeName)\(detail)"
+        // Events carry the last-processed request's sequence number on the
+        // wire (per the spec, every core event except KeymapNotify), so show
+        // it too — every server→client line then has a consistent [seq=N].
+        // KeymapNotify (code 11) has no seq field (those bytes are keymap data).
+        let eventBody = row("\(prefix)\(codeName)", stripLead(detail))
+        if e.code == 11 {
+            return "\(seqBlank)\(eventBody)"
+        }
+        return "\(seqField(e.sequenceNumber(byteOrder: byteOrder))) \(eventBody)"
     case .xError(let err):
         let errName = errorName(err.errorCode) ?? "Error#\(err.errorCode)"
         let majorName = opcodeName(err.majorOpcode) ?? "?"
         let seq = err.sequenceNumber(byteOrder: byteOrder)
-        return "[seq=\(seq)] \(errName) major=\(err.majorOpcode) (\(majorName)) bad=\(String(format: "0x%X", err.badResourceId(byteOrder: byteOrder)))"
+        return "\(seqField(seq)) \(row(errName, "major=\(err.majorOpcode) (\(majorName)) bad=\(hx(err.badResourceId(byteOrder: byteOrder)))"))"
     }
 }
 

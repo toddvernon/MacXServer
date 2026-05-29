@@ -30,6 +30,13 @@ struct CodeEditorView: NSViewRepresentable {
     /// highlighters, but every other piece — scroll view, gutter,
     /// theme application — is shared.
     let makeHighlighter: (EditorTheme, NSFont) -> SyntaxHighlighter
+    /// Read-only mode (still selectable + copyable, no editing or undo).
+    /// Used by the capture viewer, which shows decoded `.xtap` output.
+    var isEditable: Bool = true
+    /// Force a always-visible (legacy) vertical scroller instead of the
+    /// fading overlay one — useful for long files where the thumb position
+    /// tells you where you are. The capture viewer turns this on.
+    var alwaysShowVerticalScroller: Bool = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -51,7 +58,9 @@ struct CodeEditorView: NSViewRepresentable {
         textView.isContinuousSpellCheckingEnabled = false
         textView.isAutomaticTextCompletionEnabled = false
         textView.usesFindBar = true
-        textView.allowsUndo = true
+        textView.isEditable = isEditable
+        textView.isSelectable = true
+        textView.allowsUndo = isEditable
         textView.font = font
         textView.backgroundColor = theme.background
         textView.textColor = theme.defaultText
@@ -91,7 +100,18 @@ struct CodeEditorView: NSViewRepresentable {
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
-        scrollView.scrollerStyle = .overlay
+        if alwaysShowVerticalScroller {
+            // Legacy scrollers stay put (and reserve a gutter) so the thumb
+            // is always a position indicator, not a fading overlay. Force the
+            // dark appearance so the scroller draws a light thumb that's
+            // actually visible on the near-black editor background (the default
+            // dark-on-dark scroller is invisible).
+            scrollView.scrollerStyle = .legacy
+            scrollView.autohidesScrollers = false
+            scrollView.appearance = NSAppearance(named: .darkAqua)
+        } else {
+            scrollView.scrollerStyle = .overlay
+        }
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = true
         scrollView.backgroundColor = theme.background
