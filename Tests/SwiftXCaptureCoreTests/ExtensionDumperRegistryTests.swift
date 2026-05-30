@@ -23,8 +23,10 @@ final class ExtensionDumperRegistryTests: XCTestCase {
     }
 
     func testUnknownExtensionIsNotRegistered() {
-        XCTAssertNil(ExtensionDumperRegistry.decoder(forName: "MIT-SHM"))
-        XCTAssertEqual(ExtensionDumperRegistry.eventCount(forName: "MIT-SHM"), 0)
+        // Use a deliberately-fictitious name so this stays a "no decoder
+        // registered" check even as we add real extensions over time.
+        XCTAssertNil(ExtensionDumperRegistry.decoder(forName: "MADE-UP-EXTENSION"))
+        XCTAssertEqual(ExtensionDumperRegistry.eventCount(forName: "MADE-UP-EXTENSION"), 0)
     }
 
     func testAllRegisteredNamesIncludesShape() {
@@ -70,19 +72,19 @@ final class ExtensionDumperRegistryTests: XCTestCase {
     func testExtensionForEventFindsBinding() {
         var ctx = ChronoContext()
         ctx.extensionFirstEventToName[64] = "SHAPE"
-        ctx.extensionFirstEventToName[80] = "MIT-SHM"  // hypothetical, no registered decoder
+        ctx.extensionFirstEventToName[88] = "MADE-UP-EXTENSION"  // no registered decoder
 
         // SHAPE owns its single event at code 64.
         let shape = ctx.extensionForEvent(code: 64)
         XCTAssertEqual(shape?.name, "SHAPE")
         XCTAssertEqual(shape?.firstEvent, 64)
 
-        // MIT-SHM is named but has no decoder (eventCount=0). The lookup
-        // still returns it for code == firstEvent so the dumper can label.
-        let shm = ctx.extensionForEvent(code: 80)
-        XCTAssertEqual(shm?.name, "MIT-SHM")
+        // Unregistered extension: lookup still returns it for code ==
+        // firstEvent so the dumper can label-but-not-decode.
+        let madeUp = ctx.extensionForEvent(code: 88)
+        XCTAssertEqual(madeUp?.name, "MADE-UP-EXTENSION")
 
         // A code outside any registered range returns nil.
-        XCTAssertNil(ctx.extensionForEvent(code: 90))
+        XCTAssertNil(ctx.extensionForEvent(code: 100))
     }
 }

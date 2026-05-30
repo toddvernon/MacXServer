@@ -267,7 +267,10 @@ that conforms to `ExtensionDumper` plus one entry in `ExtensionDumperRegistry.bu
 | Extension | Negotiation | Decoded | Notes |
 | --- | --- | --- | --- |
 | SHAPE | per-session via QueryExtension | full (requests + events) | Migrated to registry 2026-05-30. Reference implementation for the protocol. |
-| All others (MIT-SHM, BIG-REQUESTS, XKEYBOARD, XINPUT, RENDER, etc.) | per-session via QueryExtension | named-only | Dumper shows `<ExtName> opcode=N minor=M (undecoded)` for requests, `<ExtName>-Event#N` for events. Phase 3 adds the Tier-1 typed decoders. |
+| BIG-REQUESTS | per-session via QueryExtension | full (1 request, 1 reply, 0 events) | Phase 3 batch A landed 2026-05-30. `BigRequestsDumper.swift`. |
+| MIT-SHM | per-session via QueryExtension | full (6 requests, 2 replies, 1 event) | Phase 3 batch A landed 2026-05-30. `ShmDumper.swift`. |
+| Remaining Tier 1 (XKEYBOARD, XINPUT v1, RENDER) | per-session via QueryExtension | named-only | Phase 3 batch B / C / D — each large enough for its own focused session per CLAUDE.md's planning-agent guidance. |
+| Tier 2 (RANDR, XFIXES, DAMAGE, XINPUT2, COMPOSITE, etc.) | per-session via QueryExtension | named-only | Decision pending end of Phase 3: ship without, or include before OSS launch? |
 
 ### Decoder-coverage exit criteria
 

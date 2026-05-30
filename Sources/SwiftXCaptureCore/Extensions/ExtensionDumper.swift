@@ -51,6 +51,8 @@ public enum ExtensionDumperRegistry {
 
     private static let builtins: [String: ExtensionDumper.Type] = [
         ShapeDumper.extensionName: ShapeDumper.self,
+        BigRequestsDumper.extensionName: BigRequestsDumper.self,
+        ShmDumper.extensionName: ShmDumper.self,
     ]
 
     public static func decoder(forName name: String) -> ExtensionDumper.Type? {
