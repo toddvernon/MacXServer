@@ -37,7 +37,7 @@ public struct CaptureRow: Identifiable, Equatable, Hashable, Sendable {
                 break
             }
             // Starts with digit, punctuation, or arrow glyph — keep
-            // walking. Catches "0.000ms", "12345", "[→]", "→", "←", "↳".
+            // walking. Catches "0.000ms", "12345", "[→]", "→", "←", "↙".
             idx += 1
         }
         guard idx < tokens.count else { return ("", line) }

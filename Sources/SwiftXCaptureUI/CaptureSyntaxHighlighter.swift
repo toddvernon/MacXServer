@@ -84,7 +84,9 @@ final class CaptureSyntaxHighlighter: NSObject, SyntaxHighlighter {
         reError     = rx("\\bBad[A-Za-z]+\\b|\\bError#[0-9]+\\b")
         reSeq       = rx("\\[seq=\\s*[0-9]+\\s*\\]")
         reArrowOut  = rx("→")
-        reArrowIn   = rx("←")
+        // Both spontaneous events (←) and reply/XError tags (↙) are
+        // server→client and share the response color.
+        reArrowIn   = rx("←|↙")
         reHex       = rx("0x[0-9A-Fa-f]+")
         reString    = rx("\"[^\"]*\"")
         super.init()

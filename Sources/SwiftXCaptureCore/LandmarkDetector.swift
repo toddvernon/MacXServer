@@ -127,16 +127,19 @@ public struct LandmarkDetector: Sendable {
             // so app-interned WM_NAME variants also work in principle (in
             // practice WM_NAME is the predefined atom 39 always).
             let propName = atomToName[r.property] ?? predefinedAtomName(r.property)
-            if propName == "WM_NAME" && topLevels[r.window] != nil
-                && topLevels[r.window]?.emittedNameLandmark != true {
+            if propName == "WM_NAME", let top = topLevels[r.window],
+               top.emittedNameLandmark != true {
                 let name = decodeWMName(r.data, format: r.format.rawValue)
                 topLevels[r.window]?.name = name
                 topLevels[r.window]?.emittedNameLandmark = true
-                let phrase = firstIdentifyEmitted
-                    ? "Window \(hexId(r.window)) identifies as \"\(name)\""
-                    : "The first top-level window identifies as \"\(name)\""
+                let alreadyMapped = mappedWindows.contains(r.window)
+                let isFirst = !firstIdentifyEmitted
                 firstIdentifyEmitted = true
-                return [Landmark("# \(phrase)")]
+                return [Landmark(identifyLandmarkText(
+                    windowId: r.window, name: name,
+                    width: top.width, height: top.height,
+                    isFirst: isFirst, alreadyMapped: alreadyMapped
+                ))]
             }
             // WM_TRANSIENT_FOR (atom 68) — record for the eventual MapWindow.
             // Data is a 32-bit WINDOW id (4 bytes), format=32.
@@ -203,6 +206,40 @@ private func hexId(_ v: UInt32) -> String { String(format: "0x%X", v) }
 // The window id and size always come along for technical reference — the
 // reader needs them to correlate the landmark with the actual protocol
 // lines around it.
+// Story-form narration for a WM_NAME landmark. The action being narrated
+// is "the client just told the server (and any WM) what to call this
+// window," but for a reader walking the capture as a story the more
+// useful framing is "a new window with this name is being set up" or
+// (in the rare WM_NAME-after-map case) "this window has been renamed."
+//
+// We always note "Not yet visible on screen" when the window hasn't been
+// mapped yet — that's the load-bearing fact for the user who's trying to
+// understand whether they would have seen this window when the capture
+// was running.
+private func identifyLandmarkText(windowId: UInt32, name: String,
+                                   width: UInt16, height: UInt16,
+                                   isFirst: Bool, alreadyMapped: Bool) -> String {
+    // An empty WM_NAME is a real protocol act (the client wrote zero
+    // bytes for the name). Some toolkits (Motif/Xt boot path) do this on
+    // hidden helper windows the user never sees. Surface them — the
+    // reader needs to know they exist — but render the name field as
+    // "no name set" rather than literal "".
+    let nameStr = name.isEmpty ? "no name set" : "\"\(name)\""
+    if alreadyMapped {
+        if name.isEmpty {
+            return "# Window \(hexId(windowId)) had its name cleared (WM_NAME set to empty)"
+        }
+        return "# Window \(hexId(windowId)) is renamed to \(nameStr)"
+    }
+    let size = "\(width)×\(height)"
+    if isFirst {
+        return "# The client creates its first top-level window (\(nameStr), " +
+            "\(size), \(hexId(windowId))). Not yet visible on screen."
+    }
+    return "# Another top-level window is created (\(nameStr), " +
+        "\(size), \(hexId(windowId))). Not yet visible on screen."
+}
+
 private func mapLandmarkText(windowId: UInt32, name: String?,
                               width: UInt16, height: UInt16,
                               isPrimary: Bool) -> String {

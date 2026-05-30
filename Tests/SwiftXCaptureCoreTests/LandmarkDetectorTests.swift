@@ -127,7 +127,7 @@ final class LandmarkDetectorTests: XCTestCase {
         XCTAssertEqual(second.count, 0)
     }
 
-    func testWMNameOnFirstTopLevelReadsAsFirstWindowIdentifies() {
+    func testWMNameOnFirstTopLevelReadsAsClientCreatesFirstWindow() {
         var d = LandmarkDetector()
         let roots: Set<UInt32> = [0x2B]
         _ = d.afterRequest(.createWindow(cw(wid: 0x4400001, parent: 0x2B)),
@@ -136,33 +136,60 @@ final class LandmarkDetectorTests: XCTestCase {
                                   byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
         XCTAssertEqual(lms.count, 1)
         XCTAssertEqual(lms.first?.text,
-                       "# The first top-level window identifies as \"editres\"")
+                       "# The client creates its first top-level window " +
+                       "(\"editres\", 100×50, 0x4400001). Not yet visible on screen.")
     }
 
-    func testWMNameOnLaterTopLevelReadsAsNamedWindowIdentifies() {
+    func testWMNameOnLaterTopLevelReadsAsAnotherWindowCreated() {
         var d = LandmarkDetector()
         let roots: Set<UInt32> = [0x2B]
-        // Identify a primary first so subsequent identifies don't say "first."
         _ = d.afterRequest(.createWindow(cw(wid: 0x4400001, parent: 0x2B)),
                            byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
         _ = d.afterRequest(.changeProperty(setWMName(0x4400001, "editres")),
                            byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
-        // Now identify a second top-level
         _ = d.afterRequest(.createWindow(cw(wid: 0x4400029, parent: 0x2B)),
                            byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
         let lms = d.afterRequest(.changeProperty(setWMName(0x4400029, "Help")),
                                   byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
         XCTAssertEqual(lms.count, 1)
         XCTAssertEqual(lms.first?.text,
-                       "# Window 0x4400029 identifies as \"Help\"")
+                       "# Another top-level window is created " +
+                       "(\"Help\", 100×50, 0x4400029). Not yet visible on screen.")
+    }
+
+    func testEmptyWMNameSurfacedAsNoNameSet() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        _ = d.afterRequest(.createWindow(cw(wid: 0x4600001, parent: 0x2B, w: 1, h: 1)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        let lms = d.afterRequest(.changeProperty(setWMName(0x4600001, "")),
+                                  byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        XCTAssertEqual(lms.count, 1)
+        XCTAssertEqual(lms.first?.text,
+                       "# The client creates its first top-level window " +
+                       "(no name set, 1×1, 0x4600001). Not yet visible on screen.")
+    }
+
+    func testWMNameAfterMapReadsAsRename() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        _ = d.afterRequest(.createWindow(cw(wid: 0x4400001, parent: 0x2B)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterRequest(.mapWindow(mw(0x4400001)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        let lms = d.afterRequest(.changeProperty(setWMName(0x4400001, "editres")),
+                                  byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        XCTAssertEqual(lms.count, 1)
+        XCTAssertEqual(lms.first?.text,
+                       "# Window 0x4400001 is renamed to \"editres\"")
     }
 
     // Regression: Motif apps like xmeditor commonly set WM_NAME on every
     // top-level popup/dialog window at startup, BEFORE mapping any of
     // them. Earlier the "first top-level" gate was tied to MapWindow, so
     // every WM_NAME landmark before the first map said "first." Each
-    // identify after the first should say "Window 0x... identifies as ..."
-    // regardless of whether any window has been mapped yet.
+    // identify after the first should narrate as "Another top-level
+    // window is created ..." regardless of whether any has been mapped.
     func testMultipleIdentifiesBeforeAnyMapOnlyFirstSaysFirst() {
         var d = LandmarkDetector()
         let roots: Set<UInt32> = [0x2B]
@@ -178,9 +205,12 @@ final class LandmarkDetectorTests: XCTestCase {
                                  byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
         let l3 = d.afterRequest(.changeProperty(setWMName(0x4400003, "Save Warning")),
                                  byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
-        XCTAssertEqual(l1.first?.text, "# The first top-level window identifies as \"xmeditor\"")
-        XCTAssertEqual(l2.first?.text, "# Window 0x4400002 identifies as \"Open File\"")
-        XCTAssertEqual(l3.first?.text, "# Window 0x4400003 identifies as \"Save Warning\"")
+        XCTAssertTrue(l1.first?.text.hasPrefix("# The client creates its first top-level window") ?? false)
+        XCTAssertTrue(l1.first?.text.contains("\"xmeditor\"") ?? false)
+        XCTAssertTrue(l2.first?.text.hasPrefix("# Another top-level window is created") ?? false)
+        XCTAssertTrue(l2.first?.text.contains("\"Open File\"") ?? false)
+        XCTAssertTrue(l3.first?.text.hasPrefix("# Another top-level window is created") ?? false)
+        XCTAssertTrue(l3.first?.text.contains("\"Save Warning\"") ?? false)
     }
 
     func testWMNameOnNonTopLevelEmitsNothing() {

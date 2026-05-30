@@ -228,15 +228,18 @@ private func formatLandmark(_ text: String) -> String {
     return "\n\(text)\n\n"
 }
 
-/// Phase 5 visual join (2026-05-30) — picks the direction glyph for a
-/// server-to-client message based on whether it's responding to a prior
-/// request. Replies and XErrors carry the seq number of the request
-/// that triggered them; events are spontaneous. The `↳` glyph (down-and-
-/// right hook) signals "this line is attached to the request above";
-/// the regular `←` stays for spontaneous events.
+/// Phase 5 visual join — picks the direction glyph for a server-to-client
+/// message based on whether it's responding to a prior request. Replies
+/// and XErrors carry the seq number of the request that triggered them;
+/// events are spontaneous.
+///
+/// The `↙` glyph (south-west arrow) is used for replies and XErrors: the
+/// leftward component matches the `←` server→client convention, and the
+/// downward component signals "this line is attached to the request
+/// above." The regular `←` stays for spontaneous events.
 private func directionGlyph(for msg: ServerMessage) -> String {
     switch msg {
-    case .reply, .xError: return "↳"
+    case .reply, .xError: return "↙"
     case .event:          return "←"
     }
 }
