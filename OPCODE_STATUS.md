@@ -196,56 +196,63 @@ everything well-specified even if swift-x doesn't handle it.
 
 The bar: zero `opcode=N (untyped)` lines in any capture of well-documented X11 traffic.
 
-### Headline as of 2026-05-29 (Phase 0 audit)
+### Headline as of 2026-05-29 (Phase 1 landed)
 
-- **Core requests:** 104 of 120 core opcodes have decoders + dumpers. 16 are gaps. List below.
-- **Core events:** 28 of 33 core event codes have decoders + dumpers. 5 are gaps. List below.
-- **Core replies:** all opcodes that produce replies and that have request decoders also have
-	reply decoders — except for the 6 request-side gaps that produce replies (`GetFontPath`,
-	`GetKeyboardControl`, `GetPointerControl`, `ListHosts`, `SetPointerMapping`, `SetModifierMapping`).
-	Reply *body* printing in the dumper is rich for 5 opcodes (`InternAtom`, `QueryExtension`,
-	`QueryFont`, `AllocColor`, `AllocNamedColor`) and minimal (`Reply (opName)` only, no body) for
-	the other ~25. Minimal is acceptable for now; Phase 5 polish enriches it.
+- **Core requests:** 120 of 120 core opcodes have decoders + dumpers. ✅ Phase 1 closed the
+	16 audited gaps (commit landed 2026-05-29). Server implementation is unchanged — the new
+	cases emit BadRequest per the XError-honesty policy, same as the prior `.unknown` path.
+- **Core events:** 33 of 33 core event codes have decoders + dumpers. ✅ Phase 1 closed the
+	5 audited gaps (commit landed 2026-05-30): `ConfigureRequest`, `GravityNotify`,
+	`ResizeRequest`, `CirculateRequest`, `ColormapNotify`. Source: `Phase1Events.swift`.
+- **Core replies:** all opcodes that produce replies now have typed reply decoders, including
+	the 6 added in Phase 1 (`ListPropertiesReply`, `GetFontPathReply`, `GetKeyboardControlReply`,
+	`GetPointerControlReply`, `ListHostsReply`, `SetMappingReply` — shared by SetPointerMapping
+	and SetModifierMapping). Reply *body* printing in the dumper is rich for 5 opcodes
+	(`InternAtom`, `QueryExtension`, `QueryFont`, `AllocColor`, `AllocNamedColor`) and minimal
+	(`Reply (opName)` only, no body) for the other ~30. Minimal is acceptable for now; Phase 5
+	polish enriches it.
 - **Extensions:** only **SHAPE** is fully decoded + printed. All other extensions degrade to a
 	"`<ExtName>` opcode=N minor=M" line if `QueryExtension` named the major opcode, or
 	`Request opcode=N (untyped)` if the extension is unrecognized. The Phase 2 / Phase 3 work
 	(extension negotiation infrastructure + Tier-1 extension decoders) takes this from labeled
 	to fully typed.
 
-### Core request gaps (16 opcodes)
+### Phase 1 — what landed (2026-05-29)
 
-Listed in opcode order. Every one of these will fall through to `.unknown(opcode:bytes:)` in the
-framer and `Request opcode=N (untyped)` in the dumper. Closing these is Phase 1 of the Decoder
-Coverage Phase in `PRODUCT_1_CAPTURE.md`.
+16 core request decoders + 6 reply decoders + dumper printers + 23 round-trip tests. The
+opcodes are:
 
-| Op  | Name | Has reply? | Notes |
+| Op  | Name | Reply | Notes |
 | --- | --- | --- | --- |
-|  6  | ChangeSaveSet | no | Single window arg + insert/delete mode byte; trivial. |
-| 21  | ListProperties | yes | Returns the atom list for a window. Reply decoder also missing. |
-| 51  | SetFontPath | no | LIST of STRING8 (font search path); variable-length. |
-| 52  | GetFontPath | yes | Returns current font path. Reply decoder also missing. |
-| 57  | CopyGC | no | Two GC ids + value-mask; one of the "BROKEN on swiftx" symptoms in `/tmp/swift-x-captures/notes` (puzzle). Decoding is independent of server impl, but landing this decoder makes the symptom visible in capture dumps. |
-| 100 | ChangeKeyboardMapping | no | First-keycode + keysyms-per-keycode header + LIST of KEYSYM. |
-| 102 | ChangeKeyboardControl | no | Value-mask + per-bit values; KB-CONTROL value-list format. |
-| 103 | GetKeyboardControl | yes | Header-only request. The reply has the bell/LED/key state — the other "BROKEN on swiftx" symptom (xmpiano). Reply decoder also missing. |
-| 105 | ChangePointerControl | no | Header-only request with accel num/denom + threshold + do-bits. |
-| 106 | GetPointerControl | yes | Header-only request. Reply decoder also missing. |
-| 109 | ChangeHosts | no | Mode byte + family + LIST of BYTE (address). Access control list. |
-| 110 | ListHosts | yes | Header-only request. Reply decoder also missing. |
-| 111 | SetAccessControl | no | One-byte mode. Trivial. |
-| 114 | RotateProperties | no | Window + delta + LIST of ATOM (property names). |
-| 116 | SetPointerMapping | yes | LIST of CARD8 (map). Reply has status byte; reply decoder also missing. |
-| 118 | SetModifierMapping | yes | LIST of KEYCODE (8 modifiers × keycodes-per-modifier). Reply has status byte; reply decoder also missing. |
+|  6  | ChangeSaveSet | — | `PropertyListOpcodes.swift` |
+| 21  | ListProperties | `ListPropertiesReply` | `PropertyListOpcodes.swift` |
+| 51  | SetFontPath | — | `FontPathOpcodes.swift` |
+| 52  | GetFontPath | `GetFontPathReply` | `FontPathOpcodes.swift` |
+| 57  | CopyGC | — | `CopyGC.swift` (puzzle "BROKEN on swiftx" — now visible in dumps) |
+| 100 | ChangeKeyboardMapping | — | `KeyboardOpcodes.swift` |
+| 102 | ChangeKeyboardControl | — | `KeyboardOpcodes.swift` |
+| 103 | GetKeyboardControl | `GetKeyboardControlReply` | `KeyboardOpcodes.swift` (xmpiano "BROKEN on swiftx") |
+| 105 | ChangePointerControl | — | `PointerOpcodes.swift` |
+| 106 | GetPointerControl | `GetPointerControlReply` | `PointerOpcodes.swift` |
+| 109 | ChangeHosts | — | `HostAccessOpcodes.swift` |
+| 110 | ListHosts | `ListHostsReply` | `HostAccessOpcodes.swift` |
+| 111 | SetAccessControl | — | `HostAccessOpcodes.swift` |
+| 114 | RotateProperties | — | `PropertyListOpcodes.swift` |
+| 116 | SetPointerMapping | `SetMappingReply` | `PointerOpcodes.swift` |
+| 118 | SetModifierMapping | `SetMappingReply` | `PointerOpcodes.swift` |
 
-### Core event gaps (5 codes)
+### Core events (closed 2026-05-30)
+
+All 5 events that lacked typed decoders at Phase 0 now have them, in
+`Sources/Framer/Events/Phase1Events.swift`:
 
 | Code | Name | Notes |
 | --- | --- | --- |
-| 23 | ConfigureRequest | Parent-side notification when a child requests configuration; needed by any window manager listening to substructure. |
-| 24 | GravityNotify | Emitted when a window moves because its parent resized. |
-| 25 | ResizeRequest | Parent-side notification on child resize. WM gate. |
-| 27 | CirculateRequest | Parent-side notification on CirculateWindow. WM gate. |
-| 32 | ColormapNotify | Colormap install/uninstall/change notifications. |
+| 23 | ConfigureRequestEvent | Parent-side notification when a child requests configuration. |
+| 24 | GravityNotifyEvent | Emitted when a window moves because its parent resized. |
+| 25 | ResizeRequestEvent | Parent-side notification on child resize. |
+| 27 | CirculateRequestEvent | Parent-side notification on CirculateWindow. |
+| 32 | ColormapNotifyEvent | Colormap install/uninstall/change notifications. |
 
 ### Extension coverage
 

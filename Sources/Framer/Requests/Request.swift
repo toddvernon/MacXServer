@@ -103,6 +103,25 @@ public enum Request: Equatable, Sendable {
     case polyText16(PolyText16)
     case imageText16(ImageText16)
     case copyPlane(CopyPlane)
+    // Phase 1 (2026-05-29) — decoder coverage completion. None of these
+    // are server-implemented; they exist so the dumper can show what the
+    // client actually asked for instead of "opcode=N (untyped)".
+    case changeSaveSet(ChangeSaveSet)
+    case listProperties(ListProperties)
+    case setFontPath(SetFontPath)
+    case getFontPath(GetFontPath)
+    case copyGC(CopyGC)
+    case changeKeyboardMapping(ChangeKeyboardMapping)
+    case changeKeyboardControl(ChangeKeyboardControl)
+    case getKeyboardControl(GetKeyboardControl)
+    case changePointerControl(ChangePointerControl)
+    case getPointerControl(GetPointerControl)
+    case changeHosts(ChangeHosts)
+    case listHosts(ListHosts)
+    case setAccessControl(SetAccessControl)
+    case rotateProperties(RotateProperties)
+    case setPointerMapping(SetPointerMapping)
+    case setModifierMapping(SetModifierMapping)
     // Carries the full request bytes including the 4-byte header. Encode is a
     // pass-through and ignores the byteOrder argument since the bytes are already
     // in their original byte order.
@@ -214,6 +233,22 @@ public enum Request: Equatable, Sendable {
         case .polyText16(let r):                return r.encode(byteOrder: byteOrder)
         case .imageText16(let r):               return r.encode(byteOrder: byteOrder)
         case .copyPlane(let r):                 return r.encode(byteOrder: byteOrder)
+        case .changeSaveSet(let r):             return r.encode(byteOrder: byteOrder)
+        case .listProperties(let r):            return r.encode(byteOrder: byteOrder)
+        case .setFontPath(let r):               return r.encode(byteOrder: byteOrder)
+        case .getFontPath(let r):               return r.encode(byteOrder: byteOrder)
+        case .copyGC(let r):                    return r.encode(byteOrder: byteOrder)
+        case .changeKeyboardMapping(let r):     return r.encode(byteOrder: byteOrder)
+        case .changeKeyboardControl(let r):     return r.encode(byteOrder: byteOrder)
+        case .getKeyboardControl(let r):        return r.encode(byteOrder: byteOrder)
+        case .changePointerControl(let r):      return r.encode(byteOrder: byteOrder)
+        case .getPointerControl(let r):         return r.encode(byteOrder: byteOrder)
+        case .changeHosts(let r):               return r.encode(byteOrder: byteOrder)
+        case .listHosts(let r):                 return r.encode(byteOrder: byteOrder)
+        case .setAccessControl(let r):          return r.encode(byteOrder: byteOrder)
+        case .rotateProperties(let r):          return r.encode(byteOrder: byteOrder)
+        case .setPointerMapping(let r):         return r.encode(byteOrder: byteOrder)
+        case .setModifierMapping(let r):        return r.encode(byteOrder: byteOrder)
         case .unknown(_, let bytes):            return bytes
         }
     }
@@ -442,6 +477,38 @@ public enum Request: Equatable, Sendable {
             return .imageText16(try ImageText16.decode(from: bytes, byteOrder: byteOrder))
         case CopyPlane.opcode:
             return .copyPlane(try CopyPlane.decode(from: bytes, byteOrder: byteOrder))
+        case ChangeSaveSet.opcode:
+            return .changeSaveSet(try ChangeSaveSet.decode(from: bytes, byteOrder: byteOrder))
+        case ListProperties.opcode:
+            return .listProperties(try ListProperties.decode(from: bytes, byteOrder: byteOrder))
+        case SetFontPath.opcode:
+            return .setFontPath(try SetFontPath.decode(from: bytes, byteOrder: byteOrder))
+        case GetFontPath.opcode:
+            return .getFontPath(try GetFontPath.decode(from: bytes, byteOrder: byteOrder))
+        case CopyGC.opcode:
+            return .copyGC(try CopyGC.decode(from: bytes, byteOrder: byteOrder))
+        case ChangeKeyboardMapping.opcode:
+            return .changeKeyboardMapping(try ChangeKeyboardMapping.decode(from: bytes, byteOrder: byteOrder))
+        case ChangeKeyboardControl.opcode:
+            return .changeKeyboardControl(try ChangeKeyboardControl.decode(from: bytes, byteOrder: byteOrder))
+        case GetKeyboardControl.opcode:
+            return .getKeyboardControl(try GetKeyboardControl.decode(from: bytes, byteOrder: byteOrder))
+        case ChangePointerControl.opcode:
+            return .changePointerControl(try ChangePointerControl.decode(from: bytes, byteOrder: byteOrder))
+        case GetPointerControl.opcode:
+            return .getPointerControl(try GetPointerControl.decode(from: bytes, byteOrder: byteOrder))
+        case ChangeHosts.opcode:
+            return .changeHosts(try ChangeHosts.decode(from: bytes, byteOrder: byteOrder))
+        case ListHosts.opcode:
+            return .listHosts(try ListHosts.decode(from: bytes, byteOrder: byteOrder))
+        case SetAccessControl.opcode:
+            return .setAccessControl(try SetAccessControl.decode(from: bytes, byteOrder: byteOrder))
+        case RotateProperties.opcode:
+            return .rotateProperties(try RotateProperties.decode(from: bytes, byteOrder: byteOrder))
+        case SetPointerMapping.opcode:
+            return .setPointerMapping(try SetPointerMapping.decode(from: bytes, byteOrder: byteOrder))
+        case SetModifierMapping.opcode:
+            return .setModifierMapping(try SetModifierMapping.decode(from: bytes, byteOrder: byteOrder))
         default:
             return .unknown(opcode: opcode, bytes: Array(bytes[0..<expected]))
         }

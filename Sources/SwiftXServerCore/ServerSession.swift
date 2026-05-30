@@ -3439,6 +3439,18 @@ public final class ServerSession: @unchecked Sendable {
 
     // MARK: - Dispatch
 
+    /// Logs + records + emits BadRequest for an opcode that decodes (framer
+    /// has a typed struct for it) but has no server handler. Used by the
+    /// Phase 1 decoder-coverage cases below — they exist so the dumper can
+    /// show what the client asked for, but the server's behavior is
+    /// unchanged from the .unknown path: a spec-honest BadRequest goes out.
+    private func reportUnimplementedOpcode(_ op: UInt8) {
+        unknownOpcodes.append(op)
+        let n = Framer.opcodeName(op) ?? "unknown"
+        log?.log("dispatch: typed-but-unimplemented opcode \(op) (\(n))")
+        emitError(.request, majorOpcode: op)
+    }
+
     private func dispatch(_ request: Request, byteOrder: ByteOrder) {
         switch request {
 
@@ -6156,6 +6168,28 @@ public final class ServerSession: @unchecked Sendable {
             )
             outbound.append(reply.encode(byteOrder: byteOrder))
 
+        // Phase 1 (2026-05-29) — typed but not server-implemented. These
+        // opcodes decode in the framer for the capture-tool mission; the
+        // server still has no handler and emits BadRequest per the
+        // XError-honesty policy, just like the .unknown path.
+        // Helper inline (file-private nested func not available in a switch).
+        case .changeSaveSet:           reportUnimplementedOpcode(ChangeSaveSet.opcode)
+        case .listProperties:          reportUnimplementedOpcode(ListProperties.opcode)
+        case .setFontPath:             reportUnimplementedOpcode(SetFontPath.opcode)
+        case .getFontPath:             reportUnimplementedOpcode(GetFontPath.opcode)
+        case .copyGC:                  reportUnimplementedOpcode(CopyGC.opcode)
+        case .changeKeyboardMapping:   reportUnimplementedOpcode(ChangeKeyboardMapping.opcode)
+        case .changeKeyboardControl:   reportUnimplementedOpcode(ChangeKeyboardControl.opcode)
+        case .getKeyboardControl:      reportUnimplementedOpcode(GetKeyboardControl.opcode)
+        case .changePointerControl:    reportUnimplementedOpcode(ChangePointerControl.opcode)
+        case .getPointerControl:       reportUnimplementedOpcode(GetPointerControl.opcode)
+        case .changeHosts:             reportUnimplementedOpcode(ChangeHosts.opcode)
+        case .listHosts:               reportUnimplementedOpcode(ListHosts.opcode)
+        case .setAccessControl:        reportUnimplementedOpcode(SetAccessControl.opcode)
+        case .rotateProperties:        reportUnimplementedOpcode(RotateProperties.opcode)
+        case .setPointerMapping:       reportUnimplementedOpcode(SetPointerMapping.opcode)
+        case .setModifierMapping:      reportUnimplementedOpcode(SetModifierMapping.opcode)
+
         case .unknown(let op, let bytes):
             // SHAPE requests arrive here: their major opcode is the one we
             // handed out at QueryExtension time, so they don't decode into a
@@ -6165,7 +6199,7 @@ public final class ServerSession: @unchecked Sendable {
                 break
             }
             unknownOpcodes.append(op)
-            let n = opcodeName(op) ?? "unknown"
+            let n = Framer.opcodeName(op) ?? "unknown"
             log?.log("dispatch: unknown opcode \(op) (\(n))")
             // Per XError-honesty policy (CLAUDE.md), don't silently drop.
             // BadRequest is the spec-correct error for "the major or minor
@@ -6286,6 +6320,22 @@ private func opcodeName(_ request: Request) -> String {
     case .polyText16: return "PolyText16"
     case .imageText16: return "ImageText16"
     case .copyPlane: return "CopyPlane"
+    case .changeSaveSet: return "ChangeSaveSet"
+    case .listProperties: return "ListProperties"
+    case .setFontPath: return "SetFontPath"
+    case .getFontPath: return "GetFontPath"
+    case .copyGC: return "CopyGC"
+    case .changeKeyboardMapping: return "ChangeKeyboardMapping"
+    case .changeKeyboardControl: return "ChangeKeyboardControl"
+    case .getKeyboardControl: return "GetKeyboardControl"
+    case .changePointerControl: return "ChangePointerControl"
+    case .getPointerControl: return "GetPointerControl"
+    case .changeHosts: return "ChangeHosts"
+    case .listHosts: return "ListHosts"
+    case .setAccessControl: return "SetAccessControl"
+    case .rotateProperties: return "RotateProperties"
+    case .setPointerMapping: return "SetPointerMapping"
+    case .setModifierMapping: return "SetModifierMapping"
     case .unknown(let op, _): return "unknown(\(op))"
     }
 }

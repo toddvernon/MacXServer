@@ -402,6 +402,22 @@ public enum Dumper {
         case .polyText16:                return PolyText16.opcode
         case .imageText16:               return ImageText16.opcode
         case .copyPlane:                 return CopyPlane.opcode
+        case .changeSaveSet:             return ChangeSaveSet.opcode
+        case .listProperties:            return ListProperties.opcode
+        case .setFontPath:               return SetFontPath.opcode
+        case .getFontPath:               return GetFontPath.opcode
+        case .copyGC:                    return CopyGC.opcode
+        case .changeKeyboardMapping:     return ChangeKeyboardMapping.opcode
+        case .changeKeyboardControl:     return ChangeKeyboardControl.opcode
+        case .getKeyboardControl:        return GetKeyboardControl.opcode
+        case .changePointerControl:      return ChangePointerControl.opcode
+        case .getPointerControl:         return GetPointerControl.opcode
+        case .changeHosts:               return ChangeHosts.opcode
+        case .listHosts:                 return ListHosts.opcode
+        case .setAccessControl:          return SetAccessControl.opcode
+        case .rotateProperties:          return RotateProperties.opcode
+        case .setPointerMapping:         return SetPointerMapping.opcode
+        case .setModifierMapping:        return SetModifierMapping.opcode
         case .unknown(let op, _):        return op
         }
     }
@@ -432,5 +448,12 @@ public enum Dumper {
         CreateGlyphCursor.opcode, FreeCursor.opcode, RecolorCursor.opcode,
         ListExtensions.opcode,
         GetKeyboardMapping.opcode, GetModifierMapping.opcode, GetPointerMapping.opcode,
+        // Phase 1 (2026-05-29) — decode-only coverage.
+        ChangeSaveSet.opcode, ListProperties.opcode,
+        SetFontPath.opcode, GetFontPath.opcode, CopyGC.opcode,
+        ChangeKeyboardMapping.opcode, ChangeKeyboardControl.opcode, GetKeyboardControl.opcode,
+        ChangePointerControl.opcode, GetPointerControl.opcode,
+        ChangeHosts.opcode, ListHosts.opcode, SetAccessControl.opcode,
+        RotateProperties.opcode, SetPointerMapping.opcode, SetModifierMapping.opcode,
     ]
 }

@@ -34,6 +34,12 @@ public enum DecodedEvent: Equatable, Sendable {
     case selectionNotify(SelectionNotifyEvent)
     case clientMessage(ClientMessageEvent)
     case mappingNotify(MappingNotifyEvent)
+    // Phase 1 (2026-05-30) — WM-side notifications + colormap state.
+    case configureRequest(ConfigureRequestEvent)
+    case gravityNotify(GravityNotifyEvent)
+    case resizeRequest(ResizeRequestEvent)
+    case circulateRequest(CirculateRequestEvent)
+    case colormapNotify(ColormapNotifyEvent)
     case unknown(code: UInt8, bytes: [UInt8])
 
     public static func decode(from event: Event, byteOrder: ByteOrder) throws -> DecodedEvent {
@@ -67,8 +73,13 @@ public enum DecodedEvent: Equatable, Sendable {
         case 20: return .mapRequest(try MapRequestEvent.decode(from: bytes, byteOrder: byteOrder))
         case 21: return .reparentNotify(try ReparentNotifyEvent.decode(from: bytes, byteOrder: byteOrder))
         case 22: return .configureNotify(try ConfigureNotifyEvent.decode(from: bytes, byteOrder: byteOrder))
+        case 23: return .configureRequest(try ConfigureRequestEvent.decode(from: bytes, byteOrder: byteOrder))
+        case 24: return .gravityNotify(try GravityNotifyEvent.decode(from: bytes, byteOrder: byteOrder))
+        case 25: return .resizeRequest(try ResizeRequestEvent.decode(from: bytes, byteOrder: byteOrder))
         case 26: return .circulateNotify(try CirculateNotifyEvent.decode(from: bytes, byteOrder: byteOrder))
+        case 27: return .circulateRequest(try CirculateRequestEvent.decode(from: bytes, byteOrder: byteOrder))
         case 28: return .propertyNotify(try PropertyNotifyEvent.decode(from: bytes, byteOrder: byteOrder))
+        case 32: return .colormapNotify(try ColormapNotifyEvent.decode(from: bytes, byteOrder: byteOrder))
         case 29: return .selectionClear(try SelectionClearEvent.decode(from: bytes, byteOrder: byteOrder))
         case 30: return .selectionRequest(try SelectionRequestEvent.decode(from: bytes, byteOrder: byteOrder))
         case 31: return .selectionNotify(try SelectionNotifyEvent.decode(from: bytes, byteOrder: byteOrder))

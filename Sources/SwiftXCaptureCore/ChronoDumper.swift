@@ -482,6 +482,38 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
         body = row("ImageText16", "drawable=\(windowDisplay(r.drawable)) gc=\(windowDisplay(r.gc)) at \(pt(r.x, r.y)) nChars=\(r.characters.count)")
     case .copyPlane(let r):
         body = row("CopyPlane", "src=\(windowDisplay(r.srcDrawable)) dst=\(windowDisplay(r.dstDrawable)) gc=\(windowDisplay(r.gc)) \(pt(r.srcX, r.srcY))→\(pt(r.dstX, r.dstY)) \(sz(r.width, r.height)) bitPlane=\(hx(r.bitPlane))")
+    case .changeSaveSet(let r):
+        body = row("ChangeSaveSet", "mode=\(r.mode == .insert ? "Insert" : "Delete") window=\(windowDisplay(r.window))")
+    case .listProperties(let r):
+        body = row("ListProperties", "window=\(windowDisplay(r.window))")
+    case .setFontPath(let r):
+        body = row("SetFontPath", "paths=\(r.path.count) [\(r.path.prefix(3).joined(separator: ", "))\(r.path.count > 3 ? ", ..." : "")]")
+    case .getFontPath:
+        body = row("GetFontPath", "")
+    case .copyGC(let r):
+        body = row("CopyGC", "src=\(windowDisplay(r.srcGC)) dst=\(windowDisplay(r.dstGC)) mask=\(hx(r.valueMask))")
+    case .changeKeyboardMapping(let r):
+        body = row("ChangeKeyboardMapping", "firstKeyCode=\(r.firstKeyCode) perKey=\(r.keysymsPerKeycode) keycodes=\(r.keycodeCount)")
+    case .changeKeyboardControl(let r):
+        body = row("ChangeKeyboardControl", "mask=\(hx(r.valueMask)) values=\(r.valueList.count / 4)")
+    case .getKeyboardControl:
+        body = row("GetKeyboardControl", "")
+    case .changePointerControl(let r):
+        body = row("ChangePointerControl", "accel=\(r.accelerationNumerator)/\(r.accelerationDenominator) threshold=\(r.threshold) doAccel=\(r.doAcceleration) doThresh=\(r.doThreshold)")
+    case .getPointerControl:
+        body = row("GetPointerControl", "")
+    case .changeHosts(let r):
+        body = row("ChangeHosts", "mode=\(r.mode == .insert ? "Insert" : "Delete") family=\(r.family) addr=\(r.address.count)b")
+    case .listHosts:
+        body = row("ListHosts", "")
+    case .setAccessControl(let r):
+        body = row("SetAccessControl", "mode=\(r.mode == .enable ? "Enable" : "Disable")")
+    case .rotateProperties(let r):
+        body = row("RotateProperties", "window=\(windowDisplay(r.window)) delta=\(r.delta) properties=\(r.properties.count)")
+    case .setPointerMapping(let r):
+        body = row("SetPointerMapping", "map=\(r.map.count) bytes")
+    case .setModifierMapping(let r):
+        body = row("SetModifierMapping", "perModifier=\(r.keycodesPerModifier) keycodes=\(r.keycodes.count)")
     case .unknown(let op, let raw):
         // Decode extension requests when we've seen the QueryExtension reply
         // that negotiated their major opcode. SHAPE gets full per-request
@@ -644,6 +676,16 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
                 detail = " request=\(mn.request)"
             case .visibilityNotify(let vn):
                 detail = " window=\(windowDisplay(vn.window)) state=\(vn.state)"
+            case .configureRequest(let cr):
+                detail = " parent=\(windowDisplay(cr.parent)) window=\(windowDisplay(cr.window)) \(geom(cr.width, cr.height, cr.x, cr.y)) mask=\(hx(cr.valueMask))"
+            case .gravityNotify(let gn):
+                detail = " window=\(windowDisplay(gn.window)) at \(pt(gn.x, gn.y))"
+            case .resizeRequest(let rr):
+                detail = " window=\(windowDisplay(rr.window)) \(sz(rr.width, rr.height))"
+            case .circulateRequest(let cr):
+                detail = " parent=\(windowDisplay(cr.parent)) window=\(windowDisplay(cr.window)) place=\(cr.place == 0 ? "Top" : "Bottom")"
+            case .colormapNotify(let cn):
+                detail = " window=\(windowDisplay(cn.window)) colormap=\(hx(cn.colormap)) new=\(cn.isNew) state=\(cn.state == 1 ? "Installed" : "Uninstalled")"
             case .keymapNotify:
                 detail = ""
             case .unknown:
@@ -773,6 +815,22 @@ func opcodeOf(_ req: Request) -> UInt8 {
     case .polyText16:                return PolyText16.opcode
     case .imageText16:               return ImageText16.opcode
     case .copyPlane:                 return CopyPlane.opcode
+    case .changeSaveSet:             return ChangeSaveSet.opcode
+    case .listProperties:            return ListProperties.opcode
+    case .setFontPath:               return SetFontPath.opcode
+    case .getFontPath:               return GetFontPath.opcode
+    case .copyGC:                    return CopyGC.opcode
+    case .changeKeyboardMapping:     return ChangeKeyboardMapping.opcode
+    case .changeKeyboardControl:     return ChangeKeyboardControl.opcode
+    case .getKeyboardControl:        return GetKeyboardControl.opcode
+    case .changePointerControl:      return ChangePointerControl.opcode
+    case .getPointerControl:         return GetPointerControl.opcode
+    case .changeHosts:               return ChangeHosts.opcode
+    case .listHosts:                 return ListHosts.opcode
+    case .setAccessControl:          return SetAccessControl.opcode
+    case .rotateProperties:          return RotateProperties.opcode
+    case .setPointerMapping:         return SetPointerMapping.opcode
+    case .setModifierMapping:        return SetModifierMapping.opcode
     case .unknown(let op, _):        return op
     }
 }
