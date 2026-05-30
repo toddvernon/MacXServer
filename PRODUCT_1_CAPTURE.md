@@ -845,6 +845,13 @@ enough to know if `--headless` is awkward.
 
 # Decoder Coverage Phase (post-v2, pre-OSS launch)
 
+> **Status as of 2026-05-30 — see `macXcapture-feature-checklist.md` at the top level for the live
+> ledger of what's done vs what's left.** Phases 0-3 (Tier 1) are done: every core X11 opcode +
+> SHAPE / BIG-REQUESTS / MIT-SHM / XKEYBOARD / XInput v1 / RENDER all decode to typed dumper output.
+> Suite is at 1007 tests, 0 failures. Phase 4 (Tier 2 extensions), Phase 5 (output polish), and a
+> few deferred typed-trailer walkers remain. The phase plan below is the original journey; the
+> checklist doc is the authoritative live state.
+
 The mission stated at the top of this doc — macXcapture as a first-class X11 protocol inspection tool
 — sets a concrete coverage bar: a capture from any reasonable X session should decode cleanly, with no
 `opcode=N (untyped)` lines for opcodes the X protocol documents.
