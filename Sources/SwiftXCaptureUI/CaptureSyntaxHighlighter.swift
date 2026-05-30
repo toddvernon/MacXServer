@@ -35,8 +35,14 @@ final class CaptureSyntaxHighlighter: NSObject, SyntaxHighlighter {
     private let cHex        = NSColor(srgbRed: 0xc7/255, green: 0x92/255, blue: 0xea/255, alpha: 1) // 0x...
     private let cString     = NSColor(srgbRed: 0xe5/255, green: 0xc0/255, blue: 0x7b/255, alpha: 1) // "..."
     private let cHeader     = NSColor(srgbRed: 0xff/255, green: 0x99/255, blue: 0x66/255, alpha: 1) // === path ===
+    // Landmark callout — saturated yellow against the dark theme; the
+    // landmark lines are produced by LandmarkDetector and are structural
+    // navigation aids ("top-level window mapped," "click on window 0x...,"
+    // etc), so we want them visible without being shouty.
+    private let cLandmark   = NSColor(srgbRed: 0xf0/255, green: 0xc6/255, blue: 0x74/255, alpha: 1)
 
     private let reHeader: NSRegularExpression
+    private let reLandmark: NSRegularExpression
     private let reTimestamp: NSRegularExpression
     private let reRequestName: NSRegularExpression
     private let reResponseName: NSRegularExpression
@@ -59,6 +65,11 @@ final class CaptureSyntaxHighlighter: NSObject, SyntaxHighlighter {
             return try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
         }
         reHeader    = rx("^===.*$")
+        // LandmarkDetector emits lines of the form
+        //   "                  --- top-level window 0x... mapped (primary, 500×600) ---"
+        // Detect the whole line (leading whitespace + `--- ... ---`) so the
+        // landmark pass paints both the markers and the body in one color.
+        reLandmark  = rx("^\\s*---\\s.+---\\s*$")
         reTimestamp = rx("^\\s*[0-9]+\\.[0-9]+ms")
         // The message name (group 1) is the first word after the timestamp,
         // direction arrow, and optional [seq=N] field (events have a blank
@@ -114,6 +125,11 @@ final class CaptureSyntaxHighlighter: NSObject, SyntaxHighlighter {
         color(storage, text, reArrowIn, cResponse)   // ← matches response color
         color(storage, text, reHex, cHex)
         color(storage, text, reString, cString)
+        // Landmark pass runs last so its color wins over hex / string
+        // matches inside the landmark text (e.g. the `0x...` window id and
+        // the `"editres"` name should both read as landmark, not split
+        // into purple-hex / orange-string).
+        color(storage, text, reLandmark, cLandmark)
 
         storage.endEditing()
     }

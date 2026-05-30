@@ -1,5 +1,6 @@
 import Foundation
 import Framer
+import SwiftXCaptureCore
 
 // Per-connection state machine. Bytes flow in via `feed(_:)`; reply/event bytes
 // the server should send back come out the return value. There is no socket
@@ -210,6 +211,15 @@ public final class ServerSession: @unchecked Sendable {
     /// notified about new/destroyed top-levels. WMs are the canonical case.
     /// We don't run a WM but the path should be spec-correct.
     private var rootEventMask: UInt32 = 0
+
+    /// Inline landmark detector. Watches the request stream + outgoing
+    /// events and emits "--- ... ---" log lines at structurally
+    /// significant moments (top-level mapped, dialog mapped, window
+    /// identified, click). Output goes to the same ServerLog the rest of
+    /// the session uses, so the Xcode console gets the same navigation
+    /// vocabulary the capture viewer does. Same LandmarkDetector type
+    /// runs in ChronoDumper post-mortem.
+    private var landmarks = LandmarkDetector()
 
     /// Pointer buttons currently held. Used to manage the X11 implicit
     /// pointer grab that activates on the first ButtonPress and ends when
@@ -3422,6 +3432,21 @@ public final class ServerSession: @unchecked Sendable {
             let request = try Request.decode(from: bytes, byteOrder: byteOrder)
             log?.log("req[\(sequenceNumber)] \(opcodeName(request))")
             dispatch(request, byteOrder: byteOrder)
+            // Feed the detector and surface any landmarks to the same log
+            // stream. Same vocabulary the capture viewer uses post-mortem.
+            // Request-side detectors fire here (top-level mapped, dialog
+            // mapped, window identified). Click landmarks rely on
+            // afterServerMessage and aren't wired server-side in v1 — the
+            // server's event-emit paths are spread across several call
+            // sites (ButtonPress is constructed in multiple input-routing
+            // paths), and the click vocabulary is more useful on the
+            // capture side where you're reading after the fact anyway.
+            let roots: Set<UInt32> = [config.rootWindowId]
+            for lm in landmarks.afterRequest(request, byteOrder: byteOrder,
+                                              screenRoots: roots,
+                                              atomToName: [:]) {
+                log?.log(lm.text)
+            }
         } catch {
             // Decode of a well-framed request failed — the length was sane,
             // the body wasn't. Per spec emit BadLength/BadValue and skip

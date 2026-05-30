@@ -123,6 +123,7 @@
 		758144B0A968AAF9054A5F97 /* SwiftXCaptureUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08FC1E8C330E95BC28022D41 /* SwiftXCaptureUI.framework */; };
 		75F844E86AF97F78E13CA685 /* LauncherFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9F771FDFB6E892C7CB0786F /* LauncherFile.swift */; };
 		769D508C17662DBC84D87898 /* Framer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2BBD4D4DAD4A758CA64CEF04 /* Framer.framework */; };
+		795706AA2466589C43634C4C /* LandmarkDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42C61C93318159452488CEB8 /* LandmarkDetector.swift */; };
 		7BF36C425166147EF387CB8B /* LaunchersPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 025DFC747EFBE6A7F2915698 /* LaunchersPanelView.swift */; };
 		7C57F207AFF865CF1F02C3D8 /* GetImageReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D23F905A00E063991355DA2 /* GetImageReply.swift */; };
 		7DC1B22EAEEBA1053CCD0D86 /* FramerError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89CBF14A62BEBE35E6F10D2A /* FramerError.swift */; };
@@ -463,6 +464,7 @@
 		4106716272A1733D73B0576B /* RecolorCursor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecolorCursor.swift; sourceTree = "<group>"; };
 		41B83AC7933BBEF466B1EEF8 /* Region.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Region.swift; sourceTree = "<group>"; };
 		4204EB36EE098626E6899FF2 /* GetKeyboardMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GetKeyboardMapping.swift; sourceTree = "<group>"; };
+		42C61C93318159452488CEB8 /* LandmarkDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkDetector.swift; sourceTree = "<group>"; };
 		42E07903E925E683CEE345EC /* MacXServer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MacXServer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		42E8BAC0AD7C1060A2BD86A1 /* MotifTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotifTheme.swift; sourceTree = "<group>"; };
 		444D19E75D23D299BCE5B5B1 /* ChronoDumper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChronoDumper.swift; sourceTree = "<group>"; };
@@ -936,6 +938,7 @@
 				066968E759C97BA32529BF97 /* CLI.swift */,
 				A278A53900E1093DFAB6717B /* Direction.swift */,
 				06314C8D76CFD19A97AD74B7 /* Dumper.swift */,
+				42C61C93318159452488CEB8 /* LandmarkDetector.swift */,
 				CBD7E512E41311E9DB831229 /* NetworkInterfaces.swift */,
 				34D34B4B935E7C62AE94A994 /* Proxy.swift */,
 				879DD92FB0B2E7F7ED0D4279 /* RecentRequestSink.swift */,
@@ -1356,6 +1359,7 @@
 				F2DC869401878E504F795B5A /* Direction.swift in Sources */,
 				B99E056BA859A551A97D5CB4 /* Dumper.swift in Sources */,
 				A6266AC0AC52C35A23267900 /* ExtensionDumper.swift in Sources */,
+				795706AA2466589C43634C4C /* LandmarkDetector.swift in Sources */,
 				6C51E55D9CE60E89029F1BCE /* NetworkInterfaces.swift in Sources */,
 				C1511C1CC316B2A44AD82545 /* Proxy.swift in Sources */,
 				257D1061C1EE35F98FA603E9 /* RecentRequestSink.swift in Sources */,

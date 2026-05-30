@@ -21,6 +21,7 @@ public enum ChronoDumper {
         var c2s = StreamWalker()
         var s2c = StreamWalker()
         var ctx = ChronoContext()
+        var landmarks = LandmarkDetector()
 
         for frame in frames {
             switch frame.direction {
@@ -43,6 +44,11 @@ public enum ChronoDumper {
                             ctx.seqToQueryExtensionName[seq] = String(decoding: qe.name, as: UTF8.self)
                         }
                         out += format(timestamp: ts, direction: "→", line: formatRequest(req, seq: seq, ctx: ctx, byteOrder: byteOrder))
+                        for lm in landmarks.afterRequest(req, byteOrder: byteOrder,
+                                                          screenRoots: ctx.screenRoots,
+                                                          atomToName: ctx.atomToName) {
+                            out += formatLandmark(lm.text)
+                        }
                     }
                 }
             case .serverToClient:
@@ -51,10 +57,16 @@ public enum ChronoDumper {
                     if !ctx.s2cSetupSeen {
                         ctx.s2cSetupSeen = true
                         if case .setupReply(let r) = raw {
+                            if case .accepted(let acc) = r {
+                                ctx.screenRoots = Set(acc.screens.map(\.root))
+                            }
                             out += format(timestamp: ts, line: formatSetupReply(r))
                         }
                     } else if case .serverMessage(let m) = raw {
                         out += format(timestamp: ts, direction: directionGlyph(for: m), line: formatServerMessage(m, byteOrder: byteOrder, ctx: &ctx))
+                        for lm in landmarks.afterServerMessage(m, byteOrder: byteOrder) {
+                            out += formatLandmark(lm.text)
+                        }
                     }
                 }
             }
@@ -172,6 +184,10 @@ struct ChronoContext {
     /// Extension event-base assignments from QueryExtension replies. Lets
     /// the dumper figure out which extension owns a given event code.
     var extensionFirstEventToName: [UInt8: String] = [:]
+    /// Root window ids (one per screen) harvested from the accepted-setup
+    /// reply. The landmark detector uses this to recognize a CreateWindow
+    /// whose parent is a screen root, i.e. a top-level window.
+    var screenRoots: Set<UInt32> = []
 
     /// For an event code ≥ 64 (i.e., outside the core 2-34 range), find
     /// the registered extension whose `[firstEvent, firstEvent+eventCount)`
@@ -201,6 +217,15 @@ private func format(timestamp: UInt64, line: String) -> String {
 private func format(timestamp: UInt64, direction: String, line: String) -> String {
     let ms = Double(timestamp) / 1_000_000.0
     return String(format: "%9.3fms  %@   %@\n", ms, direction as NSString, line as NSString) as String
+}
+
+/// Indented synthetic line for a LandmarkDetector emission. No timestamp or
+/// direction marker — the landmark is attached to the line immediately
+/// above. Indented to the same column as the regular message-name field so
+/// it visually clings to the prior message rather than looking like another
+/// timestamped row.
+private func formatLandmark(_ text: String) -> String {
+    return "                  \(text)\n"
 }
 
 /// Phase 5 visual join (2026-05-30) — picks the direction glyph for a
