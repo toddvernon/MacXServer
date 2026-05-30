@@ -219,13 +219,13 @@ private func format(timestamp: UInt64, direction: String, line: String) -> Strin
     return String(format: "%9.3fms  %@   %@\n", ms, direction as NSString, line as NSString) as String
 }
 
-/// Indented synthetic line for a LandmarkDetector emission. No timestamp or
-/// direction marker — the landmark is attached to the line immediately
-/// above. Indented to the same column as the regular message-name field so
-/// it visually clings to the prior message rather than looking like another
-/// timestamped row.
+/// Synthetic line for a LandmarkDetector emission. Left-justified comment,
+/// surrounded by blank lines so it visually breaks the protocol stream and
+/// reads as a chapter heading rather than another protocol line. The
+/// detector emits the line with a leading `# ` so the text reads as a
+/// source-code-style comment.
 private func formatLandmark(_ text: String) -> String {
-    return "                  \(text)\n"
+    return "\n\(text)\n\n"
 }
 
 /// Phase 5 visual join (2026-05-30) — picks the direction glyph for a

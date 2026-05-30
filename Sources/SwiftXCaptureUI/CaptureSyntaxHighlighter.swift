@@ -66,10 +66,10 @@ final class CaptureSyntaxHighlighter: NSObject, SyntaxHighlighter {
         }
         reHeader    = rx("^===.*$")
         // LandmarkDetector emits lines of the form
-        //   "                  --- top-level window 0x... mapped (primary, 500×600) ---"
-        // Detect the whole line (leading whitespace + `--- ... ---`) so the
-        // landmark pass paints both the markers and the body in one color.
-        reLandmark  = rx("^\\s*---\\s.+---\\s*$")
+        //   "# The \"editres\" window appears on screen (0x..., 500×600)"
+        // Detect the whole line (left-justified `#` + text) so the landmark
+        // pass paints the comment in one color.
+        reLandmark  = rx("^#\\s.*$")
         reTimestamp = rx("^\\s*[0-9]+\\.[0-9]+ms")
         // The message name (group 1) is the first word after the timestamp,
         // direction arrow, and optional [seq=N] field (events have a blank
