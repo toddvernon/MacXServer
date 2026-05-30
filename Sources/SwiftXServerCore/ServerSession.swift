@@ -258,6 +258,11 @@ public final class ServerSession: @unchecked Sendable {
     public private(set) var requestsProcessed: Int = 0
     public private(set) var unknownOpcodes: [UInt8] = []
     public private(set) var errorsEmitted: Int = 0
+    /// Wall-clock time of the first request observed in this session.
+    /// Captured lazily so the elapsed-time summary in cleanupOnDisconnect
+    /// reflects real client activity, not the time the listener decided
+    /// to accept the socket.
+    private var firstActivityTime: Date?
 
     /// Windows this client has selected ShapeNotify input on (ShapeSelectInput
     /// enable=true). The X server tracks shape-event interest per-window
@@ -935,7 +940,17 @@ public final class ServerSession: @unchecked Sendable {
             sameScreen: true
         )
         log?.log("  → \(isDown ? "ButtonPress" : "ButtonRelease") button=\(button) target=0x\(String(target, radix: 16)) at top=(\(x),\(y)) root=(\(rx),\(ry)) local=(\(x &- tx),\(y &- ty)) state=0x\(String(state, radix: 16))")
-        outbound.append(event.encode(code: code, byteOrder: order))
+        let encoded = event.encode(code: code, byteOrder: order)
+        outbound.append(encoded)
+        // Feed the landmark detector with the same wire bytes that just
+        // went out. The detector matches a ButtonRelease against a prior
+        // ButtonPress on the same window within its click-threshold and
+        // emits "# The user clicks on ..." inline in the server log.
+        let synth = ServerMessage.event(Event(bytes: encoded))
+        for lm in landmarks.afterServerMessage(synth, byteOrder: order,
+                                                screenRoots: [config.rootWindowId]) {
+            log?.log(lm.text)
+        }
 
         // X11 implicit pointer grab. On the first ButtonPress with no other
         // grab active, install a synthetic grab on the press's target so
@@ -3235,6 +3250,16 @@ public final class ServerSession: @unchecked Sendable {
         errorsEmitted += 1
         let opName = opcodeName(majorOpcode) ?? "?"
         log?.log("[XERROR] \(code) on \(opName) (major=\(majorOpcode)) seq=\(sequenceNumber) badId=0x\(String(badResourceId, radix: 16))")
+        // Run the landmark detector against the same XError wire bytes we
+        // just queued for the client. Surfaces the cause-and-effect
+        // ("BadDrawable from CopyArea on 'Command Window'") inline with
+        // the regular server log instead of the bare "[XERROR] ..." line.
+        let synth = ServerMessage.xError(XError(bytes: bytes))
+        for lm in landmarks.afterServerMessage(synth, byteOrder: order,
+                                                screenRoots: [config.rootWindowId],
+                                                extensionMajorToName: [Self.shapeMajorOpcode: "SHAPE"]) {
+            log?.log(lm.text)
+        }
     }
 
     /// Tear down all of this client's resources on disconnect, per X11 spec
@@ -3246,6 +3271,17 @@ public final class ServerSession: @unchecked Sendable {
     /// `protocolQueue` so the bridge's destroyTopLevel runs in the same
     /// thread context as session-state mutation.
     public func cleanupOnDisconnect() {
+        // Session-end summary landmark. Mirrors the chrono dumper's
+        // bookend on the capture side so the Xcode console gets the
+        // same "Session ends after Ns (M requests, K errors)" line that
+        // a post-mortem dump would end with. Skip if we never saw any
+        // activity (pre-handshake disconnect, refused setup, etc).
+        if let start = firstActivityTime {
+            let elapsed = Date().timeIntervalSince(start)
+            var parts: [String] = ["\(requestsProcessed) requests"]
+            if errorsEmitted > 0 { parts.append("\(errorsEmitted) errors") }
+            log?.log("# Session ends after \(formatServerElapsed(elapsed)) (\(parts.joined(separator: ", ")))")
+        }
         // Revoke selection ownership held by ANY window this session created
         // (R6 dispatch.c:DeleteClientFromAnySelections). Without this,
         // GetSelectionOwner from another client would return a stale window
@@ -3427,6 +3463,7 @@ public final class ServerSession: @unchecked Sendable {
         let bytes = Array(inbound[0..<totalSize])
         sequenceNumber &+= 1
         requestsProcessed += 1
+        if firstActivityTime == nil { firstActivityTime = Date() }
 
         do {
             let request = try Request.decode(from: bytes, byteOrder: byteOrder)
@@ -6386,4 +6423,20 @@ extension ServerSession: RootPropertyObserver {
             self.flushOutbound()
         }
     }
+}
+
+/// Format an elapsed-time interval for the session-end summary log line.
+/// Mirrors ChronoDumper's formatElapsed but takes seconds instead of ms.
+/// Under a second shows ms; under a minute shows Ns.NN; beyond a minute
+/// shows MM:SS.NN.
+private func formatServerElapsed(_ seconds: TimeInterval) -> String {
+    if seconds < 1 {
+        return String(format: "%.0fms", seconds * 1000)
+    }
+    if seconds < 60 {
+        return String(format: "%.2fs", seconds)
+    }
+    let minutes = Int(seconds) / 60
+    let remaining = seconds - Double(minutes * 60)
+    return String(format: "%d:%05.2f", minutes, remaining)
 }
