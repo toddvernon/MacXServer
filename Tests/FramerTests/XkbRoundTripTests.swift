@@ -125,27 +125,79 @@ final class XkbRoundTripTests: XCTestCase {
             decode: { try XkbGetControlsReply.decode(from: $0, byteOrder: $1) })
     }
 
-    func testGetMapReplyHeaderOnly() throws {
+    func testGetMapReplyEmptyPayload() throws {
+        // All counts zero → trailer is empty.
         try roundTrip(XkbGetMapReply(
             sequenceNumber: 13, deviceID: 3,
             minKeyCode: 8, maxKeyCode: 255,
-            present: 0x00FF,
-            firstType: 0, nTypes: 4, totalTypes: 16,
-            firstKeySym: 8, nKeySyms: 240,
-            firstKeyAction: 8, nKeyActions: 240,
+            present: 0,
+            firstType: 0, nTypes: 0, totalTypes: 16,
+            firstKeySym: 0, nKeySyms: 0,
+            firstKeyAction: 0, nKeyActions: 0,
             totalKeyBehaviors: 0,
-            virtualMods: 0xFFFF,
-            totalSyms: 480, totalActions: 0,
+            virtualMods: 0,
+            totalSyms: 0, totalActions: 0,
             totalKeyExplicit: 0,
-            trailer: []),
+            payload: .empty),
             encode: { $0.encode(byteOrder: $1) },
             decode: { try XkbGetMapReply.decode(from: $0, byteOrder: $1) })
     }
 
-    func testGetMapReplyWithRawTrailer() throws {
-        // 8 bytes of trailing data — Session 2 will give this semantics.
+    func testGetMapReplyWithTypedPayload() throws {
+        // A representative mid-sized payload exercising every section.
+        let kt = XkbKeyType(
+            mask: 0x07, realMods: 0x05, virtualMods: 0,
+            groupWidth: 2,
+            mapEntries: [
+                XkbKTMapEntry(active: true, mask: 0x01, level: 0, realMods: 0x01, virtualMods: 0),
+                XkbKTMapEntry(active: true, mask: 0x02, level: 1, realMods: 0x02, virtualMods: 0),
+            ])
+        let sm = XkbSymMap(ktIndex: 0, groupInfo: 0x10,
+                           syms: [0xFF01, 0xFF02, 0xFF03])
+        let payload = XkbMapPayload(
+            keyTypes: [kt],
+            keySyms: [sm],
+            actionsPerKey: [2, 0, 1],          // 3 keys covered; one with 2, one with 0, one with 1
+            actions: [
+                XkbAction(type: 1, data: [0,0,0,0,0,0,0]),
+                XkbAction(type: 2, data: [1,2,3,4,5,6,7]),
+                XkbAction(type: 3, data: [9,9,9,9,9,9,9]),
+            ],
+            behaviors: [XkbBehavior(key: 8, type: 1, data: 0)],
+            virtualMods: [0x10, 0x20],          // two set bits → two values
+            explicits: [XkbExplicit(key: 24, explicit: 0x01)]
+        )
         try roundTrip(XkbGetMapReply(
             sequenceNumber: 14, deviceID: 3,
+            minKeyCode: 8, maxKeyCode: 255,
+            present: 0x00FF,
+            firstType: 0, nTypes: 1, totalTypes: 4,
+            firstKeySym: 8, nKeySyms: 1,
+            firstKeyAction: 8, nKeyActions: 3,
+            totalKeyBehaviors: 1,
+            virtualMods: 0b0000_0000_0000_0011,   // popcount=2 matches virtualMods.count
+            totalSyms: 3, totalActions: 3,
+            totalKeyExplicit: 1,
+            payload: payload),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try XkbGetMapReply.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testGetMapReplyWithPreserves() throws {
+        // KeyType with `preserves` set (the conditional preserve array).
+        let kt = XkbKeyType(
+            mask: 0x07, realMods: 0x05, virtualMods: 0,
+            groupWidth: 2,
+            mapEntries: [
+                XkbKTMapEntry(active: true, mask: 0x01, level: 0, realMods: 0x01, virtualMods: 0),
+                XkbKTMapEntry(active: true, mask: 0x02, level: 1, realMods: 0x02, virtualMods: 0),
+            ],
+            preserves: [
+                XkbKTPreserveEntry(mask: 0x01, realMods: 0x01, virtualMods: 0),
+                XkbKTPreserveEntry(mask: 0x02, realMods: 0x02, virtualMods: 0),
+            ])
+        try roundTrip(XkbGetMapReply(
+            sequenceNumber: 15, deviceID: 3,
             minKeyCode: 8, maxKeyCode: 255,
             present: 0x0001,
             firstType: 0, nTypes: 1, totalTypes: 1,
@@ -155,7 +207,7 @@ final class XkbRoundTripTests: XCTestCase {
             virtualMods: 0,
             totalSyms: 0, totalActions: 0,
             totalKeyExplicit: 0,
-            trailer: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]),
+            payload: XkbMapPayload(keyTypes: [kt])),
             encode: { $0.encode(byteOrder: $1) },
             decode: { try XkbGetMapReply.decode(from: $0, byteOrder: $1) })
     }
@@ -292,6 +344,90 @@ final class XkbRoundTripTests: XCTestCase {
             slowKeyState: 1, keycode: 24, delay: 250),
             encode: { $0.encode(byteOrder: $1) },
             decode: { try XkbSlowKeyNotifyEvent.decode(from: $0, byteOrder: $1) })
+    }
+
+    // MARK: - XkbSetMap + XkbMapPayload (Session 2)
+
+    func testSetMapEmptyPayload() throws {
+        try roundTrip(XkbSetMap(
+            deviceSpec: 0x0100, present: 0, resize: 0,
+            firstType: 0, nTypes: 0,
+            firstKeySym: 0, nKeySyms: 0,
+            firstKeyAction: 0, nKeyActions: 0,
+            totalKeyBehaviors: 0,
+            virtualMods: 0,
+            totalKeyExplicit: 0,
+            totalSyms: 0, totalActions: 0,
+            payload: .empty),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbSetMap.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testSetMapMixedPayload() throws {
+        // Mirror the GetMap reply test but on the request side.
+        let kt = XkbKeyType(
+            mask: 0x07, realMods: 0x05, virtualMods: 0, groupWidth: 2,
+            mapEntries: [
+                XkbKTMapEntry(active: true, mask: 0x01, level: 0, realMods: 0x01, virtualMods: 0),
+            ])
+        let payload = XkbMapPayload(
+            keyTypes: [kt],
+            keySyms: [XkbSymMap(ktIndex: 0, groupInfo: 0, syms: [0xFF01])],
+            actionsPerKey: [1, 0],
+            actions: [XkbAction(type: 1, data: [0,0,0,0,0,0,0])],
+            behaviors: [XkbBehavior(key: 8, type: 1, data: 0)],
+            virtualMods: [0x10],
+            explicits: [XkbExplicit(key: 24, explicit: 0x01)]
+        )
+        try roundTrip(XkbSetMap(
+            deviceSpec: 0x0100,
+            present: 0x00FF, resize: 0,
+            firstType: 0, nTypes: 1,
+            firstKeySym: 8, nKeySyms: 1,
+            firstKeyAction: 8, nKeyActions: 2,
+            totalKeyBehaviors: 1,
+            virtualMods: 0b1,           // popcount=1
+            totalKeyExplicit: 1,
+            totalSyms: 1, totalActions: 1,
+            payload: payload),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbSetMap.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testMapPayloadAlignment() throws {
+        // Pathological alignment cases: trigger non-zero pad in each
+        // padded section.
+        // actionsPerKey count=3 → 1 byte pad. virtualMods count=3 →
+        // 1 byte pad. explicits count=3 → 2 bytes pad (6 bytes total
+        // → next 4-byte boundary).
+        let payload = XkbMapPayload(
+            actionsPerKey: [1, 1, 1],
+            actions: [
+                XkbAction(type: 1, data: [0,0,0,0,0,0,0]),
+                XkbAction(type: 2, data: [0,0,0,0,0,0,0]),
+                XkbAction(type: 3, data: [0,0,0,0,0,0,0]),
+            ],
+            virtualMods: [0xA, 0xB, 0xC],
+            explicits: [
+                XkbExplicit(key: 8, explicit: 1),
+                XkbExplicit(key: 9, explicit: 2),
+                XkbExplicit(key: 10, explicit: 3),
+            ]
+        )
+        for order in [ByteOrder.lsbFirst, .msbFirst] {
+            let bytes = payload.encode(byteOrder: order)
+            XCTAssertEqual(bytes.count % 4, 0, "payload bytes must be 4-byte aligned in \(order)")
+            let decoded = try XkbMapPayload.decode(
+                from: bytes,
+                nTypes: 0, nKeySyms: 0,
+                nKeyActions: 3, totalKeyBehaviors: 0,
+                virtualModsBitmap: 0b111,   // popcount=3
+                totalKeyExplicit: 3,
+                byteOrder: order
+            )
+            XCTAssertEqual(decoded, payload, "payload round-trip in \(order)")
+            XCTAssertEqual(payload.encode(byteOrder: order), bytes, "byte-identical re-encode in \(order)")
+        }
     }
 
     // MARK: - Common event header decode

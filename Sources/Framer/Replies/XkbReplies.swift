@@ -247,12 +247,13 @@ public struct XkbGetControlsReply: Equatable, Sendable {
     }
 }
 
-// MARK: - XkbGetMap reply (header + raw trailer)
+// MARK: - XkbGetMap reply (32-byte header + typed trailer payload)
 
-/// 32-byte fixed header; the variable trailer (KeyTypes → MapEntries →
-/// SymMaps → Actions → Behaviors → VirtualMods → Explicits) is
-/// captured as raw bytes. Phase 3 Session 2 implements the nested-list
-/// walker so the trailer becomes typed too.
+/// 32-byte fixed header followed by the typed map payload (KeyTypes →
+/// SymMaps → KeyActions → Behaviors → VirtualMods → Explicits). The
+/// payload codec lives in `XkbMapPayload.swift` and is shared with
+/// `XkbSetMap`. Phase 3 Session 1 captured the trailer as raw bytes;
+/// Session 2 (2026-05-30) replaced it with the typed `payload` field.
 public struct XkbGetMapReply: Equatable, Sendable {
     public var sequenceNumber: UInt16
     public var deviceID: UInt8
@@ -271,8 +272,7 @@ public struct XkbGetMapReply: Equatable, Sendable {
     public var totalSyms: UInt16
     public var totalActions: UInt16
     public var totalKeyExplicit: UInt8
-    /// Variable-length trailer; Session 2 will turn this into typed structs.
-    public var trailer: [UInt8]
+    public var payload: XkbMapPayload
 
     public init(sequenceNumber: UInt16, deviceID: UInt8,
                 minKeyCode: UInt8, maxKeyCode: UInt8, present: UInt16,
@@ -281,8 +281,8 @@ public struct XkbGetMapReply: Equatable, Sendable {
                 firstKeyAction: UInt8, nKeyActions: UInt8,
                 totalKeyBehaviors: UInt8, virtualMods: UInt16,
                 totalSyms: UInt16, totalActions: UInt16,
-                totalKeyExplicit: UInt8, trailer: [UInt8] = []) {
-        precondition(trailer.count % 4 == 0, "trailer must be 4-byte aligned")
+                totalKeyExplicit: UInt8,
+                payload: XkbMapPayload = .empty) {
         self.sequenceNumber = sequenceNumber; self.deviceID = deviceID
         self.minKeyCode = minKeyCode; self.maxKeyCode = maxKeyCode
         self.present = present
@@ -293,11 +293,12 @@ public struct XkbGetMapReply: Equatable, Sendable {
         self.virtualMods = virtualMods
         self.totalSyms = totalSyms; self.totalActions = totalActions
         self.totalKeyExplicit = totalKeyExplicit
-        self.trailer = trailer
+        self.payload = payload
     }
 
     public func encode(byteOrder: ByteOrder) -> [UInt8] {
-        let lenIn4 = UInt32(trailer.count / 4)
+        let trailerBytes = payload.encode(byteOrder: byteOrder)
+        let lenIn4 = UInt32(trailerBytes.count / 4)
         var w = ByteWriter(byteOrder: byteOrder)
         w.writeUInt8(1); w.writeUInt8(deviceID); w.writeUInt16(sequenceNumber)
         w.writeUInt32(lenIn4)
@@ -311,7 +312,7 @@ public struct XkbGetMapReply: Equatable, Sendable {
         w.writeUInt16(totalSyms); w.writeUInt16(totalActions)
         w.writeUInt8(totalKeyExplicit); w.writeUInt8(0)
         w.writeUInt32(0)
-        w.writeBytes(trailer)
+        w.writeBytes(trailerBytes)
         return w.bytes
     }
 
@@ -341,7 +342,16 @@ public struct XkbGetMapReply: Equatable, Sendable {
         let totalKeyExplicit = try r.readUInt8()
         try r.skip(1)
         try r.skip(4)
-        let trailer = lenIn4 > 0 ? try r.readBytes(lenIn4 * 4) : []
+        let trailerBytes = lenIn4 > 0 ? try r.readBytes(lenIn4 * 4) : []
+        let payload = try XkbMapPayload.decode(
+            from: trailerBytes,
+            nTypes: nTypes, nKeySyms: nKeySyms,
+            nKeyActions: nKeyActions,
+            totalKeyBehaviors: totalKeyBehaviors,
+            virtualModsBitmap: virtualMods,
+            totalKeyExplicit: totalKeyExplicit,
+            byteOrder: byteOrder
+        )
         return XkbGetMapReply(
             sequenceNumber: seq, deviceID: deviceID,
             minKeyCode: minKeyCode, maxKeyCode: maxKeyCode,
@@ -353,7 +363,7 @@ public struct XkbGetMapReply: Equatable, Sendable {
             virtualMods: virtualMods,
             totalSyms: totalSyms, totalActions: totalActions,
             totalKeyExplicit: totalKeyExplicit,
-            trailer: trailer
+            payload: payload
         )
     }
 }

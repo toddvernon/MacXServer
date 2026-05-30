@@ -47,6 +47,13 @@ public enum XkbDumper: ExtensionDumper {
                 return "XkbGetMap                dev=\(r.deviceSpec) full=\(hx(r.full)) partial=\(hx(r.partial)) types=\(r.firstType)+\(r.nTypes) syms=\(r.firstKeySym)+\(r.nKeySyms) actions=\(r.firstKeyAction)+\(r.nKeyActions)"
             }
 
+        case XkbMinor.setMap:
+            if let r = try? XkbSetMap.decode(from: bytes, byteOrder: byteOrder) {
+                let p = r.payload
+                let summary = "types=\(p.keyTypes.count) syms=\(p.keySyms.count) actions=\(p.actions.count)/\(p.actionsPerKey.count)k behaviors=\(p.behaviors.count) vmods=\(p.virtualMods.count) explicits=\(p.explicits.count)"
+                return "XkbSetMap                dev=\(r.deviceSpec) present=\(hx(r.present)) resize=\(hx(r.resize)) [\(summary)]"
+            }
+
         case XkbMinor.getNames:
             if let r = try? XkbGetNames.decode(from: bytes, byteOrder: byteOrder) {
                 return "XkbGetNames              dev=\(r.deviceSpec) which=\(hx(r.which))"

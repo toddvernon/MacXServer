@@ -262,6 +262,125 @@ public struct XkbGetMap: Equatable, Sendable {
     }
 }
 
+// MARK: - XkbSetMap (minor 9)
+
+/// xkbSetMapReq: 28-byte header + the map payload trailer shared with
+/// XkbGetMapReply. `present` is the bitmask gating which sections
+/// appear in the trailer (sister of GetMap's `partial`/`full`). The
+/// counts in the header tell how to walk each present section, just
+/// like the reply does.
+public struct XkbSetMap: Equatable, Sendable {
+    public static let minor: UInt8 = XkbMinor.setMap
+
+    public var deviceSpec: UInt16
+    public var present: UInt16
+    public var resize: UInt16
+    public var firstType: UInt8
+    public var nTypes: UInt8
+    public var firstKeySym: UInt8
+    public var nKeySyms: UInt8
+    public var firstKeyAction: UInt8
+    public var nKeyActions: UInt8
+    public var totalKeyBehaviors: UInt8
+    public var virtualMods: UInt16
+    public var totalKeyExplicit: UInt8
+    public var totalSyms: UInt16
+    public var totalActions: UInt16
+    public var payload: XkbMapPayload
+
+    public init(deviceSpec: UInt16, present: UInt16, resize: UInt16,
+                firstType: UInt8, nTypes: UInt8,
+                firstKeySym: UInt8, nKeySyms: UInt8,
+                firstKeyAction: UInt8, nKeyActions: UInt8,
+                totalKeyBehaviors: UInt8, virtualMods: UInt16,
+                totalKeyExplicit: UInt8,
+                totalSyms: UInt16, totalActions: UInt16,
+                payload: XkbMapPayload = .empty) {
+        self.deviceSpec = deviceSpec
+        self.present = present
+        self.resize = resize
+        self.firstType = firstType; self.nTypes = nTypes
+        self.firstKeySym = firstKeySym; self.nKeySyms = nKeySyms
+        self.firstKeyAction = firstKeyAction; self.nKeyActions = nKeyActions
+        self.totalKeyBehaviors = totalKeyBehaviors
+        self.virtualMods = virtualMods
+        self.totalKeyExplicit = totalKeyExplicit
+        self.totalSyms = totalSyms
+        self.totalActions = totalActions
+        self.payload = payload
+    }
+
+    public func encode(majorOpcode: UInt8, byteOrder: ByteOrder) -> [UInt8] {
+        let trailer = payload.encode(byteOrder: byteOrder)
+        // 28-byte header = 7 4-byte words; trailer is already padded.
+        let lenIn4 = UInt16(7 + trailer.count / 4)
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(majorOpcode); w.writeUInt8(Self.minor); w.writeUInt16(lenIn4)
+        w.writeUInt16(deviceSpec)
+        w.writeUInt16(present)
+        w.writeUInt16(resize)
+        w.writeUInt8(firstType); w.writeUInt8(nTypes)
+        w.writeUInt8(firstKeySym); w.writeUInt8(nKeySyms)
+        w.writeUInt8(firstKeyAction); w.writeUInt8(nKeyActions)
+        w.writeUInt8(totalKeyBehaviors)
+        // The C struct has totalKeyBehaviors at offset 16 followed by
+        // CARD16 virtualMods, so the compiler inserts a 1-byte natural
+        // alignment pad here. X11 wire follows C struct layout exactly.
+        w.writePadding(1)
+        w.writeUInt16(virtualMods)
+        w.writeUInt8(totalKeyExplicit); w.writeUInt8(0)
+        w.writeUInt16(totalSyms); w.writeUInt16(totalActions)
+        w.writeUInt16(0)
+        w.writeBytes(trailer)
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> XkbSetMap {
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        _ = try r.readUInt8(); _ = try r.readUInt8()
+        let lenIn4 = Int(try r.readUInt16())
+        let deviceSpec = try r.readUInt16()
+        let present = try r.readUInt16()
+        let resize = try r.readUInt16()
+        let firstType = try r.readUInt8()
+        let nTypes = try r.readUInt8()
+        let firstKeySym = try r.readUInt8()
+        let nKeySyms = try r.readUInt8()
+        let firstKeyAction = try r.readUInt8()
+        let nKeyActions = try r.readUInt8()
+        let totalKeyBehaviors = try r.readUInt8()
+        try r.skip(1)   // natural alignment pad before virtualMods
+        let virtualMods = try r.readUInt16()
+        let totalKeyExplicit = try r.readUInt8()
+        try r.skip(1)
+        let totalSyms = try r.readUInt16()
+        let totalActions = try r.readUInt16()
+        try r.skip(2)
+        let trailerBytes = (lenIn4 - 7) * 4
+        let trailer = trailerBytes > 0 ? try r.readBytes(trailerBytes) : []
+        let payload = try XkbMapPayload.decode(
+            from: trailer,
+            nTypes: nTypes, nKeySyms: nKeySyms,
+            nKeyActions: nKeyActions,
+            totalKeyBehaviors: totalKeyBehaviors,
+            virtualModsBitmap: virtualMods,
+            totalKeyExplicit: totalKeyExplicit,
+            byteOrder: byteOrder
+        )
+        return XkbSetMap(
+            deviceSpec: deviceSpec, present: present, resize: resize,
+            firstType: firstType, nTypes: nTypes,
+            firstKeySym: firstKeySym, nKeySyms: nKeySyms,
+            firstKeyAction: firstKeyAction, nKeyActions: nKeyActions,
+            totalKeyBehaviors: totalKeyBehaviors,
+            virtualMods: virtualMods,
+            totalKeyExplicit: totalKeyExplicit,
+            totalSyms: totalSyms, totalActions: totalActions,
+            payload: payload
+        )
+    }
+}
+
 // MARK: - XkbGetNames (minor 15)
 
 public struct XkbGetNames: Equatable, Sendable {
