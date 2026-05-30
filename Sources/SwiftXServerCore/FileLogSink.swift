@@ -1,14 +1,16 @@
 import Foundation
 
 // Per-session log sink. Writes every line to a file under
-// `~/Library/Logs/macxserver/`, *and* mirrors to stderr so the running
-// terminal still has the trace. Each accepted connection gets its own sink
-// (and its own file) — when WM_CLASS arrives the listener calls `rename`
-// to retitle the file from a tentative `session-N-<timestamp>.log` to a
-// useful `<instance>-<timestamp>.log` (e.g. xterm-2026-05-08-13-58.log).
+// `/tmp/macxserver/`, and optionally mirrors to stderr. The file is always
+// written; stderr mirroring is off by default so a running server doesn't
+// drown the terminal in per-op traces. Pass `alsoWriteStderr: true` (or
+// run with `--verbose`) when you want the live trace too. The disk file is
+// always available for `tail -F` when debugging.
 //
-// Console.app auto-discovers files in ~/Library/Logs/, so a tail-friendly
-// path is also available there without configuration.
+// Each accepted connection gets its own sink and its own file — when
+// WM_CLASS arrives the listener calls `rename` to retitle the file from a
+// tentative `session-N-<timestamp>.log` to `<instance>-<timestamp>.log`
+// (e.g. xterm-2026-05-08-13-58.log).
 
 public final class FileLogSink: ServerLogSink, @unchecked Sendable {
 
@@ -22,7 +24,7 @@ public final class FileLogSink: ServerLogSink, @unchecked Sendable {
     /// Build a per-session log file. The file's initial name is
     /// `session-<n>-<timestamp>.log`; call `rename(toIdentified:)` once a
     /// real client identity is known.
-    public init(sessionNumber: Int, alsoWriteStderr: Bool = true) {
+    public init(sessionNumber: Int, alsoWriteStderr: Bool = false) {
         self.alsoWriteStderr = alsoWriteStderr
         self.directory = Self.logsDirectory()
         self.timestampString = Self.formatTimestamp(Date())

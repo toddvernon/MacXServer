@@ -77,6 +77,9 @@ enum ServerEntry {
         // `--no-capture` sets false. Resolved into a concrete bool below once
         // the AppDelegate is built and prefs are readable.
         var captureOverride: Bool? = nil
+        // Per-session and bridge traces always go to disk (/tmp/macxserver/).
+        // --verbose additionally mirrors them to stderr; default is quiet.
+        var verbose = false
 
         let args = Array(CommandLine.arguments.dropFirst())
         var i = 0
@@ -93,7 +96,7 @@ enum ServerEntry {
             switch args[i] {
             case "-h", "--help":
                 print("""
-                usage: macxserver [--host HOST] [--port PORT] [--capture | --no-capture]
+                usage: macxserver [--host HOST] [--port PORT] [--capture | --no-capture] [--verbose]
 
                 Listens for X client connections on HOST:PORT (default 0.0.0.0:6000
                 which is X DISPLAY :0). Top-level X windows become real NSWindows on
@@ -102,6 +105,10 @@ enum ServerEntry {
                 --capture / --no-capture override the Preferences toggle for this
                 process. When capture is on, every accepted client writes its own
                 .xtap to /tmp/swift-x-captures/ (configurable in Preferences).
+
+                --verbose mirrors per-session and bridge traces to stderr. By default
+                they're disk-only at /tmp/macxserver/<instance>-<timestamp>.log;
+                `tail -F` that file when you need the live trace.
                 """)
                 exit(0)
             case "--host":
@@ -118,6 +125,8 @@ enum ServerEntry {
                 captureOverride = true
             case "--no-capture":
                 captureOverride = false
+            case "--verbose", "-v":
+                verbose = true
             default:
                 writeStderr("unknown arg: \(args[i])\n")
                 exit(2)
@@ -125,15 +134,20 @@ enum ServerEntry {
             i += 1
         }
 
-        let log = StderrLogSink()
+        let stderrLog = StderrLogSink()
         WireTrace.installFromEnvironment()
-        let listener = Listener(host: host, port: port, log: log)
+        let listener = Listener(host: host, port: port, log: stderrLog)
 
         // Detect the connected display and pick a logical-root + integer-scale
         // combination per `SERVER_RESOLUTION_SCALING_AND_FONTS.md`.
         let displayConfig = DisplayConfig.forMainDisplay()
         let serverConfig = ServerConfig(displayConfig: displayConfig)
-        let bridge = CocoaWindowBridge(scaleFactor: displayConfig.scale, log: log)
+        // Bridge log is the volume driver (every drawXxx, windowDidMove). The
+        // bridge is shared across sessions so it can't write to a per-session
+        // file; either we send these to stderr or we drop them. Off unless
+        // --verbose. When debugging a draw issue, rerun with --verbose.
+        let bridgeLog: ServerLogSink? = verbose ? stderrLog : nil
+        let bridge = CocoaWindowBridge(scaleFactor: displayConfig.scale, log: bridgeLog)
 
         let app = NSApplication.shared
         let appDelegate = AppDelegate()
@@ -166,7 +180,11 @@ enum ServerEntry {
             writeStderr("display: native \(displayConfig.nativePixelWidth)×\(displayConfig.nativePixelHeight)px → ")
             writeStderr("X-logical \(displayConfig.logicalWidth)×\(displayConfig.logicalHeight) at \(displayConfig.scale)x ")
             writeStderr("(\(displayConfig.deviceWidth)×\(displayConfig.deviceHeight) device px), ~90 DPI\n")
-            writeStderr("waiting for one client...\n\n")
+            writeStderr("waiting for one client...\n")
+            if !verbose {
+                writeStderr("(per-session traces in /tmp/macxserver/ — pass --verbose to mirror to stderr)\n")
+            }
+            writeStderr("\n")
         } catch {
             writeStderr("error: \(error)\n")
             exit(1)
@@ -208,6 +226,7 @@ enum ServerEntry {
         // Run the listener on a background thread so the main thread can drive AppKit.
         // runAccepting loops accepting connections; each accept spawns a dedicated
         // read+write thread pair. Quit via Cmd-Q (or `pkill macxserver`).
+        let verboseSnapshot = verbose
         DispatchQueue.global(qos: .userInitiated).async {
             listener.runAccepting(
                 template: serverConfig,
@@ -215,9 +234,10 @@ enum ServerEntry {
                 coordinator: coordinator,
                 clipboardPrefs: prefsProvider,
                 sessionLogFactory: { clientNumber in
-                    // One file per connection in ~/Library/Logs/macxserver/.
-                    // Renamed to <wmInstance>-<timestamp>.log when WM_CLASS arrives.
-                    FileLogSink(sessionNumber: clientNumber)
+                    // One file per connection in /tmp/macxserver/. Renamed to
+                    // <wmInstance>-<timestamp>.log when WM_CLASS arrives.
+                    // Stderr mirror only when --verbose; disk file is always.
+                    FileLogSink(sessionNumber: clientNumber, alsoWriteStderr: verboseSnapshot)
                 },
                 captureSinkFactory: captureSinkFactory,
                 sessionDidStart: { session, clientNumber, sessionLog, captureSink in
