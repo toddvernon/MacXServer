@@ -2,34 +2,64 @@ public enum DefaultLaunchers {
     public static let seedContent: String = """
         # Remote app launchers for MacXServer.
         #
-        # Each [section] becomes a menu item under the Launchers menu.
+        # The Launchers menu is a two-level menu: top-level entries are
+        # remote hosts; each host's submenu lists the apps you can launch
+        # there. The file format groups settings to match.
+        #
+        # Two section shapes:
+        #
+        #   [host:KEY]            -- defines a host (shared connection
+        #                            settings). KEY becomes the top-level
+        #                            menu label.
+        #   [KEY/ITEM]            -- defines a launcher under host KEY.
+        #                            ITEM becomes the submenu label.
+        #
+        # An item inherits everything from its host block and overrides only
+        # what it needs (almost always just `command`).
+        #
         # Fields:
-        #   host    = hostname or IP (required)
-        #   user    = login username (required)
-        #   command = X app to launch (required)
-        #   port    = telnet port (optional, default 23)
-        #   verbose = true/false (optional, default false) -- show progress window
-        #   login_prompt    = substring to match for login (default: ogin:)
-        #   password_prompt = substring to match for password (default: assword:)
-        #   shell_prompt    = substring to match for shell ready (default: "$ ")
-        #   password = login password (optional) -- see below
+        #   host    = hostname or IP             (required on the host block)
+        #   user    = login username             (required on the host block)
+        #   command = X app to launch            (required on the item)
+        #   port    = telnet port                (optional, default 23)
+        #   verbose = true/false                 (optional, default false)
+        #   login_prompt    = substring          (default: ogin:)
+        #   password_prompt = substring          (default: assword:)
+        #   shell_prompt    = substring          (default: "$ ")
+        #   password = login password            (optional, see below)
         #
         # If you omit `password`, it's read from the macOS Keychain; on first
-        # use of a launcher you're prompted once and it's stored there.
-        # Setting `password` here skips that prompt every launch -- handy
-        # during development, but it's plaintext in this file, so don't use it
-        # on a shared machine.
+        # use you're prompted once and it's stored there. Setting `password`
+        # in this file skips that prompt every launch -- handy during
+        # development, but it's plaintext, so don't use it on a shared
+        # machine.
         #
         # Example:
         #
-        # [xterm on u5]
+        # [host:u5]
         # host = u5.example.com
         # user = todd
-        # command = xterm
+        # shell_prompt = vernon]
         #
-        # [xcalc on ss2]
+        # [u5/xterm cyan]
+        # command = xterm -bg black -fg cyan -cr yellow
+        #
+        # [u5/xterm yellow]
+        # command = xterm -bg black -fg yellow -cr white
+        #
+        # [u5/dtpad]
+        # command = /usr/dt/bin/dtpad -standAlone
+        #
+        # [host:ss2]
         # host = ss2.example.com
         # user = todd
+        #
+        # [ss2/xcalc]
         # command = xcalc -bg gray90
+        #
+        # Legacy flat sections (no `host:` prefix, no `/` in the name) still
+        # parse: they're grouped automatically under the short form of their
+        # `host` field (e.g. host = u5.example.com -> "u5" submenu). Migrate
+        # at your own pace.
         """
 }

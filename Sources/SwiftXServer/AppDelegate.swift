@@ -356,13 +356,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.removeAllItems()
         let file = LauncherFileLoader.loadOrSeed(seed: DefaultLaunchers.seedContent)
         currentLauncherFile = file
-        for entry in file.entries {
-            let item = NSMenuItem(title: entry.name,
-                                  action: #selector(launchRemoteApp(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.representedObject = entry.name as NSString
-            menu.addItem(item)
+        let groups = file.groups()
+        // Single-group case: flatten -- a submenu of one is just an extra
+        // click for no reason.
+        if groups.count == 1 {
+            for entry in groups[0].entries { menu.addItem(launcherMenuItem(for: entry)) }
+        } else {
+            for group in groups {
+                let submenu = NSMenu(title: group.label)
+                for entry in group.entries { submenu.addItem(launcherMenuItem(for: entry)) }
+                let header = NSMenuItem(title: group.label, action: nil, keyEquivalent: "")
+                header.submenu = submenu
+                menu.addItem(header)
+            }
         }
         if !file.entries.isEmpty { menu.addItem(.separator()) }
         let edit = NSMenuItem(title: "Edit Launchers\u{2026}",
@@ -370,6 +376,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               keyEquivalent: "")
         edit.target = self
         menu.addItem(edit)
+    }
+
+    private func launcherMenuItem(for entry: LauncherEntry) -> NSMenuItem {
+        let item = NSMenuItem(title: entry.name,
+                              action: #selector(launchRemoteApp(_:)),
+                              keyEquivalent: "")
+        item.target = self
+        // group/name disambiguates same-named items across hosts
+        // ("xterm cyan" can live under both u5 and ss2).
+        item.representedObject = "\(entry.group)/\(entry.name)" as NSString
+        return item
     }
 
     @objc private func launchersFileChanged(_ note: Notification) {
@@ -386,8 +403,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     @objc private func launchRemoteApp(_ sender: NSMenuItem) {
-        guard let name = sender.representedObject as? String,
-              let entry = currentLauncherFile?.entries.first(where: { $0.name == name })
+        guard let key = sender.representedObject as? String,
+              let entry = currentLauncherFile?.entries.first(where: { "\($0.group)/\($0.name)" == key })
         else { return }
         // An explicit password in the launcher file wins (dev convenience —
         // skips the prompt every launch). Otherwise fall back to the Keychain,
