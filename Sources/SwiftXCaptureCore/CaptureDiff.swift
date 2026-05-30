@@ -9,8 +9,14 @@ import Framer
 // longer poisons every downstream row. Unmatched runs are paired up entry-
 // by-entry as `different` rows; excess on either side becomes onlyA / onlyB.
 //
-// Resource IDs are not normalized — for the gold-vs-swiftx use case our
-// resourceIdBase matches Sun's, so client-allocated IDs align naturally.
+// Client-allocated resource IDs are not normalized: for the gold-vs-swiftx
+// use case our resourceIdBase matches Sun's, so they align naturally.
+//
+// Server-allocated identifiers DO differ across servers and get scrubbed by
+// `applyToleranceRules` before LCS keying: InternAtom atom IDs (the name in
+// parens carries the canonical identity), QueryExtension's major-opcode and
+// event/error bases, and AllocColor / AllocNamedColor pixel values. The
+// displayed line keeps the original values so the user can read the actuals.
 
 public enum DiffStatus: String, Equatable, Sendable {
     case same
@@ -79,18 +85,20 @@ public struct DiffRenderOptions: Sendable {
 
 public enum CaptureDiff {
     public static func compare(pathA: String, pathB: String) throws -> DiffReport {
-        let a = try walkMessages(path: pathA)
-        let b = try walkMessages(path: pathB)
-        return diff(pathA: pathA, pathB: pathB, a: a, b: b)
+        let (a, metaA) = try walkMessages(path: pathA)
+        let (b, metaB) = try walkMessages(path: pathB)
+        return diff(pathA: pathA, pathB: pathB, a: a, b: b, metaA: metaA, metaB: metaB)
     }
 
-    static func diff(pathA: String, pathB: String, a: [MessageEntry], b: [MessageEntry]) -> DiffReport {
+    static func diff(pathA: String, pathB: String,
+                     a: [MessageEntry], b: [MessageEntry],
+                     metaA: StreamMetadata = .empty, metaB: StreamMetadata = .empty) -> DiffReport {
         let aC2S = a.filter { $0.direction == .clientToServer }
         let bC2S = b.filter { $0.direction == .clientToServer }
         let aS2C = a.filter { $0.direction == .serverToClient }
         let bS2C = b.filter { $0.direction == .serverToClient }
-        let c2sRows = alignAndCompare(direction: .clientToServer, a: aC2S, b: bC2S)
-        let s2cRows = alignAndCompare(direction: .serverToClient, a: aS2C, b: bS2C)
+        let c2sRows = alignAndCompare(direction: .clientToServer, a: aC2S, b: bC2S, metaA: metaA, metaB: metaB)
+        let s2cRows = alignAndCompare(direction: .serverToClient, a: aS2C, b: bS2C, metaA: metaA, metaB: metaB)
         return DiffReport(pathA: pathA, pathB: pathB, c2sRows: c2sRows, s2cRows: s2cRows)
     }
 
@@ -124,7 +132,25 @@ struct MessageEntry: Equatable, Sendable {
     var line: String
 }
 
-func walkMessages(path: String) throws -> [MessageEntry] {
+// Per-stream state from the connection-setup phase that downstream
+// normalization needs. Two captures of the same client against different
+// servers will get different resource-id bases and different
+// server-allocated root/colormap/visual IDs; subtracting them out lets
+// the LCS treat semantically equal lines as equal.
+struct StreamMetadata: Equatable, Sendable {
+    var resourceIdBase: UInt32
+    var resourceIdMask: UInt32
+    var rootWindowIds: Set<UInt32>
+    var rootVisualIds: Set<UInt32>
+    var defaultColormapIds: Set<UInt32>
+
+    static let empty = StreamMetadata(
+        resourceIdBase: 0, resourceIdMask: 0,
+        rootWindowIds: [], rootVisualIds: [], defaultColormapIds: []
+    )
+}
+
+func walkMessages(path: String) throws -> (entries: [MessageEntry], metadata: StreamMetadata) {
     let frames = try CaptureReader.read(from: path)
 
     var byteOrder: ByteOrder = .lsbFirst
@@ -137,6 +163,7 @@ func walkMessages(path: String) throws -> [MessageEntry] {
     var s2c = StreamWalker()
     var ctx = ChronoContext()
     var entries: [MessageEntry] = []
+    var metadata: StreamMetadata = .empty
 
     for frame in frames {
         switch frame.direction {
@@ -167,6 +194,13 @@ func walkMessages(path: String) throws -> [MessageEntry] {
                 if !ctx.s2cSetupSeen {
                     ctx.s2cSetupSeen = true
                     if case .setupReply(let r) = raw {
+                        if case .accepted(let acc) = r {
+                            metadata.resourceIdBase = acc.resourceIdBase
+                            metadata.resourceIdMask = acc.resourceIdMask
+                            metadata.rootWindowIds = Set(acc.screens.map(\.root))
+                            metadata.rootVisualIds = Set(acc.screens.map(\.rootVisual))
+                            metadata.defaultColormapIds = Set(acc.screens.map(\.defaultColormap))
+                        }
                         entries.append(MessageEntry(direction: .serverToClient, timestamp: ts, line: formatSetupReply(r)))
                     }
                 } else if case .serverMessage(let m) = raw {
@@ -176,18 +210,61 @@ func walkMessages(path: String) throws -> [MessageEntry] {
         }
     }
 
-    return entries
+    return (entries, metadata)
 }
 
-private func alignAndCompare(direction: Direction, a: [MessageEntry], b: [MessageEntry]) -> [DiffRow] {
-    // LCS matches on a key that strips the leading "[seq=N]" prefix. Sequence
-    // numbers are stream-local: once gold and swiftx diverge in request count,
-    // every downstream message has a different seq even when the semantic
-    // content is identical. Strip for alignment, keep in displayed line.
-    let aKeys = a.map { stripSeqPrefix($0.line) }
-    let bKeys = b.map { stripSeqPrefix($0.line) }
+private func alignAndCompare(direction: Direction,
+                              a: [MessageEntry], b: [MessageEntry],
+                              metaA: StreamMetadata, metaB: StreamMetadata) -> [DiffRow] {
+    // LCS matches on a normalized key: leading "[seq=N]" stripped (sequence
+    // numbers are stream-local — once gold and swiftx diverge in request
+    // count, every downstream message has a different seq even when the
+    // semantic content is identical), plus tolerance rules that scrub the
+    // known server-allocated identifiers and substitute per-stream
+    // canonical forms for resource IDs that legitimately differ. Display
+    // still shows the original line so the user can read the actuals.
+    let aKeys = a.map { applyToleranceRules(normalizeIdentifiers(stripSeqPrefix($0.line), metadata: metaA)) }
+    let bKeys = b.map { applyToleranceRules(normalizeIdentifiers(stripSeqPrefix($0.line), metadata: metaB)) }
     let alignment = longestCommonSubsequence(a: aKeys, b: bKeys)
     return emitRows(direction: direction, a: a, b: b, alignment: alignment)
+}
+
+// Rewrite every "0xNNNN" in `line` to a per-stream canonical form so the
+// same semantic identifier from two different servers compares equal:
+//
+//   - root window id  -> "0xROOT"
+//   - root visual id  -> "0xVISUAL"
+//   - default cmap id -> "0xCMAP"
+//   - client-allocated (id high bits match resourceIdBase) -> "0xC<offset>"
+//   - anything else   -> left alone (still a server-allocated atom or the
+//                        like; the tolerance rules above handle the
+//                        named cases)
+//
+// The client allocates resource IDs as `base | <small monotonically-
+// increasing offset>` so the offset-only form is stable across captures
+// from the same client against different servers.
+func normalizeIdentifiers(_ line: String, metadata: StreamMetadata) -> String {
+    if metadata.resourceIdMask == 0
+        && metadata.rootWindowIds.isEmpty
+        && metadata.rootVisualIds.isEmpty
+        && metadata.defaultColormapIds.isEmpty {
+        return line
+    }
+    return line.replacing(/0x[0-9A-Fa-f]+/) { match in
+        let s = String(match.0)
+        guard let id = UInt32(s.dropFirst(2), radix: 16) else { return s }
+        if metadata.rootWindowIds.contains(id) { return "0xROOT" }
+        if metadata.rootVisualIds.contains(id) { return "0xVISUAL" }
+        if metadata.defaultColormapIds.contains(id) { return "0xCMAP" }
+        if metadata.resourceIdMask != 0 {
+            let baseBits = id & ~metadata.resourceIdMask
+            if baseBits == metadata.resourceIdBase {
+                let offset = id & metadata.resourceIdMask
+                return "0xC" + String(offset, radix: 16, uppercase: true)
+            }
+        }
+        return s
+    }
 }
 
 func stripSeqPrefix(_ line: String) -> String {
@@ -198,6 +275,39 @@ func stripSeqPrefix(_ line: String) -> String {
         return String(line[line.index(after: after)...])
     }
     return String(line[after...])
+}
+
+// Scrub fields that legitimately differ between two servers serving the
+// same client. Each rule replaces the value with `*` so the canonical
+// identity (atom name, extension name, RGB) carries the equality. Lines
+// without these substrings pass through untouched.
+//
+// Patterns are anchored on the field-name prefix that ChronoDumper emits,
+// so an unrelated substring like "major=5" appearing inside a property
+// data dump won't get touched: only the literal " major=N" inside a
+// QueryExtension reply gets matched.
+//
+// Patterns are re-compiled each call. Cheap (three short patterns) and
+// keeps us out of Swift 6's non-Sendable global-let trap without having
+// to launder `Regex<AnyRegexOutput>` through `nonisolated(unsafe)`.
+func applyToleranceRules(_ line: String) -> String {
+    var s = line
+    // InternAtom reply: atom value differs across servers; the name in parens
+    // carries the canonical identity. Match both hex and "None".
+    s = s.replacing(
+        try! Regex(#"Reply \(InternAtom\)\s+atom=(?:0x[0-9A-Fa-f]+|None)"#),
+        with: "Reply (InternAtom)      atom=*"
+    )
+    // QueryExtension reply: name= and present= are canonical; the
+    // major-opcode and first-event / first-error bases are server-private.
+    s = s.replacing(
+        try! Regex(#"major=\d+ firstEvent=\d+ firstError=\d+"#),
+        with: "major=* firstEvent=* firstError=*"
+    )
+    // AllocColor / AllocNamedColor: server-allocated pixel value differs;
+    // the RGB triple carries the request identity.
+    s = s.replacing(try! Regex(#"pixel=0x[0-9A-Fa-f]+"#), with: "pixel=*")
+    return s
 }
 
 // A single position in the aligned output. Either matched (both indices

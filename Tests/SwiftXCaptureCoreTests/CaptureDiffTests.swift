@@ -180,6 +180,149 @@ final class CaptureDiffTests: XCTestCase {
         XCTAssertEqual(stripSeqPrefix("Expose window=0x4400001"), "Expose window=0x4400001")
     }
 
+    // MARK: - Tolerance rules
+
+    func testToleranceRulesNormalizeInternAtomReply() {
+        let gold = "Reply (InternAtom)      atom=0x82 (WM_CONFIGURE_DENIED)"
+        let swiftx = "Reply (InternAtom)      atom=0x1F (WM_CONFIGURE_DENIED)"
+        XCTAssertEqual(applyToleranceRules(gold), applyToleranceRules(swiftx))
+        // "None" atoms should also normalize identically.
+        let goldNone = "Reply (InternAtom)      atom=None (SCREEN_RESOURCES)"
+        let swiftxNone = "Reply (InternAtom)      atom=0x0 (SCREEN_RESOURCES)"
+        // Both should be tolerance-equal (left already canonical "None",
+        // right is hex zero — we want them to compare same).
+        XCTAssertEqual(applyToleranceRules(goldNone), applyToleranceRules(swiftxNone))
+    }
+
+    func testToleranceRulesNormalizeQueryExtensionReply() {
+        let gold = "Reply (QueryExtension)  name=SHAPE present=true major=128 firstEvent=64 firstError=0"
+        let swiftx = "Reply (QueryExtension)  name=SHAPE present=true major=132 firstEvent=72 firstError=10"
+        XCTAssertEqual(applyToleranceRules(gold), applyToleranceRules(swiftx))
+    }
+
+    func testToleranceRulesNormalizeAllocColorPixel() {
+        let gold = "Reply (AllocColor)      → pixel=0x13 rgb=(65535,0,0)"
+        let swiftx = "Reply (AllocColor)      → pixel=0x2A rgb=(65535,0,0)"
+        XCTAssertEqual(applyToleranceRules(gold), applyToleranceRules(swiftx))
+    }
+
+    func testToleranceRulesNormalizeAllocNamedColorPixel() {
+        let gold = "Reply (AllocNamedColor) → pixel=0x42 exact=(0,32896,32896)"
+        let swiftx = "Reply (AllocNamedColor) → pixel=0xC1 exact=(0,32896,32896)"
+        XCTAssertEqual(applyToleranceRules(gold), applyToleranceRules(swiftx))
+    }
+
+    func testToleranceRulesLeaveCanonicalContentAlone() {
+        // Identity transform on lines that don't carry server-allocated IDs.
+        let line = "CreateWindow            wid=0x4400001 parent=0x2B 500x600 at (0,0)"
+        XCTAssertEqual(applyToleranceRules(line), line)
+    }
+
+    func testToleranceRulesAlignInternAtomRepliesAcrossDifferentServerAtomIDs() {
+        // Same name, different server-allocated atom — must align as `same`,
+        // not `different`. This is the bedrock gold-vs-swiftx use case.
+        let a = [
+            MessageEntry(direction: .serverToClient, timestamp: 0,
+                         line: "[seq=4     ] Reply (InternAtom)      atom=0x82 (WM_CONFIGURE_DENIED)"),
+        ]
+        let b = [
+            MessageEntry(direction: .serverToClient, timestamp: 0,
+                         line: "[seq=4     ] Reply (InternAtom)      atom=0x1F (WM_CONFIGURE_DENIED)"),
+        ]
+        let report = CaptureDiff.diff(pathA: "a", pathB: "b", a: a, b: b)
+        XCTAssertEqual(report.s2cCounts.same, 1)
+        XCTAssertEqual(report.s2cCounts.different, 0)
+        // Displayed line must keep the raw atom value so the user can read it.
+        XCTAssertEqual(report.s2cRows.first?.aLine,
+                       "[seq=4     ] Reply (InternAtom)      atom=0x82 (WM_CONFIGURE_DENIED)")
+        XCTAssertEqual(report.s2cRows.first?.bLine,
+                       "[seq=4     ] Reply (InternAtom)      atom=0x1F (WM_CONFIGURE_DENIED)")
+    }
+
+    // MARK: - Identifier normalization
+
+    private func goldStyleMeta() -> StreamMetadata {
+        StreamMetadata(
+            resourceIdBase: 0x2800000, resourceIdMask: 0x1FFFFF,
+            rootWindowIds: [0x2B], rootVisualIds: [0x23], defaultColormapIds: [0x21]
+        )
+    }
+
+    private func swiftxStyleMeta() -> StreamMetadata {
+        StreamMetadata(
+            resourceIdBase: 0x5400000, resourceIdMask: 0x1FFFFF,
+            rootWindowIds: [0x28], rootVisualIds: [0x25], defaultColormapIds: [0x22]
+        )
+    }
+
+    func testNormalizeIdentifiersRewritesClientAllocatedIds() {
+        let gold = "CreateGC                cid=0x2800009 drawable=0x2B mask=0x4 [fg=0x1]"
+        let swiftx = "CreateGC                cid=0x5400009 drawable=0x28 mask=0x4 [fg=0x1]"
+        XCTAssertEqual(
+            normalizeIdentifiers(gold, metadata: goldStyleMeta()),
+            normalizeIdentifiers(swiftx, metadata: swiftxStyleMeta())
+        )
+    }
+
+    func testNormalizeIdentifiersHandlesRootWindowsAndColormaps() {
+        let gold = "AllocNamedColor         cmap=0x21 name=\"Gray\""
+        let swiftx = "AllocNamedColor         cmap=0x22 name=\"Gray\""
+        let g = normalizeIdentifiers(gold, metadata: goldStyleMeta())
+        let s = normalizeIdentifiers(swiftx, metadata: swiftxStyleMeta())
+        XCTAssertEqual(g, s)
+        XCTAssertTrue(g.contains("0xCMAP"))
+    }
+
+    func testNormalizeIdentifiersLeavesAtomIdsAloneOutsideClientRange() {
+        // An atom value like 0x82 is server-allocated, outside the client range,
+        // and not a root/colormap. Leave it alone here — the tolerance rules
+        // above handle the InternAtom-reply line specifically.
+        let line = "ChangeProperty          window=0x2800019 prop=WM_PROTOCOLS type=ATOM format=32 data=4b"
+        let out = normalizeIdentifiers(line, metadata: goldStyleMeta())
+        XCTAssertTrue(out.contains("0xC19"))      // client-allocated window
+        XCTAssertFalse(out.contains("0x2800019")) // got rewritten
+    }
+
+    func testNormalizeIdentifiersIsIdentityForEmptyMetadata() {
+        // Without setup-reply context (tests that drive `diff(...)` directly
+        // and pass synthetic entries without metadata), normalization is a
+        // no-op so existing test expectations still hold.
+        let line = "CreateGC                cid=0x2800009 drawable=0x2B mask=0x4 [fg=0x1]"
+        XCTAssertEqual(normalizeIdentifiers(line, metadata: .empty), line)
+    }
+
+    func testIdentifierNormalizationAlignsClientResourceIdsAcrossServers() {
+        let metaA = goldStyleMeta()
+        let metaB = swiftxStyleMeta()
+        let a = [
+            MessageEntry(direction: .clientToServer, timestamp: 0,
+                         line: "[seq=1] CreateGC                cid=0x2800009 drawable=0x2B mask=0x4 [fg=0x1]"),
+        ]
+        let b = [
+            MessageEntry(direction: .clientToServer, timestamp: 0,
+                         line: "[seq=1] CreateGC                cid=0x5400009 drawable=0x28 mask=0x4 [fg=0x1]"),
+        ]
+        let report = CaptureDiff.diff(pathA: "a", pathB: "b", a: a, b: b, metaA: metaA, metaB: metaB)
+        XCTAssertEqual(report.c2sCounts.same, 1)
+        XCTAssertEqual(report.c2sCounts.different, 0)
+    }
+
+    func testToleranceRulesDontMaskRealAtomNameDifferences() {
+        // Two replies with same value but different names: must NOT align as
+        // same. The name in parens is what carries the canonical identity.
+        let a = [
+            MessageEntry(direction: .serverToClient, timestamp: 0,
+                         line: "[seq=4] Reply (InternAtom)      atom=0x82 (WM_CONFIGURE_DENIED)"),
+        ]
+        let b = [
+            MessageEntry(direction: .serverToClient, timestamp: 0,
+                         line: "[seq=4] Reply (InternAtom)      atom=0x82 (WM_PROTOCOLS)"),
+        ]
+        let report = CaptureDiff.diff(pathA: "a", pathB: "b", a: a, b: b)
+        XCTAssertEqual(report.s2cCounts.same, 0)
+        XCTAssertEqual(report.s2cCounts.different, 1)
+    }
+
     func testEmitRowsPairsUnmatchedRunsAsDifferent() throws {
         // Drive end-to-end: synthesize two MessageEntry arrays where the
         // middle differs by content but lengths match — should produce a
