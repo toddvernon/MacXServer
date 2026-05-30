@@ -93,7 +93,28 @@ public final class Proxy: @unchecked Sendable {
             let n = buf.withUnsafeMutableBufferPointer { ptr -> Int in
                 return Darwin.read(src, ptr.baseAddress, ptr.count)
             }
-            if n <= 0 { return }
+            if n == 0 {
+                // Clean EOF (peer closed). Normal end-of-session path.
+                return
+            }
+            if n < 0 {
+                let e = errno
+                // Signal interruption — retry the read. Not a real error,
+                // just a runtime context switch (the listener side handles
+                // this identically; the proxy used to silently treat it
+                // as disconnect).
+                if e == EINTR { continue }
+                // EAGAIN/EWOULDBLOCK shouldn't fire on a blocking socket,
+                // but be defensive against environments that mark sockets
+                // non-blocking through inheritance (we never do this
+                // ourselves, but treat as transient if it shows up).
+                if e == EAGAIN || e == EWOULDBLOCK { continue }
+                // Anything else — ECONNRESET, EPIPE, EBADF, ENOTCONN —
+                // is a real socket failure. Log and tear down so the
+                // user can tell unclean disconnects from clean ones.
+                logProxyError("read failed dir=\(direction) errno=\(e) (\(String(cString: strerror(e))))")
+                return
+            }
             let chunk = Array(buf[0..<n])
             sink?.record(direction: direction, bytes: chunk)
 
@@ -102,11 +123,27 @@ public final class Proxy: @unchecked Sendable {
                 let w = chunk.withUnsafeBufferPointer { ptr -> Int in
                     return Darwin.write(dst, ptr.baseAddress!.advanced(by: written), chunk.count - written)
                 }
-                if w <= 0 { return }
-                written += w
+                if w >= 0 {
+                    written += w
+                    continue
+                }
+                let e = errno
+                if e == EINTR { continue }
+                if e == EAGAIN || e == EWOULDBLOCK { continue }
+                logProxyError("write failed dir=\(direction) errno=\(e) (\(String(cString: strerror(e))))")
+                return
             }
         }
     }
+}
+
+/// Surface a transient or fatal socket condition to stderr. Proxy doesn't
+/// have a typed log sink (CaptureSink only handles the data stream); a
+/// direct stderr write keeps the error visible to whoever is running the
+/// proxy from a terminal or seeing the GUI's stderr panel.
+private func logProxyError(_ message: String) {
+    let line = "proxy: \(message)\n"
+    FileHandle.standardError.write(Data(line.utf8))
 }
 
 // MARK: - POSIX helpers
