@@ -269,7 +269,8 @@ that conforms to `ExtensionDumper` plus one entry in `ExtensionDumperRegistry.bu
 | SHAPE | per-session via QueryExtension | full (requests + events) | Migrated to registry 2026-05-30. Reference implementation for the protocol. |
 | BIG-REQUESTS | per-session via QueryExtension | full (1 request, 1 reply, 0 events) | Phase 3 batch A landed 2026-05-30. `BigRequestsDumper.swift`. |
 | MIT-SHM | per-session via QueryExtension | full (6 requests, 2 replies, 1 event) | Phase 3 batch A landed 2026-05-30. `ShmDumper.swift`. |
-| Remaining Tier 1 (XKEYBOARD, XINPUT v1, RENDER) | per-session via QueryExtension | named-only | Phase 3 batch B / C / D — each large enough for its own focused session per CLAUDE.md's planning-agent guidance. |
+| XKEYBOARD | per-session via QueryExtension | Tier A (7 of 22 requests + all 11 events); GetMap/GetNames/GetIndicatorMap reply trailers captured as raw bytes | Phase 3 Session 1 landed 2026-05-30. Session 2: GetMap/SetMap nested-list trailer walker. Session 3: Tier B + C (SetMap, SetNames, GetCompatMap, LatchLockState, Bell, Geometry, AlternateSyms). |
+| Remaining Tier 1 (XINPUT v1, RENDER) | per-session via QueryExtension | named-only | Each large enough for its own focused session per CLAUDE.md's planning-agent guidance. |
 | Tier 2 (RANDR, XFIXES, DAMAGE, XINPUT2, COMPOSITE, etc.) | per-session via QueryExtension | named-only | Decision pending end of Phase 3: ship without, or include before OSS launch? |
 
 ### Decoder-coverage exit criteria

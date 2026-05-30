@@ -53,6 +53,7 @@ public enum ExtensionDumperRegistry {
         ShapeDumper.extensionName: ShapeDumper.self,
         BigRequestsDumper.extensionName: BigRequestsDumper.self,
         ShmDumper.extensionName: ShmDumper.self,
+        XkbDumper.extensionName: XkbDumper.self,
     ]
 
     public static func decoder(forName name: String) -> ExtensionDumper.Type? {
