@@ -2,6 +2,20 @@
 
 The main event. A real X server in Swift on macOS that real Sun X clients connect to and display correctly, with rendering quality that's a clear step up from XQuartz.
 
+## Status as of 2026-05-30
+
+For day-by-day progress see `STATUS.md`. Highlights since 2026-05-09:
+
+- **CDE dt-apps + Motif boot end-to-end** (2026-05-10 → 05-18). MATCH_SELECT-time fix was the actual unlock.
+- **Server bg-paint contract honored end-to-end** (2026-05-19): clipping + paint-on-grow + GCState bg default.
+- **x11perf 254/254** (2026-05-22) + 69 new error-path tests catching 6 silent-drop bugs.
+- **Optional Motif WM frame** (2026-05-24) -- opt-in via Preferences → Display.
+- **Resize architecture landed** (2026-05-25, see DECISIONS) -- minimal-spec position, matching XQuartz's 20-year-old consensus.
+- **Root-window properties moved to ServerCoordinator** (2026-05-27) -- oldest architectural bug, unblocked Motif clipboard cross-session copy/paste.
+- **Remote app launcher** (2026-05-27) -- telnet → vintage Sun → DISPLAY+launch from a Mac menu.
+- **Configurable Motif frame chrome** (2026-05-27) -- `[motif-frame]` section in `~/.swiftx-resources`.
+- **SHAPE extension** (2026-05-28) -- major opcode 128; oclock round + xeyes oval; Motif-frame integration for shaped clients. Bounding-on-top-level visual; clip + descendant shape stored but not yet rendered (SHORTCUTS).
+
 ## Status as of 2026-05-09
 
 **M1–M3 shipped 2026-05-07**, live-verified against xclock on u5 (real SPARCstation 2). 296/296 tests green.
@@ -95,7 +109,7 @@ Things still on the list (most of Beyond-M3 from earlier drafts has shipped — 
 - TrueColor 24-bit visual alongside PseudoColor 8-bit (`DECISIONS.md` 2026-05-05)
 - XErrors for bad requests / unknown resources (today's server is forgiving — see `SHORTCUTS.md`)
 - Honour CWBackPixmap and CWBitGravity (today only CWBackPixel and CWBorderPixel are read)
-- SHAPE and BIG-REQUESTS extensions
+- ~~SHAPE extension~~ (shipped 2026-05-28; bounding-on-top-level visual). BIG-REQUESTS deferred (no client we host needs it; see SHORTCUTS).
 - CLIPBOARD selection (today only PRIMARY is wired)
 - INCR transfer for selections larger than the request-size limit
 

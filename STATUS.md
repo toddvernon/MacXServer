@@ -1,3 +1,182 @@
+# Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
+
+Three days of major work landed since the 2026-05-27 entry below. Writing
+this as a single rollup because no end-of-day STATUS pass got made on
+05-28, 05-29, or 05-30 -- the work was real, the doc just slipped. A new
+Stop hook landed today to nag when this happens again.
+
+## 2026-05-28 -- SHAPE extension
+
+oclock comes up round and xeyes as a bare oval. SHAPE shipped as major
+opcode 128, event base 64, no extension-specific errors. All 9 requests
+implemented and the region state is stored/queryable; visual application
+covers the bounding shape on a top-level (the demoable win). Clip shape
+and descendant-window shape are stored but not yet applied to rendering
+-- ledgered in SHORTCUTS with the exit plan. See DECISIONS 2026-05-28
+for the scope decision and `reference_xeyes_round_without_shape` memory
+for the corrected note (the earlier memory claiming xeyes never used
+SHAPE was wrong; Xmu calls `XShapeCombineMask`).
+
+Three commits trace the arc:
+
+- `5be5334` -- core: protocol + region engine + storage. Region algebra
+  is a faithful port of `Xext/shape.c:RegionOperate` onto our existing
+  `Region`. ShapeMask's bitmap-to-region reuses the depth-1 fully-black
+  convention from the FillStippled reader. Real xcalc and xeyes SS2
+  captures now replay their SHAPE traffic with zero XErrors.
+- `6a03159` -- render path: bounding-shaped top-levels actually appear
+  shaped on screen. Three things had to align: map-time re-apply (oclock
+  shapes before mapping, but our NSWindow/view is created lazily at
+  map, so the original ShapeMask landed against a nil view and was
+  dropped); transparency (FlippedXView clears its backing + the layer
+  background to clear, NSWindow goes non-opaque); and edge quality (the
+  protocol region is 1-logical-pixel banded, which our display scale
+  magnifies into visible stair-steps -- ShapeMask now also captures a
+  device-resolution mask from the source pixmap while it's still alive,
+  and the clip follows that at full backing resolution).
+- `6496b6f` -- Motif-frame integration: when the local mwm-look frame
+  is on, a shaped client renders mwm-style (rectangular title bar OR'ed
+  with the client shape, per mwm's `SetFrameShape`). `MotifFrameView`
+  gains a `clientIsShaped` flag that reports `isOpaque=false` and draws
+  only the title-bar strip while transparent everywhere else.
+
+Also that day: remote launcher learned TERM=xterm telnet negotiation
+(`2db4596`) so `.cshrc` prompt setup runs on the remote, and
+`LaunchProgressWindowController` got Xcode-target-registered
+(`7b4c01c`).
+
+## 2026-05-29 -- Capture v2 largely lands + ss2 rebaseline
+
+Capture v2 (the library + GUI app + decoded-text export from
+`DECISIONS.md` 2026-05-23) shipped most of its scope in a single push.
+macXcapture is now a real Mac app, not a CLI:
+
+- `1294bc0` -- optional decoded `.txt` log alongside each `.xtap`,
+  written as the capture runs.
+- `6485f7d` -- capture viewer window with standardized chrono dump
+  formatting. Opens any `.xtap` file in a syntax-highlighted code-editor
+  view.
+- `66f6b4d` -- moved `.txt` generation out of the capture path and into
+  the viewer as Save As / Export as Text. Captures stay binary; the
+  viewer renders to text on demand.
+- `d95a66b` -- extracted shared `SwiftXCaptureUI`. The capture app and
+  the server's debug viewer now use the same code path.
+- `550a8aa` -- Record screen redesigned as a stacked 6-step wizard:
+  source / target / proxy / output / launcher / go.
+- `ce28a32` -- launcher gained an optional plaintext password field
+  with keychain fallback.
+- `f5e2301` -- red XTAP app icon, distinct from the blue X server icon
+  (`Icons/CaptureAppIcon.appiconset/`). Render script lives in
+  `Icons/source/`.
+
+Then the ss2 rebaseline (`c3f1572`): fresh `ss2 -> swiftx` capture pairs
+for the dt-apps and quickplot, plus refreshed ss2-only golds. This
+moots the "STALE pending u5 recapture" notes on
+`project_motif_quickplot_status`, `project_dt_apps_status`, and
+`project_dt_apps_theme_pass_open` -- the captures are now in tree.
+
+End of day, the macXcapture mission doc landed (`40dea83`): mission
+statement, decoder coverage plan, Phase 0 audit. Establishes the OSS
+launch bar (decode any capture with zero `opcode=N (untyped)` lines for
+documented opcodes) and the phased plan to get there. PRODUCT_1_CAPTURE
+and PROJECT folded the mission in.
+
+## 2026-05-30 -- Decoder coverage Phases 1-3, inline landmark detector, Phase 5 polish
+
+The biggest single-day decoder push since the framer was first written.
+Roughly five threads of work:
+
+**Phase 1 -- framer core gaps closed (`672f01d`)**: 16 requests + 6
+replies + 5 events that the framer had been silently treating as
+untyped. CopyGC, FontPath ops, HostAccess ops, Keyboard ops, Pointer
+ops, PropertyList ops, ListProperties/GetFontPath/GetKeyboardControl/
+GetPointerControl/ListHosts/SetMapping replies. Round-trip tested.
+
+**Phase 2 -- extension dumper registry (`d95e957`)**: ChronoDumper now
+dispatches by negotiated major opcode to per-extension dumpers
+registered at startup. Replaces the hardcoded shape-dumper bolt-on.
+`ShapeDumper` lifts to the new registry.
+
+**Phase 3 -- extension decoders, three sessions per extension**:
+
+- BIG-REQUESTS + MIT-SHM (`37a2c8d`).
+- XKB Sessions 1-3 (`df89a00`, `5cfeb72`, `72c878a`) -- Tier A
+  requests + all 11 events; `GetMap`/`SetMap` nested-list trailer;
+  Tier B/C bulk.
+- XInput v1 Sessions 1-2 (`71739e4`, `a31b5e9`) -- Tier A + class
+  trailer + events; Tier B/C bulk + three union types.
+- RENDER Sessions 1-3 (`e3721bf`, `ea82093`, `820c11b`) -- Tier A +
+  PictFormats walker; glyph stack + filter/index queries; Tier B/C
+  bulk.
+
+OPCODE_STATUS was updated in lockstep on every commit.
+
+**Phase 5 polish**: visual request/reply pairing via a `↳` glyph
+(`9664a68`) and a `↙` glyph for replies (`9417165`); field-level
+semantic diff in CaptureDiff (`f6c19ef`); proxy read/write paths
+harmonized with the listener (`218dc53` -- EINTR/EAGAIN retry +
+errno logging).
+
+**Inline narrative landmark detector** -- new sub-feature that landed
+in four phases:
+
+- `9111f86` -- core: LandmarkDetector + syntax-colored `# ...` callouts
+  inline in the dump. Server-side parity in `ServerSession`.
+- `af25b2f` / `230b4d2` -- rewrote landmarks as story-form narration,
+  left-justified `# ...` comments. Fixed the first-top-level
+  detection bug.
+- `9417165` -- verbose identify landmarks (which app each window came
+  from).
+- `b5a233d` / `de4160d` / `16fd018` / `7796097` -- Phases A through D:
+  window hierarchy + click contextualization; hidden / closed /
+  dialog-dismissed landmarks; error correlation + session-end summary;
+  viewer-side landmark navigation (sidebar + Cmd-]/Cmd-[).
+
+**Docs + ledger**:
+
+- `201c52c` / `d3d43ec` -- macXcapture feature checklist created and
+  filled (22 Yes / 34 Partial / 69 No / 1 N/A).
+- `2f912fc` -- checklist rewrapped + vintage-X11-lens synopsis added.
+- `532e786` -- end-of-day audit against the day's landmark + diff
+  work. Four row moves; checklist now 24/35/67/1 (127 items, +2 Yes,
+  +1 Partial, -3 No net).
+- `60568bb` -- xcodegen regen to pick up Phase 1-3 source files.
+- `ff7dd8c` -- server: drop the session-end console summary that the
+  capture-side landmark sweep made redundant.
+- `ac2614c` -- server: close landmark parity with the capture side.
+- `9eacc8a` -- new memory: don't filter protocol truth from output
+  (`feedback_dont_filter_protocol_truth`). Rephrase quirky-but-real
+  wire acts (empty WM_NAME, hidden helper windows) so they read
+  cleanly instead of hiding them.
+
+## What's open
+
+Carrying over from prior status entries, no progress since 2026-05-27
+on:
+
+- Framer-shared bug investigation (carried since 05-19).
+- dtpad Gap B: text-area paint loss on resize (DECISIONS 2026-05-25
+  flagged as separate from the preservation work).
+- dtpad menu-bar erase on dialog popup (DECISIONS 2026-05-25).
+- Horizontal scrollbar reverse-image rendering (DECISIONS 2026-05-25).
+
+New since the SHAPE work:
+
+- Clip-shape and descendant-window shape: stored but not rendered. No
+  hosted client needs them today. See SHORTCUTS for the exit plan.
+- ShapeNotify is per-session, not cross-session (SHORTCUTS).
+- `ShapeRectangles` ordering claim not enforced (SHORTCUTS, low value).
+
+New since the macXcapture push:
+
+- The 67 `No` rows in `macXcapture-feature-checklist.md`. Phase 4-5
+  of the decoder coverage plan is the next focused push if we want
+  to keep moving on OSS-launch quality.
+
+Previous status entries (2026-05-27 onward) preserved below.
+
+---
+
 # Status 2026-05-27 — remote launcher; Motif clipboard; root properties; configurable frame; doc audit
 
 Started as cleanup, turned into the biggest feature day of the project.
