@@ -55,10 +55,13 @@ macXcapture from a useful tool into infrastructure.
       disconnect via EOF reaches finalize (`Proxy.pump` returns on `n <= 0`). SIGKILL or crash
       before finalize loses everything — explicitly documented at `Recorder.swift:111`.
 - [~] Survives partial reads/writes on either side (proper framing recovery) — **Partial**.
-      `Proxy.pump()` is byte-level, so partial reads are fine. The decoder side
-      (`ChronoDumper.StreamWalker`) buffers and only extracts when a full message is present. But
-      `Recorder.record()` takes raw chunks with no framing — replay reassembles by length-prefix per
-      frame, so a torn write in the middle of a request is preserved as torn.
+      `Proxy.pump()` is byte-level, so partial reads are fine. As of 2026-05-30 it now mirrors the
+      server-side `Listener.swift` read path: EINTR / EAGAIN / EWOULDBLOCK retry the loop, anything
+      else logs `proxy: read/write failed errno=N (text)` to stderr before tearing down. The decoder
+      side (`ChronoDumper.StreamWalker`) buffers and only extracts when a full message is present.
+      The remaining framing concern is at `Recorder.record()` which takes raw chunks with no framing
+      — replay reassembles by length-prefix per frame, so a torn write in the middle of a request is
+      preserved as torn.
 - [ ] Multi-client capture in a single session (multiple clients through one proxy) — **No**.
       `Proxy.run()` does a single `acceptConnection()` then closes the listen socket
       (`Proxy.swift:48`). One client per `Proxy` instance, period. Multiple proxies = multiple OS
@@ -142,9 +145,14 @@ macXcapture from a useful tool into infrastructure.
       `atomDisplay` at `ChronoDumper.swift:227` resolves to predefined atoms first
       (`Sources/Framer/PredefinedAtoms.swift`), then session-interned, then hex. GetAtomName reply
       harvesting is **not** implemented (only the request side prints the atom number).
-- [ ] Resource IDs (windows, pixmaps, GCs, fonts, cursors, colormaps) tracked across the session —
-      **No**. Resource IDs print as raw hex via `windowDisplay` / `hx()`. There is no session-wide
-      resource registry; no map from id → type, no creation-frame metadata.
+- [~] Resource IDs (windows, pixmaps, GCs, fonts, cursors, colormaps) tracked across the session —
+      **Partial** (as of 2026-05-30). The `LandmarkDetector`
+      (`Sources/SwiftXCaptureCore/LandmarkDetector.swift`) tracks **windows** session-wide: the
+      full parent map for every CreateWindow, a `topLevels` table keyed by wid carrying name + size
+      + mapped state, plus `windowSizes`, `mappedWindows`, and `transientFor` maps. This is what
+      enables the landmark click-contextualization to walk up from a child to its named top-level
+      ancestor. Pixmaps / GCs / fonts / cursors / colormaps are still **not** tracked. The window
+      data is also internal to the detector — there's no public registry exposed to other passes.
 - [ ] Resource creation lineage shown (this Pixmap was created at frame N) — **No**. Not implemented
       anywhere.
 - [ ] Resource lifetime tracked (freed at frame M, used-after-free flagged) — **No**. Not
@@ -239,8 +247,12 @@ For each: requests + replies + events + errors decoded.
       fast jump.
 - [ ] Jump to frame by number — **No**. No "go to frame N" UI. The text viewer has line numbers
       (`LineNumberGutter.swift`) but no goto-line command surfaced.
-- [ ] Jump to next/previous frame matching filter — **No**. Cmd-F text search in NSTextView is the
-      closest thing; there's no "next request matching X" command.
+- [~] Jump to next/previous frame matching filter — **Partial** (as of 2026-05-30). Cmd-]/Cmd-[
+      jump to the next/previous landmark line in the dump
+      (`Sources/SwiftXCaptureUI/CaptureViewerPanelView.swift` invisible-button shortcuts +
+      `CaptureEditorController.firstVisibleLine`/`jump(toLine:)`). The "filter" is fixed — landmark
+      lines only — and there's no UI for arbitrary opcode / resource-id filters. Cmd-F text search
+      still handles the generic case.
 - [ ] Filter by opcode / extension / direction / resource ID — **No**. The dump is fully
       materialized text; no in-viewer filtering.
 - [ ] Search by atom name, resource ID, or arbitrary byte pattern — **No**. Inherited NSTextView
@@ -250,10 +262,13 @@ For each: requests + replies + events + errors decoded.
       **No**. Would need a resource-tracking pass that doesn't exist.
 - [ ] Timeline view (frames over time, optionally grouped by client) — **No**. `OpenModel.swift:12`
       explicitly defers this ("no phase-tree grouping and no timeline scrubber").
-- [~] Side-by-side request/reply pairing for round-trip requests — **Partial**. `[seq=N]` is printed
-      on both lines (`ChronoDumper.swift:282` `seqField`) and the dumper resolves the reply's
-      request name. Visually they're separate lines, not paired. Phase 5 polish (about to land) adds
-      this; for this audit, current state.
+- [~] Side-by-side request/reply pairing for round-trip requests — **Partial** (as of 2026-05-30
+      Phase 5 polish landed). `[seq=N]` is printed on both lines (`ChronoDumper.swift:282`
+      `seqField`), the dumper resolves the reply's request name in parens, and the direction
+      arrow on replies / XErrors is `↙` (south-west) instead of `←` so the downward component
+      visually attaches each reply to the request line above it. Highlighter paints both arrows
+      in the response color (`CaptureSyntaxHighlighter.swift` `reArrowIn = ←|↙`). Visually they're
+      still separate lines (not a true side-by-side pane), but the linkage is unambiguous.
 - [ ] Latency annotations between request and matching reply — **No**. Both lines carry timestamps
       but the delta isn't computed/shown.
 - [ ] Bookmark frames within a capture — **No**. Not implemented.
@@ -272,11 +287,15 @@ For each: requests + replies + events + errors decoded.
       dumper emits `Request opcode=N (untyped)` for any extension request with no prior
       QueryExtension reply (`ChronoDumper.swift:553`). The syntax highlighter doesn't treat that
       line specially — it just looks like a regular request.
-- [~] Protocol error highlighting (error replies linked to causing request) — **Partial**. Errors
-      print on their own line and the syntax highlighter paints `Bad[A-Za-z]+` and `Error#N` in red
-      (`CaptureSyntaxHighlighter.swift:73`). The line carries `[seq=N]` matching the failing
-      request's sequence, but the viewer doesn't visually link them. The `majorOpcode` in the error
-      body is decoded to its name (`ChronoDumper.swift:709`).
+- [x] Protocol error highlighting (error replies linked to causing request) — **Yes** (as of
+      2026-05-30). Errors print on their own line and the syntax highlighter paints
+      `Bad[A-Za-z]+` and `Error#N` in red (`CaptureSyntaxHighlighter.swift`). On top of that, the
+      `LandmarkDetector` emits an explicit correlation comment immediately after each XError, e.g.
+      `# BadDrawable at seq=412 from CopyArea on "Command Window"`. Resource-bearing errors
+      resolve the bad id through the window hierarchy; BadValue renders the bad id as the
+      offending value; extension errors get named via `extensionMajorToName` so SHAPE-major
+      requests read as `SHAPE request (minor=N)` instead of bare opcode numbers. Same correlation
+      fires live on the server side from `ServerSession.emitError`.
 - [ ] Round-trip latency histogram — **No**. Not implemented.
 - [~] Frame size statistics — **Partial**. The `summary` CLI subcommand (`Dumper.summarize`,
       `Sources/SwiftXCaptureCore/Dumper.swift:10`) reports total c2s/s2c bytes, request count by
@@ -291,6 +310,19 @@ For each: requests + replies + events + errors decoded.
       COMPOSITE/DAMAGE aren't even decoded.
 - [ ] Pixmap content preview (where image data is captured) — **No**. PutImage prints byte count
       only; no decode-to-image, no rendering.
+- [x] Inline narrative landmarks for structural events — **Yes** (as of 2026-05-30).
+      `Sources/SwiftXCaptureCore/LandmarkDetector.swift` watches the decoded request + server-
+      message stream and emits `# ...` story-form comment lines at structurally important moments:
+      top-level window mapped (tagged primary / auxiliary), window identified by WM_NAME, dialog
+      opened (via WM_TRANSIENT_FOR), window hidden / closed / dialog dismissed, click
+      contextualized to the named ancestor and child window-size, XError correlated to its
+      causing request, session-end summary with totals. All gated on the "namability rule":
+      emit only if a top-level can be referenced by a name (or as a known unnamed top-level, or
+      as the desktop). The same `LandmarkDetector` runs server-side in `ServerSession.dispatch`
+      so the live Xcode console gets the same vocabulary as the post-mortem viewer.
+      `CaptureSyntaxHighlighter` paints landmark lines in saturated yellow (`#f0c674`).
+      Viewer sidebar in `CaptureViewerPanelView.swift` lists every landmark as a clickable row;
+      Cmd-]/Cmd-[ jump to next / previous landmark relative to the current scroll position.
 
 ## 7. Live Mode and Streaming
 
@@ -321,8 +353,15 @@ For each: requests + replies + events + errors decoded.
 - [x] Diff two captures (frame-level structural diff) — **Yes**.
       `Sources/SwiftXCaptureCore/CaptureDiff.swift` `CaptureDiff.compare(pathA:pathB:)`. LCS-aligned
       per-direction comparison on ChronoDumper-formatted lines, producing `same / different / onlyA
-      / onlyB` rows. Markdown rendering at `CaptureDiff.render`. Tests at
-      `Tests/SwiftXCaptureCoreTests/CaptureDiffTests.swift`.
+      / onlyB` rows. Phase 5 (2026-05-30) added field-level semantic tolerance: per-stream
+      `StreamMetadata` extracted from the SetupAccepted reply (resource-id base, mask, root window
+      ids, root visual ids, default colormap ids) drives `normalizeIdentifiers(_:metadata:)` which
+      rewrites client-allocated ids to `0xC<offset>`, root window → `0xROOT`, visual → `0xVISUAL`,
+      cmap → `0xCMAP` before LCS keying. Plus `applyToleranceRules(_:)` for InternAtom reply atom
+      values, QueryExtension major/firstEvent/firstError, and AllocColor / AllocNamedColor pixel
+      values. Displayed lines keep the original values. Real-world impact: editres gold-vs-swiftx
+      C2S `same` rows went from 27 → 118 (4.4×). Markdown rendering at `CaptureDiff.render`. Tests
+      at `Tests/SwiftXCaptureCoreTests/CaptureDiffTests.swift`.
 - [ ] Generate conformance test from capture (golden-file style) — **No**. No "fixture this capture
       as a regression" codepath. `Tests/SwiftXCaptureCoreTests/CorpusRoundTripTests.swift` is
       hand-written against fixed gold files; not user-facing tooling.
@@ -437,12 +476,18 @@ For each: requests + replies + events + errors decoded.
 
 ## Summary
 
-**Counts (126 items total):**
+**Counts (127 items total, audited 2026-05-30 evening after the landmark + diff
+work landed):**
 
-- **Yes**: 22
-- **Partial**: 34
-- **No**: 69
+- **Yes**: 24
+- **Partial**: 35
+- **No**: 67
 - **N/A**: 1 (Linux build — explicit non-goal)
+
+_Changes since the morning audit: protocol-error highlighting moved Partial → Yes (landmark
+correlation), Resource IDs tracked moved No → Partial (LandmarkDetector window hierarchy),
+Jump to next/previous matching filter moved No → Partial (Cmd-]/Cmd-[ landmark navigation),
+and one new row added for inline narrative landmarks in §6._
 
 The Yes column is concentrated where you'd expect from the project history: the wire codec (core
 requests + events + errors, SHAPE/BIG-REQUESTS/MIT-SHM/RENDER/XInputV1, atom resolution), the file
@@ -464,15 +509,19 @@ standardize on"):**
    "tool the whole X community uses." `OPCODE_STATUS.md:275` already flags this as a ship/no-ship
    decision.
 2. **Resource tracking (§3 + §6: ID lineage, leak detection, use-after-free, follow-this-resource
-   navigation)**. The session-wide registry that would unblock most of §6's analysis aids doesn't
-   exist. Adding it would also enable §5's "follow this window" navigation and meaningfully lower
-   the bar on every Motif/CDE debugging session, not just modern-Linux ones. The ChronoContext
-   already has the right shape; this is additive work, not a rewrite.
-3. **Structured navigation in the viewer (§5: jump to frame N, filter by opcode/direction/resource,
-   search by atom name, request/reply pairing)**. The viewer renders the entire dump as one text
-   blob. NSTextView's find-and-Cmd-F is the only navigation. For captures larger than a few thousand
-   frames this is the dominant complaint; Wireshark gets used over `tcpdump` mostly because of
-   structured filtering.
+   navigation)**. The 2026-05-30 LandmarkDetector now keeps a session-wide window hierarchy
+   (parent map, top-level table, mapped state, transient-for) — but it's internal to the detector
+   and only windows are covered. Pixmaps / GCs / fonts / cursors / colormaps remain untracked, and
+   §6's leak / use-after-free / follow-this-resource items still need a proper exposed registry.
+   Promoting the LandmarkDetector's window state to a first-class `ResourceRegistry` accessible to
+   other passes would unblock all of these.
+3. **Structured navigation in the viewer (§5: jump to frame N, filter by
+   opcode/direction/resource, search by atom name)**. The 2026-05-30 landmark + Cmd-]/Cmd-[
+   work closed the worst part of this (you can now jump between named events and see them as an
+   outline), but generic filters and "follow this resource" still don't exist. NSTextView's
+   find-and-Cmd-F is the only generic-search tool. For captures larger than a few thousand frames
+   this remains a real gap; Wireshark gets used over `tcpdump` mostly because of structured
+   filtering.
 4. **Cookie / auth-data redaction by default (§12)**. The "share a .xtap as a bug report" workflow
    is one of the stated mission goals (`PRODUCT_1_CAPTURE.md:88`), and right now every shared .xtap
    leaks the user's MIT-MAGIC-COOKIE-1 verbatim. This is small to fix (mask the SetupRequest's
