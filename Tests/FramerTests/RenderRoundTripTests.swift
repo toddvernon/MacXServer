@@ -209,6 +209,143 @@ final class RenderRoundTripTests: XCTestCase {
             decode: { try RenderQueryPictFormatsReply.decode(from: $0, byteOrder: $1) })
     }
 
+    // MARK: - Session 2: glyph stack + filter/index queries
+
+    func testQueryPictIndexValuesReqAndReply() throws {
+        try roundTrip(RenderQueryPictIndexValues(format: 0x20000020),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderQueryPictIndexValues.decode(from: $0, byteOrder: $1) })
+        try roundTrip(RenderQueryPictIndexValuesReply(
+            sequenceNumber: 9,
+            values: [
+                RenderIndexValue(pixel: 0, red: 0, green: 0, blue: 0, alpha: 0xFFFF),
+                RenderIndexValue(pixel: 1, red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF, alpha: 0xFFFF),
+            ]),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try RenderQueryPictIndexValuesReply.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testQueryFiltersReqAndReply() throws {
+        try roundTrip(RenderQueryFilters(drawable: 0x10000005),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderQueryFilters.decode(from: $0, byteOrder: $1) })
+        try roundTrip(RenderQueryFiltersReply(
+            sequenceNumber: 11,
+            aliases: [0, 1, 2],   // 3 × 2 = 6 bytes, pads 2
+            filters: ["nearest", "bilinear", "fast", "good", "best", "convolution"]),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try RenderQueryFiltersReply.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testAddGlyphs() throws {
+        let payload = RenderAddGlyphsPayload(
+            glyphIDs: [0x100, 0x200, 0x300],
+            glyphInfos: [
+                RenderGlyphInfo(width: 8, height: 12, x: 0, y: -10, xOff: 8, yOff: 0),
+                RenderGlyphInfo(width: 10, height: 14, x: 0, y: -12, xOff: 10, yOff: 0),
+                RenderGlyphInfo(width: 6, height: 10, x: -1, y: -8, xOff: 6, yOff: 0),
+            ],
+            // Synthetic bitmap blob (already padded to 4-byte boundary).
+            bitmapData: Array(repeating: 0xFF, count: 96))
+        try roundTrip(RenderAddGlyphs(glyphset: 0x40000010, payload: payload),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderAddGlyphs.decode(from: $0, byteOrder: $1) })
+    }
+
+    // MARK: - CompositeGlyphs variants
+
+    func testCompositeGlyphs8SimpleDraw() throws {
+        let elts: [RenderGlyphElt] = [
+            .draw(deltax: 0, deltay: 0, glyphIDs: [0x41, 0x42, 0x43, 0x44, 0x45]),
+        ]
+        try roundTrip(RenderCompositeGlyphs(
+            idSize: .bits8, op: 3,
+            src: 0x40000001, dst: 0x40000002,
+            maskFormat: 0x20000020, glyphset: 0x40000010,
+            xSrc: 100, ySrc: 200, elts: elts),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderCompositeGlyphs.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testCompositeGlyphs8WithPadVariations() throws {
+        // 8-bit IDs: len=1 → 3 bytes pad, len=3 → 1 byte pad, len=4 → 0 pad.
+        for n in [1, 2, 3, 4, 5, 7] {
+            let ids = (0..<n).map { UInt32(0x41 + $0) }
+            let elts: [RenderGlyphElt] = [
+                .draw(deltax: Int16(n), deltay: -Int16(n), glyphIDs: ids),
+            ]
+            try roundTrip(RenderCompositeGlyphs(
+                idSize: .bits8, op: 3,
+                src: 0x40000001, dst: 0x40000002,
+                maskFormat: 0, glyphset: 0x40000010,
+                xSrc: 0, ySrc: 0, elts: elts),
+                encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+                decode: { try RenderCompositeGlyphs.decode(from: $0, byteOrder: $1) })
+        }
+    }
+
+    func testCompositeGlyphs16PadVariations() throws {
+        // 16-bit IDs: len=1 → (4 - 2%4)%4 = 2 byte pad; len=2 → 0 pad;
+        // len=3 → 2 byte pad; len=4 → 0 pad.
+        for n in [1, 2, 3, 4] {
+            let ids = (0..<n).map { UInt32(0x100 + $0) }
+            let elts: [RenderGlyphElt] = [
+                .draw(deltax: 0, deltay: 0, glyphIDs: ids),
+            ]
+            try roundTrip(RenderCompositeGlyphs(
+                idSize: .bits16, op: 3,
+                src: 0x40000001, dst: 0x40000002,
+                maskFormat: 0, glyphset: 0x40000010,
+                xSrc: 0, ySrc: 0, elts: elts),
+                encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+                decode: { try RenderCompositeGlyphs.decode(from: $0, byteOrder: $1) })
+        }
+    }
+
+    func testCompositeGlyphs32() throws {
+        // 32-bit IDs always 0 pad.
+        let elts: [RenderGlyphElt] = [
+            .draw(deltax: 100, deltay: 50,
+                  glyphIDs: [0x10001, 0x20002, 0x30003]),
+        ]
+        try roundTrip(RenderCompositeGlyphs(
+            idSize: .bits32, op: 3,
+            src: 0x40000001, dst: 0x40000002,
+            maskFormat: 0, glyphset: 0x40000010,
+            xSrc: 0, ySrc: 0, elts: elts),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderCompositeGlyphs.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testCompositeGlyphsWithGlyphsetSwitch() throws {
+        // The risky case: a glyphset switch in the middle of a stream.
+        // Mishandling this misaligns every following elt.
+        let elts: [RenderGlyphElt] = [
+            .draw(deltax: 0, deltay: 0, glyphIDs: [0x41, 0x42, 0x43]),
+            .glyphsetSwitch(deltax: 0, deltay: 0, glyphset: 0x40000020),
+            .draw(deltax: 5, deltay: 0, glyphIDs: [0x44]),
+            .glyphsetSwitch(deltax: 0, deltay: 0, glyphset: 0x40000030),
+            .draw(deltax: 10, deltay: -5, glyphIDs: [0x45, 0x46]),
+        ]
+        try roundTrip(RenderCompositeGlyphs(
+            idSize: .bits8, op: 3,
+            src: 0x40000001, dst: 0x40000002,
+            maskFormat: 0x20000020, glyphset: 0x40000010,
+            xSrc: 0, ySrc: 0, elts: elts),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderCompositeGlyphs.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testCompositeGlyphsEmptyStream() throws {
+        try roundTrip(RenderCompositeGlyphs(
+            idSize: .bits8, op: 0,
+            src: 0x40000001, dst: 0x40000002,
+            maskFormat: 0, glyphset: 0x40000010,
+            xSrc: 0, ySrc: 0, elts: []),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderCompositeGlyphs.decode(from: $0, byteOrder: $1) })
+    }
+
     func testQueryPictFormatsReplyMultipleScreens() throws {
         // Stress the per-screen nDepths walking — two screens with
         // different depth counts.

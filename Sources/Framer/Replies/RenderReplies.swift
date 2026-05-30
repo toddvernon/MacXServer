@@ -294,3 +294,145 @@ public struct RenderQueryPictFormatsReply: Equatable, Sendable {
         )
     }
 }
+
+// =============================================================================
+// Session 2 (2026-05-30): QueryPictIndexValues + QueryFilters replies.
+// =============================================================================
+
+// MARK: - QueryPictIndexValues reply
+
+/// 32-byte header + numIndexValues × xIndexValue (12 bytes each).
+public struct RenderIndexValue: Equatable, Sendable {
+    public var pixel: UInt32
+    public var red: UInt16
+    public var green: UInt16
+    public var blue: UInt16
+    public var alpha: UInt16
+
+    public init(pixel: UInt32, red: UInt16, green: UInt16, blue: UInt16, alpha: UInt16) {
+        self.pixel = pixel
+        self.red = red; self.green = green; self.blue = blue; self.alpha = alpha
+    }
+}
+
+public struct RenderQueryPictIndexValuesReply: Equatable, Sendable {
+    public var sequenceNumber: UInt16
+    public var values: [RenderIndexValue]
+
+    public init(sequenceNumber: UInt16, values: [RenderIndexValue]) {
+        self.sequenceNumber = sequenceNumber; self.values = values
+    }
+
+    public func encode(byteOrder: ByteOrder) -> [UInt8] {
+        let trailerBytes = values.count * 12
+        // 4-byte alignment is guaranteed (12 is divisible by 4).
+        let lenIn4 = UInt32(trailerBytes / 4)
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(1); w.writeUInt8(0); w.writeUInt16(sequenceNumber)
+        w.writeUInt32(lenIn4)
+        w.writeUInt32(UInt32(values.count))
+        w.writePadding(20)
+        for v in values {
+            w.writeUInt32(v.pixel)
+            w.writeUInt16(v.red); w.writeUInt16(v.green)
+            w.writeUInt16(v.blue); w.writeUInt16(v.alpha)
+        }
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> RenderQueryPictIndexValuesReply {
+        guard bytes.count >= 32 else {
+            throw FramerError.truncated(needed: 32, available: bytes.count)
+        }
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        _ = try r.readUInt8(); _ = try r.readUInt8()
+        let seq = try r.readUInt16()
+        _ = try r.readUInt32()
+        let n = Int(try r.readUInt32())
+        try r.skip(20)
+        var values: [RenderIndexValue] = []
+        values.reserveCapacity(n)
+        for _ in 0..<n {
+            let pixel = try r.readUInt32()
+            let red = try r.readUInt16()
+            let green = try r.readUInt16()
+            let blue = try r.readUInt16()
+            let alpha = try r.readUInt16()
+            values.append(RenderIndexValue(
+                pixel: pixel, red: red, green: green, blue: blue, alpha: alpha
+            ))
+        }
+        return RenderQueryPictIndexValuesReply(sequenceNumber: seq, values: values)
+    }
+}
+
+// MARK: - QueryFilters reply
+
+/// 32-byte header + numAliases × CARD16 (padded to 4) +
+/// numFilters × STRING8 (length-prefixed bytes, packed without per-
+/// string padding; tail padded to 4).
+public struct RenderQueryFiltersReply: Equatable, Sendable {
+    public var sequenceNumber: UInt16
+    public var aliases: [UInt16]
+    public var filters: [String]
+
+    public init(sequenceNumber: UInt16, aliases: [UInt16], filters: [String]) {
+        self.sequenceNumber = sequenceNumber
+        self.aliases = aliases
+        self.filters = filters
+    }
+
+    public func encode(byteOrder: ByteOrder) -> [UInt8] {
+        // Compute trailer length.
+        var trailer = ByteWriter(byteOrder: byteOrder)
+        for a in aliases { trailer.writeUInt16(a) }
+        trailer.writePadding(xPad(aliases.count * 2))
+        var nameBytes = 0
+        for s in filters {
+            let bytes = Array(s.utf8)
+            precondition(bytes.count <= 255, "filter name must fit in one length byte")
+            trailer.writeUInt8(UInt8(bytes.count))
+            trailer.writeBytes(bytes)
+            nameBytes += 1 + bytes.count
+        }
+        trailer.writePadding(xPad(nameBytes))
+
+        let trailerBytes = trailer.bytes
+        let lenIn4 = UInt32(trailerBytes.count / 4)
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(1); w.writeUInt8(0); w.writeUInt16(sequenceNumber)
+        w.writeUInt32(lenIn4)
+        w.writeUInt32(UInt32(aliases.count))
+        w.writeUInt32(UInt32(filters.count))
+        w.writePadding(16)
+        w.writeBytes(trailerBytes)
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> RenderQueryFiltersReply {
+        guard bytes.count >= 32 else {
+            throw FramerError.truncated(needed: 32, available: bytes.count)
+        }
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        _ = try r.readUInt8(); _ = try r.readUInt8()
+        let seq = try r.readUInt16()
+        _ = try r.readUInt32()
+        let numAliases = Int(try r.readUInt32())
+        let numFilters = Int(try r.readUInt32())
+        try r.skip(16)
+        var aliases: [UInt16] = []
+        aliases.reserveCapacity(numAliases)
+        for _ in 0..<numAliases { aliases.append(try r.readUInt16()) }
+        try r.skip(xPad(numAliases * 2))
+        var filters: [String] = []
+        filters.reserveCapacity(numFilters)
+        for _ in 0..<numFilters {
+            let len = Int(try r.readUInt8())
+            let raw = try r.readBytes(len)
+            filters.append(String(decoding: raw, as: UTF8.self))
+        }
+        return RenderQueryFiltersReply(
+            sequenceNumber: seq, aliases: aliases, filters: filters
+        )
+    }
+}

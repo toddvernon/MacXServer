@@ -80,6 +80,54 @@ public struct RenderQueryVersion: Equatable, Sendable {
     }
 }
 
+// MARK: - RenderQueryPictIndexValues (minor 2) — Session 2
+
+public struct RenderQueryPictIndexValues: Equatable, Sendable {
+    public static let minor: UInt8 = RenderMinor.queryPictIndexValues
+
+    public var format: UInt32
+
+    public init(format: UInt32) { self.format = format }
+
+    public func encode(majorOpcode: UInt8, byteOrder: ByteOrder) -> [UInt8] {
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(majorOpcode); w.writeUInt8(Self.minor); w.writeUInt16(2)
+        w.writeUInt32(format)
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> RenderQueryPictIndexValues {
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        _ = try r.readUInt8(); _ = try r.readUInt8(); _ = try r.readUInt16()
+        let format = try r.readUInt32()
+        return RenderQueryPictIndexValues(format: format)
+    }
+}
+
+// MARK: - RenderQueryFilters (minor 29) — Session 2
+
+public struct RenderQueryFilters: Equatable, Sendable {
+    public static let minor: UInt8 = RenderMinor.queryFilters
+
+    public var drawable: UInt32
+
+    public init(drawable: UInt32) { self.drawable = drawable }
+
+    public func encode(majorOpcode: UInt8, byteOrder: ByteOrder) -> [UInt8] {
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(majorOpcode); w.writeUInt8(Self.minor); w.writeUInt16(2)
+        w.writeUInt32(drawable)
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> RenderQueryFilters {
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        _ = try r.readUInt8(); _ = try r.readUInt8(); _ = try r.readUInt16()
+        let drawable = try r.readUInt32()
+        return RenderQueryFilters(drawable: drawable)
+    }
+}
+
 // MARK: - RenderQueryPictFormats (minor 1)
 
 public struct RenderQueryPictFormats: Equatable, Sendable {
@@ -420,6 +468,137 @@ public struct RenderFreeGlyphs: Equatable, Sendable {
         ids.reserveCapacity(n)
         for _ in 0..<n { ids.append(try r.readUInt32()) }
         return RenderFreeGlyphs(glyphset: glyphset, glyphIDs: ids)
+    }
+}
+
+// MARK: - RenderAddGlyphs (minor 20) — Session 2
+
+/// 12-byte header (glyphset + nglyphs) + the three-part trailer
+/// handled by RenderAddGlyphsPayload (glyph IDs, GlyphInfo records,
+/// concatenated bitmap blob).
+public struct RenderAddGlyphs: Equatable, Sendable {
+    public static let minor: UInt8 = RenderMinor.addGlyphs
+
+    public var glyphset: UInt32
+    public var payload: RenderAddGlyphsPayload
+
+    public init(glyphset: UInt32, payload: RenderAddGlyphsPayload) {
+        self.glyphset = glyphset; self.payload = payload
+    }
+
+    public func encode(majorOpcode: UInt8, byteOrder: ByteOrder) -> [UInt8] {
+        let trailer = payload.encode(byteOrder: byteOrder)
+        let lenIn4 = UInt16(3 + trailer.count / 4)
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(majorOpcode); w.writeUInt8(Self.minor); w.writeUInt16(lenIn4)
+        w.writeUInt32(glyphset)
+        w.writeUInt32(UInt32(payload.glyphIDs.count))
+        w.writeBytes(trailer)
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> RenderAddGlyphs {
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        _ = try r.readUInt8(); _ = try r.readUInt8()
+        let lenIn4 = Int(try r.readUInt16())
+        let glyphset = try r.readUInt32()
+        let nglyphs = Int(try r.readUInt32())
+        let trailerBytes = (lenIn4 - 3) * 4
+        let trailer = try r.readBytes(trailerBytes)
+        let payload = try RenderAddGlyphsPayload.decode(
+            from: trailer, nglyphs: nglyphs, byteOrder: byteOrder
+        )
+        return RenderAddGlyphs(glyphset: glyphset, payload: payload)
+    }
+}
+
+// MARK: - RenderCompositeGlyphs8/16/32 (minors 23/24/25) — Session 2
+
+/// Shared struct for all three CompositeGlyphs variants. `idSize`
+/// discriminates the glyph-ID width in the trailer; the on-wire minor
+/// opcode is derived from it.
+///
+/// The trailer is a stream of GLYPHITEM records — see
+/// RenderGlyphStream. Each elt is either a draw (deltax/deltay plus
+/// some glyph IDs) or a glyphset switch (len=0xFF + 4-byte glyphset).
+public struct RenderCompositeGlyphs: Equatable, Sendable {
+    public var idSize: RenderGlyphIdSize
+    public var op: UInt8           // PictOp*
+    public var src: UInt32         // Picture
+    public var dst: UInt32         // Picture
+    public var maskFormat: UInt32  // PictFormat or 0 (None)
+    public var glyphset: UInt32    // Glyphset
+    public var xSrc: Int16
+    public var ySrc: Int16
+    public var elts: [RenderGlyphElt]
+
+    public init(idSize: RenderGlyphIdSize,
+                op: UInt8, src: UInt32, dst: UInt32,
+                maskFormat: UInt32, glyphset: UInt32,
+                xSrc: Int16, ySrc: Int16,
+                elts: [RenderGlyphElt]) {
+        self.idSize = idSize
+        self.op = op
+        self.src = src; self.dst = dst
+        self.maskFormat = maskFormat; self.glyphset = glyphset
+        self.xSrc = xSrc; self.ySrc = ySrc
+        self.elts = elts
+    }
+
+    public var minorOpcode: UInt8 {
+        switch idSize {
+        case .bits8:  return RenderMinor.compositeGlyphs8
+        case .bits16: return RenderMinor.compositeGlyphs16
+        case .bits32: return RenderMinor.compositeGlyphs32
+        }
+    }
+
+    public func encode(majorOpcode: UInt8, byteOrder: ByteOrder) -> [UInt8] {
+        let trailer = RenderGlyphStream.encode(elts, idSize: idSize, byteOrder: byteOrder)
+        // 28 bytes header = 7 4-byte words.
+        let lenIn4 = UInt16(7 + trailer.count / 4)
+        var w = ByteWriter(byteOrder: byteOrder)
+        w.writeUInt8(majorOpcode); w.writeUInt8(minorOpcode); w.writeUInt16(lenIn4)
+        w.writeUInt8(op); w.writePadding(3)
+        w.writeUInt32(src); w.writeUInt32(dst)
+        w.writeUInt32(maskFormat); w.writeUInt32(glyphset)
+        w.writeUInt16(UInt16(bitPattern: xSrc)); w.writeUInt16(UInt16(bitPattern: ySrc))
+        w.writeBytes(trailer)
+        return w.bytes
+    }
+
+    public static func decode(from bytes: [UInt8], byteOrder: ByteOrder) throws -> RenderCompositeGlyphs {
+        var r = ByteReader(bytes: bytes, byteOrder: byteOrder)
+        _ = try r.readUInt8()
+        let minor = try r.readUInt8()
+        let idSize: RenderGlyphIdSize
+        switch minor {
+        case RenderMinor.compositeGlyphs8:  idSize = .bits8
+        case RenderMinor.compositeGlyphs16: idSize = .bits16
+        case RenderMinor.compositeGlyphs32: idSize = .bits32
+        default:
+            throw FramerError.invalidOpcode(expected: RenderMinor.compositeGlyphs8, got: minor)
+        }
+        let lenIn4 = Int(try r.readUInt16())
+        let op = try r.readUInt8(); try r.skip(3)
+        let src = try r.readUInt32()
+        let dst = try r.readUInt32()
+        let maskFormat = try r.readUInt32()
+        let glyphset = try r.readUInt32()
+        let xSrc = Int16(bitPattern: try r.readUInt16())
+        let ySrc = Int16(bitPattern: try r.readUInt16())
+        let trailerBytes = (lenIn4 - 7) * 4
+        let trailer = try r.readBytes(trailerBytes)
+        let elts = try RenderGlyphStream.decode(
+            from: trailer, idSize: idSize, byteOrder: byteOrder
+        )
+        return RenderCompositeGlyphs(
+            idSize: idSize,
+            op: op, src: src, dst: dst,
+            maskFormat: maskFormat, glyphset: glyphset,
+            xSrc: xSrc, ySrc: ySrc,
+            elts: elts
+        )
     }
 }
 

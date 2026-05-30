@@ -73,6 +73,29 @@ public enum RenderDumper: ExtensionDumper {
                 return "RenderSetPictureTransform picture=\(hx(r.picture)) matrix=[..3x3 16.16 fixed..]"
             }
 
+        // Session 2 — glyph stack + filter/index queries
+        case RenderMinor.queryPictIndexValues:
+            if let r = try? RenderQueryPictIndexValues.decode(from: bytes, byteOrder: byteOrder) {
+                return "RenderQueryPictIndexValues format=\(hx(r.format))"
+            }
+        case RenderMinor.queryFilters:
+            if let r = try? RenderQueryFilters.decode(from: bytes, byteOrder: byteOrder) {
+                return "RenderQueryFilters       drawable=\(hx(r.drawable))"
+            }
+        case RenderMinor.addGlyphs:
+            if let r = try? RenderAddGlyphs.decode(from: bytes, byteOrder: byteOrder) {
+                return "RenderAddGlyphs          glyphset=\(hx(r.glyphset)) nglyphs=\(r.payload.glyphIDs.count) bitmapData=\(r.payload.bitmapData.count)b"
+            }
+        case RenderMinor.compositeGlyphs8,
+             RenderMinor.compositeGlyphs16,
+             RenderMinor.compositeGlyphs32:
+            if let r = try? RenderCompositeGlyphs.decode(from: bytes, byteOrder: byteOrder) {
+                let (totalGlyphs, switches) = glyphElementStats(r.elts)
+                let maskStr = r.maskFormat == 0 ? "None" : hx(r.maskFormat)
+                let size = idSizeBits(r.idSize)
+                return "RenderCompositeGlyphs\(size)  op=\(pictOpName(r.op)) src=\(hx(r.src)) dst=\(hx(r.dst)) mask=\(maskStr) glyphset=\(hx(r.glyphset)) origin=(\(r.xSrc),\(r.ySrc)) elts=\(r.elts.count) glyphs=\(totalGlyphs) switches=\(switches)"
+            }
+
         // Reserved holes: opcodes 3, 14, 15, 16, 21 — render.h spec'd
         // these but they were either never shipped (3, 14, 15, 21) or
         // explicitly commented out (16 = Transform).
@@ -121,4 +144,28 @@ public enum RenderDumper: ExtensionDumper {
     }
 
     private static func hx(_ v: UInt32) -> String { "0x" + String(v, radix: 16) }
+
+    /// Walk the elements once to count total draw glyphs and switches.
+    /// Useful for the dumper summary line — capturing just `elts.count`
+    /// understates Pango's per-call glyph throughput (one elt can hold
+    /// up to 254 glyphs).
+    private static func glyphElementStats(_ elts: [RenderGlyphElt]) -> (totalGlyphs: Int, switches: Int) {
+        var glyphs = 0
+        var switches = 0
+        for elt in elts {
+            switch elt {
+            case .draw(_, _, let ids): glyphs += ids.count
+            case .glyphsetSwitch:      switches += 1
+            }
+        }
+        return (glyphs, switches)
+    }
+
+    private static func idSizeBits(_ size: RenderGlyphIdSize) -> String {
+        switch size {
+        case .bits8:  return "8 "
+        case .bits16: return "16"
+        case .bits32: return "32"
+        }
+    }
 }
