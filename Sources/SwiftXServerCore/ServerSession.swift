@@ -258,11 +258,6 @@ public final class ServerSession: @unchecked Sendable {
     public private(set) var requestsProcessed: Int = 0
     public private(set) var unknownOpcodes: [UInt8] = []
     public private(set) var errorsEmitted: Int = 0
-    /// Wall-clock time of the first request observed in this session.
-    /// Captured lazily so the elapsed-time summary in cleanupOnDisconnect
-    /// reflects real client activity, not the time the listener decided
-    /// to accept the socket.
-    private var firstActivityTime: Date?
 
     /// Windows this client has selected ShapeNotify input on (ShapeSelectInput
     /// enable=true). The X server tracks shape-event interest per-window
@@ -3271,17 +3266,6 @@ public final class ServerSession: @unchecked Sendable {
     /// `protocolQueue` so the bridge's destroyTopLevel runs in the same
     /// thread context as session-state mutation.
     public func cleanupOnDisconnect() {
-        // Session-end summary landmark. Mirrors the chrono dumper's
-        // bookend on the capture side so the Xcode console gets the
-        // same "Session ends after Ns (M requests, K errors)" line that
-        // a post-mortem dump would end with. Skip if we never saw any
-        // activity (pre-handshake disconnect, refused setup, etc).
-        if let start = firstActivityTime {
-            let elapsed = Date().timeIntervalSince(start)
-            var parts: [String] = ["\(requestsProcessed) requests"]
-            if errorsEmitted > 0 { parts.append("\(errorsEmitted) errors") }
-            log?.log("# Session ends after \(formatServerElapsed(elapsed)) (\(parts.joined(separator: ", ")))")
-        }
         // Revoke selection ownership held by ANY window this session created
         // (R6 dispatch.c:DeleteClientFromAnySelections). Without this,
         // GetSelectionOwner from another client would return a stale window
@@ -3463,7 +3447,6 @@ public final class ServerSession: @unchecked Sendable {
         let bytes = Array(inbound[0..<totalSize])
         sequenceNumber &+= 1
         requestsProcessed += 1
-        if firstActivityTime == nil { firstActivityTime = Date() }
 
         do {
             let request = try Request.decode(from: bytes, byteOrder: byteOrder)
@@ -6423,20 +6406,4 @@ extension ServerSession: RootPropertyObserver {
             self.flushOutbound()
         }
     }
-}
-
-/// Format an elapsed-time interval for the session-end summary log line.
-/// Mirrors ChronoDumper's formatElapsed but takes seconds instead of ms.
-/// Under a second shows ms; under a minute shows Ns.NN; beyond a minute
-/// shows MM:SS.NN.
-private func formatServerElapsed(_ seconds: TimeInterval) -> String {
-    if seconds < 1 {
-        return String(format: "%.0fms", seconds * 1000)
-    }
-    if seconds < 60 {
-        return String(format: "%.2fs", seconds)
-    }
-    let minutes = Int(seconds) / 60
-    let remaining = seconds - Double(minutes * 60)
-    return String(format: "%d:%05.2f", minutes, remaining)
 }
