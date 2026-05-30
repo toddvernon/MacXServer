@@ -54,7 +54,7 @@ public enum ChronoDumper {
                             out += format(timestamp: ts, line: formatSetupReply(r))
                         }
                     } else if case .serverMessage(let m) = raw {
-                        out += format(timestamp: ts, direction: "←", line: formatServerMessage(m, byteOrder: byteOrder, ctx: &ctx))
+                        out += format(timestamp: ts, direction: directionGlyph(for: m), line: formatServerMessage(m, byteOrder: byteOrder, ctx: &ctx))
                     }
                 }
             }
@@ -201,6 +201,19 @@ private func format(timestamp: UInt64, line: String) -> String {
 private func format(timestamp: UInt64, direction: String, line: String) -> String {
     let ms = Double(timestamp) / 1_000_000.0
     return String(format: "%9.3fms  %@   %@\n", ms, direction as NSString, line as NSString) as String
+}
+
+/// Phase 5 visual join (2026-05-30) — picks the direction glyph for a
+/// server-to-client message based on whether it's responding to a prior
+/// request. Replies and XErrors carry the seq number of the request
+/// that triggered them; events are spontaneous. The `↳` glyph (down-and-
+/// right hook) signals "this line is attached to the request above";
+/// the regular `←` stays for spontaneous events.
+private func directionGlyph(for msg: ServerMessage) -> String {
+    switch msg {
+    case .reply, .xError: return "↳"
+    case .event:          return "←"
+    }
 }
 
 func formatSetupRequest(_ r: SetupRequest) -> String {
