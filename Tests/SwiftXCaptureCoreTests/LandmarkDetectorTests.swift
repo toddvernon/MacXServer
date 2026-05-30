@@ -474,6 +474,82 @@ final class LandmarkDetectorTests: XCTestCase {
         XCTAssertEqual(lms.count, 0)
     }
 
+    // MARK: - Error correlation
+
+    private func errorMsg(code: XErrorCode, seq: UInt16, badId: UInt32 = 0,
+                          majorOpcode: UInt8, minorOpcode: UInt16 = 0) -> ServerMessage {
+        .xError(XError(bytes: XError.encode(
+            code: code, sequenceNumber: seq,
+            badResourceId: badId, minorOpcode: minorOpcode,
+            majorOpcode: majorOpcode, byteOrder: .lsbFirst
+        )))
+    }
+
+    func testBadWindowErrorIncludesNamedWindow() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        mapped(&d, wid: 0x4400001, name: "Coordinates", roots: roots)
+        let lms = d.afterServerMessage(
+            errorMsg(code: .window, seq: 42, badId: 0x4400001, majorOpcode: 8 /* MapWindow */),
+            byteOrder: .lsbFirst, screenRoots: roots
+        )
+        XCTAssertEqual(lms.first?.text,
+                       "# BadWindow at seq=42 from MapWindow on \"Coordinates\"")
+    }
+
+    func testBadWindowErrorOnUnknownResourceQuotesId() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        let lms = d.afterServerMessage(
+            errorMsg(code: .window, seq: 100, badId: 0xFFFE0001, majorOpcode: 2 /* ChangeWindowAttributes */),
+            byteOrder: .lsbFirst, screenRoots: roots
+        )
+        XCTAssertEqual(lms.first?.text,
+                       "# BadWindow at seq=100 from ChangeWindowAttributes (bad resource 0xFFFE0001)")
+    }
+
+    func testBadValueErrorRendersBadValue() {
+        var d = LandmarkDetector()
+        let lms = d.afterServerMessage(
+            errorMsg(code: .value, seq: 17, badId: 0x99, majorOpcode: 55 /* CreateGC */),
+            byteOrder: .lsbFirst
+        )
+        XCTAssertEqual(lms.first?.text,
+                       "# BadValue at seq=17 from CreateGC (bad value=153)")
+    }
+
+    func testBadMatchErrorOmitsResourcePhrase() {
+        var d = LandmarkDetector()
+        let lms = d.afterServerMessage(
+            errorMsg(code: .match, seq: 5, badId: 0, majorOpcode: 1 /* CreateWindow */),
+            byteOrder: .lsbFirst
+        )
+        // No resource phrase for BadMatch (and no badId either)
+        XCTAssertEqual(lms.first?.text, "# BadMatch at seq=5 from CreateWindow")
+    }
+
+    func testErrorOnExtensionRequestUsesExtensionName() {
+        var d = LandmarkDetector()
+        let lms = d.afterServerMessage(
+            errorMsg(code: .value, seq: 88, badId: 0xFF, majorOpcode: 128, minorOpcode: 3),
+            byteOrder: .lsbFirst,
+            extensionMajorToName: [128: "SHAPE"]
+        )
+        XCTAssertEqual(lms.first?.text,
+                       "# BadValue at seq=88 from SHAPE request (minor=3) (bad value=255)")
+    }
+
+    func testErrorOnUnknownExtensionUsesNumericMajor() {
+        var d = LandmarkDetector()
+        let lms = d.afterServerMessage(
+            errorMsg(code: .value, seq: 88, badId: 0xFF, majorOpcode: 129, minorOpcode: 7),
+            byteOrder: .lsbFirst
+            // no extensionMajorToName lookup available
+        )
+        XCTAssertEqual(lms.first?.text,
+                       "# BadValue at seq=88 from extension request major=129 minor=7 (bad value=255)")
+    }
+
     func testRemapAfterHideEmitsFreshAppearance() {
         var d = LandmarkDetector()
         let roots: Set<UInt32> = [0x2B]

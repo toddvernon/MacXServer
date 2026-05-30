@@ -217,12 +217,20 @@ public struct LandmarkDetector: Sendable {
         }
     }
 
-    /// Feed a decoded server-to-client message to the detector. v1 only
-    /// cares about ButtonPress (code 4) + ButtonRelease (code 5) events.
-    /// Takes `screenRoots` so click contextualization can recognize when
-    /// the click target is the root window itself ("the desktop").
+    /// Feed a decoded server-to-client message to the detector. Currently
+    /// observes ButtonPress / ButtonRelease (click landmarks) and XError
+    /// (error-correlation landmarks). Takes `screenRoots` so click
+    /// contextualization can recognize when the click target is the root
+    /// itself, and `extensionMajorToName` so XError landmarks can name an
+    /// extension request that triggered the error.
     public mutating func afterServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder,
-                                             screenRoots: Set<UInt32> = []) -> [Landmark] {
+                                             screenRoots: Set<UInt32> = [],
+                                             extensionMajorToName: [UInt8: String] = [:]) -> [Landmark] {
+        if case .xError(let err) = msg {
+            return errorLandmark(err, byteOrder: byteOrder,
+                                  screenRoots: screenRoots,
+                                  extensionMajorToName: extensionMajorToName)
+        }
         guard case .event(let e) = msg else { return [] }
         switch e.code {
         case 4:  // ButtonPress
@@ -267,6 +275,73 @@ public struct LandmarkDetector: Sendable {
     func transientForParentName(_ id: UInt32) -> String? {
         guard let parent = transientFor[id] else { return nil }
         return topLevels[parent]?.name
+    }
+
+    // MARK: - Error correlation
+
+    private func errorLandmark(_ err: XError, byteOrder: ByteOrder,
+                                screenRoots: Set<UInt32>,
+                                extensionMajorToName: [UInt8: String]) -> [Landmark] {
+        let errName = errorName(err.errorCode) ?? "Error#\(err.errorCode)"
+        let seq = err.sequenceNumber(byteOrder: byteOrder)
+        // Failing-request name: core opcode if < 128, else look up the
+        // extension by major opcode. Minor opcode goes alongside the
+        // extension name since that's how X11 identifies sub-requests.
+        let major = err.majorOpcode
+        let minor = err.minorOpcode(byteOrder: byteOrder)
+        let requestPhrase: String
+        if major < 128 {
+            requestPhrase = opcodeName(major) ?? "request opcode \(major)"
+        } else if let extName = extensionMajorToName[major] {
+            requestPhrase = "\(extName) request (minor=\(minor))"
+        } else {
+            requestPhrase = "extension request major=\(major) minor=\(minor)"
+        }
+        // Resource clause: only meaningful for resource-bearing errors.
+        // Try to resolve to a named window; otherwise quote the raw id.
+        let badId = err.badResourceId(byteOrder: byteOrder)
+        let resourcePhrase = resourcePhraseForError(
+            code: err.errorCode, badId: badId, screenRoots: screenRoots
+        )
+        let text: String
+        if let phrase = resourcePhrase {
+            text = "# \(errName) at seq=\(seq) from \(requestPhrase) \(phrase)"
+        } else {
+            text = "# \(errName) at seq=\(seq) from \(requestPhrase)"
+        }
+        return [Landmark(text)]
+    }
+
+    private func resourcePhraseForError(code: UInt8, badId: UInt32,
+                                         screenRoots: Set<UInt32>) -> String? {
+        // BadValue's "bad resource" slot actually holds the offending
+        // value, not a resource id. Render as "(bad value=N)" to keep
+        // the semantics honest. Errors that don't carry a resource id
+        // (BadMatch, BadAccess, BadAlloc, BadName, BadLength,
+        // BadImplementation, BadRequest) get no resource phrase at all.
+        if code == 2 { // BadValue
+            return "(bad value=\(badId))"
+        }
+        // Resource-bearing error codes: BadWindow=3, BadPixmap=4,
+        // BadAtom=5, BadCursor=6, BadFont=7, BadDrawable=9, BadColor=12,
+        // BadGC=13, BadIDChoice=14.
+        let resourceCodes: Set<UInt8> = [3, 4, 5, 6, 7, 9, 12, 13, 14]
+        guard resourceCodes.contains(code), badId != 0 else { return nil }
+        // Try to resolve. If the bad id is itself a known top-level or
+        // descends from one, frame as "on 'X'". Otherwise quote the id.
+        if let ref = resolveReference(for: badId, screenRoots: screenRoots) {
+            switch ref {
+            case .root:
+                return "on the desktop"
+            case .topLevel(let id, let name, _, _):
+                if let n = name { return "on \"\(n)\"" }
+                return "on an unnamed top-level (\(hexId(id)))"
+            case .child(_, let topName, _, _, _):
+                if let n = topName { return "on a child of \"\(n)\"" }
+                return "on a child of an unnamed top-level"
+            }
+        }
+        return "(bad resource \(hexId(badId)))"
     }
 
     // MARK: - Hierarchy + name resolution

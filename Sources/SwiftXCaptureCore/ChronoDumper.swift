@@ -22,6 +22,15 @@ public enum ChronoDumper {
         var s2c = StreamWalker()
         var ctx = ChronoContext()
         var landmarks = LandmarkDetector()
+        // Track first / last activity timestamp and a few summary counters
+        // for the session-end landmark. Frames before SetupRequest don't
+        // count toward "session start"; ts is captured at first decoded
+        // request emission instead.
+        var firstTimestamp: UInt64?
+        var lastTimestamp: UInt64 = 0
+        var requestCount = 0
+        var eventCount = 0
+        var errorCount = 0
 
         for frame in frames {
             switch frame.direction {
@@ -44,6 +53,9 @@ public enum ChronoDumper {
                             ctx.seqToQueryExtensionName[seq] = String(decoding: qe.name, as: UTF8.self)
                         }
                         out += format(timestamp: ts, direction: "→", line: formatRequest(req, seq: seq, ctx: ctx, byteOrder: byteOrder))
+                        if firstTimestamp == nil { firstTimestamp = ts }
+                        lastTimestamp = ts
+                        requestCount += 1
                         for lm in landmarks.afterRequest(req, byteOrder: byteOrder,
                                                           screenRoots: ctx.screenRoots,
                                                           atomToName: ctx.atomToName) {
@@ -64,8 +76,16 @@ public enum ChronoDumper {
                         }
                     } else if case .serverMessage(let m) = raw {
                         out += format(timestamp: ts, direction: directionGlyph(for: m), line: formatServerMessage(m, byteOrder: byteOrder, ctx: &ctx))
+                        if firstTimestamp == nil { firstTimestamp = ts }
+                        lastTimestamp = ts
+                        switch m {
+                        case .event:   eventCount += 1
+                        case .xError:  errorCount += 1
+                        case .reply:   break
+                        }
                         for lm in landmarks.afterServerMessage(m, byteOrder: byteOrder,
-                                                                screenRoots: ctx.screenRoots) {
+                                                                screenRoots: ctx.screenRoots,
+                                                                extensionMajorToName: ctx.extensionMajorToName) {
                             out += formatLandmark(lm.text)
                         }
                     }
@@ -73,8 +93,38 @@ public enum ChronoDumper {
             }
         }
 
+        // Session-end summary landmark. Emitted unconditionally — the
+        // bookend frames the whole capture so a reader scanning the file
+        // top-to-bottom knows when it's over and what the totals were.
+        if let start = firstTimestamp, requestCount > 0 || eventCount > 0 {
+            let elapsedMs = Double(lastTimestamp &- start) / 1_000_000.0
+            let elapsedPhrase = formatElapsed(ms: elapsedMs)
+            var parts: [String] = ["\(requestCount) requests"]
+            if eventCount > 0 { parts.append("\(eventCount) events") }
+            if errorCount > 0 { parts.append("\(errorCount) errors") }
+            let stats = parts.joined(separator: ", ")
+            out += formatLandmark("# Session ends after \(elapsedPhrase) (\(stats))")
+        }
+
         return out
     }
+}
+
+/// Render an elapsed-ms value as a human-friendly phrase. Sub-second
+/// captures show ms; longer captures show seconds with two decimals;
+/// over a minute uses MM:SS. Keeps the session-end landmark readable
+/// across the full range of capture durations.
+private func formatElapsed(ms: Double) -> String {
+    if ms < 1000 {
+        return String(format: "%.0fms", ms)
+    }
+    let seconds = ms / 1000.0
+    if seconds < 60 {
+        return String(format: "%.2fs", seconds)
+    }
+    let minutes = Int(seconds) / 60
+    let remainingSeconds = seconds - Double(minutes * 60)
+    return String(format: "%d:%05.2f", minutes, remainingSeconds)
 }
 
 // MARK: - Walker state
