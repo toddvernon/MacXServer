@@ -37,17 +37,23 @@ public struct CodeEditorView: NSViewRepresentable {
     /// fading overlay one — useful for long files where the thumb position
     /// tells you where you are. The capture viewer turns this on.
     var alwaysShowVerticalScroller: Bool = false
+    /// Optional controller that lets the caller drive scroll / selection
+    /// on the underlying text view. The capture viewer passes one in to
+    /// implement Cmd-] / Cmd-[ landmark navigation + the outline sidebar.
+    var controller: CaptureEditorController? = nil
 
     public init(text: Binding<String>,
                 theme: EditorTheme,
                 makeHighlighter: @escaping (EditorTheme, NSFont) -> SyntaxHighlighter,
                 isEditable: Bool = true,
-                alwaysShowVerticalScroller: Bool = false) {
+                alwaysShowVerticalScroller: Bool = false,
+                controller: CaptureEditorController? = nil) {
         self._text = text
         self.theme = theme
         self.makeHighlighter = makeHighlighter
         self.isEditable = isEditable
         self.alwaysShowVerticalScroller = alwaysShowVerticalScroller
+        self.controller = controller
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -133,6 +139,11 @@ public struct CodeEditorView: NSViewRepresentable {
         gutter.textView = textView
         let container = EditorContainer(gutter: gutter, scrollView: scrollView)
         container.startObserving()
+
+        // Wire the optional controller. Done after the text view is fully
+        // assembled (and attached to the scroll view) so firstVisibleLine
+        // queries find an enclosingScrollView immediately.
+        controller?.attach(textView)
 
         return container
     }

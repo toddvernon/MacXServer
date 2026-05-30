@@ -45,6 +45,7 @@
 		257D1061C1EE35F98FA603E9 /* RecentRequestSink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 879DD92FB0B2E7F7ED0D4279 /* RecentRequestSink.swift */; };
 		264A167C235FD60F267C6075 /* CaptureMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1345E2593709A090BCFB07AA /* CaptureMain.swift */; };
 		26D61E26CF20E4649E4BAF97 /* ShapeExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47DE8FD81191EC2F95EAEE34 /* ShapeExtension.swift */; };
+		26DFA02C5DDE4A6864335AA4 /* CaptureEditorController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73D88FEB83C29D484A115494 /* CaptureEditorController.swift */; };
 		272E535AEF9DBCC0E098B409 /* CaptureReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = F65A7559D43F800CBEAA0A72 /* CaptureReader.swift */; };
 		2A9488BF82A47D5171A135C7 /* USKeymap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BB04B0B20E574B91DE7719 /* USKeymap.swift */; };
 		2B64CB16780CD6E745C17AFD /* CopyPlane.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2FD0D5ABA128A97E4429D3F /* CopyPlane.swift */; };
@@ -511,6 +512,7 @@
 		6BDF02BBA9F2D1A1948961B8 /* FontResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontResolver.swift; sourceTree = "<group>"; };
 		6BF6DEE9FEFA41D7E7FDF6B0 /* Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preferences.swift; sourceTree = "<group>"; };
 		6D7F5F989DC183873905FFA9 /* RenderGlyphPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderGlyphPayload.swift; sourceTree = "<group>"; };
+		73D88FEB83C29D484A115494 /* CaptureEditorController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureEditorController.swift; sourceTree = "<group>"; };
 		73E5D73EEB22199AA3ABA989 /* ServerMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerMessage.swift; sourceTree = "<group>"; };
 		74181E9F09A99474693C608A /* XInputRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XInputRequests.swift; sourceTree = "<group>"; };
 		755E7D3A4CD70DB98267EC10 /* MacXCapture.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MacXCapture.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -876,6 +878,7 @@
 		6EDA88B229A8BF1E32C87017 /* SwiftXCaptureUI */ = {
 			isa = PBXGroup;
 			children = (
+				73D88FEB83C29D484A115494 /* CaptureEditorController.swift */,
 				F04C9320D2980D91CF50A3F5 /* CaptureSyntaxHighlighter.swift */,
 				1FF724750D3FE91232EDE82A /* CaptureViewerPanelView.swift */,
 				09F64319AEAED9D66098749D /* CaptureViewerWindowController.swift */,
@@ -1276,6 +1279,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				26DFA02C5DDE4A6864335AA4 /* CaptureEditorController.swift in Sources */,
 				F4491C69D02ADFB05549B0A8 /* CaptureSyntaxHighlighter.swift in Sources */,
 				5CD75F501140BC3717120513 /* CaptureViewerPanelView.swift in Sources */,
 				AC76566E6F3C68A4E2081A71 /* CaptureViewerWindowController.swift in Sources */,
