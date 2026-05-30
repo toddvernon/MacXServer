@@ -64,7 +64,8 @@ public enum ChronoDumper {
                         }
                     } else if case .serverMessage(let m) = raw {
                         out += format(timestamp: ts, direction: directionGlyph(for: m), line: formatServerMessage(m, byteOrder: byteOrder, ctx: &ctx))
-                        for lm in landmarks.afterServerMessage(m, byteOrder: byteOrder) {
+                        for lm in landmarks.afterServerMessage(m, byteOrder: byteOrder,
+                                                                screenRoots: ctx.screenRoots) {
                             out += formatLandmark(lm.text)
                         }
                     }

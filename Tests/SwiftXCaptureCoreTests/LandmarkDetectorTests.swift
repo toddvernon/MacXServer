@@ -246,44 +246,116 @@ final class LandmarkDetectorTests: XCTestCase {
         })
     }
 
-    func testClickLandmarkOnMatchedPressReadsAsUserClicks() {
+    // MARK: - Click landmarks (hierarchy + naming)
+
+    private func clickOnNamedSetup() -> (LandmarkDetector, Set<UInt32>) {
         var d = LandmarkDetector()
-        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x4400023, button: 1, time: 1000, x: 55, y: 8),
-                                  byteOrder: .lsbFirst)
-        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400023, button: 1, time: 1100, x: 55, y: 8),
-                                        byteOrder: .lsbFirst)
-        XCTAssertEqual(lms.count, 1)
-        XCTAssertEqual(lms.first?.text,
-                       "# The user clicks at (55,8) on window 0x4400023")
+        let roots: Set<UInt32> = [0x2B]
+        _ = d.afterRequest(.createWindow(cw(wid: 0x4400001, parent: 0x2B, w: 500, h: 600)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterRequest(.changeProperty(setWMName(0x4400001, "Command Window")),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        return (d, roots)
     }
 
-    func testClickLandmarkButtonThreeReadsAsButton3() {
+    func testClickDirectlyOnNamedTopLevel() {
+        var (d, roots) = clickOnNamedSetup()
+        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x4400001, button: 1, time: 1000, x: 50, y: 50),
+                                  byteOrder: .lsbFirst, screenRoots: roots)
+        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400001, button: 1, time: 1100, x: 50, y: 50),
+                                        byteOrder: .lsbFirst, screenRoots: roots)
+        XCTAssertEqual(lms.first?.text,
+                       "# The user clicks on \"Command Window\" at (50,50)")
+    }
+
+    func testClickOnChildOfNamedTopLevel() {
+        var (d, roots) = clickOnNamedSetup()
+        _ = d.afterRequest(.createWindow(cw(wid: 0x4400074, parent: 0x4400001, w: 60, h: 26)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x4400074, button: 1, time: 1000, x: 26, y: 21),
+                                  byteOrder: .lsbFirst, screenRoots: roots)
+        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400074, button: 1, time: 1100, x: 26, y: 21),
+                                        byteOrder: .lsbFirst, screenRoots: roots)
+        XCTAssertEqual(lms.first?.text,
+                       "# The user clicks inside \"Command Window\" on a 60×26 child 0x4400074 at (26,21)")
+    }
+
+    func testClickOnDeeplyNestedChildWalksToTopLevel() {
+        var (d, roots) = clickOnNamedSetup()
+        _ = d.afterRequest(.createWindow(cw(wid: 0x4400010, parent: 0x4400001)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterRequest(.createWindow(cw(wid: 0x4400020, parent: 0x4400010, w: 46, h: 18)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x4400020, button: 1, time: 1000, x: 13, y: 12),
+                                  byteOrder: .lsbFirst, screenRoots: roots)
+        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400020, button: 1, time: 1100, x: 13, y: 12),
+                                        byteOrder: .lsbFirst, screenRoots: roots)
+        XCTAssertEqual(lms.first?.text,
+                       "# The user clicks inside \"Command Window\" on a 46×18 child 0x4400020 at (13,12)")
+    }
+
+    func testClickOnRootReadsAsClickOnDesktop() {
         var d = LandmarkDetector()
-        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x4400023, button: 3, time: 1000),
-                                  byteOrder: .lsbFirst)
-        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400023, button: 3, time: 1100),
-                                        byteOrder: .lsbFirst)
-        XCTAssertEqual(lms.count, 1)
+        let roots: Set<UInt32> = [0x2B]
+        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x2B, button: 1, time: 1000, x: 100, y: 100),
+                                  byteOrder: .lsbFirst, screenRoots: roots)
+        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x2B, button: 1, time: 1100, x: 100, y: 100),
+                                        byteOrder: .lsbFirst, screenRoots: roots)
+        XCTAssertEqual(lms.first?.text, "# The user clicks on the desktop at (100,100)")
+    }
+
+    func testClickOnUnknownWindowEmitsNothing() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        // Click on a window we never saw a CreateWindow for — namability
+        // rule says skip rather than emit a bare hex id.
+        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x99999, button: 1, time: 1000),
+                                  byteOrder: .lsbFirst, screenRoots: roots)
+        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x99999, button: 1, time: 1100),
+                                        byteOrder: .lsbFirst, screenRoots: roots)
+        XCTAssertEqual(lms.count, 0)
+    }
+
+    func testClickInsideUnnamedTopLevelStillEmits() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        // Top-level created but WM_NAME never set
+        _ = d.afterRequest(.createWindow(cw(wid: 0x4400001, parent: 0x2B, w: 16, h: 16)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterRequest(.createWindow(cw(wid: 0x4400025, parent: 0x4400001, w: 16, h: 16)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x4400025, button: 1, time: 1000, x: 5, y: 5),
+                                  byteOrder: .lsbFirst, screenRoots: roots)
+        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400025, button: 1, time: 1100, x: 5, y: 5),
+                                        byteOrder: .lsbFirst, screenRoots: roots)
+        XCTAssertEqual(lms.first?.text,
+                       "# The user clicks inside an unnamed top-level on a 16×16 child 0x4400025 at (5,5)")
+    }
+
+    func testClickButtonThreeReadsAsButton3() {
+        var (d, roots) = clickOnNamedSetup()
+        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x4400001, button: 3, time: 1000),
+                                  byteOrder: .lsbFirst, screenRoots: roots)
+        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400001, button: 3, time: 1100),
+                                        byteOrder: .lsbFirst, screenRoots: roots)
         XCTAssertTrue(lms.first?.text.contains("clicks button 3") ?? false)
     }
 
     func testClickThresholdRejectsLatePairs() {
-        var d = LandmarkDetector()
-        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x4400023, button: 1, time: 1000),
-                                  byteOrder: .lsbFirst)
-        // Release at t=2000 — 1000ms gap, beyond 500ms threshold
-        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400023, button: 1, time: 2000),
-                                        byteOrder: .lsbFirst)
+        var (d, roots) = clickOnNamedSetup()
+        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x4400001, button: 1, time: 1000),
+                                  byteOrder: .lsbFirst, screenRoots: roots)
+        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400001, button: 1, time: 2000),
+                                        byteOrder: .lsbFirst, screenRoots: roots)
         XCTAssertEqual(lms.count, 0)
     }
 
     func testMismatchedButtonNumbersDontCount() {
-        var d = LandmarkDetector()
-        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x4400023, button: 1, time: 1000),
-                                  byteOrder: .lsbFirst)
-        // Release with a different button — no match
-        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400023, button: 2, time: 1100),
-                                        byteOrder: .lsbFirst)
+        var (d, roots) = clickOnNamedSetup()
+        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x4400001, button: 1, time: 1000),
+                                  byteOrder: .lsbFirst, screenRoots: roots)
+        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400001, button: 2, time: 1100),
+                                        byteOrder: .lsbFirst, screenRoots: roots)
         XCTAssertEqual(lms.count, 0)
     }
 }

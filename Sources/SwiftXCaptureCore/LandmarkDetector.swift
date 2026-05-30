@@ -59,6 +59,14 @@ public struct LandmarkDetector: Sendable {
 
     // Windows created with parent == root, by wid.
     private var topLevels: [UInt32: TopLevel] = [:]
+    // Parent map for every CreateWindow we observe (including non-top-level
+    // children). Used to walk up the hierarchy from a clicked / affected
+    // window to find the nearest named ancestor — the central abstraction
+    // that gates whether any state-change landmark gets emitted at all.
+    private var parents: [UInt32: UInt32] = [:]
+    // Per-window size from CreateWindow. Useful for sizing intuition in
+    // child references ("on its 60×26 child of 'Command Window'").
+    private var windowSizes: [UInt32: (UInt16, UInt16)] = [:]
     // Windows that have had WM_TRANSIENT_FOR set, mapped to their transient parent.
     private var transientFor: [UInt32: UInt32] = [:]
     // True once the first top-level MAP landmark has been emitted. Used to
@@ -92,6 +100,8 @@ public struct LandmarkDetector: Sendable {
                                        atomToName: [UInt32: String]) -> [Landmark] {
         switch req {
         case .createWindow(let r):
+            parents[r.wid] = r.parent
+            windowSizes[r.wid] = (r.width, r.height)
             if screenRoots.contains(r.parent) {
                 topLevels[r.wid] = TopLevel(width: r.width, height: r.height)
             }
@@ -156,7 +166,10 @@ public struct LandmarkDetector: Sendable {
 
     /// Feed a decoded server-to-client message to the detector. v1 only
     /// cares about ButtonPress (code 4) + ButtonRelease (code 5) events.
-    public mutating func afterServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder) -> [Landmark] {
+    /// Takes `screenRoots` so click contextualization can recognize when
+    /// the click target is the root window itself ("the desktop").
+    public mutating func afterServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder,
+                                             screenRoots: Set<UInt32> = []) -> [Landmark] {
         guard case .event(let e) = msg else { return [] }
         switch e.code {
         case 4:  // ButtonPress
@@ -177,26 +190,116 @@ public struct LandmarkDetector: Sendable {
             pendingPresses.removeValue(forKey: ie.event)
             let dtMs = ie.time &- pp.time
             guard dtMs <= clickThresholdMs else { return [] }
-            // Use natural language for button 1 ("clicks") and explicit
-            // number for the rest ("clicks button 2 / 3 / ...") — matches
-            // how people actually talk about mouse clicks. Buttons 4/5 are
-            // scroll wheel up/down on most systems; we still describe them
-            // as clicks because the X protocol can't tell from outside.
-            let buttonPhrase = pp.button == 1 ? "clicks"
-                : "clicks button \(pp.button)"
-            return [Landmark(
-                "# The user \(buttonPhrase) at (\(pp.eventX),\(pp.eventY)) " +
-                "on window \(hexId(ie.event))"
-            )]
+            // Resolve the clicked window to something the reader can
+            // identify. Per the namability rule: emit only if we can name
+            // the target window, a named top-level ancestor, or recognize
+            // it as the root (desktop). Otherwise skip — a bare hex id
+            // isn't actionable.
+            guard let ref = resolveReference(for: ie.event, screenRoots: screenRoots) else {
+                return []
+            }
+            return [Landmark(clickLandmarkText(
+                ref: ref, button: pp.button,
+                x: pp.eventX, y: pp.eventY,
+                clickedWindowId: ie.event
+            ))]
         default:
             return []
         }
+    }
+
+    // MARK: - Hierarchy + name resolution
+
+    /// What a window resolves to for landmark text purposes.
+    enum WindowReference {
+        /// The clicked / affected window is the screen root.
+        case root
+        /// The clicked / affected window is a tracked top-level. Carries
+        /// its name (nil if WM_NAME never set) and size for reader context.
+        case topLevel(id: UInt32, name: String?, width: UInt16, height: UInt16)
+        /// The clicked / affected window is a descendant of a tracked
+        /// top-level. Carries the top-level's name (nil if unnamed) and
+        /// the immediate clicked child's size for reader context.
+        case child(topLevelId: UInt32, topLevelName: String?,
+                   childId: UInt32, childWidth: UInt16, childHeight: UInt16)
+    }
+
+    /// Walk up the parent chain from `id` looking for a recognizable
+    /// landmark anchor (root window, tracked top-level, or simply the
+    /// nearest top-level we know about). Returns nil if no anchor is
+    /// reachable (the click landed on a window we never observed, e.g.
+    /// pre-existing root subwindows or windows from a capture truncated
+    /// before their CreateWindow).
+    func resolveReference(for id: UInt32, screenRoots: Set<UInt32>) -> WindowReference? {
+        if screenRoots.contains(id) { return .root }
+        if let top = topLevels[id] {
+            return .topLevel(id: id, name: top.name, width: top.width, height: top.height)
+        }
+        // Walk parents until we hit a top-level or the root.
+        let (childW, childH) = windowSizes[id] ?? (0, 0)
+        var cursor = id
+        while let parent = parents[cursor] {
+            if screenRoots.contains(parent) {
+                // Our cursor is a top-level we somehow didn't register
+                // (CreateWindow with parent=root that bypassed the
+                // top-level path — shouldn't happen but be defensive).
+                return .topLevel(id: cursor, name: topLevels[cursor]?.name,
+                                 width: windowSizes[cursor]?.0 ?? 0,
+                                 height: windowSizes[cursor]?.1 ?? 0)
+            }
+            if let top = topLevels[parent] {
+                return .child(topLevelId: parent, topLevelName: top.name,
+                              childId: id, childWidth: childW, childHeight: childH)
+            }
+            cursor = parent
+        }
+        return nil
     }
 }
 
 // MARK: - Helpers (file-private; mirror the chrono dumper's conventions)
 
 private func hexId(_ v: UInt32) -> String { String(format: "0x%X", v) }
+
+// Story-form narration for a click. The window reference resolved by
+// the hierarchy walk decides which of four variants gets rendered:
+//
+//   - root: clicked the desktop ("on the desktop")
+//   - topLevel + name: clicked the top-level directly ("on 'Command Window'")
+//   - topLevel + no name: clicked a known but unnamed top-level
+//   - child of top-level: clicked something inside a (named or not) top-level
+//
+// The button verb varies on button==1 ("clicks") vs 2-5 ("clicks button N");
+// buttons 4/5 are scroll wheel up/down on most systems but the protocol
+// can't tell from outside, so we treat them as clicks.
+private func clickLandmarkText(ref: LandmarkDetector.WindowReference,
+                                button: UInt8, x: Int16, y: Int16,
+                                clickedWindowId: UInt32) -> String {
+    let verb = button == 1 ? "clicks" : "clicks button \(button)"
+    switch ref {
+    case .root:
+        return "# The user \(verb) on the desktop at (\(x),\(y))"
+    case .topLevel(let id, let name, _, _):
+        if let n = name {
+            return "# The user \(verb) on \"\(n)\" at (\(x),\(y))"
+        }
+        return "# The user \(verb) on an unnamed top-level (\(hexId(id))) at (\(x),\(y))"
+    case .child(_, let topName, _, let cw, let ch):
+        let sizePhrase: String
+        if cw > 0 && ch > 0 {
+            sizePhrase = "a \(cw)×\(ch) child"
+        } else {
+            sizePhrase = "a child"
+        }
+        if let n = topName {
+            return "# The user \(verb) inside \"\(n)\" on \(sizePhrase) " +
+                "\(hexId(clickedWindowId)) at (\(x),\(y))"
+        }
+        // Top-level is known but unnamed — still namable enough to surface.
+        return "# The user \(verb) inside an unnamed top-level on \(sizePhrase) " +
+            "\(hexId(clickedWindowId)) at (\(x),\(y))"
+    }
+}
 
 // Story-form narration for a top-level window appearing on screen. We
 // vary the wording on (name known?) × (primary?) so the reader can walk
