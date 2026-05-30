@@ -96,6 +96,72 @@ public enum RenderDumper: ExtensionDumper {
                 return "RenderCompositeGlyphs\(size)  op=\(pictOpName(r.op)) src=\(hx(r.src)) dst=\(hx(r.dst)) mask=\(maskStr) glyphset=\(hx(r.glyphset)) origin=(\(r.xSrc),\(r.ySrc)) elts=\(r.elts.count) glyphs=\(totalGlyphs) switches=\(switches)"
             }
 
+        // Session 3 — poly ops, gradients, cursor, etc.
+        case RenderMinor.scale:
+            if let r = try? RenderScale.decode(from: bytes, byteOrder: byteOrder) {
+                return "RenderScale              src=\(hx(r.src)) dst=\(hx(r.dst)) colorScale=\(hx(r.colorScale)) alphaScale=\(hx(r.alphaScale)) src=(\(r.xSrc),\(r.ySrc)) dst=(\(r.xDst),\(r.yDst)) \(r.width)x\(r.height)"
+            }
+        case RenderMinor.trapezoids:
+            if let r = try? RenderTrapezoids.decode(from: bytes, byteOrder: byteOrder) {
+                let maskStr = r.maskFormat == 0 ? "None" : hx(r.maskFormat)
+                return "RenderTrapezoids         op=\(pictOpName(r.op)) src=\(hx(r.src)) dst=\(hx(r.dst)) mask=\(maskStr) src=(\(r.xSrc),\(r.ySrc)) trapezoids=\(r.trapezoids.count)"
+            }
+        case RenderMinor.triangles:
+            if let r = try? RenderTriangles.decode(from: bytes, byteOrder: byteOrder) {
+                let maskStr = r.maskFormat == 0 ? "None" : hx(r.maskFormat)
+                return "RenderTriangles          op=\(pictOpName(r.op)) src=\(hx(r.src)) dst=\(hx(r.dst)) mask=\(maskStr) src=(\(r.xSrc),\(r.ySrc)) triangles=\(r.triangles.count)"
+            }
+        case RenderMinor.triStrip:
+            if let r = try? RenderTriStrip.decode(from: bytes, byteOrder: byteOrder) {
+                let maskStr = r.maskFormat == 0 ? "None" : hx(r.maskFormat)
+                return "RenderTriStrip           op=\(pictOpName(r.op)) src=\(hx(r.src)) dst=\(hx(r.dst)) mask=\(maskStr) src=(\(r.xSrc),\(r.ySrc)) points=\(r.points.count)"
+            }
+        case RenderMinor.triFan:
+            if let r = try? RenderTriFan.decode(from: bytes, byteOrder: byteOrder) {
+                let maskStr = r.maskFormat == 0 ? "None" : hx(r.maskFormat)
+                return "RenderTriFan             op=\(pictOpName(r.op)) src=\(hx(r.src)) dst=\(hx(r.dst)) mask=\(maskStr) src=(\(r.xSrc),\(r.ySrc)) points=\(r.points.count)"
+            }
+        case RenderMinor.referenceGlyphSet:
+            if let r = try? RenderReferenceGlyphSet.decode(from: bytes, byteOrder: byteOrder) {
+                return "RenderReferenceGlyphSet  gsid=\(hx(r.gsid)) existing=\(hx(r.existing))"
+            }
+        case RenderMinor.fillRectangles:
+            if let r = try? RenderFillRectangles.decode(from: bytes, byteOrder: byteOrder) {
+                return "RenderFillRectangles     op=\(pictOpName(r.op)) dst=\(hx(r.dst)) color=(\(r.color.red),\(r.color.green),\(r.color.blue),\(r.color.alpha)) rects=\(r.rectangles.count)"
+            }
+        case RenderMinor.createCursor:
+            if let r = try? RenderCreateCursor.decode(from: bytes, byteOrder: byteOrder) {
+                return "RenderCreateCursor       cid=\(hx(r.cid)) src=\(hx(r.src)) hotspot=(\(r.x),\(r.y))"
+            }
+        case RenderMinor.setPictureFilter:
+            if let r = try? RenderSetPictureFilter.decode(from: bytes, byteOrder: byteOrder) {
+                return "RenderSetPictureFilter   picture=\(hx(r.picture)) name=\"\(r.name)\" values=\(r.values.count)"
+            }
+        case RenderMinor.createAnimCursor:
+            if let r = try? RenderCreateAnimCursor.decode(from: bytes, byteOrder: byteOrder) {
+                return "RenderCreateAnimCursor   cid=\(hx(r.cid)) elts=\(r.elts.count)"
+            }
+        case RenderMinor.addTraps:
+            if let r = try? RenderAddTraps.decode(from: bytes, byteOrder: byteOrder) {
+                return "RenderAddTraps           picture=\(hx(r.picture)) offset=(\(r.xOff),\(r.yOff)) traps=\(r.traps.count)"
+            }
+        case RenderMinor.createSolidFill:
+            if let r = try? RenderCreateSolidFill.decode(from: bytes, byteOrder: byteOrder) {
+                return "RenderCreateSolidFill    pid=\(hx(r.pid)) color=(\(r.color.red),\(r.color.green),\(r.color.blue),\(r.color.alpha))"
+            }
+        case RenderMinor.createLinearGradient:
+            if let r = try? RenderCreateLinearGradient.decode(from: bytes, byteOrder: byteOrder) {
+                return "RenderCreateLinearGradient pid=\(hx(r.pid)) p1=\(fixedPoint(r.p1)) p2=\(fixedPoint(r.p2)) stops=\(r.stops.count)"
+            }
+        case RenderMinor.createRadialGradient:
+            if let r = try? RenderCreateRadialGradient.decode(from: bytes, byteOrder: byteOrder) {
+                return "RenderCreateRadialGradient pid=\(hx(r.pid)) inner=\(fixedPoint(r.inner)) outer=\(fixedPoint(r.outer)) innerR=\(r.innerRadius) outerR=\(r.outerRadius) stops=\(r.stops.count)"
+            }
+        case RenderMinor.createConicalGradient:
+            if let r = try? RenderCreateConicalGradient.decode(from: bytes, byteOrder: byteOrder) {
+                return "RenderCreateConicalGradient pid=\(hx(r.pid)) center=\(fixedPoint(r.center)) angle=\(r.angle) stops=\(r.stops.count)"
+            }
+
         // Reserved holes: opcodes 3, 14, 15, 16, 21 — render.h spec'd
         // these but they were either never shipped (3, 14, 15, 21) or
         // explicitly commented out (16 = Transform).
@@ -167,5 +233,11 @@ public enum RenderDumper: ExtensionDumper {
         case .bits16: return "16"
         case .bits32: return "32"
         }
+    }
+
+    /// Format a 16.16 fixed-point point as a (xInt, yInt) pair. Shows
+    /// just the integer part — enough for a dump-line scan.
+    private static func fixedPoint(_ p: RenderPointFixed) -> String {
+        "(\(p.x >> 16),\(p.y >> 16))"
     }
 }

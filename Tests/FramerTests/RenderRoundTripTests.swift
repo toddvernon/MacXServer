@@ -346,6 +346,194 @@ final class RenderRoundTripTests: XCTestCase {
             decode: { try RenderCompositeGlyphs.decode(from: $0, byteOrder: $1) })
     }
 
+    // MARK: - Session 3: Tier B + C
+
+    func testScale() throws {
+        try roundTrip(RenderScale(
+            src: 0x40000001, dst: 0x40000002,
+            colorScale: 0x10000, alphaScale: 0x10000,
+            xSrc: 0, ySrc: 0, xDst: 100, yDst: 200,
+            width: 640, height: 480),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderScale.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testTrapezoids() throws {
+        let traps = [
+            RenderTrapezoid(
+                top: 0, bottom: 10 * 0x10000,
+                left: RenderLineFixed(
+                    p1: RenderPointFixed(x: 0, y: 0),
+                    p2: RenderPointFixed(x: 0, y: 10 * 0x10000)),
+                right: RenderLineFixed(
+                    p1: RenderPointFixed(x: 100 * 0x10000, y: 0),
+                    p2: RenderPointFixed(x: 100 * 0x10000, y: 10 * 0x10000))),
+            RenderTrapezoid(
+                top: 10 * 0x10000, bottom: 20 * 0x10000,
+                left: RenderLineFixed(
+                    p1: RenderPointFixed(x: 0, y: 10 * 0x10000),
+                    p2: RenderPointFixed(x: 5 * 0x10000, y: 20 * 0x10000)),
+                right: RenderLineFixed(
+                    p1: RenderPointFixed(x: 100 * 0x10000, y: 10 * 0x10000),
+                    p2: RenderPointFixed(x: 95 * 0x10000, y: 20 * 0x10000))),
+        ]
+        try roundTrip(RenderTrapezoids(
+            op: 3, src: 0x40000001, dst: 0x40000002,
+            maskFormat: 0x20000020,
+            xSrc: 0, ySrc: 0, trapezoids: traps),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderTrapezoids.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testTriangles() throws {
+        let tris = [
+            RenderTriangle(
+                p1: RenderPointFixed(x: 0, y: 0),
+                p2: RenderPointFixed(x: 10 * 0x10000, y: 0),
+                p3: RenderPointFixed(x: 5 * 0x10000, y: 10 * 0x10000)),
+            RenderTriangle(
+                p1: RenderPointFixed(x: 0, y: 10 * 0x10000),
+                p2: RenderPointFixed(x: 10 * 0x10000, y: 10 * 0x10000),
+                p3: RenderPointFixed(x: 5 * 0x10000, y: 20 * 0x10000)),
+        ]
+        try roundTrip(RenderTriangles(
+            op: 3, src: 0x40000001, dst: 0x40000002,
+            maskFormat: 0,
+            xSrc: 0, ySrc: 0, triangles: tris),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderTriangles.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testTriStripAndTriFan() throws {
+        let points = (0..<5).map {
+            RenderPointFixed(x: Int32($0) * 10 * 0x10000, y: 0)
+        }
+        try roundTrip(RenderTriStrip(
+            op: 3, src: 0x40000001, dst: 0x40000002,
+            maskFormat: 0,
+            xSrc: 0, ySrc: 0, points: points),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderTriStrip.decode(from: $0, byteOrder: $1) })
+        try roundTrip(RenderTriFan(
+            op: 3, src: 0x40000001, dst: 0x40000002,
+            maskFormat: 0,
+            xSrc: 0, ySrc: 0, points: points),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderTriFan.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testReferenceGlyphSet() throws {
+        try roundTrip(RenderReferenceGlyphSet(gsid: 0x40000010, existing: 0x40000011),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderReferenceGlyphSet.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testFillRectangles() throws {
+        try roundTrip(RenderFillRectangles(
+            op: 1,    // PictOpSrc
+            dst: 0x40000002,
+            color: RenderColor(red: 0xFFFF, green: 0, blue: 0, alpha: 0xFFFF),
+            rectangles: [
+                Rectangle(x: 0, y: 0, width: 100, height: 50),
+                Rectangle(x: 100, y: 50, width: 200, height: 150),
+                Rectangle(x: -5, y: -10, width: 50, height: 50),
+            ]),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderFillRectangles.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testCreateCursor() throws {
+        try roundTrip(RenderCreateCursor(
+            cid: 0x40000040, src: 0x40000001, x: 8, y: 8),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderCreateCursor.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testSetPictureFilter() throws {
+        // Test alignment: "bilinear" is 8 bytes (no pad needed).
+        try roundTrip(RenderSetPictureFilter(
+            picture: 0x40000001, name: "bilinear", values: []),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderSetPictureFilter.decode(from: $0, byteOrder: $1) })
+        // "good" is 4 bytes (no pad) with 3 fixed params.
+        try roundTrip(RenderSetPictureFilter(
+            picture: 0x40000001, name: "good",
+            values: [0x10000, 0x20000, 0x10000]),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderSetPictureFilter.decode(from: $0, byteOrder: $1) })
+        // "fast" is 4 bytes — pad 0; "best" is 4 — pad 0; "nearest" is 7 — pad 1.
+        try roundTrip(RenderSetPictureFilter(
+            picture: 0x40000001, name: "nearest", values: [0x10000]),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderSetPictureFilter.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testCreateAnimCursor() throws {
+        try roundTrip(RenderCreateAnimCursor(
+            cid: 0x40000040,
+            elts: [
+                RenderAnimCursorElt(cursor: 0x40000041, delay: 100),
+                RenderAnimCursorElt(cursor: 0x40000042, delay: 100),
+                RenderAnimCursorElt(cursor: 0x40000043, delay: 100),
+            ]),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderCreateAnimCursor.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testAddTraps() throws {
+        try roundTrip(RenderAddTraps(
+            picture: 0x40000001, xOff: 10, yOff: 20,
+            traps: [
+                RenderTrap(
+                    top: RenderSpanFix(l: 0, r: 100 * 0x10000, y: 0),
+                    bot: RenderSpanFix(l: 0, r: 100 * 0x10000, y: 10 * 0x10000)),
+                RenderTrap(
+                    top: RenderSpanFix(l: 5 * 0x10000, r: 95 * 0x10000, y: 10 * 0x10000),
+                    bot: RenderSpanFix(l: 10 * 0x10000, r: 90 * 0x10000, y: 20 * 0x10000)),
+            ]),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderAddTraps.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testCreateSolidFill() throws {
+        try roundTrip(RenderCreateSolidFill(
+            pid: 0x40000001,
+            color: RenderColor(red: 0x8000, green: 0x4000, blue: 0x2000, alpha: 0xFFFF)),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderCreateSolidFill.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testGradients() throws {
+        let stops: [Int32] = [0, 0x8000, 0x10000]    // 0.0, 0.5, 1.0
+        let colors = [
+            RenderColor(red: 0, green: 0, blue: 0, alpha: 0xFFFF),
+            RenderColor(red: 0x8000, green: 0x8000, blue: 0x8000, alpha: 0xFFFF),
+            RenderColor(red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF, alpha: 0xFFFF),
+        ]
+        try roundTrip(RenderCreateLinearGradient(
+            pid: 0x40000050,
+            p1: RenderPointFixed(x: 0, y: 0),
+            p2: RenderPointFixed(x: 100 * 0x10000, y: 0),
+            stops: stops, colors: colors),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderCreateLinearGradient.decode(from: $0, byteOrder: $1) })
+        try roundTrip(RenderCreateRadialGradient(
+            pid: 0x40000051,
+            inner: RenderPointFixed(x: 50 * 0x10000, y: 50 * 0x10000),
+            outer: RenderPointFixed(x: 50 * 0x10000, y: 50 * 0x10000),
+            innerRadius: 0, outerRadius: 50 * 0x10000,
+            stops: stops, colors: colors),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderCreateRadialGradient.decode(from: $0, byteOrder: $1) })
+        try roundTrip(RenderCreateConicalGradient(
+            pid: 0x40000052,
+            center: RenderPointFixed(x: 50 * 0x10000, y: 50 * 0x10000),
+            angle: 0,
+            stops: stops, colors: colors),
+            encode: { $0.encode(majorOpcode: 139, byteOrder: $1) },
+            decode: { try RenderCreateConicalGradient.decode(from: $0, byteOrder: $1) })
+    }
+
     func testQueryPictFormatsReplyMultipleScreens() throws {
         // Stress the per-screen nDepths walking — two screens with
         // different depth counts.
