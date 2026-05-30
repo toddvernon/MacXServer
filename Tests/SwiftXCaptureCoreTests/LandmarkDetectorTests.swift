@@ -18,6 +18,14 @@ final class LandmarkDetectorTests: XCTestCase {
         MapWindow(window: window)
     }
 
+    private func uw(_ window: UInt32) -> UnmapWindow {
+        UnmapWindow(window: window)
+    }
+
+    private func dw(_ window: UInt32) -> DestroyWindow {
+        DestroyWindow(window: window)
+    }
+
     // ChangeProperty WM_NAME shaped as Athena/Motif would write it.
     private func setWMName(_ window: UInt32, _ name: String) -> ChangeProperty {
         ChangeProperty(
@@ -357,5 +365,125 @@ final class LandmarkDetectorTests: XCTestCase {
         let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400001, button: 2, time: 1100),
                                         byteOrder: .lsbFirst, screenRoots: roots)
         XCTAssertEqual(lms.count, 0)
+    }
+
+    // MARK: - Hide / close / dialog-dismissed landmarks
+
+    private func mapped(_ d: inout LandmarkDetector, wid: UInt32, name: String?,
+                        roots: Set<UInt32>) {
+        _ = d.afterRequest(.createWindow(cw(wid: wid, parent: 0x2B, w: 500, h: 600)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        if let n = name {
+            _ = d.afterRequest(.changeProperty(setWMName(wid, n)),
+                               byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        }
+        _ = d.afterRequest(.mapWindow(mw(wid)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+    }
+
+    func testUnmapNamedTopLevelReadsAsHidden() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        mapped(&d, wid: 0x4400001, name: "Coordinates", roots: roots)
+        let lms = d.afterRequest(.unmapWindow(uw(0x4400001)),
+                                  byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        XCTAssertEqual(lms.first?.text, "# The \"Coordinates\" window was hidden")
+    }
+
+    func testUnmapUnnamedTopLevelReadsAsUnnamed() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        mapped(&d, wid: 0x4400001, name: nil, roots: roots)
+        let lms = d.afterRequest(.unmapWindow(uw(0x4400001)),
+                                  byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        XCTAssertEqual(lms.first?.text,
+                       "# An unnamed top-level was hidden (0x4400001, 500×600)")
+    }
+
+    func testUnmapEmptyNamedTopLevelReadsAsUnnamed() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        mapped(&d, wid: 0x4400001, name: "", roots: roots)
+        let lms = d.afterRequest(.unmapWindow(uw(0x4400001)),
+                                  byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        XCTAssertEqual(lms.first?.text,
+                       "# An unnamed top-level was hidden (0x4400001, 500×600)")
+    }
+
+    func testUnmapTransientReadsAsDialogDismissed() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        mapped(&d, wid: 0x4400001, name: "Command Window", roots: roots)
+        _ = d.afterRequest(.createWindow(cw(wid: 0x4400029, parent: 0x2B, w: 200, h: 100)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterRequest(.changeProperty(setWMName(0x4400029, "Save Confirm")),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterRequest(.changeProperty(setTransientFor(0x4400029, parent: 0x4400001)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterRequest(.mapWindow(mw(0x4400029)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        let lms = d.afterRequest(.unmapWindow(uw(0x4400029)),
+                                  byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        XCTAssertEqual(lms.first?.text,
+                       "# The \"Save Confirm\" dialog above \"Command Window\" was dismissed")
+    }
+
+    func testDestroyTopLevelReadsAsClosed() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        mapped(&d, wid: 0x4400001, name: "Help Window", roots: roots)
+        let lms = d.afterRequest(.destroyWindow(dw(0x4400001)),
+                                  byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        XCTAssertEqual(lms.first?.text, "# The \"Help Window\" window was closed")
+    }
+
+    func testDestroyAfterUnmapDoesNotRepeatLandmark() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        mapped(&d, wid: 0x4400001, name: "Find Dialog", roots: roots)
+        let hide = d.afterRequest(.unmapWindow(uw(0x4400001)),
+                                   byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        let close = d.afterRequest(.destroyWindow(dw(0x4400001)),
+                                    byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        XCTAssertEqual(hide.count, 1)
+        XCTAssertEqual(close.count, 0)
+    }
+
+    func testUnmapNonTopLevelEmitsNothing() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        mapped(&d, wid: 0x4400001, name: "Parent", roots: roots)
+        _ = d.afterRequest(.createWindow(cw(wid: 0x4400002, parent: 0x4400001)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterRequest(.mapWindow(mw(0x4400002)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        let lms = d.afterRequest(.unmapWindow(uw(0x4400002)),
+                                  byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        XCTAssertEqual(lms.count, 0)
+    }
+
+    func testUnmapNeverMappedWindowEmitsNothing() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        _ = d.afterRequest(.createWindow(cw(wid: 0x4400001, parent: 0x2B)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterRequest(.changeProperty(setWMName(0x4400001, "Never Shown")),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        let lms = d.afterRequest(.unmapWindow(uw(0x4400001)),
+                                  byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        XCTAssertEqual(lms.count, 0)
+    }
+
+    func testRemapAfterHideEmitsFreshAppearance() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        mapped(&d, wid: 0x4400001, name: "Coordinates", roots: roots)
+        _ = d.afterRequest(.unmapWindow(uw(0x4400001)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        let lms = d.afterRequest(.mapWindow(mw(0x4400001)),
+                                  byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        // After hide, a re-map produces a fresh appearance landmark so
+        // the reader can follow hide/reshow as a sequence.
+        XCTAssertTrue(lms.contains { $0.text.contains("appears on screen") })
     }
 }

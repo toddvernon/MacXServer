@@ -83,6 +83,11 @@ public struct LandmarkDetector: Sendable {
     // Set once we've seen MapWindow on a window so we don't double-emit if a
     // later MapWindow fires (the X server is forgiving about re-mapping).
     private var mappedWindows: Set<UInt32> = []
+    // Set of windows we've already emitted a "was hidden / was dismissed"
+    // landmark for. Used to suppress a redundant "was closed" landmark
+    // when the client follows the hide with a destroy (the common Motif
+    // pattern: unmap dialog, then destroy its resources).
+    private var hideEmittedFor: Set<UInt32> = []
 
     /// Two ButtonPress+ButtonRelease events farther apart than this are NOT
     /// treated as a click. 500ms matches the typical OS double-click threshold
@@ -130,6 +135,54 @@ public struct LandmarkDetector: Sendable {
                 ))
             }
             return out
+
+        case .unmapWindow(let r):
+            // Only landmark the unmap if the window was actually mapped
+            // and we can name what it is to the user. Children unmap
+            // routinely (Motif re-parenting, scroll-down menu hide) and
+            // would just be noise.
+            guard mappedWindows.contains(r.window) else { return [] }
+            mappedWindows.remove(r.window)
+            guard let top = topLevels[r.window] else { return [] }
+            // Allow a future re-map to re-announce the appearance, since
+            // hide-then-show is a meaningful user journey to surface.
+            topLevels[r.window]?.emittedMapLandmark = false
+            hideEmittedFor.insert(r.window)
+            return [Landmark(hideOrCloseText(
+                action: .hidden, windowId: r.window, name: top.name,
+                width: top.width, height: top.height,
+                transientParentName: transientForParentName(r.window)
+            ))]
+
+        case .destroyWindow(let r):
+            // Resolve any landmark text BEFORE we wipe state, since the
+            // destroy path needs the window's name and transient context.
+            var emitted: [Landmark] = []
+            // Suppress the "was closed" landmark if we already announced
+            // the hide for this window — the destroy is the routine
+            // resource cleanup the client does after dismissing, and
+            // narrating both reads as duplicate.
+            if let top = topLevels[r.window], !hideEmittedFor.contains(r.window) {
+                emitted.append(Landmark(hideOrCloseText(
+                    action: .closed, windowId: r.window, name: top.name,
+                    width: top.width, height: top.height,
+                    transientParentName: transientForParentName(r.window)
+                )))
+            }
+            // Tear down all tracking for this window id. Resource ids in
+            // X can be recycled, so leaving stale entries around could
+            // mis-attribute future activity. (Note: real X servers also
+            // destroy all subwindows recursively. We don't walk children
+            // here since DestroyWindow is rare enough on top-levels that
+            // a leaked child entry is harmless until the next CreateWindow
+            // reuses the id, at which point our state gets overwritten.)
+            topLevels.removeValue(forKey: r.window)
+            parents.removeValue(forKey: r.window)
+            windowSizes.removeValue(forKey: r.window)
+            mappedWindows.remove(r.window)
+            transientFor.removeValue(forKey: r.window)
+            hideEmittedFor.remove(r.window)
+            return emitted
 
         case .changeProperty(let r):
             // WM_NAME (atom 39) — identify a top-level. Only the request's
@@ -208,6 +261,14 @@ public struct LandmarkDetector: Sendable {
         }
     }
 
+    /// If `id` has a WM_TRANSIENT_FOR set, return the name of the
+    /// transient parent (or nil if the parent itself is unnamed).
+    /// Used to render dialog-dismissed / dialog-closed landmarks.
+    func transientForParentName(_ id: UInt32) -> String? {
+        guard let parent = transientFor[id] else { return nil }
+        return topLevels[parent]?.name
+    }
+
     // MARK: - Hierarchy + name resolution
 
     /// What a window resolves to for landmark text purposes.
@@ -272,6 +333,45 @@ private func hexId(_ v: UInt32) -> String { String(format: "0x%X", v) }
 // The button verb varies on button==1 ("clicks") vs 2-5 ("clicks button N");
 // buttons 4/5 are scroll wheel up/down on most systems but the protocol
 // can't tell from outside, so we treat them as clicks.
+enum HideOrCloseAction {
+    case hidden    // UnmapWindow — window still exists, may reappear
+    case closed    // DestroyWindow — window is gone
+}
+
+// Text for the hide/close family of landmarks. Six variants emerge from
+// the cross-product of (hidden / closed) × (named top-level / unnamed
+// top-level / transient with named parent). When a transient parent is
+// known we lead with "the dialog" framing since that's how a user
+// remembers it; the underlying window may have its own name too, in
+// which case both appear ('Save Warning' dialog above 'xmeditor').
+private func hideOrCloseText(action: HideOrCloseAction,
+                              windowId: UInt32, name: String?,
+                              width: UInt16, height: UInt16,
+                              transientParentName: String?) -> String {
+    let verb: String
+    switch action {
+    case .hidden: verb = transientParentName != nil ? "was dismissed" : "was hidden"
+    case .closed: verb = "was closed"
+    }
+    // Empty WM_NAME is a real protocol act (see the empty-name case in
+    // identifyLandmarkText) but it's not a useful label here. Fall back
+    // to the unnamed framing so the output doesn't render literal "".
+    let usableName: String? = (name?.isEmpty == false) ? name : nil
+    if let parentName = transientParentName {
+        // Dialog framing — parent name is the load-bearing reference.
+        if let n = usableName {
+            return "# The \"\(n)\" dialog above \"\(parentName)\" \(verb)"
+        }
+        return "# The dialog above \"\(parentName)\" \(verb) " +
+            "(\(hexId(windowId)), \(width)×\(height))"
+    }
+    // Non-dialog top-level
+    if let n = usableName {
+        return "# The \"\(n)\" window \(verb)"
+    }
+    return "# An unnamed top-level \(verb) (\(hexId(windowId)), \(width)×\(height))"
+}
+
 private func clickLandmarkText(ref: LandmarkDetector.WindowReference,
                                 button: UInt8, x: Int16, y: Int16,
                                 clickedWindowId: UInt32) -> String {
