@@ -225,12 +225,32 @@ final class XkbRoundTripTests: XCTestCase {
             decode: { try XkbGetNamesReply.decode(from: $0, byteOrder: $1) })
     }
 
-    func testGetIndicatorMapReplyHeaderOnly() throws {
+    func testGetIndicatorMapReplyEmpty() throws {
         try roundTrip(XkbGetIndicatorMapReply(
             sequenceNumber: 19, deviceID: 3,
-            which: 0xFFFFFFFF,
+            which: 0,
             nRealIndicators: 3, nIndicators: 32,
-            trailer: []),
+            maps: []),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try XkbGetIndicatorMapReply.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testGetIndicatorMapReplyWithMaps() throws {
+        try roundTrip(XkbGetIndicatorMapReply(
+            sequenceNumber: 20, deviceID: 3,
+            which: 0b0111,    // 3 indicators
+            nRealIndicators: 3, nIndicators: 32,
+            maps: [
+                XkbIndicatorMapEntry(flags: 0x01, whichGroups: 0x02, groups: 0x03,
+                                     whichMods: 0x04, mods: 0x05, realMods: 0x06,
+                                     virtualMods: 0x0007, ctrls: 0x0000_0008),
+                XkbIndicatorMapEntry(flags: 0x11, whichGroups: 0x12, groups: 0x13,
+                                     whichMods: 0x14, mods: 0x15, realMods: 0x16,
+                                     virtualMods: 0x0017, ctrls: 0x0000_0018),
+                XkbIndicatorMapEntry(flags: 0x21, whichGroups: 0x22, groups: 0x23,
+                                     whichMods: 0x24, mods: 0x25, realMods: 0x26,
+                                     virtualMods: 0x0027, ctrls: 0x0000_0028),
+            ]),
             encode: { $0.encode(byteOrder: $1) },
             decode: { try XkbGetIndicatorMapReply.decode(from: $0, byteOrder: $1) })
     }
@@ -428,6 +448,258 @@ final class XkbRoundTripTests: XCTestCase {
             XCTAssertEqual(decoded, payload, "payload round-trip in \(order)")
             XCTAssertEqual(payload.encode(byteOrder: order), bytes, "byte-identical re-encode in \(order)")
         }
+    }
+
+    // MARK: - Session 3 Tier B requests
+
+    func testLatchLockState() throws {
+        try roundTrip(XkbLatchLockState(
+            deviceSpec: 0x0100,
+            affectModLocks: 0xFF, modLocks: 0x04,
+            lockGroup: true, groupLock: 1,
+            affectModLatches: 0xFF, modLatches: 0x01,
+            latchGroup: false, groupLatch: 0),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbLatchLockState.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testSetControls() throws {
+        try roundTrip(XkbSetControls(
+            deviceSpec: 0x0100,
+            affectInternalRealMods: 0xFF, internalRealMods: 0x01,
+            affectIgnoreLockRealMods: 0xFF, ignoreLockRealMods: 0x00,
+            affectInternalVirtualMods: 0xFFFF, internalVirtualMods: 0x0001,
+            affectIgnoreLockVirtualMods: 0xFFFF, ignoreLockVirtualMods: 0,
+            mouseKeysDfltBtn: 1,
+            affectEnabledControls: 0x07FF, enabledControls: 0x0003, changeControls: 0x0001,
+            repeatDelay: 500, repeatInterval: 30,
+            slowKeysDelay: 0, debounceDelay: 0,
+            mouseKeysDelay: 160, mouseKeysInterval: 40,
+            mouseKeysTimeToMax: 30, mouseKeysMaxSpeed: 10,
+            mouseKeysCurve: 0,
+            accessXTimeout: 120, accessXTimeoutMask: 0),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbSetControls.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testBell() throws {
+        try roundTrip(XkbBell(
+            deviceSpec: 0x0100, bellClass: 1, bellID: 0,
+            percent: 75, doOverride: false,
+            name: 0x12345678, window: 0x10000005),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbBell.decode(from: $0, byteOrder: $1) })
+        // Negative percent (clamp-down request).
+        try roundTrip(XkbBell(
+            deviceSpec: 0x0100, bellClass: 0, bellID: 0,
+            percent: -50, doOverride: true,
+            name: 0, window: 0),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbBell.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testSendEvent() throws {
+        let synth = [UInt8](repeating: 0xAB, count: 32)
+        try roundTrip(XkbSendEvent(
+            propagate: true, synthesizeClick: false,
+            destination: 0x10000005, eventMask: 0xFFFFFFFF,
+            eventBytes: synth),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbSendEvent.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testGetIndicatorState() throws {
+        try roundTrip(XkbGetIndicatorState(deviceSpec: 0x0100),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbGetIndicatorState.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testSetIndicatorMap() throws {
+        try roundTrip(XkbSetIndicatorMap(
+            deviceSpec: 0x0100,
+            which: 0b0111,
+            maps: [
+                XkbIndicatorMapEntry(flags: 0x01, whichGroups: 0, groups: 0,
+                                     whichMods: 0, mods: 0, realMods: 0,
+                                     virtualMods: 0, ctrls: 0),
+                XkbIndicatorMapEntry(flags: 0x02, whichGroups: 0, groups: 0,
+                                     whichMods: 0, mods: 0, realMods: 0,
+                                     virtualMods: 0, ctrls: 0),
+                XkbIndicatorMapEntry(flags: 0x03, whichGroups: 0, groups: 0,
+                                     whichMods: 0, mods: 0, realMods: 0,
+                                     virtualMods: 0, ctrls: 0),
+            ]),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbSetIndicatorMap.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testGetCompatMap() throws {
+        try roundTrip(XkbGetCompatMap(
+            deviceSpec: 0x0100, virtualMods: 0,
+            mods: 0x01, getAllSI: true,
+            firstSI: 0, nSI: 16),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbGetCompatMap.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testSetCompatMapEmpty() throws {
+        try roundTrip(XkbSetCompatMap(
+            deviceSpec: 0x0100, recomputeActions: false, truncateSI: false,
+            mods: 0, virtualMods: 0,
+            firstSI: 0, nSI: 0,
+            payload: .empty),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbSetCompatMap.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testSetCompatMapWithSymInterpretsAndGroupCompat() throws {
+        let payload = XkbCompatPayload(
+            symInterprets: [
+                XkbSymInterpret(sym: 0xFF01, mods: 0x01, match: 0x02,
+                                virtualMod: 0x03, flags: 0x04,
+                                actionType: 0x05, actionData: [1,2,3,4,5,6,7]),
+                XkbSymInterpret(sym: 0xFF02, mods: 0, match: 0,
+                                virtualMod: 0, flags: 0,
+                                actionType: 0, actionData: [0,0,0,0,0,0,0]),
+            ],
+            groupCompat: [
+                XkbModCompat(mods: 0x01, groups: 0x01),
+                XkbModCompat(mods: 0x02, groups: 0x02),
+                XkbModCompat(mods: 0x03, groups: 0x03),
+                XkbModCompat(mods: 0x04, groups: 0x04),
+            ]
+        )
+        try roundTrip(XkbSetCompatMap(
+            deviceSpec: 0x0100, recomputeActions: true, truncateSI: false,
+            mods: 0x01, virtualMods: 0,
+            firstSI: 0, nSI: 2,
+            payload: payload),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbSetCompatMap.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testSetNames() throws {
+        try roundTrip(XkbSetNames(
+            deviceSpec: 0x0100, which: 0xFFFFFFFF,
+            firstType: 0, nTypes: 0,
+            firstKTLevel: 0, nKTLevels: 0,
+            indicators: 0, modifiers: 0,
+            virtualMods: 0,
+            nRadioGroups: 0, nCharSets: 0,
+            firstKey: 0, nKeys: 0,
+            resize: 0,
+            trailer: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbSetNames.decode(from: $0, byteOrder: $1) })
+    }
+
+    // MARK: - Session 3 Tier B replies
+
+    func testGetIndicatorStateReply() throws {
+        try roundTrip(XkbGetIndicatorStateReply(
+            sequenceNumber: 23, deviceID: 3, state: 0x0000_000F),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try XkbGetIndicatorStateReply.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testGetCompatMapReply() throws {
+        let payload = XkbCompatPayload(
+            symInterprets: [
+                XkbSymInterpret(sym: 0xFF01, mods: 0x01, match: 0x02,
+                                virtualMod: 0x03, flags: 0x04,
+                                actionType: 0x05, actionData: [1,2,3,4,5,6,7]),
+            ],
+            groupCompat: [
+                XkbModCompat(mods: 0x01, groups: 0x01),
+                XkbModCompat(mods: 0x02, groups: 0x02),
+                XkbModCompat(mods: 0x03, groups: 0x03),
+                XkbModCompat(mods: 0x04, groups: 0x04),
+            ]
+        )
+        try roundTrip(XkbGetCompatMapReply(
+            sequenceNumber: 25, deviceID: 3,
+            mods: 0x01, virtualMods: 0,
+            firstSI: 0, nSI: 1, nTotalSI: 16,
+            payload: payload),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try XkbGetCompatMapReply.decode(from: $0, byteOrder: $1) })
+    }
+
+    // MARK: - Session 3 Tier C
+
+    func testListAlternateSymsReqAndReply() throws {
+        try roundTrip(XkbListAlternateSyms(
+            deviceSpec: 0x0100, name: 0x91, charset: 0x9A),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbListAlternateSyms.decode(from: $0, byteOrder: $1) })
+        try roundTrip(XkbListAlternateSymsReply(
+            sequenceNumber: 27, deviceID: 3,
+            nAlternateSyms: 4,
+            indices: Array(repeating: UInt8(0x55), count: 20)),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try XkbListAlternateSymsReply.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testGetAlternateSyms() throws {
+        try roundTrip(XkbGetAlternateSyms(
+            deviceSpec: 0x0100, index: 2, firstKey: 8, nKeys: 248),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbGetAlternateSyms.decode(from: $0, byteOrder: $1) })
+        try roundTrip(XkbGetAlternateSymsReply(
+            sequenceNumber: 29, deviceID: 3,
+            name: 0x91, index: 2, nCharSets: 1,
+            firstKey: 8, nKeys: 10,
+            totalSyms: 3, syms: [0xFF01, 0xFF02, 0xFF03]),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try XkbGetAlternateSymsReply.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testSetAlternateSyms() throws {
+        try roundTrip(XkbSetAlternateSyms(
+            deviceSpec: 0x0100, create: true, replace: 0,
+            present: 0x00FF, name: 0x91,
+            nCharSets: 1, firstKey: 8, nKeys: 4,
+            syms: [0xFF01, 0xFF02, 0xFF03, 0xFF04]),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbSetAlternateSyms.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testGetGeometryReqAndReply() throws {
+        try roundTrip(XkbGetGeometry(deviceSpec: 0x0100, name: 0),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbGetGeometry.decode(from: $0, byteOrder: $1) })
+        try roundTrip(XkbGetGeometryReply(
+            sequenceNumber: 31, deviceID: 3,
+            name: 0x91, width: 400, height: 150,
+            shape: 0, color: 1,
+            nShapes: 2, nSections: 3,
+            nPoints: 4, nOutlines: 5,
+            nColors: 6, nDoodads: 7,
+            nLabels: 8, nFonts: 9,
+            trailer: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try XkbGetGeometryReply.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testSetGeometry() throws {
+        try roundTrip(XkbSetGeometry(
+            deviceSpec: 0x0100, nShapes: 2, nSections: 3,
+            name: 0x91, widthMM: 400, heightMM: 150,
+            trailer: [0x01, 0x02, 0x03, 0x04]),
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbSetGeometry.decode(from: $0, byteOrder: $1) })
+    }
+
+    func testSetDebuggingFlagsReqAndReply() throws {
+        try roundTrip(XkbSetDebuggingFlags(
+            mask: 0x01, flags: 0x01, disableLocks: 0,
+            message: [0x68, 0x65, 0x6c, 0x6c, 0x6f]),   // "hello"
+            encode: { $0.encode(majorOpcode: 135, byteOrder: $1) },
+            decode: { try XkbSetDebuggingFlags.decode(from: $0, byteOrder: $1) })
+        try roundTrip(XkbSetDebuggingFlagsReply(
+            sequenceNumber: 33, disableLocks: 0, currentFlags: 0x01),
+            encode: { $0.encode(byteOrder: $1) },
+            decode: { try XkbSetDebuggingFlagsReply.decode(from: $0, byteOrder: $1) })
     }
 
     // MARK: - Common event header decode

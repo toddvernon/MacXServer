@@ -64,6 +64,71 @@ public enum XkbDumper: ExtensionDumper {
                 return "XkbGetIndicatorMap       dev=\(r.deviceSpec) which=\(hx(r.which))"
             }
 
+        // Session 3 (Tier B)
+        case XkbMinor.latchLockState:
+            if let r = try? XkbLatchLockState.decode(from: bytes, byteOrder: byteOrder) {
+                return "XkbLatchLockState        dev=\(r.deviceSpec) modLocks=\(hx(r.modLocks))/aff=\(hx(r.affectModLocks)) modLatches=\(hx(r.modLatches))/aff=\(hx(r.affectModLatches)) group=lock=\(r.lockGroup):\(r.groupLock) latch=\(r.latchGroup):\(r.groupLatch)"
+            }
+        case XkbMinor.setControls:
+            if let r = try? XkbSetControls.decode(from: bytes, byteOrder: byteOrder) {
+                return "XkbSetControls           dev=\(r.deviceSpec) enabledControls=\(hx(r.enabledControls)) affect=\(hx(r.affectEnabledControls)) change=\(hx(r.changeControls)) repeat=\(r.repeatDelay)/\(r.repeatInterval)"
+            }
+        case XkbMinor.bell:
+            if let r = try? XkbBell.decode(from: bytes, byteOrder: byteOrder) {
+                return "XkbBell                  dev=\(r.deviceSpec) class=\(r.bellClass) id=\(r.bellID) pct=\(r.percent) override=\(r.doOverride) name=\(hx(r.name)) window=\(hx(r.window))"
+            }
+        case XkbMinor.sendEvent:
+            if let r = try? XkbSendEvent.decode(from: bytes, byteOrder: byteOrder) {
+                return "XkbSendEvent             dst=\(hx(r.destination)) mask=\(hx(r.eventMask)) propagate=\(r.propagate) synthClick=\(r.synthesizeClick) eventBytes=\(r.eventBytes.count)b"
+            }
+        case XkbMinor.getIndicatorState:
+            if let r = try? XkbGetIndicatorState.decode(from: bytes, byteOrder: byteOrder) {
+                return "XkbGetIndicatorState     dev=\(r.deviceSpec)"
+            }
+        case XkbMinor.setIndicatorMap:
+            if let r = try? XkbSetIndicatorMap.decode(from: bytes, byteOrder: byteOrder) {
+                return "XkbSetIndicatorMap       dev=\(r.deviceSpec) which=\(hx(r.which)) maps=\(r.maps.count)"
+            }
+        case XkbMinor.getCompatMap:
+            if let r = try? XkbGetCompatMap.decode(from: bytes, byteOrder: byteOrder) {
+                return "XkbGetCompatMap          dev=\(r.deviceSpec) vmods=\(hx(r.virtualMods)) mods=\(hx(r.mods)) getAllSI=\(r.getAllSI) firstSI=\(r.firstSI) nSI=\(r.nSI)"
+            }
+        case XkbMinor.setCompatMap:
+            if let r = try? XkbSetCompatMap.decode(from: bytes, byteOrder: byteOrder) {
+                let gc = r.payload.groupCompat.isEmpty ? "" : " +groupCompat"
+                return "XkbSetCompatMap          dev=\(r.deviceSpec) recompute=\(r.recomputeActions) truncate=\(r.truncateSI) mods=\(hx(r.mods)) firstSI=\(r.firstSI) nSI=\(r.nSI) symInterprets=\(r.payload.symInterprets.count)\(gc)"
+            }
+        case XkbMinor.setNames:
+            if let r = try? XkbSetNames.decode(from: bytes, byteOrder: byteOrder) {
+                return "XkbSetNames              dev=\(r.deviceSpec) which=\(hx(r.which)) types=\(r.firstType)+\(r.nTypes) keys=\(r.firstKey)+\(r.nKeys) trailer=\(r.trailer.count)b"
+            }
+
+        // Session 3 (Tier C)
+        case XkbMinor.listAlternateSyms:
+            if let r = try? XkbListAlternateSyms.decode(from: bytes, byteOrder: byteOrder) {
+                return "XkbListAlternateSyms     dev=\(r.deviceSpec) name=\(hx(r.name)) charset=\(hx(r.charset))"
+            }
+        case XkbMinor.getAlternateSyms:
+            if let r = try? XkbGetAlternateSyms.decode(from: bytes, byteOrder: byteOrder) {
+                return "XkbGetAlternateSyms      dev=\(r.deviceSpec) index=\(r.index) keys=\(r.firstKey)+\(r.nKeys)"
+            }
+        case XkbMinor.setAlternateSyms:
+            if let r = try? XkbSetAlternateSyms.decode(from: bytes, byteOrder: byteOrder) {
+                return "XkbSetAlternateSyms      dev=\(r.deviceSpec) create=\(r.create) replace=\(r.replace) present=\(hx(r.present)) name=\(hx(r.name)) syms=\(r.syms.count)"
+            }
+        case XkbMinor.getGeometry:
+            if let r = try? XkbGetGeometry.decode(from: bytes, byteOrder: byteOrder) {
+                return "XkbGetGeometry           dev=\(r.deviceSpec) name=\(hx(r.name))"
+            }
+        case XkbMinor.setGeometry:
+            if let r = try? XkbSetGeometry.decode(from: bytes, byteOrder: byteOrder) {
+                return "XkbSetGeometry           dev=\(r.deviceSpec) name=\(hx(r.name)) \(r.widthMM)x\(r.heightMM)mm shapes=\(r.nShapes) sections=\(r.nSections) trailer=\(r.trailer.count)b"
+            }
+        case XkbMinor.setDebuggingFlags:
+            if let r = try? XkbSetDebuggingFlags.decode(from: bytes, byteOrder: byteOrder) {
+                return "XkbSetDebuggingFlags     mask=\(hx(r.mask)) flags=\(hx(r.flags)) disableLocks=\(r.disableLocks) msg=\(r.message.count)b"
+            }
+
         default:
             break
         }

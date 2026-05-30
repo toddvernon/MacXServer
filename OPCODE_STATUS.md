@@ -269,7 +269,7 @@ that conforms to `ExtensionDumper` plus one entry in `ExtensionDumperRegistry.bu
 | SHAPE | per-session via QueryExtension | full (requests + events) | Migrated to registry 2026-05-30. Reference implementation for the protocol. |
 | BIG-REQUESTS | per-session via QueryExtension | full (1 request, 1 reply, 0 events) | Phase 3 batch A landed 2026-05-30. `BigRequestsDumper.swift`. |
 | MIT-SHM | per-session via QueryExtension | full (6 requests, 2 replies, 1 event) | Phase 3 batch A landed 2026-05-30. `ShmDumper.swift`. |
-| XKEYBOARD | per-session via QueryExtension | Tier A (7 requests + all 11 events) + SetMap (Session 2) — GetMap/SetMap trailer fully typed via shared `XkbMapPayload` codec. GetNames/GetIndicatorMap reply trailers still raw. | Phase 3 Session 1 + 2 landed 2026-05-30. Session 3: Tier B + C (SetNames, GetCompatMap, LatchLockState, Bell, Geometry, AlternateSyms, etc.). |
+| XKEYBOARD | per-session via QueryExtension | All 22 core requests + 6 replies + all 11 events; full typed payloads for GetMap/SetMap/IndicatorMap/CompatMap. GetGeometry/SetGeometry tree trailer and GetNames/SetNames Atom-list trailer kept raw (deferred typed walkers). | Phase 3 Sessions 1+2+3 landed 2026-05-30. Remaining: Geometry tree walker + Names which-mask walker — deferred follow-ups, not blocking OSS launch. |
 | Remaining Tier 1 (XINPUT v1, RENDER) | per-session via QueryExtension | named-only | Each large enough for its own focused session per CLAUDE.md's planning-agent guidance. |
 | Tier 2 (RANDR, XFIXES, DAMAGE, XINPUT2, COMPOSITE, etc.) | per-session via QueryExtension | named-only | Decision pending end of Phase 3: ship without, or include before OSS launch? |
 
