@@ -49,6 +49,52 @@ final class FontMappingFileTests: XCTestCase {
         XCTAssertEqual(file.mappings[0].family, "fixed")
     }
 
+    // The user-facing format includes an optional trailing `mono` / `prop`
+    // token to document the spacing kind (see DefaultFontMappings header
+    // comment). It's informational only -- isMonospace is derived from
+    // CTFontGetSymbolicTraits -- so the parser must drop it. Without this,
+    // resolve("fixed") returned "Monaco mono" and CTFont silently fell back
+    // to Helvetica; the breakage surfaced as test-suite-only "Monaco mono"
+    // failures in FontResolverTests once FontMappingFileTests had loaded
+    // the developer's real ~/.swiftx-fonts.
+    func testTrailingMonoTokenStripped() {
+        let file = FontMappingFile.parse("fixed  ->  Monaco  mono")
+        XCTAssertEqual(file.mappings.count, 1)
+        XCTAssertEqual(file.mappings[0].family, "fixed")
+        XCTAssertEqual(file.mappings[0].macFont, "Monaco")
+    }
+
+    func testTrailingPropTokenStripped() {
+        let file = FontMappingFile.parse("helvetica  ->  Helvetica Neue  prop")
+        XCTAssertEqual(file.mappings.count, 1)
+        XCTAssertEqual(file.mappings[0].macFont, "Helvetica Neue")
+    }
+
+    // Capitalized "Mono" / "Prop" are NOT spacing tokens -- they're part of
+    // font names ("Andale Mono", or hypothetically a "Foo Prop" face). The
+    // documented format uses lowercase `mono` / `prop` only, and the parser
+    // matches strictly. Tests against "Andale Mono" elsewhere rely on this.
+    func testCapitalizedMonoStaysAsPartOfMacFontName() {
+        let file = FontMappingFile.parse("lucidatypewriter  ->  Andale Mono")
+        XCTAssertEqual(file.mappings.count, 1)
+        XCTAssertEqual(file.mappings[0].macFont, "Andale Mono")
+    }
+
+    func testNoTrailingTokenStillParses() {
+        // Old format without the trailing token must keep working.
+        let file = FontMappingFile.parse("fixed  ->  Monaco")
+        XCTAssertEqual(file.mappings[0].macFont, "Monaco")
+    }
+
+    // Edge case: a one-word mac font that happens to equal the spacing
+    // token. The parser must NOT strip it -- the trailing-token rule only
+    // applies when at least one mac-font word would survive.
+    func testSingleWordMacFontNamedMonoNotStripped() {
+        let file = FontMappingFile.parse("weird  ->  mono")
+        XCTAssertEqual(file.mappings.count, 1)
+        XCTAssertEqual(file.mappings[0].macFont, "mono")
+    }
+
     func testFallbackKeysParsedSeparately() {
         let file = FontMappingFile.parse("""
         *fallback-mono  ->  Courier New
@@ -130,10 +176,14 @@ final class FontMappingFileTests: XCTestCase {
     }
 
     func testSeedRoundTripsThroughFontResolver() {
-        // Sanity-check the integration. After installMappings (which the
-        // server does at startup), FontResolver.resolveFamily should
-        // match the seed.
-        FontResolver.installMappings()
+        // Sanity-check the integration. After installMappings, FontResolver
+        // .resolveFamily should match the seed. Use the in-memory variant
+        // so we don't pull the developer's actual ~/.swiftx-fonts into the
+        // shared static (which leaked across tests before 2026-05-30,
+        // making FontResolverTests fail in full-suite runs but pass in
+        // isolation). tearDown restores the seed for any later test that
+        // relies on the default mapping state.
+        FontResolver.installMappings(file: FontMappingFile.parse(DefaultFontMappings.seedContent))
         let monaco = FontResolver.resolveFamily(family: "fixed", spacing: "c")
         XCTAssertEqual(monaco.name, "Monaco")
         XCTAssertTrue(monaco.isMonospace)
@@ -149,6 +199,14 @@ final class FontMappingFileTests: XCTestCase {
         let unknownProp = FontResolver.resolveFamily(family: "unknown", spacing: "p")
         XCTAssertEqual(unknownProp.name, "Helvetica Neue")
         XCTAssertFalse(unknownProp.isMonospace)
+    }
+
+    override func tearDown() {
+        // Restore the in-memory seed after any test that mutated the
+        // shared FontResolver.loadedMappings static. Belt-and-suspenders
+        // for the test-isolation issue called out above.
+        FontResolver.installMappings(file: FontMappingFile.parse(DefaultFontMappings.seedContent))
+        super.tearDown()
     }
 
     // MARK: - isMonospace derivation

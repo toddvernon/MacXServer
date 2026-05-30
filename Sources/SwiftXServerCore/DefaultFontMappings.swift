@@ -15,20 +15,22 @@ public enum DefaultFontMappings {
     # swift-x font mappings — controls FontResolver's XLFD family substitution.
     #
     # Format per line:
-    #   <xlfd-family>  ->  <mac-font-name>
+    #   <xlfd-family>  ->  <mac-font-name>  mono|prop
     #
-    # - The `->` separates the X family name from the Mac font. This supports
-    #   multi-word X family names ("new century schoolbook") and multi-word
-    #   Mac fonts ("Helvetica Neue") without ambiguity.
+    # - The `->` separates the X family name from the Mac font; the trailing
+    #   `mono`/`prop` token separates the Mac font from its spacing kind.
+    #   This supports multi-word X family names ("new century schoolbook")
+    #   and multi-word Mac fonts ("Helvetica Neue") without ambiguity.
     # - Family names are case-insensitive; aliases share a Mac font by
     #   listing each one on its own line.
     # - Monospace vs proportional is derived from the Mac font itself
-    #   (CTFontGetSymbolicTraits), not declared here. Monaco / Courier
-    #   New / Andale Mono report monospace; Helvetica Neue / Times New
-    #   Roman / Charter / Symbol don't.
-    # - Two special keys hold the wildcard fallbacks for unknown families:
+    #   (CTFontGetSymbolicTraits); the trailing `mono`/`prop` is
+    #   informational. Monaco / Courier New / Andale Mono report
+    #   monospace; Helvetica Neue / Times New Roman / Charter / Symbol
+    #   don't.
+    # - Two special keys hold the wildcard fallbacks:
     #     *fallback-mono  ->  used for clients requesting spacing=c (charcell)
-    #                         or spacing=m (monospace)
+    #                         or spacing=m (monospace) with an unknown family
     #     *fallback-prop  ->  used for everything else (unknown spacing,
     #                         wildcards)
     #
@@ -38,30 +40,30 @@ public enum DefaultFontMappings {
     # font metrics at QueryFont time. Restart Motif/dt apps to see edits.
 
     # ── Monospaced families ──────────────────────────────────────────────────
-    fixed                          ->  Monaco
-    misc-fixed                     ->  Monaco
-    courier                        ->  Courier New
-    adobe-courier                  ->  Courier New
-    lucidatypewriter               ->  Andale Mono
-    b&h-lucidatypewriter           ->  Andale Mono
-    terminal                       ->  Monaco
-    vt100                          ->  Monaco
-    screen                         ->  Monaco
-    clean                          ->  Monaco
-    schumacher-clean               ->  Monaco
+    fixed                          ->  Monaco             mono
+    misc-fixed                     ->  Monaco             mono
+    courier                        ->  Courier New        mono
+    adobe-courier                  ->  Courier New        mono
+    lucidatypewriter               ->  Andale Mono        mono
+    b&h-lucidatypewriter           ->  Andale Mono        mono
+    terminal                       ->  Monaco             mono
+    vt100                          ->  Monaco             mono
+    screen                         ->  Monaco             mono
+    clean                          ->  Monaco             mono
+    schumacher-clean               ->  Monaco             mono
 
     # ── Proportional families ────────────────────────────────────────────────
-    helvetica                      ->  Helvetica Neue
-    adobe-helvetica                ->  Helvetica Neue
-    times                          ->  Times New Roman
-    adobe-times                    ->  Times New Roman
-    new century schoolbook         ->  Charter
-    adobe-new century schoolbook   ->  Charter
-    symbol                         ->  Symbol
-    adobe-symbol                   ->  Symbol
+    helvetica                      ->  Helvetica Neue     prop
+    adobe-helvetica                ->  Helvetica Neue     prop
+    times                          ->  Times New Roman    prop
+    adobe-times                    ->  Times New Roman    prop
+    new century schoolbook         ->  Charter            prop
+    adobe-new century schoolbook   ->  Charter            prop
+    symbol                         ->  Symbol             prop
+    adobe-symbol                   ->  Symbol             prop
 
     # ── Wildcard fallbacks ───────────────────────────────────────────────────
-    *fallback-mono                 ->  Monaco
-    *fallback-prop                 ->  Helvetica Neue
+    *fallback-mono                 ->  Monaco             mono
+    *fallback-prop                 ->  Helvetica Neue     prop
     """
 }

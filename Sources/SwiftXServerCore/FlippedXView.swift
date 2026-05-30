@@ -30,32 +30,47 @@ public final class FlippedXView: NSView {
     /// Mouse event sink. The bridge installs this; FlippedXView calls it
     /// from mouseDown / mouseUp / rightMouseDown / rightMouseUp /
     /// otherMouseDown / otherMouseUp. Args: (X-logical x in top-level
-    /// coords, X-logical y, X button number 1..3, isDown). The view
-    /// converts NSEvent coords from view-local points → device px →
-    /// logical px before calling.
-    public var mouseHandler: ((Int16, Int16, UInt8, Bool) -> Void)?
+    /// coords, X-logical y, X button number 1..3, isDown, raw modifier
+    /// flags). modifierFlags carries the live NSEvent.modifierFlags so
+    /// the session emits ButtonPress/Release with a correct `state` field
+    /// without relying on a key-event-driven cache that goes stale when
+    /// the user releases a modifier without pressing a key (the cause of
+    /// the 2026-05-30 stuck-Ctrl xterm-menu bug).
+    public var mouseHandler: ((Int16, Int16, UInt8, Bool, UInt) -> Void)?
 
     /// Drag event sink. Fires from mouseDragged / rightMouseDragged /
     /// otherMouseDragged. Same coord convention as mouseHandler. The held
     /// button number is forwarded so the session can populate the state
     /// field of the X MotionNotify event correctly.
-    public var mouseDraggedHandler: ((Int16, Int16, UInt8) -> Void)?
+    public var mouseDraggedHandler: ((Int16, Int16, UInt8, UInt) -> Void)?
 
     /// Pointer-moved event sink (no button held). Fires from `mouseMoved`
     /// when the tracking area is active. Args: (X-logical x, y in
-    /// top-level coords). The session uses this to track which X subwindow
-    /// currently contains the pointer and emit EnterNotify / LeaveNotify.
-    public var mouseMovedHandler: ((Int16, Int16) -> Void)?
+    /// top-level coords, raw modifier flags). The session uses this to
+    /// track which X subwindow currently contains the pointer and emit
+    /// EnterNotify / LeaveNotify.
+    public var mouseMovedHandler: ((Int16, Int16, UInt) -> Void)?
 
     /// Pointer entered the NSView's content area (from outside the window).
-    /// Args: (X-logical x, y). The session emits the EnterNotify chain.
-    public var mouseEnteredHandler: ((Int16, Int16) -> Void)?
+    /// Args: (X-logical x, y, raw modifier flags). The session emits the
+    /// EnterNotify chain.
+    public var mouseEnteredHandler: ((Int16, Int16, UInt) -> Void)?
 
     /// Pointer left the NSView's content area. Args: (X-logical x, y at exit
-    /// time — may be outside the view's bounds). The session emits the
-    /// LeaveNotify chain for whichever X window the pointer was last in,
-    /// stamping these coords as the cursor's position at the crossing.
-    public var mouseExitedHandler: ((Int16, Int16) -> Void)?
+    /// time — may be outside the view's bounds, raw modifier flags). The
+    /// session emits the LeaveNotify chain for whichever X window the
+    /// pointer was last in, stamping these coords as the cursor's position
+    /// at the crossing.
+    public var mouseExitedHandler: ((Int16, Int16, UInt) -> Void)?
+
+    /// Modifier-key state change sink. Fires from `flagsChanged(with:)`
+    /// whenever a bare modifier (Ctrl, Shift, Option, Command, Caps) is
+    /// pressed or released. X11 has no modifier-only event on the wire,
+    /// but the session needs to know so it can refresh its cached state
+    /// mask. Without this, releasing Ctrl after using a Ctrl-keystroke
+    /// leaves the cache stuck at Ctrl=1 and every subsequent click pops
+    /// xterm's Ctrl+click menu. Args: (raw modifier flags).
+    public var flagsChangedHandler: ((UInt) -> Void)?
 
     /// Cursor to display while the pointer is over this view. Bridge sets
     /// this from `setCursor(topLevel:glyph:)` in response to crossing
@@ -251,19 +266,27 @@ public final class FlippedXView: NSView {
     public override func mouseMoved(with event: NSEvent) {
         guard let handler = mouseMovedHandler else { return }
         let (x, y) = logicalLocation(of: event)
-        handler(x, y)
+        handler(x, y, event.modifierFlags.rawValue)
     }
 
     public override func mouseEntered(with event: NSEvent) {
         guard let handler = mouseEnteredHandler else { return }
         let (x, y) = logicalLocation(of: event)
-        handler(x, y)
+        handler(x, y, event.modifierFlags.rawValue)
     }
 
     public override func mouseExited(with event: NSEvent) {
         guard let handler = mouseExitedHandler else { return }
         let (x, y) = logicalLocation(of: event)
-        handler(x, y)
+        handler(x, y, event.modifierFlags.rawValue)
+    }
+
+    /// AppKit calls this when a bare modifier key transitions (no character
+    /// key involved). Forward the live modifier mask to the session so its
+    /// cached state-mask stays accurate — the 2026-05-30 stuck-Ctrl bug
+    /// happened precisely because we never observed this event.
+    public override func flagsChanged(with event: NSEvent) {
+        flagsChangedHandler?(event.modifierFlags.rawValue)
     }
 
     /// AppKit calls this whenever the view's frame changes (initial layout,
@@ -297,14 +320,14 @@ public final class FlippedXView: NSView {
         // Swallow clicks that land outside the SHAPE bounding region: those
         // pixels aren't part of the window, so no X button event is generated.
         guard isInsideShape(logicalX: x, logicalY: y) else { return }
-        handler(x, y, button, isDown)
+        handler(x, y, button, isDown, event.modifierFlags.rawValue)
     }
 
     private func dispatchDrag(_ event: NSEvent, button: UInt8) {
         guard let handler = mouseDraggedHandler else { return }
         let (x, y) = logicalLocation(of: event)
         guard isInsideShape(logicalX: x, logicalY: y) else { return }
-        handler(x, y, button)
+        handler(x, y, button, event.modifierFlags.rawValue)
     }
 
     /// True if the logical point is inside the bounding shape, or the window

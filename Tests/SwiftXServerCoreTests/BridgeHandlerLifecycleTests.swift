@@ -5,36 +5,38 @@ import Framer
 #if canImport(AppKit)
 import AppKit
 
-// Bridge handler-list lifecycle. Each ServerSession registers 12 handlers
-// on the bridge at init time. Without cleanup, the lists grew unboundedly
-// across accept/disconnect cycles and dead-session closures (weak-self
-// no-ops) kept firing on every AppKit event. cleanupOnDisconnect must
-// call `bridge.removeHandlers(token:)` to prune this session's entries.
+// Bridge handler-list lifecycle. Each ServerSession registers 13 handlers
+// on the bridge at init time (was 12 prior to 2026-05-30 -- the
+// setOnModifiersChanged handler that closes the stuck-Ctrl xterm-menu bug
+// makes 13). Without cleanup, the lists grew unboundedly across
+// accept/disconnect cycles and dead-session closures (weak-self no-ops)
+// kept firing on every AppKit event. cleanupOnDisconnect must call
+// `bridge.removeHandlers(token:)` to prune this session's entries.
 
 final class BridgeHandlerLifecycleTests: XCTestCase {
 
-    func testSessionInitRegistersTwelveHandlers() {
+    func testSessionInitRegistersThirteenHandlers() {
         let bridge = CocoaWindowBridge(scaleFactor: 1, log: nil)
         XCTAssertEqual(bridge.totalHandlerCount, 0, "fresh bridge has no handlers")
 
         let session = ServerSession(bridge: bridge)
         // Suppress unused warning; the session's init is what registers.
         _ = session.bridgeHandlerToken
-        XCTAssertEqual(bridge.totalHandlerCount, 12,
-                       "ServerSession init registers exactly 12 handlers on the bridge")
+        XCTAssertEqual(bridge.totalHandlerCount, 13,
+                       "ServerSession init registers exactly 13 handlers on the bridge")
     }
 
     func testCleanupOnDisconnectRemovesThisSessionsHandlers() {
         let bridge = CocoaWindowBridge(scaleFactor: 1, log: nil)
         let s1 = ServerSession(bridge: bridge)
         let s2 = ServerSession(bridge: bridge)
-        XCTAssertEqual(bridge.totalHandlerCount, 24, "two sessions = 24 handlers")
+        XCTAssertEqual(bridge.totalHandlerCount, 26, "two sessions = 26 handlers")
         XCTAssertNotEqual(s1.bridgeHandlerToken, s2.bridgeHandlerToken,
                           "every session gets a unique bridge handler token")
 
         s1.cleanupOnDisconnect()
-        XCTAssertEqual(bridge.totalHandlerCount, 12,
-                       "s1's 12 handlers removed; s2's still present")
+        XCTAssertEqual(bridge.totalHandlerCount, 13,
+                       "s1's 13 handlers removed; s2's still present")
 
         s2.cleanupOnDisconnect()
         XCTAssertEqual(bridge.totalHandlerCount, 0,

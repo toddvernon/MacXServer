@@ -51,11 +51,12 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private var moveHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16) -> Void)] = []
     private var keyHandlers: [(UInt64, @Sendable (UInt32, UInt8, UInt, Bool) -> Void)] = []
     private var focusHandlers: [(UInt64, @Sendable (UInt32, Bool) -> Void)] = []
-    private var mouseHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void)] = []
-    private var mouseDraggedHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16, UInt8) -> Void)] = []
-    private var pointerMovedHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16) -> Void)] = []
-    private var pointerEnteredViewHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16) -> Void)] = []
-    private var pointerExitedViewHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16) -> Void)] = []
+    private var mouseHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16, UInt8, Bool, UInt) -> Void)] = []
+    private var mouseDraggedHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16, UInt8, UInt) -> Void)] = []
+    private var pointerMovedHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16, UInt) -> Void)] = []
+    private var pointerEnteredViewHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16, UInt) -> Void)] = []
+    private var pointerExitedViewHandlers: [(UInt64, @Sendable (UInt32, Int16, Int16, UInt) -> Void)] = []
+    private var modifiersChangedHandlers: [(UInt64, @Sendable (UInt) -> Void)] = []
     private var pasteHandlers: [(UInt64, @Sendable (UInt32, String) -> Void)] = []
     private var copyHandlers: [(UInt64, @Sendable (UInt32) -> Void)] = []
     private var closeHandlers: [(UInt64, @Sendable (UInt32) -> Void)] = []
@@ -280,24 +281,28 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         handlerLock.lock(); focusHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnMouse(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void) {
+    public func setOnMouse(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool, UInt) -> Void) {
         handlerLock.lock(); mouseHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnMouseDragged(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void) {
+    public func setOnMouseDragged(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, UInt) -> Void) {
         handlerLock.lock(); mouseDraggedHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnPointerMoved(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {
+    public func setOnPointerMoved(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt) -> Void) {
         handlerLock.lock(); pointerMovedHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnPointerEnteredView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {
+    public func setOnPointerEnteredView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt) -> Void) {
         handlerLock.lock(); pointerEnteredViewHandlers.append((token, handler)); handlerLock.unlock()
     }
 
-    public func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {
+    public func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt) -> Void) {
         handlerLock.lock(); pointerExitedViewHandlers.append((token, handler)); handlerLock.unlock()
+    }
+
+    public func setOnModifiersChanged(token: UInt64, _ handler: @escaping @Sendable (UInt) -> Void) {
+        handlerLock.lock(); modifiersChangedHandlers.append((token, handler)); handlerLock.unlock()
     }
 
     public func setOnPaste(token: UInt64, _ handler: @escaping @Sendable (UInt32, String) -> Void) {
@@ -326,6 +331,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         pointerMovedHandlers.removeAll        { $0.0 == token }
         pointerEnteredViewHandlers.removeAll  { $0.0 == token }
         pointerExitedViewHandlers.removeAll   { $0.0 == token }
+        modifiersChangedHandlers.removeAll    { $0.0 == token }
         pasteHandlers.removeAll               { $0.0 == token }
         copyHandlers.removeAll                { $0.0 == token }
         closeHandlers.removeAll               { $0.0 == token }
@@ -337,8 +343,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         return resizeHandlers.count + moveHandlers.count + keyHandlers.count
              + focusHandlers.count + mouseHandlers.count + mouseDraggedHandlers.count
              + pointerMovedHandlers.count + pointerEnteredViewHandlers.count
-             + pointerExitedViewHandlers.count + pasteHandlers.count
-             + copyHandlers.count + closeHandlers.count
+             + pointerExitedViewHandlers.count + modifiersChangedHandlers.count
+             + pasteHandlers.count + copyHandlers.count + closeHandlers.count
     }
 
     // MARK: - Handler fan-out
@@ -362,25 +368,29 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         handlerLock.lock(); let snap = focusHandlers; handlerLock.unlock()
         for (_, h) in snap { h(id, gained) }
     }
-    private func fireMouse(id: UInt32, x: Int16, y: Int16, button: UInt8, isDown: Bool) {
+    private func fireMouse(id: UInt32, x: Int16, y: Int16, button: UInt8, isDown: Bool, mods: UInt) {
         handlerLock.lock(); let snap = mouseHandlers; handlerLock.unlock()
-        for (_, h) in snap { h(id, x, y, button, isDown) }
+        for (_, h) in snap { h(id, x, y, button, isDown, mods) }
     }
-    private func fireMouseDragged(id: UInt32, x: Int16, y: Int16, button: UInt8) {
+    private func fireMouseDragged(id: UInt32, x: Int16, y: Int16, button: UInt8, mods: UInt) {
         handlerLock.lock(); let snap = mouseDraggedHandlers; handlerLock.unlock()
-        for (_, h) in snap { h(id, x, y, button) }
+        for (_, h) in snap { h(id, x, y, button, mods) }
     }
-    private func firePointerMoved(id: UInt32, x: Int16, y: Int16) {
+    private func firePointerMoved(id: UInt32, x: Int16, y: Int16, mods: UInt) {
         handlerLock.lock(); let snap = pointerMovedHandlers; handlerLock.unlock()
-        for (_, h) in snap { h(id, x, y) }
+        for (_, h) in snap { h(id, x, y, mods) }
     }
-    private func firePointerEnteredView(id: UInt32, x: Int16, y: Int16) {
+    private func firePointerEnteredView(id: UInt32, x: Int16, y: Int16, mods: UInt) {
         handlerLock.lock(); let snap = pointerEnteredViewHandlers; handlerLock.unlock()
-        for (_, h) in snap { h(id, x, y) }
+        for (_, h) in snap { h(id, x, y, mods) }
     }
-    private func firePointerExitedView(id: UInt32, x: Int16, y: Int16) {
+    private func firePointerExitedView(id: UInt32, x: Int16, y: Int16, mods: UInt) {
         handlerLock.lock(); let snap = pointerExitedViewHandlers; handlerLock.unlock()
-        for (_, h) in snap { h(id, x, y) }
+        for (_, h) in snap { h(id, x, y, mods) }
+    }
+    private func fireModifiersChanged(mods: UInt) {
+        handlerLock.lock(); let snap = modifiersChangedHandlers; handlerLock.unlock()
+        for (_, h) in snap { h(mods) }
     }
     private func firePaste(id: UInt32, text: String) {
         handlerLock.lock(); let snap = pasteHandlers; handlerLock.unlock()
@@ -529,20 +539,23 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                     mods: event.modifierFlags.rawValue, isDown: isDown
                 )
             }
-            view.mouseHandler = { [weak self] x, y, button, isDown in
-                self?.fireMouse(id: id, x: x, y: y, button: button, isDown: isDown)
+            view.mouseHandler = { [weak self] x, y, button, isDown, mods in
+                self?.fireMouse(id: id, x: x, y: y, button: button, isDown: isDown, mods: mods)
             }
-            view.mouseDraggedHandler = { [weak self] x, y, button in
-                self?.fireMouseDragged(id: id, x: x, y: y, button: button)
+            view.mouseDraggedHandler = { [weak self] x, y, button, mods in
+                self?.fireMouseDragged(id: id, x: x, y: y, button: button, mods: mods)
             }
-            view.mouseMovedHandler = { [weak self] x, y in
-                self?.firePointerMoved(id: id, x: x, y: y)
+            view.mouseMovedHandler = { [weak self] x, y, mods in
+                self?.firePointerMoved(id: id, x: x, y: y, mods: mods)
             }
-            view.mouseEnteredHandler = { [weak self] x, y in
-                self?.firePointerEnteredView(id: id, x: x, y: y)
+            view.mouseEnteredHandler = { [weak self] x, y, mods in
+                self?.firePointerEnteredView(id: id, x: x, y: y, mods: mods)
             }
-            view.mouseExitedHandler = { [weak self] x, y in
-                self?.firePointerExitedView(id: id, x: x, y: y)
+            view.mouseExitedHandler = { [weak self] x, y, mods in
+                self?.firePointerExitedView(id: id, x: x, y: y, mods: mods)
+            }
+            view.flagsChangedHandler = { [weak self] mods in
+                self?.fireModifiersChanged(mods: mods)
             }
             view.pasteHandler = { [weak self] text in
                 self?.firePaste(id: id, text: text)
@@ -2518,6 +2531,7 @@ extension CocoaWindowBridge {
         let isUp: Bool = (event.type == .leftMouseUp
                           || event.type == .rightMouseUp
                           || event.type == .otherMouseUp)
+        let mods = event.modifierFlags.rawValue
 
         let target = findManagedWindow(at: screenPt)
 
@@ -2548,7 +2562,7 @@ extension CocoaWindowBridge {
             } else {
                 exitX = 0; exitY = 0     // old slot gone (rare race); fall through
             }
-            firePointerExitedView(id: lastId, x: exitX, y: exitY)
+            firePointerExitedView(id: lastId, x: exitX, y: exitY, mods: mods)
         }
 
         if let (xid, view) = target, let win = view.window {
@@ -2574,7 +2588,7 @@ extension CocoaWindowBridge {
 
             let crossed = (dragLastWindowId != xid)
             if crossed {
-                firePointerEnteredView(id: xid, x: logicalX, y: logicalY)
+                firePointerEnteredView(id: xid, x: logicalX, y: logicalY, mods: mods)
             }
             dragLastWindowId = xid
 
@@ -2582,7 +2596,7 @@ extension CocoaWindowBridge {
                 // Button-up always fires regardless of crossing (the press
                 // started a grab, the release ends it; clients depend on
                 // seeing the Release at the cursor's actual position).
-                fireMouse(id: xid, x: logicalX, y: logicalY, button: button, isDown: false)
+                fireMouse(id: xid, x: logicalX, y: logicalY, button: button, isDown: false, mods: mods)
             } else if !crossed {
                 // Within-window drag: emit Motion at the new coords as usual.
                 // At a boundary crossing, the Enter we just fired already
@@ -2592,7 +2606,7 @@ extension CocoaWindowBridge {
                 // it" and the submenu dismisses. Sun's X server only emits
                 // Enter at the boundary, with the next Motion coming when
                 // the cursor truly moves further. Match that.
-                fireMouseDragged(id: xid, x: logicalX, y: logicalY, button: button)
+                fireMouseDragged(id: xid, x: logicalX, y: logicalY, button: button, mods: mods)
             }
         } else {
             // Pointer outside all managed NSWindows. The previous window's

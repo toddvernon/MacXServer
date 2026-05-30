@@ -383,36 +383,47 @@ public final class ServerSession: @unchecked Sendable {
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnMouse(token: token) { [weak self] topLevel, x, y, button, isDown in
+        bridge?.setOnMouse(token: token) { [weak self] topLevel, x, y, button, isDown, mods in
             queue.async {
                 self?.handleMouseEvent(
-                    topLevel: topLevel, x: x, y: y, button: button, isDown: isDown
+                    topLevel: topLevel, x: x, y: y, button: button, isDown: isDown,
+                    modifierFlags: mods
                 )
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnMouseDragged(token: token) { [weak self] topLevel, x, y, button in
+        bridge?.setOnMouseDragged(token: token) { [weak self] topLevel, x, y, button, mods in
             queue.async {
-                self?.handleMouseDragged(topLevel: topLevel, x: x, y: y, button: button)
+                self?.handleMouseDragged(topLevel: topLevel, x: x, y: y, button: button,
+                                         modifierFlags: mods)
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnPointerMoved(token: token) { [weak self] topLevel, x, y in
+        bridge?.setOnPointerMoved(token: token) { [weak self] topLevel, x, y, mods in
             queue.async {
-                self?.handlePointerMoved(topLevel: topLevel, x: x, y: y)
+                self?.handlePointerMoved(topLevel: topLevel, x: x, y: y, modifierFlags: mods)
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnPointerEnteredView(token: token) { [weak self] topLevel, x, y in
+        bridge?.setOnPointerEnteredView(token: token) { [weak self] topLevel, x, y, mods in
             queue.async {
-                self?.handlePointerEnteredView(topLevel: topLevel, x: x, y: y)
+                self?.handlePointerEnteredView(topLevel: topLevel, x: x, y: y,
+                                               modifierFlags: mods)
                 self?.flushOutbound()
             }
         }
-        bridge?.setOnPointerExitedView(token: token) { [weak self] topLevel, x, y in
+        bridge?.setOnPointerExitedView(token: token) { [weak self] topLevel, x, y, mods in
             queue.async {
-                self?.handlePointerExitedView(topLevel: topLevel, x: x, y: y)
+                self?.handlePointerExitedView(topLevel: topLevel, x: x, y: y,
+                                              modifierFlags: mods)
                 self?.flushOutbound()
+            }
+        }
+        bridge?.setOnModifiersChanged(token: token) { [weak self] mods in
+            queue.async {
+                self?.handleModifiersChanged(modifierFlags: mods)
+                // No event to flush — cache update only. Don't flushOutbound
+                // here (would be a no-op) so the queue hop stays minimal.
             }
         }
         bridge?.setOnPaste(token: token) { [weak self] topLevel, text in
@@ -778,10 +789,15 @@ public final class ServerSession: @unchecked Sendable {
     /// inverse-video selection highlight as the user drags through the
     /// terminal grid.
     public func handleMouseDragged(
-        topLevel: UInt32, x: Int16, y: Int16, button: UInt8
+        topLevel: UInt32, x: Int16, y: Int16, button: UInt8,
+        modifierFlags: UInt = 0
     ) {
         guard let order = byteOrder else { return }
         guard windows.get(topLevel) != nil else { return }
+        // Refresh the cached modifier state from the live event's flags. This
+        // also makes any state-bearing path that reads currentModifierState
+        // (crossing emissions during drag, etc.) see the current picture.
+        currentModifierState = USKeymap.translateModifiers(modifierFlags)
         // Update last-known pointer position (used by QueryPointer reply)
         // and detect subwindow-boundary crossings during drag. X spec
         // says crossing events fire regardless of button state — without
@@ -830,7 +846,8 @@ public final class ServerSession: @unchecked Sendable {
     /// ButtonPressMask (1<<2) or ButtonReleaseMask (1<<3) set; falls back
     /// to the top-level. Emits ButtonPress (code 4) or ButtonRelease (code 5).
     public func handleMouseEvent(
-        topLevel: UInt32, x: Int16, y: Int16, button: UInt8, isDown: Bool
+        topLevel: UInt32, x: Int16, y: Int16, button: UInt8, isDown: Bool,
+        modifierFlags: UInt = 0
     ) {
         guard let order = byteOrder else { return }
         let mask: UInt32 = isDown ? (1 << 2) : (1 << 3)
@@ -843,7 +860,17 @@ public final class ServerSession: @unchecked Sendable {
         // Compute current modifier state up-front so passive-grab matching
         // can see it. This is the modifier portion only (low 8 bits); the
         // full state including button bits is built later for the event.
-        let stateMods: UInt16 = currentModifierState
+        //
+        // Sourced from the LIVE NSEvent.modifierFlags, not a cache. The
+        // cache (currentModifierState) was the cause of the 2026-05-30
+        // stuck-Ctrl bug: it only updated on key events, so releasing Ctrl
+        // without pressing a key (NSEvent.flagsChanged) left it stale and
+        // every subsequent click reported state=ControlMask → xterm popped
+        // its Ctrl+click menu on plain LMB/RMB. We sync the cache from the
+        // live flags here too, so any code path that reads the cache after
+        // this point sees the fresh value.
+        let stateMods: UInt16 = USKeymap.translateModifiers(modifierFlags)
+        currentModifierState = stateMods
 
         let resolved: (UInt32, Int16, Int16)?
         if let redirect = grabRedirect(topLevel: topLevel, eventMaskBit16: mask16) {
@@ -903,7 +930,9 @@ public final class ServerSession: @unchecked Sendable {
         // event. For a press, the new button is NOT in state (0 buttons
         // before press). For a release, the released button IS in state
         // (it was held before the release). Button N occupies bit (7+N).
-        var state: UInt16 = currentModifierState
+        // Modifier bits come from the live NSEvent (stateMods), not from
+        // the cache — see the comment at the top of this method.
+        var state: UInt16 = stateMods
         // heldButtons was just updated; for press, exclude the just-pressed
         // button (state should reflect "before"); for release, include the
         // about-to-release button.
@@ -1000,9 +1029,12 @@ public final class ServerSession: @unchecked Sendable {
     /// want the actual position-window, not the nearest-subscribed-window),
     /// compare to the previously-tracked pointer window for this top-level,
     /// and emit the EnterNotify / LeaveNotify chain if it changed.
-    public func handlePointerMoved(topLevel: UInt32, x: Int16, y: Int16) {
+    public func handlePointerMoved(
+        topLevel: UInt32, x: Int16, y: Int16, modifierFlags: UInt = 0
+    ) {
         guard let order = byteOrder else { return }
         guard windows.get(topLevel) != nil else { return }
+        currentModifierState = USKeymap.translateModifiers(modifierFlags)
         lastPointerTopLevel = topLevel
         lastPointerXY = (x, y)
         let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
@@ -1053,9 +1085,12 @@ public final class ServerSession: @unchecked Sendable {
     /// subtree — another macOS window, off-screen, etc.). Treated as a
     /// Nonlinear crossing: the synthetic "from" is no X window at all, so
     /// we only emit the EnterNotify chain.
-    public func handlePointerEnteredView(topLevel: UInt32, x: Int16, y: Int16) {
+    public func handlePointerEnteredView(
+        topLevel: UInt32, x: Int16, y: Int16, modifierFlags: UInt = 0
+    ) {
         guard byteOrder != nil else { return }
         guard windows.get(topLevel) != nil else { return }
+        currentModifierState = USKeymap.translateModifiers(modifierFlags)
         // Idempotency: AppKit's tracking-area mouseEntered and the cross-
         // window drag tracker's transition logic can both fire firePointer-
         // EnteredView for the same cursor crossing. The duplicate Enter
@@ -1084,12 +1119,28 @@ public final class ServerSession: @unchecked Sendable {
     /// window the cursor went to); matching that convention is what kept
     /// Motif's submenu safe-triangle from seeing a coordinate "teleport"
     /// between Leave and Enter and dismissing.
-    public func handlePointerExitedView(topLevel: UInt32, x: Int16, y: Int16) {
+    public func handlePointerExitedView(
+        topLevel: UInt32, x: Int16, y: Int16, modifierFlags: UInt = 0
+    ) {
         guard byteOrder != nil else { return }
+        currentModifierState = USKeymap.translateModifiers(modifierFlags)
         guard let from = currentPointerWindow[topLevel] else { return }
         currentPointerWindow[topLevel] = nil
         let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
         emitCrossings(topLevel: topLevel, from: from, to: nil, rootX: rx, rootY: ry)
+    }
+
+    /// Modifier-only state change (NSEvent.flagsChanged): refresh the cached
+    /// modifier mask so any subsequent event that consults the cache sees the
+    /// current modifier picture. Mouse events plumb their live modifiers
+    /// directly and don't need this -- the cache is here for paths like
+    /// crossings under a passive grab, EnterNotify-with-no-recent-mouse, etc.
+    /// Without this hook the cache could only update from key events; a user
+    /// who pressed Ctrl, hit a letter, then released Ctrl without pressing
+    /// another key left Ctrl=1 stuck in the cache. See the comment in
+    /// handleMouseEvent for the 2026-05-30 xterm-menu bug this closes.
+    public func handleModifiersChanged(modifierFlags: UInt) {
+        currentModifierState = USKeymap.translateModifiers(modifierFlags)
     }
 
     /// Walk the mapped X subtree under `topLevel` and return the deepest

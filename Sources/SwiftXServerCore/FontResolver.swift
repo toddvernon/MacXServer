@@ -163,6 +163,17 @@ public enum FontResolver {
         lock.unlock()
     }
 
+    /// In-memory variant — install a pre-parsed mapping file without
+    /// touching disk. The integration test uses this so it doesn't pull
+    /// the developer's actual `~/.swiftx-fonts` into a shared static
+    /// (which leaked across tests before 2026-05-30, causing the
+    /// FontResolverTests "Monaco mono" failures in full-suite runs).
+    public static func installMappings(file: FontMappingFile) {
+        lock.lock()
+        loadedMappings = file
+        lock.unlock()
+    }
+
     /// Maps an XLFD family name (with optional spacing fallback for
     /// wildcards) to a Mac font family name. Per the substitution table
     /// in SERVER_RESOLUTION_SCALING_AND_FONTS.md, which is also the seed

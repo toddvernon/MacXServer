@@ -95,10 +95,17 @@ public struct FontMappingFile: Sendable {
     }
 
     /// Split a single non-comment, non-blank line into (family, macFont).
-    /// Format: `<family>  ->  <mac-font>`. Multi-word family on the
-    /// left of `->`, multi-word Mac font on the right.
+    /// Format: `<family>  ->  <mac-font> [mono|prop]`. Multi-word family
+    /// on the left of `->`, multi-word Mac font on the right. The optional
+    /// trailing `mono` / `prop` token is documentation of the spacing kind
+    /// (the user-facing comment in DefaultFontMappings calls it out) -- we
+    /// derive isMonospace from CTFontGetSymbolicTraits at lookup time, so
+    /// the token is informational only. Strip it so it doesn't end up
+    /// glued onto the Mac font name (the cause of the test-suite-only
+    /// "Monaco mono" failures: FontMappingFileTests was reading the real
+    /// user `~/.swiftx-fonts`, which uses the trailing-token format).
     private static func parseLine(_ line: String) -> (family: String, macFont: String)? {
-        let tokens = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        var tokens = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
         guard tokens.count >= 3 else { return nil }   // need at least family, ->, macFont
 
         guard let arrowIdx = tokens.firstIndex(of: "->") else { return nil }
@@ -110,6 +117,15 @@ public struct FontMappingFile: Sendable {
         let family = tokens[0..<arrowIdx]
             .joined(separator: " ")
             .lowercased()
+
+        // Strip the optional trailing spacing-kind token. Lowercase ONLY,
+        // and only when a real mac-font token would survive. Capitalized
+        // "Mono" is part of font names like "Andale Mono" and must stay.
+        if tokens.count - arrowIdx >= 3,
+           let last = tokens.last,
+           last == "mono" || last == "prop" {
+            tokens.removeLast()
+        }
 
         // Mac font: everything after the arrow, joined with spaces.
         let macFont = tokens[(arrowIdx + 1)...]

@@ -156,49 +156,66 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// Called by the session at startup. Bridge invokes this on every
     /// mouseDown / mouseUp inside one of its NSWindows. Args: (top-level X
     /// window id, X-logical x, X-logical y in top-level coords, X button
-    /// number 1..3, isDown). The session resolves which X subwindow should
-    /// receive the event and emits ButtonPress / ButtonRelease.
+    /// number 1..3, isDown, raw NSEvent.modifierFlags at click time). The
+    /// session resolves which X subwindow should receive the event and
+    /// emits ButtonPress / ButtonRelease with state derived from the live
+    /// modifierFlags.
     /// Always invoked on the main thread.
-    func setOnMouse(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void)
+    func setOnMouse(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool, UInt) -> Void)
 
     /// Called by the session at startup. Bridge invokes this on every
     /// mouseDragged event (mouse moved while a button is held). Args:
     /// (top-level X window id, X-logical x, X-logical y in top-level coords,
-    /// X button number 1..3 of the held button). The session emits
-    /// MotionNotify so clients can track a drag — xterm needs this to
-    /// render the inverse-video selection highlight as the user drags.
+    /// X button number 1..3 of the held button, raw NSEvent.modifierFlags).
+    /// The session emits MotionNotify so clients can track a drag — xterm
+    /// needs this to render the inverse-video selection highlight as the
+    /// user drags.
     /// Always invoked on the main thread.
-    func setOnMouseDragged(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void)
+    func setOnMouseDragged(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, UInt) -> Void)
 
     /// Called by the session at startup. Bridge invokes this on every
     /// mouseMoved (pointer moved with NO button held). Args: (top-level X
-    /// window id, X-logical x, X-logical y in top-level coords). The
-    /// session tracks which X subwindow currently contains the pointer and
-    /// emits EnterNotify / LeaveNotify when the containing window changes.
-    /// Always invoked on the main thread. Mouse-with-button-held is
-    /// `setOnMouseDragged` — the protocol distinguishes the two.
-    func setOnPointerMoved(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void)
+    /// window id, X-logical x, X-logical y in top-level coords, raw
+    /// NSEvent.modifierFlags). The session tracks which X subwindow
+    /// currently contains the pointer and emits EnterNotify / LeaveNotify
+    /// when the containing window changes. Always invoked on the main
+    /// thread. Mouse-with-button-held is `setOnMouseDragged` — the
+    /// protocol distinguishes the two.
+    func setOnPointerMoved(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt) -> Void)
 
     /// Called by the session at startup. Bridge invokes this when the
     /// pointer crosses INTO an NSWindow's content area (from outside our
     /// X subtree entirely — e.g. mouse moves over the window from another
     /// app or from off-screen). Args: (top-level X window id, X-logical x,
-    /// y in top-level coords). The session emits the EnterNotify chain
-    /// from top-level down to the deepest window currently under the
-    /// pointer.
-    func setOnPointerEnteredView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void)
+    /// y in top-level coords, raw NSEvent.modifierFlags). The session
+    /// emits the EnterNotify chain from top-level down to the deepest
+    /// window currently under the pointer.
+    func setOnPointerEnteredView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt) -> Void)
 
     /// Called by the session at startup. Bridge invokes this when the
     /// pointer leaves an NSWindow's content area (mouse moves off the
     /// window edge or to another app). Args: (top-level X window id, X-logical
     /// cursor coords at exit time, in top-level local space — may be outside
-    /// the window's bounds since the exit IS the cursor leaving). The session
-    /// emits the LeaveNotify chain with the actual exit-point coords; matches
-    /// how a real X server reports the cursor's position at the moment of the
-    /// crossing (verified against Sun's quickplot capture — Sun's Leave coords
-    /// describe the same root pixel as the corresponding Enter on the sibling
-    /// popup, not the prior motion event's coords).
-    func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void)
+    /// the window's bounds since the exit IS the cursor leaving, raw
+    /// NSEvent.modifierFlags). The session emits the LeaveNotify chain with
+    /// the actual exit-point coords; matches how a real X server reports the
+    /// cursor's position at the moment of the crossing (verified against
+    /// Sun's quickplot capture — Sun's Leave coords describe the same root
+    /// pixel as the corresponding Enter on the sibling popup, not the prior
+    /// motion event's coords).
+    func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt) -> Void)
+
+    /// Called by the session at startup. Bridge invokes this whenever a bare
+    /// modifier key (Ctrl, Shift, Option, Command, Caps Lock) transitions
+    /// up or down with no character key involved. Args: (raw
+    /// NSEvent.modifierFlags). The session refreshes its cached state mask
+    /// so subsequent events that read the cache (crossings under grab,
+    /// etc.) see the current modifier picture. Without this hook, releasing
+    /// Ctrl after using a Ctrl-keystroke leaves the cache stuck at Ctrl=1
+    /// and every subsequent click reports state=ControlMask, which xterm
+    /// reads as Ctrl+click and pops its menu (the 2026-05-30 stuck-Ctrl
+    /// bug). Always invoked on the main thread.
+    func setOnModifiersChanged(token: UInt64, _ handler: @escaping @Sendable (UInt) -> Void)
 
     /// Called by the session at startup. Bridge invokes this when the user
     /// pastes (Cmd-V or Edit > Paste) into one of its NSWindows. Args:
@@ -533,11 +550,12 @@ public extension WindowBridge {
     func setOnTopLevelMove(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {}
     func setOnKey(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {}
     func setOnFocus(token: UInt64, _ handler: @escaping @Sendable (UInt32, Bool) -> Void) {}
-    func setOnMouse(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool) -> Void) {}
-    func setOnMouseDragged(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8) -> Void) {}
-    func setOnPointerMoved(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {}
-    func setOnPointerEnteredView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {}
-    func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {}
+    func setOnMouse(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool, UInt) -> Void) {}
+    func setOnMouseDragged(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, UInt) -> Void) {}
+    func setOnPointerMoved(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt) -> Void) {}
+    func setOnPointerEnteredView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt) -> Void) {}
+    func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt) -> Void) {}
+    func setOnModifiersChanged(token: UInt64, _ handler: @escaping @Sendable (UInt) -> Void) {}
     func setOnPaste(token: UInt64, _ handler: @escaping @Sendable (UInt32, String) -> Void) {}
     func setOnCopy(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void) {}
     func writeClipboard(text: String) {}
