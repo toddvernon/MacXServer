@@ -61,7 +61,7 @@ final class LandmarkDetectorTests: XCTestCase {
         return .event(Event(bytes: ie.encode(code: code, byteOrder: .lsbFirst)))
     }
 
-    func testPrimaryTagOnFirstTopLevelMap() {
+    func testFirstUnnamedTopLevelReadsAsTopLevelAppearing() {
         var d = LandmarkDetector()
         let roots: Set<UInt32> = [0x2B]
         _ = d.afterRequest(.createWindow(cw(wid: 0x4400001, parent: 0x2B, w: 500, h: 600)),
@@ -69,11 +69,25 @@ final class LandmarkDetectorTests: XCTestCase {
         let lms = d.afterRequest(.mapWindow(mw(0x4400001)),
                                   byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
         XCTAssertEqual(lms.count, 1)
-        XCTAssertTrue(lms.first?.text.contains("primary") ?? false)
-        XCTAssertTrue(lms.first?.text.contains("500×600") ?? false)
+        XCTAssertEqual(lms.first?.text,
+                       "--- A top-level window appears on screen (0x4400001, 500×600) ---")
     }
 
-    func testAuxiliaryTagOnSecondTopLevelMap() {
+    func testNamedFirstTopLevelReadsAsTheNamedWindowAppearing() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        _ = d.afterRequest(.createWindow(cw(wid: 0x4400001, parent: 0x2B, w: 500, h: 600)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterRequest(.changeProperty(setWMName(0x4400001, "editres")),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        let lms = d.afterRequest(.mapWindow(mw(0x4400001)),
+                                  byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        XCTAssertEqual(lms.count, 1)
+        XCTAssertEqual(lms.first?.text,
+                       "--- The \"editres\" window appears on screen (0x4400001, 500×600) ---")
+    }
+
+    func testSecondTopLevelReadsAsAnotherTopLevel() {
         var d = LandmarkDetector()
         let roots: Set<UInt32> = [0x2B]
         _ = d.afterRequest(.createWindow(cw(wid: 0x4400001, parent: 0x2B, w: 500, h: 600)),
@@ -85,7 +99,8 @@ final class LandmarkDetectorTests: XCTestCase {
         let lms = d.afterRequest(.mapWindow(mw(0x4400029)),
                                   byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
         XCTAssertEqual(lms.count, 1)
-        XCTAssertTrue(lms.first?.text.contains("auxiliary") ?? false)
+        XCTAssertEqual(lms.first?.text,
+                       "--- Another top-level window appears on screen (0x4400029, 200×100) ---")
     }
 
     func testNonTopLevelMapEmitsNoLandmark() {
@@ -112,7 +127,7 @@ final class LandmarkDetectorTests: XCTestCase {
         XCTAssertEqual(second.count, 0)
     }
 
-    func testWMNameSetsIdentityLandmark() {
+    func testWMNameOnFirstTopLevelReadsAsFirstWindowIdentifies() {
         var d = LandmarkDetector()
         let roots: Set<UInt32> = [0x2B]
         _ = d.afterRequest(.createWindow(cw(wid: 0x4400001, parent: 0x2B)),
@@ -120,7 +135,26 @@ final class LandmarkDetectorTests: XCTestCase {
         let lms = d.afterRequest(.changeProperty(setWMName(0x4400001, "editres")),
                                   byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
         XCTAssertEqual(lms.count, 1)
-        XCTAssertTrue(lms.first?.text.contains("\"editres\"") ?? false)
+        XCTAssertEqual(lms.first?.text,
+                       "--- The first top-level window identifies as \"editres\" ---")
+    }
+
+    func testWMNameOnLaterTopLevelReadsAsNamedWindowIdentifies() {
+        var d = LandmarkDetector()
+        let roots: Set<UInt32> = [0x2B]
+        // Map a primary first (so subsequent identifies aren't "first")
+        _ = d.afterRequest(.createWindow(cw(wid: 0x4400001, parent: 0x2B)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterRequest(.mapWindow(mw(0x4400001)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        // Now identify a second top-level
+        _ = d.afterRequest(.createWindow(cw(wid: 0x4400029, parent: 0x2B)),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        let lms = d.afterRequest(.changeProperty(setWMName(0x4400029, "Help")),
+                                  byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        XCTAssertEqual(lms.count, 1)
+        XCTAssertEqual(lms.first?.text,
+                       "--- Window 0x4400029 identifies as \"Help\" ---")
     }
 
     func testWMNameOnNonTopLevelEmitsNothing() {
@@ -137,6 +171,8 @@ final class LandmarkDetectorTests: XCTestCase {
         let roots: Set<UInt32> = [0x2B]
         _ = d.afterRequest(.createWindow(cw(wid: 0x4400001, parent: 0x2B)),
                            byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
+        _ = d.afterRequest(.changeProperty(setWMName(0x4400001, "editres")),
+                           byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
         _ = d.afterRequest(.mapWindow(mw(0x4400001)),
                            byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
         // Dialog window created with parent == root
@@ -146,22 +182,33 @@ final class LandmarkDetectorTests: XCTestCase {
                            byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
         let lms = d.afterRequest(.mapWindow(mw(0x4400029)),
                                   byteOrder: .lsbFirst, screenRoots: roots, atomToName: [:])
-        // Two landmarks now expected: auxiliary top-level + dialog tag
+        // Two landmarks now expected: another-top-level appearance + dialog
         XCTAssertEqual(lms.count, 2)
-        XCTAssertTrue(lms.contains { $0.text.contains("auxiliary") })
-        XCTAssertTrue(lms.contains { $0.text.contains("dialog") })
+        XCTAssertTrue(lms.contains { $0.text.contains("Another top-level window appears") })
+        XCTAssertTrue(lms.contains {
+            $0.text == "--- A dialog opens above \"editres\" (0x4400029, 200×100) ---"
+        })
     }
 
-    func testClickLandmarkOnMatchedPress() {
+    func testClickLandmarkOnMatchedPressReadsAsUserClicks() {
         var d = LandmarkDetector()
-        // Press at t=1000, release at t=1100 — within threshold
-        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x4400023, button: 1, time: 1000),
+        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x4400023, button: 1, time: 1000, x: 55, y: 8),
                                   byteOrder: .lsbFirst)
-        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400023, button: 1, time: 1100),
+        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400023, button: 1, time: 1100, x: 55, y: 8),
                                         byteOrder: .lsbFirst)
         XCTAssertEqual(lms.count, 1)
-        XCTAssertTrue(lms.first?.text.contains("click on window 0x4400023") ?? false)
-        XCTAssertTrue(lms.first?.text.contains("button=1") ?? false)
+        XCTAssertEqual(lms.first?.text,
+                       "--- The user clicks at (55,8) on window 0x4400023 ---")
+    }
+
+    func testClickLandmarkButtonThreeReadsAsButton3() {
+        var d = LandmarkDetector()
+        _ = d.afterServerMessage(buttonEvent(code: 4, window: 0x4400023, button: 3, time: 1000),
+                                  byteOrder: .lsbFirst)
+        let lms = d.afterServerMessage(buttonEvent(code: 5, window: 0x4400023, button: 3, time: 1100),
+                                        byteOrder: .lsbFirst)
+        XCTAssertEqual(lms.count, 1)
+        XCTAssertTrue(lms.first?.text.contains("clicks button 3") ?? false)
     }
 
     func testClickThresholdRejectsLatePairs() {

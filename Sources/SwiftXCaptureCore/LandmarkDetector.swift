@@ -96,19 +96,20 @@ public struct LandmarkDetector: Sendable {
             var out: [Landmark] = []
             if let top = topLevels[r.window], !top.emittedMapLandmark {
                 topLevels[r.window]?.emittedMapLandmark = true
-                let tag = primaryEmitted ? "auxiliary" : "primary"
+                let isPrimary = !primaryEmitted
                 primaryEmitted = true
-                out.append(Landmark(
-                    "--- top-level window \(hexId(r.window)) mapped " +
-                    "(\(tag), \(top.width)×\(top.height)) ---"
-                ))
+                out.append(Landmark(mapLandmarkText(
+                    windowId: r.window, name: top.name,
+                    width: top.width, height: top.height, isPrimary: isPrimary
+                )))
             }
             if let parent = transientFor[r.window] {
-                let parentLabel = topLevels[parent]?.name.map { "\"\($0)\"" }
-                    ?? hexId(parent)
+                let size = topLevels[r.window].map { "\($0.width)×\($0.height)" } ?? "size unknown"
+                let parentName = topLevels[parent]?.name
+                let above = parentName.map { "\"\($0)\"" } ?? "window \(hexId(parent))"
                 out.append(Landmark(
-                    "--- dialog \(hexId(r.window)) mapped " +
-                    "(transient for \(parentLabel)) ---"
+                    "--- A dialog opens above \(above) " +
+                    "(\(hexId(r.window)), \(size)) ---"
                 ))
             }
             return out
@@ -124,9 +125,10 @@ public struct LandmarkDetector: Sendable {
                 let name = decodeWMName(r.data, format: r.format.rawValue)
                 topLevels[r.window]?.name = name
                 topLevels[r.window]?.emittedNameLandmark = true
-                return [Landmark(
-                    "--- window \(hexId(r.window)) named \"\(name)\" ---"
-                )]
+                let phrase = primaryEmitted
+                    ? "Window \(hexId(r.window)) identifies as \"\(name)\""
+                    : "The first top-level window identifies as \"\(name)\""
+                return [Landmark("--- \(phrase) ---")]
             }
             // WM_TRANSIENT_FOR (atom 68) — record for the eventual MapWindow.
             // Data is a 32-bit WINDOW id (4 bytes), format=32.
@@ -164,9 +166,16 @@ public struct LandmarkDetector: Sendable {
             pendingPresses.removeValue(forKey: ie.event)
             let dtMs = ie.time &- pp.time
             guard dtMs <= clickThresholdMs else { return [] }
+            // Use natural language for button 1 ("clicks") and explicit
+            // number for the rest ("clicks button 2 / 3 / ...") — matches
+            // how people actually talk about mouse clicks. Buttons 4/5 are
+            // scroll wheel up/down on most systems; we still describe them
+            // as clicks because the X protocol can't tell from outside.
+            let buttonPhrase = pp.button == 1 ? "clicks"
+                : "clicks button \(pp.button)"
             return [Landmark(
-                "--- click on window \(hexId(ie.event)) " +
-                "at (\(pp.eventX),\(pp.eventY)) button=\(pp.button) ---"
+                "--- The user \(buttonPhrase) at (\(pp.eventX),\(pp.eventY)) " +
+                "on window \(hexId(ie.event)) ---"
             )]
         default:
             return []
@@ -177,6 +186,27 @@ public struct LandmarkDetector: Sendable {
 // MARK: - Helpers (file-private; mirror the chrono dumper's conventions)
 
 private func hexId(_ v: UInt32) -> String { String(format: "0x%X", v) }
+
+// Story-form narration for a top-level window appearing on screen. We
+// vary the wording on (name known?) × (primary?) so the reader can walk
+// the dump as a sequence of events: the first named window appears, then
+// another window appears, then a dialog opens, etc.
+//
+// The window id and size always come along for technical reference — the
+// reader needs them to correlate the landmark with the actual protocol
+// lines around it.
+private func mapLandmarkText(windowId: UInt32, name: String?,
+                              width: UInt16, height: UInt16,
+                              isPrimary: Bool) -> String {
+    let size = "\(width)×\(height)"
+    if let n = name {
+        return "--- The \"\(n)\" window appears on screen (\(hexId(windowId)), \(size)) ---"
+    }
+    if isPrimary {
+        return "--- A top-level window appears on screen (\(hexId(windowId)), \(size)) ---"
+    }
+    return "--- Another top-level window appears on screen (\(hexId(windowId)), \(size)) ---"
+}
 
 private func readUInt32LE(_ b: [UInt8], byteOrder: ByteOrder) -> UInt32 {
     let a = UInt32(b[0])
