@@ -1,16 +1,56 @@
 # Product 1: Capture (CLI tool → library + GUI app + server-side capture)
 
-Two phases:
+## Mission
+
+macXcapture is a first-class X11 protocol capture and inspection tool. Think of it as the modern
+equivalent of xscope, xtrace, or Wireshark's X11 dissector — but built as a native macOS app, with
+syntax-highlighted decoded output, a real editor-window viewer for `.xtap` files, and a capture wizard
+that walks you through the proxy setup.
+
+**You don't have to buy into anything else in this repo to use it.** macXcapture is just a proxy:
+point your X client at it, point it at any X server (on this Mac, on the LAN, anywhere TCP reaches),
+and watch the protocol go by. Save the capture as a `.xtap` file, reopen it later, export the decoded
+transcript as text, share it with someone debugging the same problem. The Swift X server is a separate
+product in this repo; macXcapture stands on its own.
+
+**You do need a Mac.** That part is unapologetic. Cross-platform tools are the least common
+denominator — they look anonymous and work like the worst of every platform they target. macXcapture
+is built for macOS the way a good macOS app should be: a real menu bar, a real save panel, a real
+syntax-highlighted code-editor viewer, a real toolbar wizard, a native app icon. Use it and enjoy it,
+or use one of the cross-platform tools that already exist and look like they were drawn in 2001.
+
+The intended audience is wider than this repo's other product:
+
+- Vintage workstation hobbyists (Sun, SGI, DEC, NeXT — anyone with a real X client still alive on
+	the LAN).
+- Linux developers who use a Mac as their dev box and want to inspect X traffic between their Mac
+	and a remote Linux build host without firing up a Wireshark capture.
+- Anyone reverse-engineering an X client, debugging a Motif widget, or writing their own X server
+	and wanting a clean readout of what it emits.
+- Curious people who want to see what a 35-year-old wire protocol actually looks like under load.
+
+The bar for OSS launch is: a capture from any of those audiences should decode cleanly with zero
+`opcode=N (untyped)` lines for opcodes the X protocol documents. The work to get there lives in the
+"Decoder coverage phase" section at the bottom of this doc.
+
+---
+
+## Two implementation phases
 
 - **v1** — the CLI proxy tool that produced the framer, the corpus, and the article.
 	Status: done 2026-05-06. Content of this doc through the end of "Order of work (as built)"
 	covers v1.
 - **v2** — refactor format/decode into a library, build a SwiftUI capture app over it, add
-	server-side capture to `swiftx-server` for public-release bug reporting. Status: in design
-	as of 2026-05-23. See the "v2: Public-ready capture" section at the bottom of this doc.
+	server-side capture to `swiftx-server` for public-release bug reporting. Status: largely landed
+	2026-05-29 (library extracted as `SwiftXCaptureUI`, capture app shipped with stacked-wizard
+	Record screen + .xtap viewer windows + Save As / Export as Text, server-side auto-capture
+	working). See the "v2: Public-ready capture" section.
 
 v1 and v2 share the `.xtap` format. v2 is additive: v1 binaries and v1 captures keep working
 throughout the transition. The framer is unchanged.
+
+The post-v2 work is the **Decoder Coverage Phase** at the bottom of this doc — what gets macXcapture
+to OSS-launch quality.
 
 ---
 
@@ -800,3 +840,126 @@ enough to know if `--headless` is awkward.
   `ChronoDumper` path.
 - Product 2's M1/M2/M3 milestones are unaffected. Capture is a
   cross-cutting feature, not a milestone gate.
+
+---
+
+# Decoder Coverage Phase (post-v2, pre-OSS launch)
+
+The mission stated at the top of this doc — macXcapture as a first-class X11 protocol inspection tool
+— sets a concrete coverage bar: a capture from any reasonable X session should decode cleanly, with no
+`opcode=N (untyped)` lines for opcodes the X protocol documents.
+
+Today the framer covers what the swift-x server needs and what the captured corpus exercised. Plenty
+of core opcodes and most extensions beyond SHAPE are still decoded as raw bytes. Closing that gap is
+the last meaningful chunk of work before macXcapture stands on its own publicly.
+
+This is mechanical work against a well-specified target. No design risk, no behavioral risk. Read the
+section in `reference/x11-protocol-spec/x11protocol.html` or the extension spec in `reference/`, write
+the decoder, write the dumper printer, write a round-trip test. Repeat.
+
+## Phases
+
+**Phase 0 — Audit.**
+
+Single focused session. Inventory every X11 core opcode (1-127), every reply, every event against the
+existing framer source (`Sources/Framer/Requests/`, `Replies/`, `Events/`) and against `ChronoDumper`'s
+typed-print paths. Output: extend `OPCODE_STATUS.md` with two new columns:
+
+- **Decoder** — yes / no / partial. Is there a typed struct in the framer that round-trips this wire
+	form?
+- **Dumper** — yes / no / stub. Does `ChronoDumper` produce a human-readable line for it, or fall
+	through to the untyped hex dump?
+
+The existing **Status** column stays unchanged — it's about server implementation, which is a
+different question. Three columns, one row per opcode, single source of truth.
+
+Exit: every row populated honestly. We know the actual size of Phases 1-5 only after this.
+
+**Phase 1 — Core completion.**
+
+Every core opcode that audited `Decoder = no` or `partial` gets a typed decoder and a dumper printer.
+Many of the gaps are header-only (`GrabKeyboard`, `UngrabKeyboard`, `ForceScreenSaver`, etc.) — fast.
+
+Each lands with a small round-trip test in `Tests/FramerTests/`: encode a synthetic struct, decode the
+bytes, compare. No capture-driven tests needed — unit tests are enough and they're cheap.
+
+Exit: re-dumping any historic capture or the new ss2 batch produces zero `opcode=N (untyped)` lines
+for core ops (1-127).
+
+**Phase 2 — Extension negotiation infrastructure.**
+
+Today the dumper recognizes SHAPE because it's hardcoded by major opcode number. Generalize: track
+which major opcodes the `QueryExtension` responses bind to which names *per-session*, then route
+extension requests / replies / events through name-keyed decoders. For unknown extensions, the dumper
+falls back to a labeled line — `extension MIT-SUNDRY-NONSENSE request opcode 3` — rather than
+`opcode 134:3 (untyped)`. Useful even before that extension has a real per-request decoder.
+
+Exit: every extension request gets a labeled line. Unknown extensions degrade gracefully.
+
+**Phase 3 — Tier-1 extension decoders.**
+
+In order of expected real-world traffic:
+
+- **BIG-REQUESTS** — length-extension prefix, one opcode, trivial.
+- **MIT-SHM** — finite, well-documented, already in our captures' unhandled list.
+- **XKEYBOARD / XKB** — gnarly spec but high impact; modern clients hit it constantly.
+- **XINPUT v1** — common. XINPUT2 is deferred to Tier 2.
+- **RENDER** — used by Cairo/Pango, hit by basically every modern toolkit. Long spec; bound the
+	work to the request set that real clients emit, not exhaustive coverage of obscure variants.
+
+Each lands with the same per-opcode round-trip test discipline. Extension specs live in `reference/`.
+Verify against those, not against guesses or other implementations.
+
+Exit: a capture of a modern Linux X session decodes with no untyped lines for these five extensions.
+
+**Phase 4 — Tier-2 extensions (decision point).**
+
+RANDR, XFIXES, DAMAGE, XINPUT2, COMPOSITE. Less common in vintage-Sun traffic; near-universal in
+modern Linux. Decide at the end of Phase 3 whether the OSS launch waits on these or ships without.
+Leaning ship-without; Tier-2 is a natural post-launch contribution magnet for whoever cares about
+modern Linux X traffic specifically.
+
+**Phase 5 — Output polish.**
+
+With every opcode decoding, the dumper can finally show the protocol as a *conversation*:
+
+- A request line is followed by its reply or error, indented and aligned by sequence number.
+- XErrors land inline next to the request that triggered them, not a hundred lines later.
+- The `[seq=N]` column already supports this; the join logic in the dumper does not yet.
+
+Same phase covers field-level diff in `CaptureDiff` (compare two captures' decoded streams field by
+field, with tolerance rules for `serverTime`, resource-id base, and atom-id renumbering). Pays for
+the paired-capture testing strategy from the May 2026 testing-strategy discussion: once decoders are
+complete, `ss2->ss2` vs `ss2->swiftx` can be diffed semantically instead of byte-for-byte.
+
+Exit: a user opening any capture in the viewer can scroll and read the protocol as a story. That's
+the OSS-launch quality bar.
+
+## Sequencing notes
+
+Phase 0 drives everything. Until the audit is done, the size of Phase 1 is a guess. Run it first as
+its own focused session.
+
+Within each phase, the workflow is:
+
+- Decoder + dumper printer land in one commit.
+- Round-trip test in `Tests/FramerTests/` lands in the same commit.
+- `OPCODE_STATUS.md` row (Decoder + Dumper columns) updates in the same commit.
+
+The pre-implementation planning agent (CLAUDE.md) should fire on each Tier-1 extension before
+implementation — the specs are large enough that getting a header field wrong compounds across every
+later request in the extension. Core opcodes are usually trivial enough to skip the agent.
+
+## Non-goals for the decoder phase
+
+- **Implementing the things we decode.** Decoder coverage is independent of server implementation
+	per the PROJECT.md non-goals clarification. macXcapture decoding RENDER doesn't mean swift-x
+	implements RENDER.
+- **Exhaustive extension coverage.** Tier 1 + Tier 2 (if shipped) covers the long tail of
+	real-world traffic. Niche extensions stay as labeled-but-untyped lines.
+- **Pretty-printing every field in every spec-perfect way.** The bar is "a reader of the X11 spec
+	can follow what this line says without rereading the wire bytes." Not "this looks like xscope's
+	output." Many of xscope's choices were terminal-only and don't translate to a syntax-highlighted
+	GUI viewer.
+- **Field validation.** The decoder reports what's on the wire; if a client sends a malformed
+	request, the dumper shows the malformed request. macXcapture is a *passive observer*.

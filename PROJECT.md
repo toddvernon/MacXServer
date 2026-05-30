@@ -20,8 +20,10 @@ and display correctly, with the rendering quality you'd expect from a modern mac
 
 These are explicitly out of scope. If I find myself reaching for them I should stop and ask whether I've drifted.
 
-- Full Xorg compatibility. I'm targeting X11R5/R6 era apps from vintage Sun hardware. No DRI, no Composite,
-	no RANDR, no XInput2, no GLX, no Render extension.
+- Full Xorg compatibility *in the server*. I'm targeting X11R5/R6-era apps from vintage Sun hardware. No
+	server-side DRI, Composite, RANDR, XInput2, GLX, or Render extension. (The capture tool may decode
+	any of these — that's an independent product decision driven by macXcapture's standalone mission.
+	See PRODUCT_1_CAPTURE.md.)
 - Modern Linux desktop apps. GTK3/4, Qt, anything that wants client-side rendering with modern extensions.
 	Not the audience.
 - Hardware projects. The SBus framebuffer card idea is filed as "if a collaborator appears." I'm software only.

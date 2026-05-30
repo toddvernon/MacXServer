@@ -184,3 +184,81 @@ destination) is a faithful port of `Xext/shape.c:RegionOperate`.
 ## Per-opcode notes
 
 (Populated when an opcode has more to say than fits in the Notes column.)
+
+---
+
+## Decoder and dumper coverage (macXcapture mission)
+
+This section tracks a different question from the table above: does the **framer** decode this
+opcode into a typed struct, and does **ChronoDumper** print it as a human-readable line? Server
+implementation status (the table above) is independent — macXcapture's mission is to decode
+everything well-specified even if swift-x doesn't handle it.
+
+The bar: zero `opcode=N (untyped)` lines in any capture of well-documented X11 traffic.
+
+### Headline as of 2026-05-29 (Phase 0 audit)
+
+- **Core requests:** 104 of 120 core opcodes have decoders + dumpers. 16 are gaps. List below.
+- **Core events:** 28 of 33 core event codes have decoders + dumpers. 5 are gaps. List below.
+- **Core replies:** all opcodes that produce replies and that have request decoders also have
+	reply decoders — except for the 6 request-side gaps that produce replies (`GetFontPath`,
+	`GetKeyboardControl`, `GetPointerControl`, `ListHosts`, `SetPointerMapping`, `SetModifierMapping`).
+	Reply *body* printing in the dumper is rich for 5 opcodes (`InternAtom`, `QueryExtension`,
+	`QueryFont`, `AllocColor`, `AllocNamedColor`) and minimal (`Reply (opName)` only, no body) for
+	the other ~25. Minimal is acceptable for now; Phase 5 polish enriches it.
+- **Extensions:** only **SHAPE** is fully decoded + printed. All other extensions degrade to a
+	"`<ExtName>` opcode=N minor=M" line if `QueryExtension` named the major opcode, or
+	`Request opcode=N (untyped)` if the extension is unrecognized. The Phase 2 / Phase 3 work
+	(extension negotiation infrastructure + Tier-1 extension decoders) takes this from labeled
+	to fully typed.
+
+### Core request gaps (16 opcodes)
+
+Listed in opcode order. Every one of these will fall through to `.unknown(opcode:bytes:)` in the
+framer and `Request opcode=N (untyped)` in the dumper. Closing these is Phase 1 of the Decoder
+Coverage Phase in `PRODUCT_1_CAPTURE.md`.
+
+| Op  | Name | Has reply? | Notes |
+| --- | --- | --- | --- |
+|  6  | ChangeSaveSet | no | Single window arg + insert/delete mode byte; trivial. |
+| 21  | ListProperties | yes | Returns the atom list for a window. Reply decoder also missing. |
+| 51  | SetFontPath | no | LIST of STRING8 (font search path); variable-length. |
+| 52  | GetFontPath | yes | Returns current font path. Reply decoder also missing. |
+| 57  | CopyGC | no | Two GC ids + value-mask; one of the "BROKEN on swiftx" symptoms in `/tmp/swift-x-captures/notes` (puzzle). Decoding is independent of server impl, but landing this decoder makes the symptom visible in capture dumps. |
+| 100 | ChangeKeyboardMapping | no | First-keycode + keysyms-per-keycode header + LIST of KEYSYM. |
+| 102 | ChangeKeyboardControl | no | Value-mask + per-bit values; KB-CONTROL value-list format. |
+| 103 | GetKeyboardControl | yes | Header-only request. The reply has the bell/LED/key state — the other "BROKEN on swiftx" symptom (xmpiano). Reply decoder also missing. |
+| 105 | ChangePointerControl | no | Header-only request with accel num/denom + threshold + do-bits. |
+| 106 | GetPointerControl | yes | Header-only request. Reply decoder also missing. |
+| 109 | ChangeHosts | no | Mode byte + family + LIST of BYTE (address). Access control list. |
+| 110 | ListHosts | yes | Header-only request. Reply decoder also missing. |
+| 111 | SetAccessControl | no | One-byte mode. Trivial. |
+| 114 | RotateProperties | no | Window + delta + LIST of ATOM (property names). |
+| 116 | SetPointerMapping | yes | LIST of CARD8 (map). Reply has status byte; reply decoder also missing. |
+| 118 | SetModifierMapping | yes | LIST of KEYCODE (8 modifiers × keycodes-per-modifier). Reply has status byte; reply decoder also missing. |
+
+### Core event gaps (5 codes)
+
+| Code | Name | Notes |
+| --- | --- | --- |
+| 23 | ConfigureRequest | Parent-side notification when a child requests configuration; needed by any window manager listening to substructure. |
+| 24 | GravityNotify | Emitted when a window moves because its parent resized. |
+| 25 | ResizeRequest | Parent-side notification on child resize. WM gate. |
+| 27 | CirculateRequest | Parent-side notification on CirculateWindow. WM gate. |
+| 32 | ColormapNotify | Colormap install/uninstall/change notifications. |
+
+### Extension coverage
+
+| Extension | Negotiation | Decoded | Notes |
+| --- | --- | --- | --- |
+| SHAPE | yes (track by name after QueryExtension reply) | full (requests + events; SHAPE has no replies of its own beyond R6) | Reference implementation for what "fully decoded" looks like. |
+| All others (MIT-SHM, BIG-REQUESTS, XKB, XINPUT, RENDER, etc.) | named-only | none | Dumper shows `<ExtName> opcode=N minor=M` when the major opcode was resolved via QueryExtension; otherwise `Request opcode=N (untyped)`. |
+
+### Decoder-coverage exit criteria
+
+- Phase 1 done when re-dumping any historic capture or the 2026-05-29 batch produces zero
+	`opcode=N (untyped)` lines for opcodes 1-127.
+- Phase 3 done when a capture of a modern Linux X session (Cairo/Pango/GTK app, XKB-driven
+	keyboard) shows no `<ExtName> opcode=N minor=M` lines for Tier-1 extensions
+	(BIG-REQUESTS, MIT-SHM, XKEYBOARD, XINPUT v1, RENDER).
+- Tier-2 (RANDR/XFIXES/DAMAGE/XINPUT2/COMPOSITE) is a ship/no-ship decision at the end of Phase 3.
