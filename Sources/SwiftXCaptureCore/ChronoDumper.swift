@@ -169,6 +169,26 @@ struct ChronoContext {
     var seqToQueryExtensionName: [UInt16: String] = [:]
     var atomToName: [UInt32: String] = [:]
     var extensionMajorToName: [UInt8: String] = [:]
+    /// Extension event-base assignments from QueryExtension replies. Lets
+    /// the dumper figure out which extension owns a given event code.
+    var extensionFirstEventToName: [UInt8: String] = [:]
+
+    /// For an event code ≥ 64 (i.e., outside the core 2-34 range), find
+    /// the registered extension whose `[firstEvent, firstEvent+eventCount)`
+    /// range contains `code`. Returns (name, firstEvent) or nil.
+    func extensionForEvent(code: UInt8) -> (name: String, firstEvent: UInt8)? {
+        for (firstEvent, name) in extensionFirstEventToName {
+            let count = ExtensionDumperRegistry.eventCount(forName: name)
+            // Unknown extensions (no registered dumper) have count=0; still
+            // useful to label by name, so we also accept code == firstEvent
+            // as "first event of this extension."
+            let span = max(count, 1)
+            if code >= firstEvent && code < firstEvent + UInt8(span) {
+                return (name, firstEvent)
+            }
+        }
+        return nil
+    }
 }
 
 // MARK: - Formatting
@@ -515,14 +535,22 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
     case .setModifierMapping(let r):
         body = row("SetModifierMapping", "perModifier=\(r.keycodesPerModifier) keycodes=\(r.keycodes.count)")
     case .unknown(let op, let raw):
-        // Decode extension requests when we've seen the QueryExtension reply
-        // that negotiated their major opcode. SHAPE gets full per-request
-        // decoding; other known extensions at least get named.
-        if ctx.extensionMajorToName[op] == "SHAPE" {
-            body = formatShapeRequest(raw, byteOrder: byteOrder)
-        } else if let extName = ctx.extensionMajorToName[op] {
-            let minor = raw.count >= 2 ? String(raw[1]) : "?"
-            body = "\(extName)                    opcode=\(op) minor=\(minor)"
+        // Extension request: route through the ExtensionDumperRegistry if
+        // we've seen the QueryExtension reply that negotiated this major
+        // opcode. Three-tier fallback:
+        //   1. Registered decoder + recognized minor → fully decoded line.
+        //   2. Named extension (any reason its decoder didn't accept the
+        //      minor — unregistered, or registered but unknown minor) →
+        //      labeled-undecoded "<ExtName> minor=N".
+        //   3. Truly unknown extension → "Request opcode=N (untyped)".
+        if let extName = ctx.extensionMajorToName[op] {
+            if let decoder = ExtensionDumperRegistry.decoder(forName: extName),
+               let line = decoder.formatRequest(bytes: raw, byteOrder: byteOrder) {
+                body = line
+            } else {
+                let minor = raw.count >= 2 ? String(raw[1]) : "?"
+                body = row(extName, "opcode=\(op) minor=\(minor) (undecoded)")
+            }
         } else {
             body = "Request opcode=\(op) (untyped)"
         }
@@ -530,62 +558,11 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
     return "\(seqStr) \(body)"
 }
 
-// MARK: - SHAPE extension request decoding
-
-private func shapeKindName(_ k: UInt8) -> String {
-    switch k { case 0: return "Bounding"; case 1: return "Clip"; default: return "kind=\(k)" }
-}
-private func shapeOpName(_ o: UInt8) -> String {
-    switch o {
-    case 0: return "Set"; case 1: return "Union"; case 2: return "Intersect"
-    case 3: return "Subtract"; case 4: return "Invert"; default: return "op=\(o)"
-    }
-}
-
-func formatShapeRequest(_ bytes: [UInt8], byteOrder: ByteOrder) -> String {
-    guard bytes.count >= 2 else { return "SHAPE                    (truncated)" }
-    func hex(_ v: UInt32) -> String { "0x\(String(v, radix: 16))" }
-    switch bytes[1] {
-    case ShapeMinor.queryVersion:
-        return "ShapeQueryVersion"
-    case ShapeMinor.rectangles:
-        if let r = try? ShapeRectangles.decode(from: bytes, byteOrder: byteOrder) {
-            return "ShapeRectangles          dest=\(hex(r.dest)) \(shapeKindName(r.destKind)) \(shapeOpName(r.op)) off=(\(r.xOff),\(r.yOff)) rects=\(r.rectangles.count)"
-        }
-    case ShapeMinor.mask:
-        if let r = try? ShapeMask.decode(from: bytes, byteOrder: byteOrder) {
-            let src = r.src == 0 ? "None" : hex(r.src)
-            return "ShapeMask                dest=\(hex(r.dest)) \(shapeKindName(r.destKind)) \(shapeOpName(r.op)) off=(\(r.xOff),\(r.yOff)) src=\(src)"
-        }
-    case ShapeMinor.combine:
-        if let r = try? ShapeCombine.decode(from: bytes, byteOrder: byteOrder) {
-            return "ShapeCombine             dest=\(hex(r.dest)) \(shapeKindName(r.destKind)) \(shapeOpName(r.op)) off=(\(r.xOff),\(r.yOff)) src=\(hex(r.src)) \(shapeKindName(r.srcKind))"
-        }
-    case ShapeMinor.offset:
-        if let r = try? ShapeOffset.decode(from: bytes, byteOrder: byteOrder) {
-            return "ShapeOffset              dest=\(hex(r.dest)) \(shapeKindName(r.destKind)) off=(\(r.xOff),\(r.yOff))"
-        }
-    case ShapeMinor.queryExtents:
-        if let r = try? ShapeQueryExtents.decode(from: bytes, byteOrder: byteOrder) {
-            return "ShapeQueryExtents        window=\(hex(r.window))"
-        }
-    case ShapeMinor.selectInput:
-        if let r = try? ShapeSelectInput.decode(from: bytes, byteOrder: byteOrder) {
-            return "ShapeSelectInput         window=\(hex(r.window)) enable=\(r.enable)"
-        }
-    case ShapeMinor.inputSelected:
-        if let r = try? ShapeInputSelected.decode(from: bytes, byteOrder: byteOrder) {
-            return "ShapeInputSelected       window=\(hex(r.window))"
-        }
-    case ShapeMinor.getRectangles:
-        if let r = try? ShapeGetRectangles.decode(from: bytes, byteOrder: byteOrder) {
-            return "ShapeGetRectangles       window=\(hex(r.window)) \(shapeKindName(r.kind))"
-        }
-    default:
-        break
-    }
-    return "SHAPE                    minor=\(bytes[1]) (undecoded)"
-}
+// SHAPE-specific request/event formatters moved to
+// Extensions/ShapeDumper.swift on 2026-05-30 as part of Phase 2's
+// extension-dumper registry. Anything related to a specific extension
+// belongs in its own file under Extensions/, registered via
+// ExtensionDumperRegistry — not inline here.
 
 func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout ChronoContext) -> String {
     switch msg {
@@ -603,8 +580,16 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
             }
             if op == QueryExtension.opcode, let name = ctx.seqToQueryExtensionName[seq] {
                 if let parsed = try? QueryExtensionReply.decode(from: r.bytes, byteOrder: byteOrder) {
-                    if parsed.present { ctx.extensionMajorToName[parsed.majorOpcode] = name }
-                    detail = " name=\(name) present=\(parsed.present) major=\(parsed.majorOpcode)"
+                    if parsed.present {
+                        ctx.extensionMajorToName[parsed.majorOpcode] = name
+                        // Record event-base too so extension events get
+                        // routed through the registry just like requests.
+                        // firstEvent=0 means "no events" per the spec.
+                        if parsed.firstEvent != 0 {
+                            ctx.extensionFirstEventToName[parsed.firstEvent] = name
+                        }
+                    }
+                    detail = " name=\(name) present=\(parsed.present) major=\(parsed.majorOpcode) firstEvent=\(parsed.firstEvent) firstError=\(parsed.firstError)"
                 }
             }
             if op == QueryFont.opcode {
@@ -629,9 +614,26 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
         }
         return "\(seqField(seq)) \(row("Reply (\(opName))", stripLead(detail)))"
     case .event(let e):
-        let codeName = eventName(e.code) ?? "Event#\(e.code)"
+        // Extension events route through the registry. Core events always
+        // have a static name; extension events (code ≥ 64, codes 35-63 are
+        // reserved but unused per the spec) get looked up by event-base.
+        let extBinding = e.code >= 35 ? ctx.extensionForEvent(code: e.code) : nil
+        var codeName = eventName(e.code) ?? "Event#\(e.code)"
         let prefix = e.sentEvent ? "[SendEvent] " : ""
         var detail = ""
+        // Try the extension's typed event formatter first — if it succeeds,
+        // we use its output verbatim (no codeName prefix, the extension
+        // names its own event).
+        if let binding = extBinding,
+           let decoder = ExtensionDumperRegistry.decoder(forName: binding.name),
+           let line = decoder.formatEvent(bytes: e.bytes, firstEvent: binding.firstEvent, byteOrder: byteOrder) {
+            let seq = e.code == 11 ? seqBlank : seqField(e.sequenceNumber(byteOrder: byteOrder))
+            return "\(seq) \(prefix)\(line)"
+        }
+        // Named extension but no typed decoder: label it.
+        if let binding = extBinding {
+            codeName = "\(binding.name)-Event#\(e.code - binding.firstEvent)"
+        }
         if let decoded = try? DecodedEvent.decode(from: e, byteOrder: byteOrder) {
             switch decoded {
             case .keyPress(let i), .keyRelease(let i), .buttonPress(let i), .buttonRelease(let i), .motionNotify(let i):

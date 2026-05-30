@@ -211,11 +211,15 @@ The bar: zero `opcode=N (untyped)` lines in any capture of well-documented X11 t
 	(`InternAtom`, `QueryExtension`, `QueryFont`, `AllocColor`, `AllocNamedColor`) and minimal
 	(`Reply (opName)` only, no body) for the other ~30. Minimal is acceptable for now; Phase 5
 	polish enriches it.
-- **Extensions:** only **SHAPE** is fully decoded + printed. All other extensions degrade to a
-	"`<ExtName>` opcode=N minor=M" line if `QueryExtension` named the major opcode, or
-	`Request opcode=N (untyped)` if the extension is unrecognized. The Phase 2 / Phase 3 work
-	(extension negotiation infrastructure + Tier-1 extension decoders) takes this from labeled
-	to fully typed.
+- **Extensions:** infrastructure done as of 2026-05-30. The
+	`ExtensionDumperRegistry` in `Sources/SwiftXCaptureCore/Extensions/` lets any extension plug
+	in a request + event formatter that gets dispatched by the per-session
+	`(majorOpcode → name, firstEvent → name)` maps populated from QueryExtension replies.
+	**SHAPE** is the only extension with a fully typed dumper today (migrated to the registry
+	pattern, `ShapeDumper.swift`). Other named extensions degrade to
+	`<ExtName> opcode=N minor=M (undecoded)` for requests and `<ExtName>-Event#N` for events;
+	truly unknown extensions stay `Request opcode=N (untyped)`. Phase 3 adds the Tier-1
+	extension dumpers (BIG-REQUESTS, MIT-SHM, XKEYBOARD, XINPUT v1, RENDER).
 
 ### Phase 1 — what landed (2026-05-29)
 
@@ -256,10 +260,14 @@ All 5 events that lacked typed decoders at Phase 0 now have them, in
 
 ### Extension coverage
 
+Phase 2 (2026-05-30) replaced the inline `if name == "SHAPE"` branches in ChronoDumper with a
+plug-in registry. Adding a new extension is one file in `Sources/SwiftXCaptureCore/Extensions/`
+that conforms to `ExtensionDumper` plus one entry in `ExtensionDumperRegistry.builtins`.
+
 | Extension | Negotiation | Decoded | Notes |
 | --- | --- | --- | --- |
-| SHAPE | yes (track by name after QueryExtension reply) | full (requests + events; SHAPE has no replies of its own beyond R6) | Reference implementation for what "fully decoded" looks like. |
-| All others (MIT-SHM, BIG-REQUESTS, XKB, XINPUT, RENDER, etc.) | named-only | none | Dumper shows `<ExtName> opcode=N minor=M` when the major opcode was resolved via QueryExtension; otherwise `Request opcode=N (untyped)`. |
+| SHAPE | per-session via QueryExtension | full (requests + events) | Migrated to registry 2026-05-30. Reference implementation for the protocol. |
+| All others (MIT-SHM, BIG-REQUESTS, XKEYBOARD, XINPUT, RENDER, etc.) | per-session via QueryExtension | named-only | Dumper shows `<ExtName> opcode=N minor=M (undecoded)` for requests, `<ExtName>-Event#N` for events. Phase 3 adds the Tier-1 typed decoders. |
 
 ### Decoder-coverage exit criteria
 
