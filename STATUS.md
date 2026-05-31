@@ -1,4 +1,4 @@
-# Status 2026-05-31 — eight capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry, Motif properties, type-fallback, ClientMessage payload) + console quieted
+# Status 2026-05-31 — nine capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry, Motif properties, type-fallback, ClientMessage payload, WM_COMMAND argv) + console quieted
 
 Two small landings on a Sun-less day. Both pure capture-side, no live
 verification needed.
@@ -247,7 +247,27 @@ cases. 1167/1167 total tests pass. Checklist counts unchanged (this
 wedge enriches the already-Yes "core events decoded" row rather than
 flipping anything).
 
-Nine commits, 64 new unit tests, no regressions, no Sun required.
+**WM_COMMAND argv decode.** Ninth wedge. ICCCM §4.1.2.7 spec'd as a
+STRING property where each argv element is a NUL-terminated 8-bit
+string laid out back-to-back; libX11's `XSetCommand` emits
+`arg0\0arg1\0...argN\0`. Named-property dispatcher now splits on NUL
+and renders as `argv=["xterm", "-bg", "black", "-fg", "cyan", "-e",
+"ls"]`. Forgiving on a missing trailing NUL — surfaces the final
+fragment rather than dropping it. Non-printable bytes become `?` so a
+weird byte doesn't break the line.
+
+No corpus capture sets WM_COMMAND (vintage clients commonly set it
+via XSetStandardProperties early in main(), but our short captures
+catch shortly after the connection setup and most clients we have
+captured don't call SSP). Decoder is unit-tested only — 5 new cases:
+single arg, multiple args, malformed trailing fragment, empty data,
+format=32 rejection.
+
+1172/1172 total tests pass. Doesn't move a checklist row — extends
+the named-property dispatcher which is already part of the Yes
+type-aware-decoding row.
+
+Ten commits, 69 new unit tests, no regressions, no Sun required.
 
 # Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
 

@@ -148,6 +148,40 @@ final class WMPropertyTests: XCTestCase {
         XCTAssertEqual(s, "atoms=[0xABCDEF]")
     }
 
+    // MARK: - WM_COMMAND
+
+    func testWMCommandSingleArg() {
+        // xterm with no args: just "xterm\0".
+        let data = Array("xterm\u{0}".utf8)
+        XCTAssertEqual(dispatch(name: "WM_COMMAND", type: "STRING", format: 8, data: data),
+                       "argv=[\"xterm\"]")
+    }
+
+    func testWMCommandMultipleArgs() {
+        // xterm -bg black -fg cyan -e ls
+        let data = Array("xterm\u{0}-bg\u{0}black\u{0}-fg\u{0}cyan\u{0}-e\u{0}ls\u{0}".utf8)
+        XCTAssertEqual(dispatch(name: "WM_COMMAND", type: "STRING", format: 8, data: data),
+                       "argv=[\"xterm\", \"-bg\", \"black\", \"-fg\", \"cyan\", \"-e\", \"ls\"]")
+    }
+
+    func testWMCommandMalformedTrailingFragment() {
+        // No trailing NUL after the last arg — forgive and surface the
+        // fragment rather than dropping it on the floor.
+        let data = Array("xclock\u{0}-update\u{0}1".utf8)
+        XCTAssertEqual(dispatch(name: "WM_COMMAND", type: "STRING", format: 8, data: data),
+                       "argv=[\"xclock\", \"-update\", \"1\"]")
+    }
+
+    func testWMCommandEmpty() {
+        XCTAssertEqual(dispatch(name: "WM_COMMAND", type: "STRING", format: 8, data: []),
+                       "argv=[]")
+    }
+
+    func testWMCommandRejectsFormat32() {
+        // WM_COMMAND is spec'd format=8. format=32 is a wire-level bug.
+        XCTAssertNil(dispatch(name: "WM_COMMAND", type: "STRING", format: 32, data: [0, 0, 0, 0]))
+    }
+
     // MARK: - WM_TRANSIENT_FOR
 
     func testWMTransientFor() {

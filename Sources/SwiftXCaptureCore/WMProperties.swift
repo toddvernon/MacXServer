@@ -51,6 +51,13 @@ func decodeKnownWMProperty(
     case "WM_TRANSIENT_FOR":
         guard format == 32, data.count >= 4 else { return nil }
         return decodeSingleWindow(data, byteOrder: byteOrder)
+    case "WM_COMMAND":
+        // ICCCM §4.1.2.7. Format=8, type STRING. Each argv element is a
+        // NUL-terminated 8-bit string laid out back-to-back; libX11's
+        // XSetCommand emits `arg0\0arg1\0...argN\0`. Split on NUL and
+        // render as a quoted list so the reader can see the exec line.
+        guard format == 8 else { return nil }
+        return decodeWMCommand(data)
     case "_MOTIF_WM_HINTS", "_MWM_HINTS":
         // Motif-specific WM hints. 5 CARD32 elements; layout from
         // reference/motif/lib/Xm/MwmUtil.h `PropMotifWmHints`. Every
@@ -492,6 +499,47 @@ private func decodeWMClass(_ data: [UInt8]) -> String {
     if !current.isEmpty, fields.count < 2 { fields.append(current) }
     while fields.count < 2 { fields.append("") }
     return "instance=\"\(fields[0])\" class=\"\(fields[1])\""
+}
+
+// MARK: - WM_COMMAND
+
+/// Split a NUL-terminated argv blob into a quoted list. The X11 wire
+/// format is `arg0\0arg1\0...argN\0` (libX11 `XSetCommand` includes the
+/// trailing NUL after the last arg). The decoder is forgiving: a body
+/// missing the trailing NUL still yields its final fragment as the last
+/// element. Empty body → empty argv.
+private func decodeWMCommand(_ data: [UInt8]) -> String {
+    if data.isEmpty { return "argv=[]" }
+    var args: [String] = []
+    var current = ""
+    for b in data {
+        if b == 0 {
+            args.append(quoteForArgvDisplay(current))
+            current = ""
+        } else {
+            // Latin-1 single-byte decode per WM_COMMAND's STRING type.
+            current.append(Character(UnicodeScalar(b)))
+        }
+    }
+    // Trailing bytes with no terminating NUL — still surface them so the
+    // reader doesn't lose data on a malformed write.
+    if !current.isEmpty {
+        args.append(quoteForArgvDisplay(current))
+    }
+    return "argv=[\(args.joined(separator: ", "))]"
+}
+
+/// Render an argv string for the WM_COMMAND list. Quoted; non-printable
+/// bytes become `?` so a single weird byte doesn't break the line.
+private func quoteForArgvDisplay(_ s: String) -> String {
+    let escaped = s.map { c -> String in
+        let v = c.asciiValue ?? 0
+        if v != 0 && v < 0x20 { return "?" }
+        if c == "\"" { return "\\\"" }
+        if c == "\\" { return "\\\\" }
+        return String(c)
+    }.joined()
+    return "\"\(escaped)\""
 }
 
 // MARK: - ATOM list (WM_PROTOCOLS and similar)
