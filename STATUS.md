@@ -1,4 +1,4 @@
-# Status 2026-05-31 — nine capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry, Motif properties, type-fallback, ClientMessage payload, WM_COMMAND argv) + console quieted
+# Status 2026-05-31 — ten capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry, Motif properties, type-fallback, ClientMessage payload, WM_COMMAND argv, reply-body decode) + console quieted
 
 Two small landings on a Sun-less day. Both pure capture-side, no live
 verification needed.
@@ -267,7 +267,50 @@ format=32 rejection.
 the named-property dispatcher which is already part of the Yes
 type-aware-decoding row.
 
-Ten commits, 69 new unit tests, no regressions, no Sun required.
+**Reply-body decode for 10 more opcodes.** Tenth wedge — biggest of
+the day by reply lines affected (~3300 in the corpus). Targets the §3
+"All core replies decoded — Partial" row. The dumper's reply path
+gained dispatch blocks for the ten most-frequent unenriched opcodes,
+picked by corpus-wide frequency count:
+
+- `GetInputFocus` (1654 hits): `focus=0x140000E revertTo=parent`
+  (`None` / `PointerRoot` sentinels named).
+- `GetAtomName` (493 hits): `atom=0x7F → name="-Misc-Fixed-Medium-..."`
+  Also populates `ctx.atomToName` in reverse so later atom references
+  resolve symbolically.
+- `GetGeometry` (295 hits): `root=0x2B at (0,0) 484x316 border=0 depth=8`
+- `QueryTree` (143 hits): `root=… parent=… children=[…,…(+N)]`
+  (8-element cap with leak-indicator tail).
+- `QueryColors` (80 hits): `rgb=[(0,0,0),(255,255,255),…(+N)]`
+  (4-triple cap; 8-bit components extracted from the wire's 16-bit
+  values).
+- `GetModifierMapping` (72 hits): `perMod=2 Shift=[50,62] Ctrl=[37]`
+  with empty slots suppressed and Lock/Mod1..5 named.
+- `GrabPointer` + `GrabKeyboard` (combined 117 hits): `status=success`
+  / `status=frozen` etc.
+- `GetSelectionOwner` (58 hits): `owner=0x2800029` / `owner=None`.
+- `QueryPointer` (41 hits): root + win coords + child + button mask
+  symbolic.
+- `TranslateCoordinates` (38 hits): `dst=(621,299) child=0x100051F`.
+- `QueryBestSize` (29 hits): `best=32x32`.
+- `GetWindowAttributes` (29 hits): class + visual (resolved through
+  the catalog) + mapState + override.
+
+Combined with the 7 already-decoded replies (InternAtom,
+QueryExtension, QueryFont, AllocColor, AllocNamedColor, GetProperty,
+GetKeyboardMapping), the chrono dump now renders rich detail for 17
+of 30 reply-producing opcodes. The remaining ~12 (ListFonts,
+GetMotionEvents, ListHosts, etc.) are longer-tail / less-common —
+deferred without ceremony.
+
+Verified against the corpus: xterm capture now reads
+`Reply (GetAtomName) atom=0x7F → name="-Misc-Fixed-Medium-R-Semi
+Condensed--13-120-75-75-C-60-ISO8859-1"`; dogs capture
+`Reply (QueryTree) root=0x2B parent=None children=[0x2400001,...,
+…(+11)]`. 17 new unit tests + bonus end-to-end round-trip through
+`formatServerMessage` for every decoder. 1189/1189 total tests pass.
+
+Eleven commits, 86 new unit tests, no regressions, no Sun required.
 
 # Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
 

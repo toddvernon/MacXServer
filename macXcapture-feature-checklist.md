@@ -129,11 +129,20 @@ macXcapture from a useful tool into infrastructure.
       structs + dumper lines. `Sources/Framer/Requests/Request.swift` (enum) +
       `Sources/SwiftXCaptureCore/ChronoDumper.swift:291` `formatRequest`. Per
       `OPCODE_STATUS.md:201`, Phase 1 closed the 16 audited gaps 2026-05-29.
-- [~] All core replies decoded — **Partial**. All reply-producing opcodes have typed reply
-      **decoders** (`Sources/Framer/Replies/` — 39 files). The dumper's reply-body **printing** is
-      rich for 5 opcodes (InternAtom, QueryExtension, QueryFont, AllocColor, AllocNamedColor at
-      `ChronoDumper.swift:567-614`) and minimal (just `Reply (opName)`) for ~30 others. Per
-      `OPCODE_STATUS.md:207-213` — Phase 5 polish enriches the rest.
+- [~] All core replies decoded — **Partial** (substantially improved 2026-05-31). All
+      reply-producing opcodes have typed reply **decoders** in `Sources/Framer/Replies/` (39
+      files). The dumper's reply-body **printing** now covers 17 opcodes with rich detail:
+      InternAtom, QueryExtension, QueryFont, AllocColor, AllocNamedColor (the original 5);
+      GetProperty + GetKeyboardMapping (added with the keysym/property wedges earlier this day);
+      GetInputFocus, GetAtomName, GetGeometry, QueryTree, GetWindowAttributes, QueryColors,
+      GetModifierMapping, GrabPointer, GrabKeyboard, GetSelectionOwner, QueryPointer,
+      TranslateCoordinates, QueryBestSize (this wedge). The 10 added this wedge cover
+      ~3300 reply lines across the corpus. ~12 reply-producing opcodes still print as bare
+      `Reply (opName)` — the longer-tail / less-common ones (ListProperties, ListFonts,
+      ListFontsWithInfo, GetMotionEvents, GetFontPath, GetPointerControl, GetKeyboardControl,
+      GetScreenSaver, GetPointerMapping, AllocColorCells, AllocColorPlanes, ListHosts,
+      ListInstalledColormaps, ListExtensions, LookupColor). GetAtomName's reply also feeds
+      ctx.atomToName in reverse (the inverse of InternAtom-populated entries).
 - [x] All core events decoded — **Yes**. 33 of 33 core events have typed decoders.
       `Sources/Framer/Events/` covers Input/Window/Selection/Misc + Phase1Events.swift (the 5 added
       2026-05-30). Dumper detail at `ChronoDumper.swift:637-696`. Per `OPCODE_STATUS.md:204`.

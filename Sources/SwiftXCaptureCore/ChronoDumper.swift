@@ -65,6 +65,9 @@ public enum ChronoDumper {
                         if case .getProperty(let gp) = req {
                             ctx.seqToGetPropertyAtom[seq] = gp.property
                         }
+                        if case .getAtomName(let ga) = req {
+                            ctx.seqToGetAtomName[seq] = ga.atom
+                        }
                         trackResourceLifecycle(req, seq: seq, registry: &ctx.resources)
                         out += format(timestamp: ts, direction: "→", line: formatRequest(req, seq: seq, ctx: ctx, byteOrder: byteOrder))
                         if firstTimestamp == nil { firstTimestamp = ts }
@@ -267,6 +270,10 @@ struct ChronoContext {
     /// In-flight GetProperty requests: seq → property atom. Reply path uses
     /// this to dispatch type-aware decoders on the returned value.
     var seqToGetPropertyAtom: [UInt16: UInt32] = [:]
+    /// In-flight GetAtomName requests: seq → atom id being looked up. Reply
+    /// path uses this to populate ctx.atomToName in reverse (clients query
+    /// the server for an existing atom's name rather than always interning).
+    var seqToGetAtomName: [UInt16: UInt32] = [:]
     var atomToName: [UInt32: String] = [:]
     var extensionMajorToName: [UInt8: String] = [:]
     /// Extension event-base assignments from QueryExtension replies. Lets
@@ -908,6 +915,142 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
                     }
                 }
                 ctx.seqToGetPropertyAtom.removeValue(forKey: seq)
+            }
+            // GetInputFocus: most-fired reply in the corpus (1654 hits across
+            // all captures). Toolkits poll for it before nearly every focus
+            // operation. Two CARD32s on the wire: revert-to mode + focus
+            // window. Render `revertTo` as its named enum.
+            if op == GetInputFocus.opcode {
+                if let parsed = try? GetInputFocusReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let focus: String
+                    switch parsed.focus {
+                    case 0: focus = "None"
+                    case 1: focus = "PointerRoot"
+                    default: focus = String(format: "0x%X", parsed.focus)
+                    }
+                    detail = " focus=\(focus) revertTo=\(parsed.revertTo)"
+                }
+            }
+            // GetAtomName: the inverse of InternAtom. Server returns the
+            // name string for a known atom; we propagate it into ctx.atomToName
+            // so later references to that atom resolve symbolically.
+            if op == GetAtomName.opcode, let atom = ctx.seqToGetAtomName[seq] {
+                if let parsed = try? GetAtomNameReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let name = String(decoding: parsed.name, as: UTF8.self)
+                    if !name.isEmpty {
+                        ctx.atomToName[atom] = name
+                    }
+                    detail = " atom=\(String(format: "0x%X", atom)) → name=\"\(name)\""
+                }
+                ctx.seqToGetAtomName.removeValue(forKey: seq)
+            }
+            // GetGeometry: drawable bounds + depth + root.
+            if op == GetGeometry.opcode {
+                if let parsed = try? GetGeometryReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    detail = " root=\(windowDisplay(parsed.root)) at \(pt(parsed.x, parsed.y)) \(sz(parsed.width, parsed.height)) border=\(parsed.borderWidth) depth=\(parsed.depth)"
+                }
+            }
+            // QueryTree: surfaces parent + child stacking. Truncate the
+            // child list at 8 so a 60-child container doesn't blow out the line.
+            if op == QueryTree.opcode {
+                if let parsed = try? QueryTreeReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let parentStr = parsed.parent == 0 ? "None" : windowDisplay(parsed.parent)
+                    let total = parsed.children.count
+                    let shown = min(total, 8)
+                    let kids = parsed.children.prefix(shown).map { String(format: "0x%X", $0) }
+                    var listBody = kids.joined(separator: ",")
+                    if total > shown { listBody += ",…(+\(total - shown))" }
+                    detail = " root=\(windowDisplay(parsed.root)) parent=\(parentStr) children=[\(listBody)]"
+                }
+            }
+            // GetWindowAttributes: visualId resolves through the catalog;
+            // override-redirect + map-state are the workhorse fields toolkits
+            // poll for. Render the windowClass enum by name.
+            if op == GetWindowAttributes.opcode {
+                if let parsed = try? GetWindowAttributesReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let cls: String
+                    switch parsed.windowClass {
+                    case 1: cls = "InputOutput"
+                    case 2: cls = "InputOnly"
+                    default: cls = "class=\(parsed.windowClass)"
+                    }
+                    let mapState: String
+                    switch parsed.mapState {
+                    case 0: mapState = "Unmapped"
+                    case 1: mapState = "Unviewable"
+                    case 2: mapState = "Viewable"
+                    default: mapState = "mapState=\(parsed.mapState)"
+                    }
+                    detail = " \(cls) visual=\(visualDisplay(parsed.visualId, ctx: ctx)) mapState=\(mapState) override=\(parsed.overrideRedirect) eventMask=\(hx(parsed.allEventMasks))"
+                }
+            }
+            // QueryColors: list of RGB triples for the queried pixels. Cap at
+            // first 4 entries so a 256-pixel query stays readable.
+            if op == QueryColors.opcode {
+                if let parsed = try? QueryColorsReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let total = parsed.colors.count
+                    let shown = min(total, 4)
+                    let rgbs = parsed.colors.prefix(shown).map {
+                        "(\($0.red >> 8),\($0.green >> 8),\($0.blue >> 8))"
+                    }
+                    var body = rgbs.joined(separator: ",")
+                    if total > shown { body += ",…(+\(total - shown))" }
+                    detail = " rgb=[\(body)]"
+                }
+            }
+            // GetModifierMapping: 8 fixed modifier slots (Shift / Lock / Ctrl
+            // / Mod1..Mod5), each holding `keycodesPerModifier` keycodes.
+            // Render as a compact `Shift=[50,62] Ctrl=[37]` form, skipping
+            // slots whose keycodes are all zero (unmapped).
+            if op == GetModifierMapping.opcode {
+                if let parsed = try? GetModifierMappingReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let kpm = Int(parsed.keycodesPerModifier)
+                    let modNames = ["Shift", "Lock", "Ctrl", "Mod1", "Mod2", "Mod3", "Mod4", "Mod5"]
+                    var parts: [String] = []
+                    for i in 0..<min(8, parsed.keycodes.count / max(kpm, 1)) {
+                        let row = parsed.keycodes[i*kpm..<(i+1)*kpm].filter { $0 != 0 }
+                        guard !row.isEmpty else { continue }
+                        parts.append("\(modNames[i])=[\(row.map { String($0) }.joined(separator: ","))]")
+                    }
+                    let body = parts.isEmpty ? "(empty)" : parts.joined(separator: " ")
+                    detail = " perMod=\(kpm) \(body)"
+                }
+            }
+            // GrabPointer / GrabKeyboard: single status byte. Same reply
+            // struct + status enum; cover both with one block.
+            if op == GrabPointer.opcode || op == GrabKeyboard.opcode {
+                if let parsed = try? GrabReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    detail = " status=\(parsed.status)"
+                }
+            }
+            // GetSelectionOwner: single owner window id.
+            if op == GetSelectionOwner.opcode {
+                if let parsed = try? GetSelectionOwnerReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let owner = parsed.owner == 0 ? "None" : windowDisplay(parsed.owner)
+                    detail = " owner=\(owner)"
+                }
+            }
+            // QueryPointer: root-relative + window-relative coords + button
+            // mask + child-window-under-pointer.
+            if op == QueryPointer.opcode {
+                if let parsed = try? QueryPointerReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let child = parsed.child == 0 ? "None" : windowDisplay(parsed.child)
+                    detail = " root=\(windowDisplay(parsed.root)) rootAt=\(pt(parsed.rootX, parsed.rootY)) winAt=\(pt(parsed.winX, parsed.winY)) child=\(child) buttons=\(modifierMaskString(parsed.mask)) sameScreen=\(parsed.sameScreen)"
+                }
+            }
+            // TranslateCoordinates: result coords + which child window the
+            // translated point landed in.
+            if op == TranslateCoordinates.opcode {
+                if let parsed = try? TranslateCoordinatesReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let child = parsed.child == 0 ? "None" : windowDisplay(parsed.child)
+                    detail = " dst=\(pt(parsed.dstX, parsed.dstY)) child=\(child) sameScreen=\(parsed.sameScreen)"
+                }
+            }
+            // QueryBestSize: cursor/tile/stipple closest-supported dimensions.
+            if op == QueryBestSize.opcode {
+                if let parsed = try? QueryBestSizeReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    detail = " best=\(sz(parsed.width, parsed.height))"
+                }
             }
             if op == GetKeyboardMapping.opcode, let req = ctx.seqToGetKeyboardMapping[seq] {
                 if let parsed = try? GetKeyboardMappingReply.decode(from: r.bytes, byteOrder: byteOrder) {
