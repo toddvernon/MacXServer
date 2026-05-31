@@ -1,3 +1,44 @@
+# Status 2026-05-31 — keysym + modifier symbolic decode; console quieted
+
+Two small landings on a Sun-less day. Both pure capture-side, no live
+verification needed.
+
+**`macxserver` console quieted.** Per-session and bridge traces are now
+disk-only at `/tmp/macxserver/<instance>-<ts>.log` by default. New
+`--verbose` / `-v` flag restores stderr mirroring when debugging. Listener
+events (accept errors, shutdown) keep their stderr sink — those are rare
+and worth seeing. `09bf07e`.
+
+**Keysym + modifier symbolic decode for the capture viewer.** First wedge
+out of the macXcapture decoder push's Phase 4-5 work, picked as the
+highest-payoff Sun-independent gap from the checklist's vintage-lens top 5.
+
+Three pieces:
+
+- 1224-entry keysym name table generated from
+  `reference/X11R6/xc/include/keysymdef.h` into
+  `Sources/SwiftXCaptureCore/Keysyms.generated.swift`. Regen script at
+  `Tools/regen_keysyms.sh`. Public API `keysymName(_:)` +
+  `modifierMaskString(_:)` + `grabModifierString(_:)` in `Keysyms.swift`.
+- `ChronoContext` now tracks a session keymap, populated from
+  `GetKeyboardMapping` replies and `ChangeKeyboardMapping` requests.
+  `KeyPress`/`KeyRelease` events translate keycode → keysym for output;
+  before the keymap is populated, falls back to bare keycode.
+- 7 dumper call sites rewritten: `GrabButton`, `GrabKey`, `UngrabButton`,
+  `UngrabKey`, the four input-event types (state field), and
+  `ChangeKeyboardMapping` payload (now prints rows as
+  `kc7=[Tab,ISO_Left_Tab] kc8=[Return]`, capped to 8 keycodes + ellipsis).
+
+Verified against `captures/xterm-running-on-ss2-display-on-ss2.xtap` —
+live key trace now reads as `KeyPress L (keycode=92) state=none` and
+`KeyPress X (keycode=108) state=Ctrl` instead of the prior
+`keycode/btn=92 state=0x0` / `keycode/btn=108 state=0x4`. 12 new unit
+tests; 1083/1083 total tests pass.
+
+Checklist (`macXcapture-feature-checklist.md`): two §3 rows moved No → Yes
+(keysym decode, modifier mask decode). Counts: 24/35/67/1 → 26/35/65/1.
+Vintage-lens gap #1 closed.
+
 # Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
 
 Three days of major work landed since the 2026-05-27 entry below. Writing

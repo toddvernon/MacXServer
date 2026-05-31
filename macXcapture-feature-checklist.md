@@ -157,12 +157,19 @@ macXcapture from a useful tool into infrastructure.
       anywhere.
 - [ ] Resource lifetime tracked (freed at frame M, used-after-free flagged) — **No**. Not
       implemented anywhere.
-- [ ] Keysym values decoded to symbolic names — **No**. No keysym table. `GrabKey`,
-      `ChangeKeyboardMapping`, KeyPress events all print keycode/keysym as raw integers
-      (`ChronoDumper.swift:354`, `516`, `641`). Would require importing `keysymdef.h` table.
-- [ ] Modifier masks decoded symbolically — **No**. Modifiers print as `hx(r.modifiers)` (e.g.
-      `0x4`) everywhere — `ChronoDumper.swift:346,354,450,452,640`. No Shift/Ctrl/Meta/Mod1-5/Lock
-      decode.
+- [x] Keysym values decoded to symbolic names — **Yes** (as of 2026-05-31). 1224-entry table
+      generated from `reference/X11R6/xc/include/keysymdef.h` lives at
+      `Sources/SwiftXCaptureCore/Keysyms.generated.swift` (regen script
+      `Tools/regen_keysyms.sh`). Public API `keysymName(_:)` in `Keysyms.swift`. `ChronoContext`
+      now tracks a session keymap, populated from `GetKeyboardMapping` replies and
+      `ChangeKeyboardMapping` requests, so `KeyPress`/`KeyRelease` events render as
+      `L (keycode=92)` instead of `keycode=92`. `ChangeKeyboardMapping`'s payload now prints
+      keysym rows inline (capped to 8 keycodes + ellipsis). Unmapped keysyms fall back to hex.
+- [x] Modifier masks decoded symbolically — **Yes** (as of 2026-05-31). `modifierMaskString(_:)`
+      and `grabModifierString(_:)` in `Keysyms.swift` render KEYBUTMASK bits as
+      `Shift|Ctrl|Mod1|...`; `0x8000` on grab requests renders as `AnyModifier`; empty mask is
+      `none`. Wired into `GrabButton`, `GrabKey`, `UngrabButton`, `UngrabKey`, and the
+      `KeyPress`/`KeyRelease`/`ButtonPress`/`ButtonRelease`/`MotionNotify` state field.
 - [ ] Visual and depth references resolved against the server's setup reply — **No**. SetupReply is
       decoded and dumped once (`formatSetupReply`), but the visual catalog isn't kept in
       `ChronoContext`. CreateWindow / CreateColormap / etc. print the visual id as hex with no
@@ -476,12 +483,12 @@ For each: requests + replies + events + errors decoded.
 
 ## Summary
 
-**Counts (127 items total, audited 2026-05-30 evening after the landmark + diff
-work landed):**
+**Counts (127 items total, last updated 2026-05-31 after the keysym + modifier
+symbolic decode wedge landed):**
 
-- **Yes**: 24
+- **Yes**: 26
 - **Partial**: 35
-- **No**: 67
+- **No**: 65
 - **N/A**: 1 (Linux build — explicit non-goal)
 
 _Changes since the morning audit: protocol-error highlighting moved Partial → Yes (landmark
@@ -582,12 +589,13 @@ score, it's which No rows actually matter.
 
 **Highest-leverage gaps under the vintage lens:**
 
-1. **Keysym and modifier symbolic decode (§3).** Today every KeyPress, GrabKey, and
-   ChangeKeyboardMapping prints keycodes and keysyms as raw integers and modifier masks as hex.
-   For vintage debugging this is the dominant readability problem: every Motif XmText interaction,
-   every xfontsel keypress, every dtterm keystroke shows up as `keycode=27 state=0x4` instead of
-   `Escape state=Ctrl`. The keysymdef.h table is finite and 30-year stable; a one-time import
-   unlocks the whole keyboard-event surface.
+1. ~~**Keysym and modifier symbolic decode (§3).**~~ **Closed 2026-05-31.** 1224-entry table
+   imported from `reference/X11R6/xc/include/keysymdef.h` (regen script at
+   `Tools/regen_keysyms.sh`). KeyPress events now resolve keycode → keysym via the session
+   keymap harvested from GetKeyboardMapping replies / ChangeKeyboardMapping requests; modifier
+   masks render as `Shift|Ctrl|Mod1...`. Live xterm trace from the corpus now reads as
+   `KeyPress L (keycode=92) state=none` and `KeyPress X (keycode=108) state=Ctrl` instead of
+   the prior raw-integer form.
 2. **WM-property type-aware decoding (§3).** WM_NORMAL_HINTS, WM_HINTS, WM_STATE, WM_CLASS, and
    WM_PROTOCOLS are the lingua franca of vintage WM debugging, and right now ChangeProperty /
    GetProperty body bytes print as a byte count. Decoding them inline surfaces the flags,

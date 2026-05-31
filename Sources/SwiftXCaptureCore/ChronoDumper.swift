@@ -52,6 +52,16 @@ public enum ChronoDumper {
                         if case .queryExtension(let qe) = req {
                             ctx.seqToQueryExtensionName[seq] = String(decoding: qe.name, as: UTF8.self)
                         }
+                        if case .getKeyboardMapping(let gk) = req {
+                            ctx.seqToGetKeyboardMapping[seq] = (gk.firstKeycode, gk.count)
+                        }
+                        if case .changeKeyboardMapping(let ck) = req {
+                            // Installed at request time; there's no reply. A
+                            // subsequent GetKeyboardMapping reply will overwrite.
+                            ctx.installKeysyms(firstKeycode: ck.firstKeyCode,
+                                               keysymsPerKeycode: ck.keysymsPerKeycode,
+                                               flat: ck.keysyms)
+                        }
                         out += format(timestamp: ts, direction: "→", line: formatRequest(req, seq: seq, ctx: ctx, byteOrder: byteOrder))
                         if firstTimestamp == nil { firstTimestamp = ts }
                         lastTimestamp = ts
@@ -230,6 +240,11 @@ struct ChronoContext {
     var seqToOpcode: [UInt16: UInt8] = [:]
     var seqToInternAtomName: [UInt16: String] = [:]
     var seqToQueryExtensionName: [UInt16: String] = [:]
+    /// In-flight GetKeyboardMapping requests: seq → (firstKeycode, count). The
+    /// reply only carries the keysym list and the per-keycode group width,
+    /// so we have to remember the request's `firstKeycode` to know where the
+    /// list lands in the keymap.
+    var seqToGetKeyboardMapping: [UInt16: (firstKeycode: UInt8, count: UInt8)] = [:]
     var atomToName: [UInt32: String] = [:]
     var extensionMajorToName: [UInt8: String] = [:]
     /// Extension event-base assignments from QueryExtension replies. Lets
@@ -239,6 +254,41 @@ struct ChronoContext {
     /// reply. The landmark detector uses this to recognize a CreateWindow
     /// whose parent is a screen root, i.e. a top-level window.
     var screenRoots: Set<UInt32> = []
+    /// Session keymap, populated from GetKeyboardMapping replies and
+    /// ChangeKeyboardMapping requests. Indexed by keycode; each entry is the
+    /// `keysymsPerKeycode`-wide row from the spec. Empty until the first
+    /// keymap message lands. Used to translate KeyPress/KeyRelease keycodes
+    /// into keysym names in the dumper.
+    var keymap: [UInt8: [UInt32]] = [:]
+
+    /// Best-effort keycode → keysym name. Picks the first (group-0,
+    /// unshifted) keysym from the keymap row; that's the symbol you see
+    /// reported for a bare KeyPress without modifiers. Returns nil if the
+    /// session keymap hasn't been populated yet, or this keycode isn't in
+    /// it, or its row is all-NoSymbol. Falls back to the raw keycode in the
+    /// caller.
+    func keysymName(forKeycode keycode: UInt8) -> String? {
+        guard let row = keymap[keycode], !row.isEmpty else { return nil }
+        let primary = row.first(where: { $0 != 0 }) ?? 0
+        guard primary != 0 else { return nil }
+        return xKeysymNames[primary]
+    }
+
+    /// Install a row of keysyms for `firstKeycode .. firstKeycode + count - 1`.
+    /// Called from both the GetKeyboardMapping reply harvester and the
+    /// ChangeKeyboardMapping request handler. Trailing NoSymbol entries in
+    /// each row are preserved so `keysymsPerKeycode` stays consistent.
+    mutating func installKeysyms(firstKeycode: UInt8, keysymsPerKeycode: UInt8, flat: [UInt32]) {
+        let kpk = Int(keysymsPerKeycode)
+        guard kpk > 0 else { return }
+        let count = flat.count / kpk
+        for i in 0..<count {
+            let kc = Int(firstKeycode) + i
+            guard kc <= 0xFF else { break }
+            let lo = i * kpk
+            keymap[UInt8(kc)] = Array(flat[lo..<lo+kpk])
+        }
+    }
 
     /// For an event code ≥ 64 (i.e., outside the core 2-34 range), find
     /// the registered extension whose `[firstEvent, firstEvent+eventCount)`
@@ -435,7 +485,7 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
     case .ungrabPointer:
         body = row("UngrabPointer")
     case .grabButton(let r):
-        body = row("GrabButton", "window=\(windowDisplay(r.grabWindow)) button=\(r.button) modifiers=\(hx(r.modifiers))")
+        body = row("GrabButton", "window=\(windowDisplay(r.grabWindow)) button=\(r.button) modifiers=\(grabModifierString(r.modifiers))")
     case .changeActivePointerGrab(let r):
         body = row("ChangeActivePointerGrab", "cursor=\(windowDisplay(r.cursor)) eventMask=\(hx(r.eventMask))")
     case .grabKeyboard(let r):
@@ -443,7 +493,7 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
     case .ungrabKeyboard:
         body = row("UngrabKeyboard")
     case .grabKey(let r):
-        body = row("GrabKey", "window=\(windowDisplay(r.grabWindow)) key=\(r.key) modifiers=\(hx(r.modifiers))")
+        body = row("GrabKey", "window=\(windowDisplay(r.grabWindow)) key=\(r.key) modifiers=\(grabModifierString(r.modifiers))")
     case .allowEvents(let r):
         body = row("AllowEvents", "mode=\(r.mode)")
     case .grabServer:    body = row("GrabServer")
@@ -539,9 +589,9 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
     case .getModifierMapping: body = row("GetModifierMapping")
     case .getPointerMapping:  body = row("GetPointerMapping")
     case .ungrabButton(let r):
-        body = row("UngrabButton", "button=\(r.button) grabWindow=\(windowDisplay(r.grabWindow)) modifiers=\(hx(r.modifiers))")
+        body = row("UngrabButton", "button=\(r.button) grabWindow=\(windowDisplay(r.grabWindow)) modifiers=\(grabModifierString(r.modifiers))")
     case .ungrabKey(let r):
-        body = row("UngrabKey", "key=\(r.key) grabWindow=\(windowDisplay(r.grabWindow)) modifiers=\(hx(r.modifiers))")
+        body = row("UngrabKey", "key=\(r.key) grabWindow=\(windowDisplay(r.grabWindow)) modifiers=\(grabModifierString(r.modifiers))")
     case .getMotionEvents(let r):
         body = row("GetMotionEvents", "window=\(windowDisplay(r.window)) start=\(r.start) stop=\(r.stop)")
     case .allocColorCells(let r):
@@ -605,7 +655,7 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
     case .copyGC(let r):
         body = row("CopyGC", "src=\(windowDisplay(r.srcGC)) dst=\(windowDisplay(r.dstGC)) mask=\(hx(r.valueMask))")
     case .changeKeyboardMapping(let r):
-        body = row("ChangeKeyboardMapping", "firstKeyCode=\(r.firstKeyCode) perKey=\(r.keysymsPerKeycode) keycodes=\(r.keycodeCount)")
+        body = row("ChangeKeyboardMapping", "firstKeyCode=\(r.firstKeyCode) perKey=\(r.keysymsPerKeycode) keycodes=\(r.keycodeCount) \(formatKeysymRows(firstKeycode: r.firstKeyCode, keysymsPerKeycode: r.keysymsPerKeycode, flat: r.keysyms))")
     case .changeKeyboardControl(let r):
         body = row("ChangeKeyboardControl", "mask=\(hx(r.valueMask)) values=\(r.valueList.count / 4)")
     case .getKeyboardControl:
@@ -703,6 +753,15 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
                     detail = " → pixel=0x\(String(parsed.pixel, radix: 16)) exact=(\(parsed.exactRed),\(parsed.exactGreen),\(parsed.exactBlue))"
                 }
             }
+            if op == GetKeyboardMapping.opcode, let req = ctx.seqToGetKeyboardMapping[seq] {
+                if let parsed = try? GetKeyboardMappingReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    ctx.installKeysyms(firstKeycode: req.firstKeycode,
+                                       keysymsPerKeycode: parsed.keysymsPerKeycode,
+                                       flat: parsed.keysyms)
+                    detail = " perKey=\(parsed.keysymsPerKeycode) keycodes=\(req.count) (keymap populated)"
+                }
+                ctx.seqToGetKeyboardMapping.removeValue(forKey: seq)
+            }
         }
         return "\(seqField(seq)) \(row("Reply (\(opName))", stripLead(detail)))"
     case .event(let e):
@@ -728,8 +787,16 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
         }
         if let decoded = try? DecodedEvent.decode(from: e, byteOrder: byteOrder) {
             switch decoded {
-            case .keyPress(let i), .keyRelease(let i), .buttonPress(let i), .buttonRelease(let i), .motionNotify(let i):
-                detail = " window=\(windowDisplay(i.event)) at \(pt(i.eventX, i.eventY)) keycode/btn=\(i.detail) state=\(hx(i.state))"
+            case .keyPress(let i), .keyRelease(let i):
+                let keyLabel: String
+                if let name = ctx.keysymName(forKeycode: i.detail) {
+                    keyLabel = "\(name) (keycode=\(i.detail))"
+                } else {
+                    keyLabel = "keycode=\(i.detail)"
+                }
+                detail = " window=\(windowDisplay(i.event)) at \(pt(i.eventX, i.eventY)) \(keyLabel) state=\(modifierMaskString(i.state))"
+            case .buttonPress(let i), .buttonRelease(let i), .motionNotify(let i):
+                detail = " window=\(windowDisplay(i.event)) at \(pt(i.eventX, i.eventY)) button=\(i.detail) state=\(modifierMaskString(i.state))"
             case .enterNotify(let c), .leaveNotify(let c):
                 detail = " window=\(windowDisplay(c.event)) at \(pt(c.eventX, c.eventY)) mode=\(c.mode)"
             case .focusIn(let f), .focusOut(let f):
@@ -940,6 +1007,27 @@ func opcodeOf(_ req: Request) -> UInt8 {
 // Event-mask and dont-propagate are intentionally elided here — they're
 // noisy and rarely the answer to "why is this region the wrong color."
 //
+// Compact rendering of a ChangeKeyboardMapping / GetKeyboardMapping
+// keysym list. Shows the first N rows in `kc<n>=[ks0,ks1,...]` form
+// (NoSymbol entries omitted from each row), capped so a full 256-keycode
+// dump doesn't blow up a single line.
+func formatKeysymRows(firstKeycode: UInt8, keysymsPerKeycode: UInt8, flat: [UInt32]) -> String {
+    let kpk = Int(keysymsPerKeycode)
+    guard kpk > 0, !flat.isEmpty else { return "" }
+    let rowCount = flat.count / kpk
+    let shown = min(rowCount, 8)
+    var rows: [String] = []
+    for i in 0..<shown {
+        let lo = i * kpk
+        let row = flat[lo..<lo+kpk]
+        let names = row.map { keysymName($0) }.filter { $0 != "NoSymbol" }
+        let body = names.isEmpty ? "NoSymbol" : names.joined(separator: ",")
+        rows.append("kc\(Int(firstKeycode)+i)=[\(body)]")
+    }
+    if rowCount > shown { rows.append("…(+\(rowCount - shown))") }
+    return rows.joined(separator: " ")
+}
+
 // Spec ordering (X11 protocol §10): the value-list is emitted in
 // ascending bit order, one 4-byte slot per set bit, regardless of the
 // actual field width. So we walk bits 0..14 in order.
