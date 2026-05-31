@@ -1,4 +1,4 @@
-# Status 2026-05-31 — keysym + modifier symbolic decode; WM-property decode; console quieted
+# Status 2026-05-31 — keysym decode; WM-property decode; visual catalog; console quieted
 
 Two small landings on a Sun-less day. Both pure capture-side, no live
 verification needed.
@@ -70,6 +70,31 @@ pass.
 Checklist §3 "Property values decoded with type awareness" row stays
 Partial (WM_* done; CARDINAL and non-WM_* STRING decoding still
 fall through to `previewBytes`). Vintage-lens gap #2 marked Closed.
+
+**Visual catalog lookup (vintage-lens gap #3).** Third wedge of the day,
+same pattern again. `ChronoContext.visualCatalog` is populated at the
+SetupAccepted landing by walking every screen → allowedDepths → visuals
+tuple; entries record depth + class + bitsPerRgbValue + screen index.
+`visualDisplay(_:ctx:)` renders a visualId as `0x22(PseudoColor d8)`,
+falling back to bare hex when the catalog hasn't been populated. The
+spec sentinels for `CreateWindow.visual=0` and `CreateWindow.depth=0`
+render as `CopyFromParent` by name.
+
+Two dumper sites rewired: CreateWindow gained explicit `depth=` and
+`visual=` fields (previously only the class field was printed);
+CreateColormap's visual now resolves through the new helper instead of
+the old `windowDisplay` shorthand.
+
+Verified against the corpus: ico, auto-box, and xmag captures now show
+`visual=0x22(PseudoColor d8)` where before they showed bare hex; xterm
+still reads `visual=CopyFromParent` because xterm inherits its parent's
+visual rather than picking one explicitly. 5 new unit tests; 1103/1103
+total tests pass.
+
+Checklist row §3 "Visual and depth references resolved" moved No → Yes
+(27/35/64/1). Vintage-lens gap #3 marked Closed. Three of the top-5
+vintage-lens readability gaps closed in one day; gaps #4 (XTEST/RECORD/
+XC-MISC) and #5 (resource lineage) remain.
 
 # Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
 

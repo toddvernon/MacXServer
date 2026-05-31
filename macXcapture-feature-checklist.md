@@ -170,10 +170,13 @@ macXcapture from a useful tool into infrastructure.
       `Shift|Ctrl|Mod1|...`; `0x8000` on grab requests renders as `AnyModifier`; empty mask is
       `none`. Wired into `GrabButton`, `GrabKey`, `UngrabButton`, `UngrabKey`, and the
       `KeyPress`/`KeyRelease`/`ButtonPress`/`ButtonRelease`/`MotionNotify` state field.
-- [ ] Visual and depth references resolved against the server's setup reply — **No**. SetupReply is
-      decoded and dumped once (`formatSetupReply`), but the visual catalog isn't kept in
-      `ChronoContext`. CreateWindow / CreateColormap / etc. print the visual id as hex with no
-      lookup. Depth is shown as a raw integer.
+- [x] Visual and depth references resolved against the server's setup reply — **Yes** (as of
+      2026-05-31). `ChronoContext.visualCatalog` is populated at the SetupAccepted landing by
+      walking every screen → allowedDepths → visuals tuple; entries record depth + class + bpr +
+      screen index. `visualDisplay(_:ctx:)` in `ChronoDumper.swift` renders a visualId as
+      `0x22(PseudoColor d8)`. CreateWindow now also prints its depth field
+      (CopyFromParent rendered by name for the depth=0 / visual=0 spec sentinels); CreateColormap
+      resolves its visual through the same helper.
 - [~] Property values decoded with type awareness (STRING, UTF8_STRING, ATOM, CARDINAL, etc.) —
       **Partial** (improved 2026-05-31). The ICCCM WM_* properties now decode inline on both the
       `ChangeProperty` request path and the `GetProperty` reply path:
@@ -487,12 +490,12 @@ For each: requests + replies + events + errors decoded.
 
 ## Summary
 
-**Counts (127 items total, last updated 2026-05-31 after the WM-property
-type-aware decode wedge landed — second wedge of the day):**
+**Counts (127 items total, last updated 2026-05-31 after the visual
+catalog wedge landed — third wedge of the day):**
 
-- **Yes**: 26
+- **Yes**: 27
 - **Partial**: 35
-- **No**: 65
+- **No**: 64
 - **N/A**: 1 (Linux build — explicit non-goal)
 
 (The §3 type-aware-decoding row stays Partial because CARDINAL and
@@ -610,11 +613,13 @@ score, it's which No rows actually matter.
    `ChangeProperty ... prop=WM_NORMAL_HINTS ... flags=PSize|PWinGravity PSize=484x316
    gravity=NorthWest`; xedit shows `prop=WM_PROTOCOLS ... atoms=[WM_DELETE_WINDOW]`. Generic
    ATOM-typed properties also resolve via the atom list fallback.
-3. **Visual catalog lookup (§3).** Vintage X is dominated by 8-bit PseudoColor (Sun ss2, SGI Indy,
-   most CDE installs). Every CreateWindow / CreateColormap / CreatePixmap references a visualId
-   and depth that currently print as raw integers. Resolving against the SetupReply's
-   `screen.allowedDepths` catalog gives the reader "visual 0x21 is the 8-bit PseudoColor of screen
-   0" without manual translation.
+3. ~~**Visual catalog lookup (§3).**~~ **Closed 2026-05-31.** `ChronoContext.visualCatalog`
+   harvested from SetupAccepted; `visualDisplay(_:ctx:)` renders visualIds as
+   `0x22(PseudoColor d8)`. CreateWindow now also reports its depth and renders depth=0 /
+   visual=0 by spec sentinel name (CopyFromParent). Verified against ico / auto-box / xmag
+   captures from the corpus — `visual=0x22(PseudoColor d8)` reads in place of the old
+   `visual=0x22`. CreatePixmap's depth field is still a raw integer (it's a drawable
+   property, not a visual lookup), so left as-is.
 4. **XTEST + RECORD + XC-MISC decoders (§4).** These are the genuinely vintage gaps in §4 (the
    actually-era-correct extensions, as distinct from the modern Tier-2 list). XTEST is what every
    input-injection test rig for vintage X uses, and a capture taken during automated UI tests is

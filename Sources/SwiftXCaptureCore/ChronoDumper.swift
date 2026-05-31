@@ -84,6 +84,17 @@ public enum ChronoDumper {
                         if case .setupReply(let r) = raw {
                             if case .accepted(let acc) = r {
                                 ctx.screenRoots = Set(acc.screens.map(\.root))
+                                for (idx, screen) in acc.screens.enumerated() {
+                                    for d in screen.allowedDepths {
+                                        for v in d.visuals {
+                                            ctx.visualCatalog[v.visualId] = VisualCatalogEntry(
+                                                depth: d.depth,
+                                                visualClass: v.visualClass,
+                                                bitsPerRgbValue: v.bitsPerRgbValue,
+                                                screenIndex: idx)
+                                        }
+                                    }
+                                }
                             }
                             out += format(timestamp: ts, line: formatSetupReply(r))
                         }
@@ -260,6 +271,12 @@ struct ChronoContext {
     /// reply. The landmark detector uses this to recognize a CreateWindow
     /// whose parent is a screen root, i.e. a top-level window.
     var screenRoots: Set<UInt32> = []
+    /// Visual catalog harvested from the SetupAccepted reply. Indexed by
+    /// visualId; each entry remembers the depth the visual was advertised
+    /// at, its class, and which screen it belongs to. Used to render
+    /// visualIds symbolically in CreateWindow / CreateColormap dumper
+    /// output: `visual=0x21(PseudoColor d8 screen0)` instead of `0x21`.
+    var visualCatalog: [UInt32: VisualCatalogEntry] = [:]
     /// Session keymap, populated from GetKeyboardMapping replies and
     /// ChangeKeyboardMapping requests. Indexed by keycode; each entry is the
     /// `keysymsPerKeycode`-wide row from the spec. Empty until the first
@@ -379,6 +396,43 @@ func atomDisplay(_ atom: UInt32, ctx: ChronoContext) -> String {
     return String(format: "0x%X", atom)
 }
 
+/// One row in the per-session visual catalog. `depth` is from the parent
+/// `Depth` block in SetupAccepted (visuals are nested under their depth in
+/// the wire format). `screenIndex` lets the dumper distinguish identical
+/// visualIds across screens on multi-screen servers, though in practice
+/// every Sun ss2 / SGI / Mac advertises a single screen.
+struct VisualCatalogEntry {
+    let depth: UInt8
+    let visualClass: VisualClass
+    let bitsPerRgbValue: UInt8
+    let screenIndex: Int
+}
+
+/// Render a visualId symbolically. `0` is CopyFromParent on the CreateWindow
+/// path (the spec sentinel); anywhere else, falls back to hex if the catalog
+/// hasn't been populated or the id wasn't advertised.
+func visualDisplay(_ id: UInt32, ctx: ChronoContext) -> String {
+    if id == 0 { return "CopyFromParent" }
+    let hex = String(format: "0x%X", id)
+    guard let v = ctx.visualCatalog[id] else { return hex }
+    return "\(hex)(\(v.visualClass.shortName) d\(v.depth))"
+}
+
+extension VisualClass {
+    /// Compact label for dumper output. Matches the spec capitalization so
+    /// readers used to grep'ing for "PseudoColor" still hit.
+    var shortName: String {
+        switch self {
+        case .staticGray:   return "StaticGray"
+        case .grayScale:    return "GrayScale"
+        case .staticColor:  return "StaticColor"
+        case .pseudoColor:  return "PseudoColor"
+        case .trueColor:    return "TrueColor"
+        case .directColor:  return "DirectColor"
+        }
+    }
+}
+
 func windowDisplay(_ w: UInt32) -> String {
     return hx(w)
 }
@@ -441,7 +495,12 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
     let body: String
     switch req {
     case .createWindow(let r):
-        body = row("CreateWindow", "wid=\(windowDisplay(r.wid)) parent=\(windowDisplay(r.parent)) \(geom(r.width, r.height, r.x, r.y)) class=\(r.windowClass) mask=\(hx(r.valueMask))\(decodeWindowAttrs(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))")
+        // depth=0 + visual=0 = CopyFromParent for both, per spec. Render
+        // each independently — clients sometimes copy depth but pin a
+        // specific visual (or vice versa for InputOnly which uses
+        // CopyFromParent visual).
+        let depthStr = r.depth == 0 ? "CopyFromParent" : "\(r.depth)"
+        body = row("CreateWindow", "wid=\(windowDisplay(r.wid)) parent=\(windowDisplay(r.parent)) \(geom(r.width, r.height, r.x, r.y)) class=\(r.windowClass) depth=\(depthStr) visual=\(visualDisplay(r.visual, ctx: ctx)) mask=\(hx(r.valueMask))\(decodeWindowAttrs(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))")
     case .changeWindowAttributes(let r):
         body = row("ChangeWindowAttributes", "window=\(windowDisplay(r.window)) mask=\(hx(r.valueMask))\(decodeWindowAttrs(mask: r.valueMask, values: r.valueList, byteOrder: byteOrder))")
     case .getWindowAttributes(let r):
@@ -621,7 +680,7 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
     case .noOperation:
         body = row("NoOperation")
     case .createColormap(let r):
-        body = row("CreateColormap", "mid=\(windowDisplay(r.mid)) window=\(windowDisplay(r.window)) visual=\(windowDisplay(r.visual)) alloc=\(r.alloc)")
+        body = row("CreateColormap", "mid=\(windowDisplay(r.mid)) window=\(windowDisplay(r.window)) visual=\(visualDisplay(r.visual, ctx: ctx)) alloc=\(r.alloc)")
     case .freeColormap(let r):
         body = row("FreeColormap", "cmap=\(windowDisplay(r.cmap))")
     case .copyColormapAndFree(let r):
