@@ -175,11 +175,15 @@ macXcapture from a useful tool into infrastructure.
       `ChronoContext`. CreateWindow / CreateColormap / etc. print the visual id as hex with no
       lookup. Depth is shown as a raw integer.
 - [~] Property values decoded with type awareness (STRING, UTF8_STRING, ATOM, CARDINAL, etc.) —
-      **Partial**. The ChangeProperty request previews the data as ASCII when `format==8` and ≤64
-      bytes (`previewBytes` at `ChronoDumper.swift:1014`). No type-driven decode: ATOM-valued
-      properties don't show atom names, CARDINAL doesn't decode to integers, UTF8 isn't treated
-      differently from STRING. GetPropertyReply body is decoded by
-      `Sources/Framer/Replies/GetPropertyReply.swift` but the dumper doesn't print its data section.
+      **Partial** (improved 2026-05-31). The ICCCM WM_* properties now decode inline on both the
+      `ChangeProperty` request path and the `GetProperty` reply path:
+      WM_NORMAL_HINTS (flags + populated fields, gravity name); WM_HINTS (flag list, input,
+      initial state, urgency); WM_STATE (state name, icon window); WM_CLASS (instance + class
+      strings); WM_PROTOCOLS (atom-name list via `ctx.atomToName`); WM_TRANSIENT_FOR. Generic
+      ATOM-typed properties fall back to the atom-list renderer so non-WM names also decode.
+      Layouts in `Sources/SwiftXCaptureCore/WMProperties.swift`, ported from
+      `reference/libX11/src/Xatomtype.h` and ICCCM §4. STRING / UTF8_STRING outside the WM_*
+      set still falls through to `previewBytes`; CARDINAL isn't type-decoded yet.
 
 ## 4. Protocol Decoding — Extensions
 
@@ -483,13 +487,16 @@ For each: requests + replies + events + errors decoded.
 
 ## Summary
 
-**Counts (127 items total, last updated 2026-05-31 after the keysym + modifier
-symbolic decode wedge landed):**
+**Counts (127 items total, last updated 2026-05-31 after the WM-property
+type-aware decode wedge landed — second wedge of the day):**
 
 - **Yes**: 26
 - **Partial**: 35
 - **No**: 65
 - **N/A**: 1 (Linux build — explicit non-goal)
+
+(The §3 type-aware-decoding row stays Partial because CARDINAL and
+non-WM_* STRING/UTF8_STRING decoding still aren't typed; only WM_* moved.)
 
 _Changes since the morning audit: protocol-error highlighting moved Partial → Yes (landmark
 correlation), Resource IDs tracked moved No → Partial (LandmarkDetector window hierarchy),
@@ -596,11 +603,13 @@ score, it's which No rows actually matter.
    masks render as `Shift|Ctrl|Mod1...`. Live xterm trace from the corpus now reads as
    `KeyPress L (keycode=92) state=none` and `KeyPress X (keycode=108) state=Ctrl` instead of
    the prior raw-integer form.
-2. **WM-property type-aware decoding (§3).** WM_NORMAL_HINTS, WM_HINTS, WM_STATE, WM_CLASS, and
-   WM_PROTOCOLS are the lingua franca of vintage WM debugging, and right now ChangeProperty /
-   GetProperty body bytes print as a byte count. Decoding them inline surfaces the flags,
-   supplied-fields, and aspect ratios that matter when a vintage app isn't behaving (the "why
-   won't this Motif dialog place itself correctly?" workflow).
+2. ~~**WM-property type-aware decoding (§3).**~~ **Closed 2026-05-31.** WM_NORMAL_HINTS,
+   WM_HINTS, WM_STATE, WM_CLASS, WM_PROTOCOLS, WM_TRANSIENT_FOR now decode inline on both
+   `ChangeProperty` and `GetProperty` reply paths. Layouts ported from
+   `reference/libX11/src/Xatomtype.h` and ICCCM §4. Live xterm capture now shows
+   `ChangeProperty ... prop=WM_NORMAL_HINTS ... flags=PSize|PWinGravity PSize=484x316
+   gravity=NorthWest`; xedit shows `prop=WM_PROTOCOLS ... atoms=[WM_DELETE_WINDOW]`. Generic
+   ATOM-typed properties also resolve via the atom list fallback.
 3. **Visual catalog lookup (§3).** Vintage X is dominated by 8-bit PseudoColor (Sun ss2, SGI Indy,
    most CDE installs). Every CreateWindow / CreateColormap / CreatePixmap references a visualId
    and depth that currently print as raw integers. Resolving against the SetupReply's

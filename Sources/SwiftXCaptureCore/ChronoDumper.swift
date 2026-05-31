@@ -62,6 +62,9 @@ public enum ChronoDumper {
                                                keysymsPerKeycode: ck.keysymsPerKeycode,
                                                flat: ck.keysyms)
                         }
+                        if case .getProperty(let gp) = req {
+                            ctx.seqToGetPropertyAtom[seq] = gp.property
+                        }
                         out += format(timestamp: ts, direction: "→", line: formatRequest(req, seq: seq, ctx: ctx, byteOrder: byteOrder))
                         if firstTimestamp == nil { firstTimestamp = ts }
                         lastTimestamp = ts
@@ -245,6 +248,9 @@ struct ChronoContext {
     /// so we have to remember the request's `firstKeycode` to know where the
     /// list lands in the keymap.
     var seqToGetKeyboardMapping: [UInt16: (firstKeycode: UInt8, count: UInt8)] = [:]
+    /// In-flight GetProperty requests: seq → property atom. Reply path uses
+    /// this to dispatch type-aware decoders on the returned value.
+    var seqToGetPropertyAtom: [UInt16: UInt32] = [:]
     var atomToName: [UInt32: String] = [:]
     var extensionMajorToName: [UInt8: String] = [:]
     /// Extension event-base assignments from QueryExtension replies. Lets
@@ -466,8 +472,20 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
     case .getAtomName(let r):
         body = row("GetAtomName", "atom=\(atomDisplay(r.atom, ctx: ctx))")
     case .changeProperty(let r):
-        let dataPreview = previewBytes(r.data, format: r.format)
-        body = row("ChangeProperty", "window=\(windowDisplay(r.window)) prop=\(atomDisplay(r.property, ctx: ctx)) type=\(atomDisplay(r.type, ctx: ctx)) format=\(r.format.rawValue) \(dataPreview)")
+        let propName = atomDisplay(r.property, ctx: ctx)
+        let typeName = atomDisplay(r.type, ctx: ctx)
+        let dataPreview: String
+        if let decoded = decodeKnownWMProperty(propertyName: propName,
+                                               type: typeName,
+                                               format: r.format.rawValue,
+                                               data: r.data,
+                                               byteOrder: byteOrder,
+                                               ctx: ctx) {
+            dataPreview = decoded
+        } else {
+            dataPreview = previewBytes(r.data, format: r.format)
+        }
+        body = row("ChangeProperty", "window=\(windowDisplay(r.window)) prop=\(propName) type=\(typeName) format=\(r.format.rawValue) \(dataPreview)")
     case .deleteProperty(let r):
         body = row("DeleteProperty", "window=\(windowDisplay(r.window)) prop=\(atomDisplay(r.property, ctx: ctx))")
     case .getProperty(let r):
@@ -752,6 +770,31 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
                 if let parsed = try? AllocNamedColorReply.decode(from: r.bytes, byteOrder: byteOrder) {
                     detail = " → pixel=0x\(String(parsed.pixel, radix: 16)) exact=(\(parsed.exactRed),\(parsed.exactGreen),\(parsed.exactBlue))"
                 }
+            }
+            if op == GetProperty.opcode {
+                if let parsed = try? GetPropertyReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    if parsed.format == 0 || parsed.type == 0 {
+                        detail = " (no value)"
+                    } else {
+                        let typeName = atomDisplay(parsed.type, ctx: ctx)
+                        let propAtom = ctx.seqToGetPropertyAtom[seq] ?? 0
+                        let propName = propAtom == 0 ? "?" : atomDisplay(propAtom, ctx: ctx)
+                        let body: String
+                        if let decoded = decodeKnownWMProperty(propertyName: propName,
+                                                               type: typeName,
+                                                               format: parsed.format,
+                                                               data: parsed.value,
+                                                               byteOrder: byteOrder,
+                                                               ctx: ctx) {
+                            body = decoded
+                        } else {
+                            body = previewBytesRaw(parsed.value, format: parsed.format)
+                        }
+                        let after = parsed.bytesAfter == 0 ? "" : " bytesAfter=\(parsed.bytesAfter)"
+                        detail = " prop=\(propName) type=\(typeName) format=\(parsed.format)\(after) \(body)"
+                    }
+                }
+                ctx.seqToGetPropertyAtom.removeValue(forKey: seq)
             }
             if op == GetKeyboardMapping.opcode, let req = ctx.seqToGetKeyboardMapping[seq] {
                 if let parsed = try? GetKeyboardMappingReply.decode(from: r.bytes, byteOrder: byteOrder) {
@@ -1179,7 +1222,13 @@ func decodeGCFgBg(mask: UInt32, values: [UInt8], byteOrder: ByteOrder) -> String
 }
 
 func previewBytes(_ data: [UInt8], format: PropertyFormat) -> String {
-    if format == .format8 && data.count <= 64 {
+    previewBytesRaw(data, format: format.rawValue)
+}
+
+/// `format` here is the raw wire value (8/16/32) so reply paths can call
+/// it without re-deriving the enum from a request-only type.
+func previewBytesRaw(_ data: [UInt8], format: UInt8) -> String {
+    if format == 8 && data.count <= 64 {
         let s = String(decoding: data.filter { $0 >= 32 && $0 < 127 }, as: UTF8.self)
         if !s.isEmpty {
             return "data=\"\(s)\""

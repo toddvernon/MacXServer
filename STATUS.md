@@ -1,4 +1,4 @@
-# Status 2026-05-31 — keysym + modifier symbolic decode; console quieted
+# Status 2026-05-31 — keysym + modifier symbolic decode; WM-property decode; console quieted
 
 Two small landings on a Sun-less day. Both pure capture-side, no live
 verification needed.
@@ -38,6 +38,38 @@ tests; 1083/1083 total tests pass.
 Checklist (`macXcapture-feature-checklist.md`): two §3 rows moved No → Yes
 (keysym decode, modifier mask decode). Counts: 24/35/67/1 → 26/35/65/1.
 Vintage-lens gap #1 closed.
+
+**WM-property type-aware decode (vintage-lens gap #2).** Second wedge of
+the day, same pattern. The five ICCCM WM_* properties plus WM_TRANSIENT_FOR
+now decode inline on both the `ChangeProperty` request and `GetProperty`
+reply paths:
+
+- WM_NORMAL_HINTS — flags list + populated size/min/max/inc/aspect/base/
+  gravity fields (gravity rendered by name).
+- WM_HINTS — flag list, input bool, initialState name, icon refs, urgency.
+- WM_STATE — state name, icon window.
+- WM_CLASS — instance/class strings split from the NUL-terminated pair.
+- WM_PROTOCOLS — atom-name list resolved through `ctx.atomToName`.
+- WM_TRANSIENT_FOR — single window id.
+- Fallback: generic `ATOM`-typed properties get the atom-list renderer
+  even when the property name isn't in the WM_* set.
+
+Layouts in `Sources/SwiftXCaptureCore/WMProperties.swift`, ported from
+`reference/libX11/src/Xatomtype.h` and ICCCM §4. `ChronoContext` gained
+`seqToGetPropertyAtom` for request → reply pairing. New
+`previewBytesRaw(_:format:)` overload lets the reply path call the
+generic preview without an enum round-trip.
+
+Verified against the corpus: `xterm` capture shows
+`prop=WM_NORMAL_HINTS ... flags=PSize|PWinGravity PSize=484x316
+gravity=NorthWest` and `prop=WM_HINTS ... flags=Input|State input=true
+initialState=Normal`; `xedit` shows `prop=WM_PROTOCOLS ... type=ATOM
+... atoms=[WM_DELETE_WINDOW]`. 15 new unit tests; 1098/1098 total tests
+pass.
+
+Checklist §3 "Property values decoded with type awareness" row stays
+Partial (WM_* done; CARDINAL and non-WM_* STRING decoding still
+fall through to `previewBytes`). Vintage-lens gap #2 marked Closed.
 
 # Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
 
