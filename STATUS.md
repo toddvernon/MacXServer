@@ -1,4 +1,4 @@
-# Status 2026-05-31 — seven capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry, Motif properties, type-fallback) + console quieted
+# Status 2026-05-31 — eight capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry, Motif properties, type-fallback, ClientMessage payload) + console quieted
 
 Two small landings on a Sun-less day. Both pure capture-side, no live
 verification needed.
@@ -226,7 +226,28 @@ type is recognized. Replaced with a positive test for the new path.
 15 new unit tests; 1157/1157 total tests pass. Checklist §3 row
 Partial → Yes: 34/35/57/1 → 35/34/57/1.
 
-Eight commits, 54 new unit tests, no regressions, no Sun required.
+**ClientMessage payload decode.** Eighth wedge. The wire-level decoder
+for ClientMessage was already in place (type atom + window + 20-byte
+payload), but the payload bytes were opaque. Now decoded by type:
+
+- `WM_PROTOCOLS` (format=32): `protocol=WM_DELETE_WINDOW time=12345`
+  / `protocol=WM_TAKE_FOCUS time=CurrentTime`. The close-window / focus
+  handshake every Motif/CDE client uses. Resolves the protocol atom via
+  `ctx.atomToName` + predefined atoms; `time=0` → `CurrentTime`.
+- `_MOTIF_WM_MESSAGES` (format=32): renders the message code as a
+  named MWM_F_FUNCTION_* function id (24 values from MwmUtil.h), plus
+  timestamp + first argument word.
+- Generic fallback: format=32 → 5 CARD32 hex list; format=16 → 10
+  CARD16; format=8 → 20 bytes as hex tuples.
+
+No corpus capture exercises a resolved-type ClientMessage today —
+captures are short and rarely include close-window flows — so verified
+via 10 unit tests covering all branches plus the no-atom + unresolved
+cases. 1167/1167 total tests pass. Checklist counts unchanged (this
+wedge enriches the already-Yes "core events decoded" row rather than
+flipping anything).
+
+Nine commits, 64 new unit tests, no regressions, no Sun required.
 
 # Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
 

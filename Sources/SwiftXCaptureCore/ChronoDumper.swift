@@ -988,7 +988,10 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
             case .selectionNotify(let sn):
                 detail = " selection=\(atomDisplay(sn.selection, ctx: ctx)) target=\(atomDisplay(sn.target, ctx: ctx))"
             case .clientMessage(let cm):
-                detail = " window=\(windowDisplay(cm.window)) type=\(atomDisplay(cm.type, ctx: ctx)) format=\(cm.format.rawValue)"
+                let typeName = atomDisplay(cm.type, ctx: ctx)
+                let payload = decodeClientMessageData(type: typeName, format: cm.format.rawValue,
+                                                      data: cm.data, byteOrder: byteOrder, ctx: ctx)
+                detail = " window=\(windowDisplay(cm.window)) type=\(typeName) format=\(cm.format.rawValue) \(payload)"
             case .mappingNotify(let mn):
                 detail = " request=\(mn.request)"
             case .visibilityNotify(let vn):

@@ -88,6 +88,98 @@ func decodeKnownWMProperty(
     }
 }
 
+// MARK: - ClientMessage payload
+
+/// Decode a `ClientMessage`'s 20-byte payload. The payload's interpretation
+/// is by convention bound to the message's `type` atom — there's no
+/// format declaration on the wire that tells you what the bytes mean, only
+/// the type atom and a CARD8 width (8/16/32).
+///
+/// Known shapes today:
+///   `WM_PROTOCOLS` (format=32): data[0] = protocol atom, data[1] = timestamp.
+///     This is the close-window / take-focus handshake everyone uses.
+///   `_MOTIF_WM_MESSAGES` (format=32): data[0] = message code (function id).
+///   Otherwise: render the payload as a list of 5 CARD32s (format=32),
+///   10 CARD16s (format=16), or 20 bytes (format=8).
+func decodeClientMessageData(type: String, format: UInt8, data: [UInt8],
+                              byteOrder: ByteOrder, ctx: ChronoContext) -> String {
+    guard data.count == 20 else { return "data=\(data.count)b" }
+    switch (type, format) {
+    case ("WM_PROTOCOLS", 32):
+        var r = ByteReader(bytes: data, byteOrder: byteOrder)
+        let protoAtom = (try? r.readUInt32()) ?? 0
+        let timestamp = (try? r.readUInt32()) ?? 0
+        let protoName = protoAtom == 0 ? "None" : atomDisplay(protoAtom, ctx: ctx)
+        let ts = timestamp == 0 ? "CurrentTime" : "\(timestamp)"
+        return "protocol=\(protoName) time=\(ts)"
+    case ("_MOTIF_WM_MESSAGES", 32):
+        var r = ByteReader(bytes: data, byteOrder: byteOrder)
+        let messageCode = (try? r.readUInt32()) ?? 0
+        let timestamp = (try? r.readUInt32()) ?? 0
+        let arg = (try? r.readUInt32()) ?? 0
+        return "message=\(motifWMMessageName(messageCode)) time=\(timestamp) arg=\(String(format: "0x%X", arg))"
+    default:
+        return renderClientMessageRaw(format: format, data: data, byteOrder: byteOrder)
+    }
+}
+
+/// Generic dump for ClientMessage payloads not covered by a typed case.
+/// format=32 → five CARD32s, format=16 → ten CARD16s, format=8 → 20 bytes
+/// as hex tuples. Keeps the line readable when the type atom is unknown.
+private func renderClientMessageRaw(format: UInt8, data: [UInt8], byteOrder: ByteOrder) -> String {
+    var r = ByteReader(bytes: data, byteOrder: byteOrder)
+    switch format {
+    case 32:
+        var vs: [String] = []
+        for _ in 0..<5 { vs.append(String(format: "0x%X", (try? r.readUInt32()) ?? 0)) }
+        return "data=[\(vs.joined(separator: ","))]"
+    case 16:
+        var vs: [String] = []
+        for _ in 0..<10 { vs.append(String(format: "0x%X", (try? r.readUInt16()) ?? 0)) }
+        return "data=[\(vs.joined(separator: ","))]"
+    default:
+        // format=8: render as hex bytes; the bare-bytes case is rare and
+        // not specced by any protocol we care about, so this is the
+        // catch-all.
+        let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
+        return "data=\(hex)"
+    }
+}
+
+/// `_MOTIF_WM_MESSAGES` message-code names. Values from
+/// `reference/motif/lib/Xm/MwmUtil.h`. Function-id sub-protocol — the
+/// running mwm asks the client to perform a WM-side function (size, move,
+/// minimize, etc.) by posting a ClientMessage with this code.
+private func motifWMMessageName(_ code: UInt32) -> String {
+    switch code {
+    case 1: return "MWM_F_FUNCTION_HELP"
+    case 2: return "MWM_F_FUNCTION_RESTART"
+    case 3: return "MWM_F_FUNCTION_QUIT_MWM"
+    case 4: return "MWM_F_FUNCTION_LOWER"
+    case 5: return "MWM_F_FUNCTION_RAISE"
+    case 6: return "MWM_F_FUNCTION_MOVE"
+    case 7: return "MWM_F_FUNCTION_RESIZE"
+    case 8: return "MWM_F_FUNCTION_MINIMIZE"
+    case 9: return "MWM_F_FUNCTION_MAXIMIZE"
+    case 10: return "MWM_F_FUNCTION_NORMALIZE"
+    case 11: return "MWM_F_FUNCTION_RESTORE"
+    case 12: return "MWM_F_FUNCTION_KILL"
+    case 13: return "MWM_F_FUNCTION_NEXT_KEY"
+    case 14: return "MWM_F_FUNCTION_PREV_KEY"
+    case 15: return "MWM_F_FUNCTION_CIRCLE_UP"
+    case 16: return "MWM_F_FUNCTION_CIRCLE_DOWN"
+    case 17: return "MWM_F_FUNCTION_MENU"
+    case 18: return "MWM_F_FUNCTION_FOCUS_COLOR"
+    case 19: return "MWM_F_FUNCTION_FOCUS_KEY"
+    case 20: return "MWM_F_FUNCTION_EXECUTE"
+    case 21: return "MWM_F_FUNCTION_NEXT_KEY_LOCAL"
+    case 22: return "MWM_F_FUNCTION_PREV_KEY_LOCAL"
+    case 23: return "MWM_F_FUNCTION_NORMALIZE_AND_RAISE"
+    case 24: return "MWM_F_FUNCTION_NOTHING"
+    default: return "code=\(code)"
+    }
+}
+
 // MARK: - Type-driven fallback
 
 /// Decode a property body using its type atom alone. Used when the property
