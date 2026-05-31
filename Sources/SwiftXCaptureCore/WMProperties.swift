@@ -78,14 +78,136 @@ func decodeKnownWMProperty(
         guard format == 8, data.count >= 16 else { return nil }
         return decodeMotifDragReceiverInfo(data)
     default:
-        // Fallback by type, not name. Any property typed ATOM with format=32
-        // can be rendered as an atom list — covers WM_PROTOCOLS lookalikes
-        // (CDE _MOTIF_WM_HINTS_LIST etc. are similar shapes).
-        if type == "ATOM", format == 32, data.count >= 4 {
-            return decodeAtomList(data, byteOrder: byteOrder, ctx: ctx)
-        }
+        // Fallback by type, not name. Any property typed with a well-known
+        // X11 type atom decodes via its type even when the property name
+        // isn't in the WM_* / _MOTIF_* set. Covers _NET_*, _XKB_RULES_NAMES,
+        // RESOURCE_MANAGER, SM_CLIENT_ID, and the many vendor-specific
+        // properties Motif/CDE/Athena clients use that we don't enumerate.
+        return decodePropertyByType(type: type, format: format, data: data,
+                                    byteOrder: byteOrder, ctx: ctx)
+    }
+}
+
+// MARK: - Type-driven fallback
+
+/// Decode a property body using its type atom alone. Used when the property
+/// name doesn't match any WM_* / _MOTIF_* case. Returns nil when no
+/// type-specific rendering applies, so the caller falls back to
+/// `previewBytes`.
+private func decodePropertyByType(type: String, format: UInt8, data: [UInt8],
+                                   byteOrder: ByteOrder, ctx: ChronoContext) -> String? {
+    guard !data.isEmpty else { return nil }
+    switch type {
+    case "ATOM":
+        guard format == 32, data.count >= 4 else { return nil }
+        return decodeAtomList(data, byteOrder: byteOrder, ctx: ctx)
+    case "WINDOW", "PIXMAP", "COLORMAP", "CURSOR", "FONT", "DRAWABLE":
+        guard format == 32, data.count >= 4 else { return nil }
+        return decodeResourceIdList(data, byteOrder: byteOrder, label: type.lowercased())
+    case "CARDINAL":
+        return decodeIntegerList(data, format: format, byteOrder: byteOrder, signed: false)
+    case "INTEGER":
+        return decodeIntegerList(data, format: format, byteOrder: byteOrder, signed: true)
+    case "STRING", "UTF8_STRING", "COMPOUND_TEXT":
+        // Render as a quoted Latin-1 / UTF-8 string. Length cap is generous
+        // for the multi-KB cases (RESOURCE_MANAGER ~30 KB is common); the
+        // line gets long, but the reader sees the actual content.
+        guard format == 8 else { return nil }
+        return decodeStringValue(data, type: type)
+    default:
         return nil
     }
+}
+
+/// CARDINAL / INTEGER list. Format declares element width (8/16/32 bits);
+/// signed flag controls INT vs UINT rendering. Truncated to first 8
+/// elements with a `…(+N)` tail when longer.
+private func decodeIntegerList(_ data: [UInt8], format: UInt8,
+                                byteOrder: ByteOrder, signed: Bool) -> String? {
+    let width: Int
+    switch format {
+    case 8:  width = 1
+    case 16: width = 2
+    case 32: width = 4
+    default: return nil
+    }
+    let total = data.count / width
+    guard total > 0 else { return nil }
+    let shown = min(total, 8)
+    var r = ByteReader(bytes: data, byteOrder: byteOrder)
+    var nums: [String] = []
+    nums.reserveCapacity(shown)
+    for _ in 0..<shown {
+        let v: Int64
+        switch width {
+        case 1:
+            let u = (try? r.readUInt8()) ?? 0
+            v = signed ? Int64(Int8(bitPattern: u)) : Int64(u)
+        case 2:
+            let u = (try? r.readUInt16()) ?? 0
+            v = signed ? Int64(Int16(bitPattern: u)) : Int64(u)
+        default:
+            let u = (try? r.readUInt32()) ?? 0
+            v = signed ? Int64(Int32(bitPattern: u)) : Int64(u)
+        }
+        nums.append(String(v))
+    }
+    var body = nums.joined(separator: ",")
+    if total > shown { body += ",…(+\(total - shown))" }
+    let label = signed ? "ints" : "cardinals"
+    return "\(label)=[\(body)]"
+}
+
+/// Resource id list (windows, pixmaps, etc.). All format=32; render as
+/// hex with the type as label. Truncated identically to the integer list.
+private func decodeResourceIdList(_ data: [UInt8], byteOrder: ByteOrder, label: String) -> String {
+    let total = data.count / 4
+    let shown = min(total, 8)
+    var r = ByteReader(bytes: data, byteOrder: byteOrder)
+    var ids: [String] = []
+    for _ in 0..<shown {
+        let id = (try? r.readUInt32()) ?? 0
+        ids.append(id == 0 ? "None" : String(format: "0x%X", id))
+    }
+    var body = ids.joined(separator: ",")
+    if total > shown { body += ",…(+\(total - shown))" }
+    return "\(label)s=[\(body)]"
+}
+
+/// STRING / UTF8_STRING / COMPOUND_TEXT body. Renders quoted; up to
+/// 200 characters inline, then `…(N bytes total)` if longer. Newlines
+/// rendered as `\\n` so the dumper line stays single-line.
+private func decodeStringValue(_ data: [UInt8], type: String) -> String {
+    let limit = 200
+    let truncated = data.count > limit
+    let slice = truncated ? Array(data.prefix(limit)) : data
+    let raw: String
+    if type == "UTF8_STRING" {
+        raw = String(decoding: slice, as: UTF8.self)
+    } else {
+        // STRING is Latin-1 per the X11 spec; COMPOUND_TEXT is a
+        // multi-byte encoding but Latin-1-decode is acceptable for the
+        // dumper's preview (full COMPOUND_TEXT decode is a separate gap).
+        raw = String(bytes: slice, encoding: .isoLatin1) ?? ""
+    }
+    let escaped = raw.map { c -> String in
+        switch c {
+        case "\n": return "\\n"
+        case "\r": return "\\r"
+        case "\t": return "\\t"
+        case "\"": return "\\\""
+        case "\\": return "\\\\"
+        default:
+            // Control characters → `?`; otherwise keep the glyph.
+            let s = c.asciiValue ?? 0
+            if s != 0 && s < 0x20 { return "?" }
+            return String(c)
+        }
+    }.joined()
+    if truncated {
+        return "value=\"\(escaped)…\" (\(data.count) bytes)"
+    }
+    return "value=\"\(escaped)\""
 }
 
 // MARK: - WM_NORMAL_HINTS

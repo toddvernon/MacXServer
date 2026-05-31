@@ -158,9 +158,19 @@ final class WMPropertyTests: XCTestCase {
 
     // MARK: - Dispatch
 
-    func testDispatcherReturnsNilForUnknownProperty() {
-        XCTAssertNil(dispatch(name: "_NET_WM_NAME", type: "UTF8_STRING", format: 8,
-                              data: [0x68, 0x69]))
+    func testDispatcherReturnsNilForUnknownNameAndUnknownType() {
+        // Name doesn't match a WM_* / _MOTIF_* case AND type isn't in the
+        // type-driven fallback set → returns nil so caller uses previewBytes.
+        XCTAssertNil(dispatch(name: "_NET_VENDOR_BLOB", type: "VENDOR_OPAQUE",
+                              format: 32, data: [0, 0, 0, 0]))
+    }
+
+    func testDispatcherTypeFallbackHandlesUTF8String() {
+        // Confirmed Yes path after the type-fallback wedge landed: unknown
+        // name + recognized type renders via type alone.
+        XCTAssertEqual(dispatch(name: "_NET_WM_NAME", type: "UTF8_STRING",
+                                format: 8, data: [0x68, 0x69]),
+                       "value=\"hi\"")
     }
 
     func testDispatcherFallsBackToAtomListForGenericAtomType() {

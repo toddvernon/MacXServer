@@ -1,4 +1,4 @@
-# Status 2026-05-31 — six capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry, Motif properties) + console quieted
+# Status 2026-05-31 — seven capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry, Motif properties, type-fallback) + console quieted
 
 Two small landings on a Sun-less day. Both pure capture-side, no live
 verification needed.
@@ -198,7 +198,35 @@ protocol=0 style=PREFER_PREREGISTER proxy=None sites=2 heap=72`
 tests pass. No checklist count shifts — the type-aware row was already
 Partial and this extends its coverage without flipping it.
 
-Seven commits, 39 new unit tests, no regressions, no Sun required.
+**Type-driven property decode fallback.** Seventh wedge — closes the
+§3 "type-aware decoding" row from Partial → Yes. The dispatcher in
+`WMProperties.swift` gained a `decodePropertyByType` fallback that
+fires whenever the property name didn't match a WM_* / _MOTIF_* case:
+
+- **CARDINAL** / **INTEGER**: render as decimal lists (unsigned /
+  signed). Format-width-aware: 8/16/32 bits. Truncated to 8 elements
+  with `…(+N)` tail.
+- **STRING** / **UTF8_STRING** / **COMPOUND_TEXT**: render as quoted
+  text up to 200 chars (Latin-1 for STRING/COMPOUND_TEXT, UTF-8 for
+  UTF8_STRING). Newlines/CR/tab escaped; control bytes → `?`; longer
+  bodies show `…" (N bytes)` suffix.
+- **WINDOW** / **PIXMAP** / **COLORMAP** / **CURSOR** / **FONT** /
+  **DRAWABLE**: render as resource-id lists with `None` for id=0.
+- **ATOM**: already covered by `decodeAtomList`.
+
+Verified against the corpus: `RESOURCE_MANAGER` now reads as
+`value="! Reserved for resources that should apply...\n"` (truncated
+preview of the actual Xrm text) instead of `data=30567b`;
+`_MOTIF_DEFAULT_BINDINGS` shows its osfKey binding list inline;
+`WM_CLIENT_MACHINE` resolves to the hostname string.
+
+One stale test in WMPropertyTests had to be updated — its
+"unknown-property returns nil" assumption no longer holds when the
+type is recognized. Replaced with a positive test for the new path.
+15 new unit tests; 1157/1157 total tests pass. Checklist §3 row
+Partial → Yes: 34/35/57/1 → 35/34/57/1.
+
+Eight commits, 54 new unit tests, no regressions, no Sun required.
 
 # Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
 

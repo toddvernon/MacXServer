@@ -186,18 +186,21 @@ macXcapture from a useful tool into infrastructure.
       `0x22(PseudoColor d8)`. CreateWindow now also prints its depth field
       (CopyFromParent rendered by name for the depth=0 / visual=0 spec sentinels); CreateColormap
       resolves its visual through the same helper.
-- [~] Property values decoded with type awareness (STRING, UTF8_STRING, ATOM, CARDINAL, etc.) —
-      **Partial** (improved 2026-05-31). ICCCM WM_* properties decode inline on both
-      `ChangeProperty` and `GetProperty` reply paths: WM_NORMAL_HINTS, WM_HINTS, WM_STATE,
-      WM_CLASS, WM_PROTOCOLS, WM_TRANSIENT_FOR. Plus four Motif-specific properties added the
-      same day: `_MOTIF_WM_HINTS` (flags + functions + decorations + inputMode + status),
-      `_MOTIF_WM_INFO` (mwm-startup flags + wmWindow), `_MOTIF_DRAG_WINDOW` (DnD root proxy),
-      `_MOTIF_DRAG_RECEIVER_INFO` (drop-target advertisement with embedded byte_order tag).
-      Generic ATOM-typed properties fall back to the atom-list renderer so non-WM names also
-      decode. Layouts in `Sources/SwiftXCaptureCore/WMProperties.swift`, ported from
-      `reference/libX11/src/Xatomtype.h`, ICCCM §4, and `reference/motif/lib/Xm/MwmUtil.h` +
-      `DragICCI.h`. STRING / UTF8_STRING outside the named-property set still falls through to
-      `previewBytes`; CARDINAL isn't type-decoded yet.
+- [x] Property values decoded with type awareness (STRING, UTF8_STRING, ATOM, CARDINAL, etc.) —
+      **Yes** (as of 2026-05-31). Two-tier dispatch in
+      `Sources/SwiftXCaptureCore/WMProperties.swift`:
+      - **By name**: WM_NORMAL_HINTS, WM_HINTS, WM_STATE, WM_CLASS, WM_PROTOCOLS,
+        WM_TRANSIENT_FOR (ICCCM §4); `_MOTIF_WM_HINTS`, `_MOTIF_WM_INFO`,
+        `_MOTIF_DRAG_WINDOW`, `_MOTIF_DRAG_RECEIVER_INFO` (Motif).
+      - **By type, fallback**: CARDINAL / INTEGER decode by format width (8/16/32) as
+        unsigned/signed decimal lists truncated to 8 elements; STRING / UTF8_STRING /
+        COMPOUND_TEXT decode as quoted text up to 200 chars (newlines escaped, control bytes
+        rendered as `?`, truncation marked with byte total); WINDOW / PIXMAP / COLORMAP /
+        CURSOR / FONT / DRAWABLE decode as resource-id lists with `None` for id=0; ATOM
+        decodes via `ctx.atomToName` and predefined atoms.
+      Active across both `ChangeProperty` requests and `GetProperty` replies. Layouts ported
+      from `reference/libX11/src/Xatomtype.h`, ICCCM §4, and `reference/motif/lib/Xm/MwmUtil.h`
+      + `DragICCI.h`.
 
 ## 4. Protocol Decoding — Extensions
 
@@ -522,17 +525,17 @@ For each: requests + replies + events + errors decoded.
 
 ## Summary
 
-**Counts (127 items total, last updated 2026-05-31 after the Motif-
-property decode wedge — sixth wedge of the day):**
+**Counts (127 items total, last updated 2026-05-31 after the
+type-fallback wedge — seventh wedge of the day):**
 
-- **Yes**: 34
-- **Partial**: 35
+- **Yes**: 35
+- **Partial**: 34
 - **No**: 57
 - **N/A**: 1 (Linux build — explicit non-goal)
 
-(No counts shifted from this wedge — the type-aware-decoding row was
-already Partial, and the four Motif properties extend its coverage
-without flipping it. The §6 leak-detection row stays Partial as before.)
+(One row moved Partial → Yes: §3 "Property values decoded with type
+awareness". The §6 leak-detection row stays Partial — session-end
+summary lands the data but per-resource detail isn't surfaced.)
 
 _Changes since the morning audit: protocol-error highlighting moved Partial → Yes (landmark
 correlation), Resource IDs tracked moved No → Partial (LandmarkDetector window hierarchy),
