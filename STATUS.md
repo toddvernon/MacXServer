@@ -1,4 +1,4 @@
-# Status 2026-05-31 — ten capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry, Motif properties, type-fallback, ClientMessage payload, WM_COMMAND argv, reply-body decode) + console quieted
+# Status 2026-05-31 — eleven capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry, Motif properties, type-fallback, ClientMessage payload, WM_COMMAND argv, reply-body batch 1, reply-tail) + console quieted
 
 Two small landings on a Sun-less day. Both pure capture-side, no live
 verification needed.
@@ -310,7 +310,46 @@ Condensed--13-120-75-75-C-60-ISO8859-1"`; dogs capture
 …(+11)]`. 17 new unit tests + bonus end-to-end round-trip through
 `formatServerMessage` for every decoder. 1189/1189 total tests pass.
 
-Eleven commits, 86 new unit tests, no regressions, no Sun required.
+**Reply-tail: the remaining 16 reply decoders.** Eleventh wedge. With
+the most-frequent batch covered in the previous commit, this wedge
+closes the §3 "All core replies decoded" row — Partial → Yes —
+by wiring the rest:
+
+- `ListProperties` — atom list per window, resolved via atom table.
+- `ListFonts` — font name list (cap 4 with tail count).
+- `ListFontsWithInfo` — per-font metadata with end-of-list marker.
+- `GetFontPath` — server's font-search dirs.
+- `ListExtensions` — extension catalog.
+- `ListInstalledColormaps` — installed cmap stack.
+- `ListHosts` — access-control list + enabled flag.
+- `GetImage` — depth + visual + pixel-byte count.
+- `GetKeyboardControl` — autoRepeat + LED mask + bell params.
+- `GetPointerControl` — acceleration ratio + threshold.
+- `GetPointerMapping` — button id remap.
+- `GetScreenSaver` — timeout + interval + blanking prefs.
+- `QueryKeymap` — count of keys currently held down.
+- `QueryTextExtents` — overall width + ascent/descent + direction.
+- `LookupColor` — exact + visual RGB triples.
+- `SetModifierMapping` / `SetPointerMapping` — status enum
+  (Success/Busy/Failed).
+
+Verified against the corpus: `Reply (LookupColor) exact=(0,255,255)
+visual=(0,255,255)` (cyan), `Reply (GetImage) depth=8 visual=
+0x22(PseudoColor d8) bytes=4096`, `Reply (ListProperties) atoms=
+[WM_STATE,WM_PROTOCOLS,0x98,…,WM_CLASS,WM_HINTS,WM_NORMAL_HINTS,…(+4)]`.
+
+The only reply-producing opcodes that stay bare are AllocColorCells /
+AllocColorPlanes (no framer decoder — rarely-used cmap-allocation
+patterns) and GetMotionEvents (framer assumes nEvents=0 by design).
+**33 of 33 viable reply-producing opcodes now render rich detail.**
+
+18 new tests via end-to-end round-trip through formatServerMessage
+(35 cases in ReplyDecodeTests total now). 1207/1207 total tests pass.
+
+Checklist §3 "All core replies decoded" Partial → Yes:
+35/34/57/1 → 36/33/57/1.
+
+Twelve commits, 104 new unit tests, no regressions, no Sun required.
 
 # Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
 

@@ -1052,6 +1052,148 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
                     detail = " best=\(sz(parsed.width, parsed.height))"
                 }
             }
+            // ListProperties: array of atom ids on a window. Resolve via
+            // atom table when known.
+            if op == ListProperties.opcode {
+                if let parsed = try? ListPropertiesReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let total = parsed.atoms.count
+                    let shown = min(total, 8)
+                    let names = parsed.atoms.prefix(shown).map { atomDisplay($0, ctx: ctx) }
+                    var body = names.joined(separator: ",")
+                    if total > shown { body += ",…(+\(total - shown))" }
+                    detail = " atoms=[\(body)]"
+                }
+            }
+            // ListFonts: array of font name strings. STR8s ≤ 255 chars each;
+            // truncate the list at 4 since font lists are commonly large.
+            if op == ListFonts.opcode {
+                if let parsed = try? ListFontsReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let total = parsed.names.count
+                    let shown = min(total, 4)
+                    let names = parsed.names.prefix(shown).map { "\"" + String(decoding: $0, as: UTF8.self) + "\"" }
+                    var body = names.joined(separator: ",")
+                    if total > shown { body += ",…(+\(total - shown))" }
+                    detail = " count=\(total) names=[\(body)]"
+                }
+            }
+            // ListFontsWithInfo: returns one reply per matched font plus a
+            // final empty-name terminator. Surface the name + ascent/descent.
+            if op == ListFontsWithInfo.opcode {
+                if let parsed = try? ListFontsWithInfoReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    if parsed.name.isEmpty {
+                        detail = " (end of list)"
+                    } else {
+                        let name = String(decoding: parsed.name, as: UTF8.self)
+                        detail = " name=\"\(name)\" ascent/descent=\(parsed.fontAscent)/\(parsed.fontDescent)"
+                    }
+                }
+            }
+            // GetFontPath: array of directory strings the server searches.
+            if op == GetFontPath.opcode {
+                if let parsed = try? GetFontPathReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let total = parsed.path.count
+                    let shown = min(total, 4)
+                    let dirs = parsed.path.prefix(shown).map { "\"\($0)\"" }
+                    var body = dirs.joined(separator: ",")
+                    if total > shown { body += ",…(+\(total - shown))" }
+                    detail = " path=[\(body)]"
+                }
+            }
+            // ListExtensions: array of extension name strings.
+            if op == ListExtensions.opcode {
+                if let parsed = try? ListExtensionsReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let names = parsed.names.map { String(decoding: $0, as: UTF8.self) }
+                    detail = " count=\(names.count) names=[\(names.joined(separator: ","))]"
+                }
+            }
+            // ListInstalledColormaps: array of colormap ids in install order.
+            if op == ListInstalledColormaps.opcode {
+                if let parsed = try? ListInstalledColormapsReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let cmaps = parsed.colormaps.map { String(format: "0x%X", $0) }
+                    detail = " colormaps=[\(cmaps.joined(separator: ","))]"
+                }
+            }
+            // ListHosts: access-control list + enabled flag.
+            if op == ListHosts.opcode {
+                if let parsed = try? ListHostsReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    detail = " enabled=\(parsed.enabled) hosts=\(parsed.hosts.count)"
+                }
+            }
+            // GetImage: raw pixel data. Just surface size + depth + visual;
+            // the actual pixels are too big to inline.
+            if op == GetImage.opcode {
+                if let parsed = try? GetImageReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    detail = " depth=\(parsed.depth) visual=\(visualDisplay(parsed.visual, ctx: ctx)) bytes=\(parsed.imageData.count)"
+                }
+            }
+            // GetKeyboardControl: per-keyboard settings. The autoRepeats
+            // bitmap is 256 bits dense; report on/off only.
+            if op == GetKeyboardControl.opcode {
+                if let parsed = try? GetKeyboardControlReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    detail = " autoRepeat=\(parsed.globalAutoRepeat) ledMask=\(hx(parsed.ledMask)) keyClick=\(parsed.keyClickPercent)% bell=\(parsed.bellPercent)%@\(parsed.bellPitch)Hz/\(parsed.bellDuration)ms"
+                }
+            }
+            // GetPointerControl: acceleration ratio + threshold pixels.
+            if op == GetPointerControl.opcode {
+                if let parsed = try? GetPointerControlReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    detail = " accel=\(parsed.accelerationNumerator)/\(parsed.accelerationDenominator) threshold=\(parsed.threshold)"
+                }
+            }
+            // GetPointerMapping: button id → logical button mapping. Empty
+            // map keeps server default (typically [1,2,3] for left/middle/right).
+            if op == GetPointerMapping.opcode {
+                if let parsed = try? GetPointerMappingReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let body = parsed.map.map { String($0) }.joined(separator: ",")
+                    detail = " map=[\(body)]"
+                }
+            }
+            // GetScreenSaver: blanking + auto-screensaver settings.
+            if op == GetScreenSaver.opcode {
+                if let parsed = try? GetScreenSaverReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    detail = " timeout=\(parsed.timeout)s interval=\(parsed.interval)s preferBlanking=\(parsed.preferBlanking) allowExposures=\(parsed.allowExposures)"
+                }
+            }
+            // QueryKeymap: 256-bit dense bitmap of currently-down keys; count
+            // the set bits so the reader sees "how many keys are pressed"
+            // without us inlining a 256-bit string.
+            if op == QueryKeymap.opcode {
+                if let parsed = try? QueryKeymapReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let down = parsed.keys.reduce(0) { $0 + $1.nonzeroBitCount }
+                    detail = " keysDown=\(down)"
+                }
+            }
+            // QueryTextExtents: surface the overall width plus ascent/descent.
+            // The font/overall extents are what callers (xlsfonts, xfontsel)
+            // actually use; left/right are typically the same magnitudes.
+            if op == QueryTextExtents.opcode {
+                if let parsed = try? QueryTextExtentsReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let dir = parsed.drawDirection == 0 ? "LtoR" : "RtoL"
+                    detail = " width=\(parsed.overallWidth) ascent/descent=\(parsed.overallAscent)/\(parsed.overallDescent) dir=\(dir)"
+                }
+            }
+            // LookupColor: client asked for a color by name. The exact /
+            // visual triples diverge when the visual class can't represent
+            // the requested color precisely (8-bit PseudoColor with a full
+            // colormap, say).
+            if op == LookupColor.opcode {
+                if let parsed = try? LookupColorReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    detail = " exact=(\(parsed.exactRed >> 8),\(parsed.exactGreen >> 8),\(parsed.exactBlue >> 8)) visual=(\(parsed.visualRed >> 8),\(parsed.visualGreen >> 8),\(parsed.visualBlue >> 8))"
+                }
+            }
+            // SetModifierMapping / SetPointerMapping replies — both share
+            // SetMappingReply, status byte only.
+            if op == SetModifierMapping.opcode || op == SetPointerMapping.opcode {
+                if let parsed = try? SetMappingReply.decode(from: r.bytes, byteOrder: byteOrder) {
+                    let name: String
+                    switch parsed.status {
+                    case 0: name = "Success"
+                    case 1: name = "Busy"
+                    case 2: name = "Failed"
+                    default: name = "status=\(parsed.status)"
+                    }
+                    detail = " status=\(name)"
+                }
+            }
             if op == GetKeyboardMapping.opcode, let req = ctx.seqToGetKeyboardMapping[seq] {
                 if let parsed = try? GetKeyboardMappingReply.decode(from: r.bytes, byteOrder: byteOrder) {
                     ctx.installKeysyms(firstKeycode: req.firstKeycode,

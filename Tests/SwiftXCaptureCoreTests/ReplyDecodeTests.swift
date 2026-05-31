@@ -198,6 +198,197 @@ final class ReplyDecodeTests: XCTestCase {
         XCTAssertTrue(s.contains("best=32x32"), s)
     }
 
+    // MARK: - ListProperties (op 21)
+
+    func testListProperties() {
+        let bytes = ListPropertiesReply(sequenceNumber: 7, atoms: [39, 35, 0x84]).encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: ListProperties.opcode) { ctx in
+            ctx.atomToName[0x84] = "_NET_WM_STATE"
+        }
+        // 39 = WM_NAME (predefined), 35 = WM_HINTS (predefined), 0x84 = interned.
+        XCTAssertTrue(s.contains("atoms=[WM_NAME,WM_HINTS,_NET_WM_STATE]"), s)
+    }
+
+    // MARK: - ListFonts (op 49)
+
+    func testListFontsTruncation() {
+        let names = (0..<10).map { Array("font\($0)".utf8) }
+        let bytes = ListFontsReply(sequenceNumber: 7, names: names).encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: ListFonts.opcode)
+        XCTAssertTrue(s.contains("count=10 names=[\"font0\",\"font1\",\"font2\",\"font3\",…(+6)]"), s)
+    }
+
+    // MARK: - ListFontsWithInfo (op 50)
+
+    func testListFontsWithInfoEntry() {
+        let zeroCI = CharInfo(leftSideBearing: 0, rightSideBearing: 0,
+                              characterWidth: 0, ascent: 0, descent: 0, attributes: 0)
+        let entry = ListFontsWithInfoReply(
+            sequenceNumber: 7,
+            name: Array("fixed".utf8),
+            minBounds: zeroCI, maxBounds: zeroCI,
+            minCharOrByte2: 0, maxCharOrByte2: 0, defaultChar: 0,
+            drawDirection: .leftToRight, minByte1: 0, maxByte1: 0,
+            allCharsExist: false, fontAscent: 10, fontDescent: 3,
+            repliesHint: 1, properties: [])
+        let bytes = entry.encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: ListFontsWithInfo.opcode)
+        XCTAssertTrue(s.contains("name=\"fixed\" ascent/descent=10/3"), s)
+    }
+
+    func testListFontsWithInfoTerminator() {
+        let zeroCI = CharInfo(leftSideBearing: 0, rightSideBearing: 0,
+                              characterWidth: 0, ascent: 0, descent: 0, attributes: 0)
+        let term = ListFontsWithInfoReply(
+            sequenceNumber: 7, name: [],
+            minBounds: zeroCI, maxBounds: zeroCI,
+            minCharOrByte2: 0, maxCharOrByte2: 0, defaultChar: 0,
+            drawDirection: .leftToRight, minByte1: 0, maxByte1: 0,
+            allCharsExist: false, fontAscent: 0, fontDescent: 0,
+            repliesHint: 0, properties: [])
+        let bytes = term.encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: ListFontsWithInfo.opcode)
+        XCTAssertTrue(s.contains("(end of list)"), s)
+    }
+
+    // MARK: - GetFontPath (op 52)
+
+    func testGetFontPath() {
+        let bytes = GetFontPathReply(sequenceNumber: 7, path: ["/usr/X11/fonts/75dpi", "/usr/X11/fonts/100dpi"])
+            .encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: GetFontPath.opcode)
+        XCTAssertTrue(s.contains("path=[\"/usr/X11/fonts/75dpi\",\"/usr/X11/fonts/100dpi\"]"), s)
+    }
+
+    // MARK: - ListExtensions (op 99)
+
+    func testListExtensions() {
+        let names = [Array("SHAPE".utf8), Array("RENDER".utf8), Array("MIT-SHM".utf8)]
+        let bytes = ListExtensionsReply(sequenceNumber: 7, names: names).encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: ListExtensions.opcode)
+        XCTAssertTrue(s.contains("count=3 names=[SHAPE,RENDER,MIT-SHM]"), s)
+    }
+
+    // MARK: - ListInstalledColormaps (op 83)
+
+    func testListInstalledColormaps() {
+        let bytes = ListInstalledColormapsReply(sequenceNumber: 7, colormaps: [0x20, 0x21])
+            .encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: ListInstalledColormaps.opcode)
+        XCTAssertTrue(s.contains("colormaps=[0x20,0x21]"), s)
+    }
+
+    // MARK: - ListHosts (op 110)
+
+    func testListHostsEmptyAndDisabled() {
+        let bytes = ListHostsReply(sequenceNumber: 7, enabled: false, hosts: [])
+            .encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: ListHosts.opcode)
+        XCTAssertTrue(s.contains("enabled=false hosts=0"), s)
+    }
+
+    // MARK: - GetImage (op 73)
+
+    func testGetImage() {
+        let bytes = GetImageReply(sequenceNumber: 7, depth: 8, visual: 0x22,
+                                   imageData: Array(repeating: 0, count: 4096))
+            .encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: GetImage.opcode) { ctx in
+            ctx.visualCatalog[0x22] = VisualCatalogEntry(
+                depth: 8, visualClass: .pseudoColor, bitsPerRgbValue: 8, screenIndex: 0)
+        }
+        XCTAssertTrue(s.contains("depth=8 visual=0x22(PseudoColor d8) bytes=4096"), s)
+    }
+
+    // MARK: - GetKeyboardControl (op 103)
+
+    func testGetKeyboardControl() {
+        let bytes = GetKeyboardControlReply(
+            sequenceNumber: 7, globalAutoRepeat: true, ledMask: 0,
+            keyClickPercent: 0, bellPercent: 50, bellPitch: 400, bellDuration: 100,
+            autoRepeats: Array(repeating: 0, count: 32)).encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: GetKeyboardControl.opcode)
+        XCTAssertTrue(s.contains("autoRepeat=true ledMask=0x0 keyClick=0% bell=50%@400Hz/100ms"), s)
+    }
+
+    // MARK: - GetPointerControl (op 105)
+
+    func testGetPointerControl() {
+        let bytes = GetPointerControlReply(sequenceNumber: 7, accelerationNumerator: 2,
+                                            accelerationDenominator: 1, threshold: 4)
+            .encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: GetPointerControl.opcode)
+        XCTAssertTrue(s.contains("accel=2/1 threshold=4"), s)
+    }
+
+    // MARK: - GetPointerMapping (op 116)
+
+    func testGetPointerMapping() {
+        let bytes = GetPointerMappingReply(sequenceNumber: 7, map: [1, 2, 3])
+            .encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: GetPointerMapping.opcode)
+        XCTAssertTrue(s.contains("map=[1,2,3]"), s)
+    }
+
+    // MARK: - GetScreenSaver (op 108)
+
+    func testGetScreenSaver() {
+        let bytes = GetScreenSaverReply(sequenceNumber: 7, timeout: 600, interval: 600,
+                                         preferBlanking: 1, allowExposures: 0)
+            .encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: GetScreenSaver.opcode)
+        XCTAssertTrue(s.contains("timeout=600s interval=600s preferBlanking=1 allowExposures=0"), s)
+    }
+
+    // MARK: - QueryKeymap (op 44)
+
+    func testQueryKeymap() {
+        // 32-byte bitmap: 0xFF in slots 5 and 6 = 16 bits set.
+        var keys = Array<UInt8>(repeating: 0, count: 32)
+        keys[5] = 0xFF
+        keys[6] = 0xFF
+        let bytes = QueryKeymapReply(sequenceNumber: 7, keys: keys).encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: QueryKeymap.opcode)
+        XCTAssertTrue(s.contains("keysDown=16"), s)
+    }
+
+    // MARK: - QueryTextExtents (op 48)
+
+    func testQueryTextExtents() {
+        let bytes = QueryTextExtentsReply(sequenceNumber: 7, drawDirection: 0,
+                                           fontAscent: 12, fontDescent: 3,
+                                           overallAscent: 12, overallDescent: 3,
+                                           overallWidth: 84, overallLeft: 0, overallRight: 84)
+            .encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: QueryTextExtents.opcode)
+        XCTAssertTrue(s.contains("width=84 ascent/descent=12/3 dir=LtoR"), s)
+    }
+
+    // MARK: - LookupColor (op 92)
+
+    func testLookupColor() {
+        let bytes = LookupColorReply(sequenceNumber: 7,
+                                      exactRed: 0x0000, exactGreen: 0xFFFF, exactBlue: 0xFFFF,
+                                      visualRed: 0x0000, visualGreen: 0xFFFF, visualBlue: 0xFFFF)
+            .encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: LookupColor.opcode)
+        XCTAssertTrue(s.contains("exact=(0,255,255) visual=(0,255,255)"), s)
+    }
+
+    // MARK: - SetModifierMapping / SetPointerMapping (ops 118 / 117)
+
+    func testSetMappingSuccess() {
+        let bytes = SetMappingReply(sequenceNumber: 7, status: 0).encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: SetModifierMapping.opcode)
+        XCTAssertTrue(s.contains("status=Success"), s)
+    }
+
+    func testSetMappingBusy() {
+        let bytes = SetMappingReply(sequenceNumber: 7, status: 1).encode(byteOrder: .msbFirst)
+        let s = render(bytes, opcode: SetPointerMapping.opcode)
+        XCTAssertTrue(s.contains("status=Busy"), s)
+    }
+
     // MARK: - Helpers
 
     /// Hand-rolled encoder for GetWindowAttributesReply because the existing

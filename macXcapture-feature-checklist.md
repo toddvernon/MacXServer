@@ -129,20 +129,22 @@ macXcapture from a useful tool into infrastructure.
       structs + dumper lines. `Sources/Framer/Requests/Request.swift` (enum) +
       `Sources/SwiftXCaptureCore/ChronoDumper.swift:291` `formatRequest`. Per
       `OPCODE_STATUS.md:201`, Phase 1 closed the 16 audited gaps 2026-05-29.
-- [~] All core replies decoded — **Partial** (substantially improved 2026-05-31). All
-      reply-producing opcodes have typed reply **decoders** in `Sources/Framer/Replies/` (39
-      files). The dumper's reply-body **printing** now covers 17 opcodes with rich detail:
-      InternAtom, QueryExtension, QueryFont, AllocColor, AllocNamedColor (the original 5);
-      GetProperty + GetKeyboardMapping (added with the keysym/property wedges earlier this day);
-      GetInputFocus, GetAtomName, GetGeometry, QueryTree, GetWindowAttributes, QueryColors,
-      GetModifierMapping, GrabPointer, GrabKeyboard, GetSelectionOwner, QueryPointer,
-      TranslateCoordinates, QueryBestSize (this wedge). The 10 added this wedge cover
-      ~3300 reply lines across the corpus. ~12 reply-producing opcodes still print as bare
-      `Reply (opName)` — the longer-tail / less-common ones (ListProperties, ListFonts,
-      ListFontsWithInfo, GetMotionEvents, GetFontPath, GetPointerControl, GetKeyboardControl,
-      GetScreenSaver, GetPointerMapping, AllocColorCells, AllocColorPlanes, ListHosts,
-      ListInstalledColormaps, ListExtensions, LookupColor). GetAtomName's reply also feeds
-      ctx.atomToName in reverse (the inverse of InternAtom-populated entries).
+- [x] All core replies decoded — **Yes** (as of 2026-05-31). 33 of 33 reply-producing
+      opcodes render rich detail through `formatServerMessage`'s seq-keyed dispatch. Coverage
+      grew across the day from 5 → 7 (mid-day keysym + property wedges) → 17 (the
+      most-frequent batch) → 33 (this wedge closes the remainder). Decoders span the full
+      surface: InternAtom, QueryExtension, QueryFont, AllocColor, AllocNamedColor, GetProperty,
+      GetKeyboardMapping, GetInputFocus, GetAtomName, GetGeometry, QueryTree,
+      GetWindowAttributes, QueryColors, GetModifierMapping, GrabPointer, GrabKeyboard,
+      GetSelectionOwner, QueryPointer, TranslateCoordinates, QueryBestSize, ListProperties,
+      ListFonts, ListFontsWithInfo, GetFontPath, ListExtensions, ListInstalledColormaps,
+      ListHosts, GetImage, GetKeyboardControl, GetPointerControl, GetPointerMapping,
+      GetScreenSaver, QueryKeymap, QueryTextExtents, LookupColor, SetModifierMapping,
+      SetPointerMapping. GetAtomName also reverse-populates `ctx.atomToName`. The only
+      reply-producing opcodes that don't have a typed framer decoder are
+      `AllocColorCells` and `AllocColorPlanes` (rarely-used 8-bit-colormap allocation
+      patterns); `GetMotionEvents` stays bare because our framer's reply struct assumes
+      nEvents=0 by design.
 - [x] All core events decoded — **Yes**. 33 of 33 core events have typed decoders.
       `Sources/Framer/Events/` covers Input/Window/Selection/Misc + Phase1Events.swift (the 5 added
       2026-05-30). Dumper detail at `ChronoDumper.swift:637-696`. Per `OPCODE_STATUS.md:204`.
@@ -535,16 +537,17 @@ For each: requests + replies + events + errors decoded.
 ## Summary
 
 **Counts (127 items total, last updated 2026-05-31 after the
-type-fallback wedge — seventh wedge of the day):**
+reply-tail wedge — twelfth wedge of the day):**
 
-- **Yes**: 35
-- **Partial**: 34
+- **Yes**: 36
+- **Partial**: 33
 - **No**: 57
 - **N/A**: 1 (Linux build — explicit non-goal)
 
-(One row moved Partial → Yes: §3 "Property values decoded with type
-awareness". The §6 leak-detection row stays Partial — session-end
-summary lands the data but per-resource detail isn't surfaced.)
+(§3 "All core replies decoded" moved Partial → Yes — 33 of 33
+reply-producing opcodes now have rich detail. The §6 leak-detection
+row stays Partial — session-end summary lands the data but
+per-resource detail isn't surfaced.)
 
 _Changes since the morning audit: protocol-error highlighting moved Partial → Yes (landmark
 correlation), Resource IDs tracked moved No → Partial (LandmarkDetector window hierarchy),
