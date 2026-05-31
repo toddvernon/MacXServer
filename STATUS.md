@@ -1,4 +1,4 @@
-# Status 2026-05-31 — keysym decode; WM-property decode; visual catalog; console quieted
+# Status 2026-05-31 — keysym; WM-property; visual catalog; XC-MISC/XTEST/RECORD; console quieted
 
 Two small landings on a Sun-less day. Both pure capture-side, no live
 verification needed.
@@ -92,9 +92,36 @@ visual rather than picking one explicitly. 5 new unit tests; 1103/1103
 total tests pass.
 
 Checklist row §3 "Visual and depth references resolved" moved No → Yes
-(27/35/64/1). Vintage-lens gap #3 marked Closed. Three of the top-5
-vintage-lens readability gaps closed in one day; gaps #4 (XTEST/RECORD/
-XC-MISC) and #5 (resource lineage) remain.
+(27/35/64/1). Vintage-lens gap #3 marked Closed.
+
+**XC-MISC / XTEST / RECORD extension decoders (vintage-lens gap #4).**
+Fourth wedge of the day. Three new `ExtensionDumper` implementations
+registered in `ExtensionDumperRegistry.builtins`:
+
+- `XcMiscDumper` — three requests (GetVersion, GetXIDRange, GetXIDList).
+  Layouts from `reference/X11R6/xc/include/extensions/xcmiscstr.h`.
+- `XTestDumper` — four requests (GetVersion, CompareCursor, FakeInput,
+  GrabControl). FakeInput is the meaty one — synthesized input event:
+  the `detail` field is labeled per `type` (keycode for Key*,
+  button for Button*, absolute/relative for MotionNotify). Layouts from
+  `reference/xproto/include/X11/extensions/xtestproto.h`.
+- `RecordDumper` — all eight context-management requests. Trailing
+  variable-length CLIENTSPEC and RECORDRANGE lists surface as counts
+  only; per-element walks deferred. Layouts from
+  `/opt/X11/include/X11/extensions/recordproto.h`.
+
+No corpus capture exercises any of these (they're for external
+captures: input-injection rigs, macro-recording tools, long-running
+sessions that exhaust the resource-id pool). Verified via 15 new unit
+tests in `Tier4ExtensionTests.swift` — both byte orders, every minor
+opcode shape covered. 1118/1118 total tests pass.
+
+Checklist §4: XC-MISC + XTEST + RECORD all No → Yes. Counts:
+27/35/64/1 → 30/35/61/1. Vintage-lens gap #4 marked Closed. Four of
+the top-5 vintage-lens readability gaps closed in one Sun-less day;
+only #5 (resource lineage — architectural, requires promoting
+`LandmarkDetector`'s internal window registry to a public
+`ResourceRegistry`) remains.
 
 # Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
 

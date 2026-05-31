@@ -195,8 +195,12 @@ For each: requests + replies + events + errors decoded.
 - [x] BIG-REQUESTS — **Yes**. `Sources/SwiftXCaptureCore/Extensions/BigRequestsDumper.swift`,
       `Sources/Framer/Requests/BigRequests.swift`, `Sources/Framer/Replies/BigReqEnableReply.swift`.
       1 request, 1 reply, 0 events — complete per `OPCODE_STATUS.md:270`.
-- [ ] XC-MISC — **No**. Not in `ExtensionDumperRegistry.builtins`. Would degrade to `XC-MISC
-      opcode=N minor=M (undecoded)`.
+- [x] XC-MISC — **Yes** (as of 2026-05-31).
+      `Sources/SwiftXCaptureCore/Extensions/XcMiscDumper.swift`. Three requests (GetVersion,
+      GetXIDRange, GetXIDList) decoded; replies handled by the seq-keyed reply path. Layouts
+      from `reference/X11R6/xc/include/extensions/xcmiscstr.h`. No corpus capture exercises
+      it (XC-MISC only fires on resource-ID-pool exhaustion); unit-tested in
+      `Tests/SwiftXCaptureCoreTests/Tier4ExtensionTests.swift`.
 - [x] SHAPE — **Yes**. `Sources/SwiftXCaptureCore/Extensions/ShapeDumper.swift` (reference impl for
       the registry pattern, migrated 2026-05-30). Requests + ShapeNotify event + replies in
       `Sources/Framer/Requests/ShapeRequests.swift`, `Replies/ShapeReplies.swift`,
@@ -231,9 +235,20 @@ For each: requests + replies + events + errors decoded.
 - [ ] GLX (at least request/reply structure; opaque GL bytecode acknowledged) — **No**. Not in
       registry.
 - [ ] DPMS — **No**. Not in registry.
-- [ ] XTEST — **No**. Not in registry. Notable gap for anyone doing input-injection automation
-      captures.
-- [ ] RECORD — **No**. Not in registry.
+- [x] XTEST — **Yes** (as of 2026-05-31).
+      `Sources/SwiftXCaptureCore/Extensions/XTestDumper.swift`. Four requests decoded:
+      `GetVersion`, `CompareCursor`, `FakeInput` (type/detail/time/root/rootX-Y/deviceId — the
+      detail field labeled per synthesized event type: keycode for Key*, button for Button*,
+      absolute/relative for MotionNotify), `GrabControl`. Replies routed through the seq-keyed
+      reply path. Layouts from
+      `reference/xproto/include/X11/extensions/xtestproto.h`.
+- [x] RECORD — **Yes** (as of 2026-05-31).
+      `Sources/SwiftXCaptureCore/Extensions/RecordDumper.swift`. All eight requests decoded
+      (QueryVersion, CreateContext, RegisterClients, UnregisterClients, GetContext,
+      EnableContext, DisableContext, FreeContext). The two requests carrying trailing
+      LISTofCLIENTSPEC + LISTofRECORDRANGE surface the counts inline; per-element nested walk
+      deferred. Replies routed through the seq-keyed reply path. Layouts from
+      `/opt/X11/include/X11/extensions/recordproto.h`.
 - [ ] SECURITY — **No**. Not in registry.
 - [ ] XINERAMA — **No**. Not in registry.
 - [ ] XF86VidMode — **No**. Not in registry.
@@ -490,12 +505,12 @@ For each: requests + replies + events + errors decoded.
 
 ## Summary
 
-**Counts (127 items total, last updated 2026-05-31 after the visual
-catalog wedge landed — third wedge of the day):**
+**Counts (127 items total, last updated 2026-05-31 after the
+XC-MISC/XTEST/RECORD wedge landed — fourth wedge of the day):**
 
-- **Yes**: 27
+- **Yes**: 30
 - **Partial**: 35
-- **No**: 64
+- **No**: 61
 - **N/A**: 1 (Linux build — explicit non-goal)
 
 (The §3 type-aware-decoding row stays Partial because CARDINAL and
@@ -620,7 +635,15 @@ score, it's which No rows actually matter.
    captures from the corpus — `visual=0x22(PseudoColor d8)` reads in place of the old
    `visual=0x22`. CreatePixmap's depth field is still a raw integer (it's a drawable
    property, not a visual lookup), so left as-is.
-4. **XTEST + RECORD + XC-MISC decoders (§4).** These are the genuinely vintage gaps in §4 (the
+4. ~~**XTEST + RECORD + XC-MISC decoders (§4).**~~ **Closed 2026-05-31.** Three new
+   `ExtensionDumper` implementations registered. XC-MISC's three requests decoded; XTEST's
+   four including the synthesized-input FakeInput payload; RECORD's eight including the
+   context-management chain. No corpus capture exercises any of them yet — they're for
+   external captures (input-injection rigs, macro-recording tools, long-running sessions
+   that exhaust the resource-id pool). Unit-tested only.
+
+   _Original gap description preserved for citation:_ These were the genuinely vintage
+   gaps in §4 (the
    actually-era-correct extensions, as distinct from the modern Tier-2 list). XTEST is what every
    input-injection test rig for vintage X uses, and a capture taken during automated UI tests is
    undecodable without it. XC-MISC is a tiny 4-request extension; the cost is low. RECORD is what

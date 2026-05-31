@@ -56,6 +56,9 @@ public enum ExtensionDumperRegistry {
         XkbDumper.extensionName: XkbDumper.self,
         XInputDumper.extensionName: XInputDumper.self,
         RenderDumper.extensionName: RenderDumper.self,
+        XcMiscDumper.extensionName: XcMiscDumper.self,
+        XTestDumper.extensionName: XTestDumper.self,
+        RecordDumper.extensionName: RecordDumper.self,
     ]
 
     public static func decoder(forName name: String) -> ExtensionDumper.Type? {
