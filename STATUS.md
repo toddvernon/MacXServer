@@ -1,4 +1,4 @@
-# Status 2026-05-31 — five capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry) + console quieted
+# Status 2026-05-31 — six capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry, Motif properties) + console quieted
 
 Two small landings on a Sun-less day. Both pure capture-side, no live
 verification needed.
@@ -163,8 +163,42 @@ lands, per-resource detail still missing); §6 "Use-after-free detection"
 No → Yes. Counts: 30/35/61/1 → 34/35/57/1. Vintage-lens gap #5 Closed.
 
 **All five top-5 vintage-lens readability gaps closed in one Sun-less
-day.** Plus the console-quiet server wedge from this morning. Six
-commits, 28 new unit tests, no regressions, no Sun required.
+day.** Plus the console-quiet server wedge from this morning.
+
+**Bonus: `_MOTIF_*` property decoders.** With the top-5 closed, picked
+the highest-leverage *purely vintage* follow-up: four Motif-specific
+property decoders that no modern audience cares about but every vintage
+CDE/Motif client sets at realize time. Wired into the existing
+`decodeKnownWMProperty` dispatcher in `WMProperties.swift`:
+
+- `_MOTIF_WM_HINTS` — flags + functions + decorations + inputMode +
+  status. Layout from `reference/motif/lib/Xm/MwmUtil.h`
+  `PropMotifWmHints`. The mwm/dtwm communication channel; every Motif
+  top-level uses it.
+- `_MOTIF_WM_INFO` — mwm-startup flags + wmWindow id. Layout same
+  header. Published by the running window manager on the root.
+- `_MOTIF_DRAG_WINDOW` — single WINDOW id, the DnD root-window proxy.
+  Reuses the existing `decodeSingleWindow` path.
+- `_MOTIF_DRAG_RECEIVER_INFO` — 16-byte header for a drop target.
+  Layout from `reference/motif/lib/Xm/DragICCI.h`
+  `xmDragReceiverInfoStruct`. Has an embedded `byte_order` byte ('l'/
+  'B') that overrides the X11 connection's endianness — Motif's DnD
+  properties are self-describing so any client can read them
+  regardless of its own byte order. Decoder honors this.
+
+Plus the `_MWM_*` alias variants (`_MWM_HINTS`, `_MWM_INFO`) — the
+Motif source uses both spellings interchangeably.
+
+Verified against the corpus: dogs/motifanim/fileview etc. now render
+`prop=_MOTIF_DRAG_WINDOW ... window=0x2400001` (proxy resolution),
+`prop=_MOTIF_WM_HINTS ... flags=INPUT_MODE inputMode=MODELESS`
+(non-modal dialog), `prop=_MOTIF_DRAG_RECEIVER_INFO ... endian=msb
+protocol=0 style=PREFER_PREREGISTER proxy=None sites=2 heap=72`
+(fileview as a 2-site drop target). 11 new unit tests; 1141/1141 total
+tests pass. No checklist count shifts — the type-aware row was already
+Partial and this extends its coverage without flipping it.
+
+Seven commits, 39 new unit tests, no regressions, no Sun required.
 
 # Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
 

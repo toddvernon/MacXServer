@@ -51,6 +51,32 @@ func decodeKnownWMProperty(
     case "WM_TRANSIENT_FOR":
         guard format == 32, data.count >= 4 else { return nil }
         return decodeSingleWindow(data, byteOrder: byteOrder)
+    case "_MOTIF_WM_HINTS", "_MWM_HINTS":
+        // Motif-specific WM hints. 5 CARD32 elements; layout from
+        // reference/motif/lib/Xm/MwmUtil.h `PropMotifWmHints`. Every
+        // Motif client writes this at realize time so mwm/dtwm knows
+        // which decorations + functions to expose.
+        guard format == 32, !data.isEmpty else { return nil }
+        return decodeMotifWMHints(data, byteOrder: byteOrder)
+    case "_MOTIF_WM_INFO", "_MWM_INFO":
+        // Set by the running mwm on the root window. Tells clients which
+        // window the WM listens on for ICCCM-style messages.
+        guard format == 32, !data.isEmpty else { return nil }
+        return decodeMotifWMInfo(data, byteOrder: byteOrder)
+    case "_MOTIF_DRAG_WINDOW":
+        // Set on the root by the first Motif client to bootstrap drag-and-drop.
+        // A single CARD32 WINDOW id — the proxy window every DnD-aware client
+        // reads to find each other.
+        guard format == 32, data.count >= 4 else { return nil }
+        return decodeSingleWindow(data, byteOrder: byteOrder)
+    case "_MOTIF_DRAG_RECEIVER_INFO":
+        // Drop-target advertisement, set on every widget that accepts drops.
+        // Wire layout from reference/motif/lib/Xm/DragICCI.h
+        // `xmDragReceiverInfoStruct`. The first byte is an embedded
+        // byte_order tag ('l'/'B') — Motif's DnD properties carry their
+        // own endianness independent of the X11 connection. Honor it here.
+        guard format == 8, data.count >= 16 else { return nil }
+        return decodeMotifDragReceiverInfo(data)
     default:
         // Fallback by type, not name. Any property typed ATOM with format=32
         // can be rendered as an atom list — covers WM_PROTOCOLS lookalikes
@@ -278,6 +304,144 @@ private func decodeSingleWindow(_ data: [UInt8], byteOrder: ByteOrder) -> String
     var r = ByteReader(bytes: data, byteOrder: byteOrder)
     guard let id = try? r.readUInt32() else { return "data=\(data.count)b (truncated)" }
     return "window=\(hexId(id))"
+}
+
+// MARK: - _MOTIF_WM_HINTS
+
+/// 5 CARD32s: flags, functions, decorations, inputMode, status. Bit
+/// definitions from `MwmUtil.h`. The interesting fields are gated by the
+/// flags bitfield — we still render the gated value when its flag bit is
+/// set, omit otherwise. Most apps only flip a subset (typical Motif
+/// dialog: flags=DECORATIONS, decorations=BORDER|TITLE).
+private func decodeMotifWMHints(_ data: [UInt8], byteOrder: ByteOrder) -> String {
+    var r = ByteReader(bytes: data, byteOrder: byteOrder)
+    guard let flags = try? r.readUInt32() else { return "data=\(data.count)b (truncated)" }
+    let functions = (try? r.readUInt32()) ?? 0
+    let decorations = (try? r.readUInt32()) ?? 0
+    let inputMode = (try? r.readUInt32()).map { Int32(bitPattern: $0) } ?? 0
+    let status = (try? r.readUInt32()) ?? 0
+
+    var parts: [String] = ["flags=\(formatMwmHintFlags(flags))"]
+    if flags & 0x1 != 0 { parts.append("functions=\(formatMwmFunctions(functions))") }
+    if flags & 0x2 != 0 { parts.append("decorations=\(formatMwmDecorations(decorations))") }
+    if flags & 0x4 != 0 { parts.append("inputMode=\(mwmInputModeName(inputMode))") }
+    if flags & 0x8 != 0 { parts.append("status=\(formatMwmStatus(status))") }
+    return parts.joined(separator: " ")
+}
+
+private func formatMwmHintFlags(_ flags: UInt32) -> String {
+    let bits: [(UInt32, String)] = [
+        (0x1, "FUNCTIONS"), (0x2, "DECORATIONS"),
+        (0x4, "INPUT_MODE"), (0x8, "STATUS"),
+    ]
+    return mwmBitString(flags, bits: bits)
+}
+
+private func formatMwmFunctions(_ v: UInt32) -> String {
+    let bits: [(UInt32, String)] = [
+        (0x01, "ALL"), (0x02, "RESIZE"), (0x04, "MOVE"),
+        (0x08, "MINIMIZE"), (0x10, "MAXIMIZE"), (0x20, "CLOSE"),
+    ]
+    return mwmBitString(v, bits: bits)
+}
+
+private func formatMwmDecorations(_ v: UInt32) -> String {
+    let bits: [(UInt32, String)] = [
+        (0x01, "ALL"), (0x02, "BORDER"), (0x04, "RESIZEH"),
+        (0x08, "TITLE"), (0x10, "MENU"), (0x20, "MINIMIZE"), (0x40, "MAXIMIZE"),
+    ]
+    return mwmBitString(v, bits: bits)
+}
+
+private func formatMwmStatus(_ v: UInt32) -> String {
+    let bits: [(UInt32, String)] = [(0x1, "TEAROFF_WINDOW")]
+    return mwmBitString(v, bits: bits)
+}
+
+private func mwmBitString(_ v: UInt32, bits: [(UInt32, String)]) -> String {
+    if v == 0 { return "0" }
+    var consumed: UInt32 = 0
+    var parts: [String] = []
+    for (bit, name) in bits where v & bit != 0 {
+        parts.append(name)
+        consumed |= bit
+    }
+    let leftover = v & ~consumed
+    if leftover != 0 { parts.append(String(format: "0x%X", leftover)) }
+    return parts.joined(separator: "|")
+}
+
+private func mwmInputModeName(_ v: Int32) -> String {
+    switch v {
+    case 0: return "MODELESS"
+    case 1: return "PRIMARY_APPLICATION_MODAL"
+    case 2: return "SYSTEM_MODAL"
+    case 3: return "FULL_APPLICATION_MODAL"
+    default: return String(format: "0x%X", v)
+    }
+}
+
+// MARK: - _MOTIF_WM_INFO
+
+/// 2 CARD32s set by the running window manager on the root window:
+/// flags + wmWindow id. The flags signal whether mwm started in standard
+/// or customized mode; wmWindow is the listener window for ICCCM-style
+/// WM communication.
+private func decodeMotifWMInfo(_ data: [UInt8], byteOrder: ByteOrder) -> String {
+    var r = ByteReader(bytes: data, byteOrder: byteOrder)
+    guard let flags = try? r.readUInt32() else { return "data=\(data.count)b (truncated)" }
+    let wmWindow = (try? r.readUInt32()) ?? 0
+    let bits: [(UInt32, String)] = [
+        (0x1, "STARTUP_STANDARD"), (0x2, "STARTUP_CUSTOM"),
+    ]
+    return "flags=\(mwmBitString(flags, bits: bits)) wmWindow=\(hexId(wmWindow))"
+}
+
+// MARK: - _MOTIF_DRAG_RECEIVER_INFO
+
+/// 16-byte header for a drop-receiver advertisement. The first byte
+/// declares the body's endianness ('l' lsb / 'B' msb) independently of
+/// the X11 connection — Motif's DnD properties are self-describing this
+/// way so the receiver can post the property once and have any client
+/// (regardless of its own byte order) read it back. We honor that and
+/// read CARD16/CARD32 trailing fields per the embedded tag.
+///
+/// Layout per reference/motif/lib/Xm/DragICCI.h `xmDragReceiverInfoStruct`:
+///   byte_order(1) protocol_version(1) drag_protocol_style(1) pad(1)
+///   proxy_window(4) num_drop_sites(2) pad(2) heap_offset(4)
+private func decodeMotifDragReceiverInfo(_ data: [UInt8]) -> String {
+    let byteOrderTag = data[0]
+    let bo: ByteOrder = (byteOrderTag == UInt8(ascii: "l")) ? .lsbFirst : .msbFirst
+    let protocolVersion = data[1]
+    let dragStyle = data[2]
+
+    var r = ByteReader(bytes: data, byteOrder: bo, offset: 4)
+    let proxyWindow = (try? r.readUInt32()) ?? 0
+    let nDropSites = (try? r.readUInt16()) ?? 0
+    _ = try? r.readUInt16()
+    let heapOffset = (try? r.readUInt32()) ?? 0
+
+    let tag: String
+    switch byteOrderTag {
+    case UInt8(ascii: "l"): tag = "lsb"
+    case UInt8(ascii: "B"): tag = "msb"
+    default: tag = String(format: "0x%X", byteOrderTag)
+    }
+    return "endian=\(tag) protocol=\(protocolVersion) style=\(motifDragStyleName(dragStyle)) proxy=\(hexId(proxyWindow)) sites=\(nDropSites) heap=\(heapOffset)"
+}
+
+/// XmDRAG_* enum from reference/motif/lib/Xm/Display.h. Values 0..6.
+private func motifDragStyleName(_ v: UInt8) -> String {
+    switch v {
+    case 0: return "NONE"
+    case 1: return "DROP_ONLY"
+    case 2: return "PREFER_PREREGISTER"
+    case 3: return "PREREGISTER"
+    case 4: return "PREFER_DYNAMIC"
+    case 5: return "DYNAMIC"
+    case 6: return "PREFER_RECEIVER"
+    default: return "style=\(v)"
+    }
 }
 
 // MARK: - Helpers

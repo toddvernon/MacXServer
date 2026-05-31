@@ -187,15 +187,17 @@ macXcapture from a useful tool into infrastructure.
       (CopyFromParent rendered by name for the depth=0 / visual=0 spec sentinels); CreateColormap
       resolves its visual through the same helper.
 - [~] Property values decoded with type awareness (STRING, UTF8_STRING, ATOM, CARDINAL, etc.) —
-      **Partial** (improved 2026-05-31). The ICCCM WM_* properties now decode inline on both the
-      `ChangeProperty` request path and the `GetProperty` reply path:
-      WM_NORMAL_HINTS (flags + populated fields, gravity name); WM_HINTS (flag list, input,
-      initial state, urgency); WM_STATE (state name, icon window); WM_CLASS (instance + class
-      strings); WM_PROTOCOLS (atom-name list via `ctx.atomToName`); WM_TRANSIENT_FOR. Generic
-      ATOM-typed properties fall back to the atom-list renderer so non-WM names also decode.
-      Layouts in `Sources/SwiftXCaptureCore/WMProperties.swift`, ported from
-      `reference/libX11/src/Xatomtype.h` and ICCCM §4. STRING / UTF8_STRING outside the WM_*
-      set still falls through to `previewBytes`; CARDINAL isn't type-decoded yet.
+      **Partial** (improved 2026-05-31). ICCCM WM_* properties decode inline on both
+      `ChangeProperty` and `GetProperty` reply paths: WM_NORMAL_HINTS, WM_HINTS, WM_STATE,
+      WM_CLASS, WM_PROTOCOLS, WM_TRANSIENT_FOR. Plus four Motif-specific properties added the
+      same day: `_MOTIF_WM_HINTS` (flags + functions + decorations + inputMode + status),
+      `_MOTIF_WM_INFO` (mwm-startup flags + wmWindow), `_MOTIF_DRAG_WINDOW` (DnD root proxy),
+      `_MOTIF_DRAG_RECEIVER_INFO` (drop-target advertisement with embedded byte_order tag).
+      Generic ATOM-typed properties fall back to the atom-list renderer so non-WM names also
+      decode. Layouts in `Sources/SwiftXCaptureCore/WMProperties.swift`, ported from
+      `reference/libX11/src/Xatomtype.h`, ICCCM §4, and `reference/motif/lib/Xm/MwmUtil.h` +
+      `DragICCI.h`. STRING / UTF8_STRING outside the named-property set still falls through to
+      `previewBytes`; CARDINAL isn't type-decoded yet.
 
 ## 4. Protocol Decoding — Extensions
 
@@ -520,18 +522,17 @@ For each: requests + replies + events + errors decoded.
 
 ## Summary
 
-**Counts (127 items total, last updated 2026-05-31 after the resource
-registry / lineage wedge landed — fifth wedge of the day):**
+**Counts (127 items total, last updated 2026-05-31 after the Motif-
+property decode wedge — sixth wedge of the day):**
 
 - **Yes**: 34
 - **Partial**: 35
 - **No**: 57
 - **N/A**: 1 (Linux build — explicit non-goal)
 
-(The §3 type-aware-decoding row stays Partial because CARDINAL and
-non-WM_* STRING/UTF8_STRING decoding still aren't typed; only WM_* moved.
-The §6 leak-detection row also stays Partial — session-end summary lands
-the data but per-resource detail isn't surfaced.)
+(No counts shifted from this wedge — the type-aware-decoding row was
+already Partial, and the four Motif properties extend its coverage
+without flipping it. The §6 leak-detection row stays Partial as before.)
 
 _Changes since the morning audit: protocol-error highlighting moved Partial → Yes (landmark
 correlation), Resource IDs tracked moved No → Partial (LandmarkDetector window hierarchy),
