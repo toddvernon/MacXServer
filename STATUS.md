@@ -1,4 +1,4 @@
-# Status 2026-05-31 — eleven capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry, Motif properties, type-fallback, ClientMessage payload, WM_COMMAND argv, reply-body batch 1, reply-tail) + console quieted
+# Status 2026-05-31 — twelve capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry, Motif properties, type-fallback, ClientMessage payload, WM_COMMAND argv, reply-body batch 1, reply-tail, session-mgmt naming) + console quieted
 
 Two small landings on a Sun-less day. Both pure capture-side, no live
 verification needed.
@@ -349,7 +349,25 @@ patterns) and GetMotionEvents (framer assumes nEvents=0 by design).
 Checklist §3 "All core replies decoded" Partial → Yes:
 35/34/57/1 → 36/33/57/1.
 
-Twelve commits, 104 new unit tests, no regressions, no Sun required.
+**SM_CLIENT_ID + WM_CLIENT_LEADER + WM_COLORMAP_WINDOWS named
+decoders.** Twelfth wedge — completes the remaining ICCCM
+session-management property surface. These three all decoded
+adequately via the type-fallback path already, but the named cases
+add light contextual labeling:
+
+- `SM_CLIENT_ID` (STRING, format=8) → `smId="<uuid-string>"` instead
+  of the generic `value="..."`.
+- `WM_CLIENT_LEADER` (WINDOW, format=32) → `leader=0x2400001` instead
+  of the generic `windows=[0x2400001]`.
+- `WM_COLORMAP_WINDOWS` (WINDOW list, format=32) →
+  `colormapWindows=[0x..,..]` (capped at 8).
+
+No corpus capture sets these in our short sessions (session-mgmt is
+mostly absent from short-replay traces). 4 new unit tests; 1211/1211
+total tests pass. No checklist count shift — these add naming polish
+on top of the already-Yes type-aware-decoding row.
+
+Thirteen commits, 108 new unit tests, no regressions, no Sun required.
 
 # Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
 

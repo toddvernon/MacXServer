@@ -182,6 +182,40 @@ final class WMPropertyTests: XCTestCase {
         XCTAssertNil(dispatch(name: "WM_COMMAND", type: "STRING", format: 32, data: [0, 0, 0, 0]))
     }
 
+    // MARK: - WM_CLIENT_LEADER
+
+    func testWMClientLeader() {
+        let bo: ByteOrder = .msbFirst
+        XCTAssertEqual(dispatch(name: "WM_CLIENT_LEADER", type: "WINDOW",
+                                data: u32(0x2400001, bo), byteOrder: bo),
+                       "leader=0x2400001")
+    }
+
+    func testWMClientLeaderNone() {
+        let bo: ByteOrder = .msbFirst
+        XCTAssertEqual(dispatch(name: "WM_CLIENT_LEADER", type: "WINDOW",
+                                data: u32(0, bo), byteOrder: bo),
+                       "leader=None")
+    }
+
+    // MARK: - SM_CLIENT_ID
+
+    func testSMClientID() {
+        let data = Array("11d6ae5d-1cc0-1000-8e8b-f73e6d3b4f97".utf8)
+        XCTAssertEqual(dispatch(name: "SM_CLIENT_ID", type: "STRING", format: 8, data: data),
+                       "smId=\"11d6ae5d-1cc0-1000-8e8b-f73e6d3b4f97\"")
+    }
+
+    // MARK: - WM_COLORMAP_WINDOWS
+
+    func testWMColormapWindows() {
+        let bo: ByteOrder = .msbFirst
+        let data = u32(0x2800001, bo) + u32(0x2800002, bo)
+        XCTAssertEqual(dispatch(name: "WM_COLORMAP_WINDOWS", type: "WINDOW",
+                                data: data, byteOrder: bo),
+                       "colormapWindows=[0x2800001,0x2800002]")
+    }
+
     // MARK: - WM_TRANSIENT_FOR
 
     func testWMTransientFor() {

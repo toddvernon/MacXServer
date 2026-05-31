@@ -58,6 +58,40 @@ func decodeKnownWMProperty(
         // render as a quoted list so the reader can see the exec line.
         guard format == 8 else { return nil }
         return decodeWMCommand(data)
+    case "WM_CLIENT_LEADER":
+        // ICCCM §4.1.2.8. Format=32, type WINDOW. Single window id —
+        // the client-leader window for session-management coordination.
+        // A WM_CLIENT_LEADER on the leader window points to itself.
+        guard format == 32, data.count >= 4 else { return nil }
+        var r = ByteReader(bytes: data, byteOrder: byteOrder)
+        guard let id = try? r.readUInt32() else { return nil }
+        return "leader=\(id == 0 ? "None" : String(format: "0x%X", id))"
+    case "SM_CLIENT_ID":
+        // ICCCM §5.3 + X11R6 SMlib. Format=8, type STRING. The session
+        // identifier the client obtained from the SM protocol; clients
+        // re-register with it across login sessions to restore state.
+        // Typically a 36-character UUID-ish string. We label it `smId`
+        // so the reader can distinguish it from generic STRING fallback.
+        guard format == 8 else { return nil }
+        let raw = String(bytes: data, encoding: .isoLatin1) ?? ""
+        // SM client ids are printable ASCII; render verbatim.
+        return "smId=\"\(raw)\""
+    case "WM_COLORMAP_WINDOWS":
+        // ICCCM §4.1.2.8. Format=32, type WINDOW. Ordered list of
+        // windows that have non-default colormaps; the WM uses this to
+        // pick which colormap to install when one of these gets focus.
+        guard format == 32, data.count >= 4 else { return nil }
+        var r = ByteReader(bytes: data, byteOrder: byteOrder)
+        let total = data.count / 4
+        let shown = min(total, 8)
+        var ids: [String] = []
+        for _ in 0..<shown {
+            let id = (try? r.readUInt32()) ?? 0
+            ids.append(id == 0 ? "None" : String(format: "0x%X", id))
+        }
+        var body = ids.joined(separator: ",")
+        if total > shown { body += ",…(+\(total - shown))" }
+        return "colormapWindows=[\(body)]"
     case "_MOTIF_WM_HINTS", "_MWM_HINTS":
         // Motif-specific WM hints. 5 CARD32 elements; layout from
         // reference/motif/lib/Xm/MwmUtil.h `PropMotifWmHints`. Every
