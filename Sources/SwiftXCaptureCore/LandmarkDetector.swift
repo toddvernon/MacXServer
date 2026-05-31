@@ -48,6 +48,18 @@ public struct LandmarkDetector: Sendable {
         var emittedMapLandmark: Bool = false
         var name: String?
         var emittedNameLandmark: Bool = false
+        // Additional identity properties harvested from ChangeProperty by
+        // afterRequest. Populated as the toolkit sets each property at
+        // realize time (Xt typically sets WM_CLASS / WM_COMMAND /
+        // WM_CLIENT_MACHINE before WM_NAME, so they're available when
+        // the identify landmark fires).
+        var wmClassClass: String?          // the `class` field of WM_CLASS
+        var wmClientMachine: String?       // hostname
+        var wmCommand: [String]?           // argv elements
+        // _MOTIF_WM_HINTS.inputMode if the client set the INPUT_MODE flag.
+        // Values per MwmUtil.h: 0=MODELESS, 1=PRIMARY_APPLICATION_MODAL,
+        // 2=SYSTEM_MODAL, 3=FULL_APPLICATION_MODAL.
+        var motifInputMode: UInt32?
     }
 
     private struct PendingPress {
@@ -55,6 +67,7 @@ public struct LandmarkDetector: Sendable {
         var time: UInt32
         var eventX: Int16
         var eventY: Int16
+        var state: UInt16       // modifier mask at press time
     }
 
     // Windows created with parent == root, by wid.
@@ -88,6 +101,16 @@ public struct LandmarkDetector: Sendable {
     // when the client follows the hide with a destroy (the common Motif
     // pattern: unmap dialog, then destroy its resources).
     private var hideEmittedFor: Set<UInt32> = []
+    // Latest text drawn into each window via ImageText8 / PolyText8 /
+    // ImageText16 / PolyText16. Used to attach a button label to click
+    // landmarks: the toolkit draws each widget's label directly into the
+    // widget's window, so the latest text on the clicked window is almost
+    // always its label (vintage Motif/Xaw aren't double-buffered).
+    private var windowText: [UInt32: String] = [:]
+    // Length cap above which we don't treat captured text as a label.
+    // Long strings are typically text-area contents (xterm output,
+    // editor buffers), not widget labels.
+    private let labelLengthCap = 24
 
     /// Two ButtonPress+ButtonRelease events farther apart than this are NOT
     /// treated as a click. 500ms matches the typical OS double-click threshold
@@ -122,15 +145,26 @@ public struct LandmarkDetector: Sendable {
                 primaryEmitted = true
                 out.append(Landmark(mapLandmarkText(
                     windowId: r.window, name: top.name,
-                    width: top.width, height: top.height, isPrimary: isPrimary
+                    width: top.width, height: top.height, isPrimary: isPrimary,
+                    wmClass: top.wmClassClass,
+                    wmHost: top.wmClientMachine,
+                    wmCommand: top.wmCommand
                 )))
             }
             if let parent = transientFor[r.window] {
                 let size = topLevels[r.window].map { "\($0.width)×\($0.height)" } ?? "size unknown"
                 let parentName = topLevels[parent]?.name
                 let above = parentName.map { "\"\($0)\"" } ?? "window \(hexId(parent))"
+                // Inputmode 1=PRIMARY_APP_MODAL, 2=SYSTEM_MODAL,
+                // 3=FULL_APP_MODAL all warrant the "modal " prefix.
+                // 0=MODELESS is the explicit "non-modal" declaration.
+                let modalPrefix: String
+                switch topLevels[r.window]?.motifInputMode {
+                case 1, 2, 3: modalPrefix = "modal "
+                default: modalPrefix = ""
+                }
                 out.append(Landmark(
-                    "# A dialog opens above \(above) " +
+                    "# A \(modalPrefix)dialog opens above \(above) " +
                     "(\(hexId(r.window)), \(size))"
                 ))
             }
@@ -198,6 +232,11 @@ public struct LandmarkDetector: Sendable {
                 let alreadyMapped = mappedWindows.contains(r.window)
                 let isFirst = !firstIdentifyEmitted
                 firstIdentifyEmitted = true
+                // The identify landmark fires here at WM_NAME time. Most
+                // Xt toolkits set WM_NAME *before* WM_CLASS / WM_COMMAND /
+                // WM_CLIENT_MACHINE, so by-design those aren't available
+                // yet; we surface them in the map landmark instead, which
+                // fires after the toolkit's full property burst has landed.
                 return [Landmark(identifyLandmarkText(
                     windowId: r.window, name: name,
                     width: top.width, height: top.height,
@@ -210,11 +249,70 @@ public struct LandmarkDetector: Sendable {
                 let parent = readUInt32LE(r.data, byteOrder: byteOrder)
                 transientFor[r.window] = parent
             }
+            // Identity-enriching properties for top-levels. Each gets
+            // tucked onto the TopLevel entry if one exists, so the
+            // identify landmark can pick them up when WM_NAME fires.
+            // Order-tolerant: clients set these in varying sequence.
+            if propName == "WM_CLASS" && r.format.rawValue == 8 && topLevels[r.window] != nil {
+                let parts = parseWMClassPair(r.data)
+                topLevels[r.window]?.wmClassClass = parts.cls
+            }
+            if propName == "WM_CLIENT_MACHINE" && r.format.rawValue == 8 && topLevels[r.window] != nil {
+                let host = String(bytes: r.data.prefix(while: { $0 != 0 }), encoding: .isoLatin1) ?? ""
+                if !host.isEmpty { topLevels[r.window]?.wmClientMachine = host }
+            }
+            if propName == "WM_COMMAND" && r.format.rawValue == 8 && topLevels[r.window] != nil {
+                let argv = parseNULSeparatedStrings(r.data)
+                if !argv.isEmpty { topLevels[r.window]?.wmCommand = argv }
+            }
+            if (propName == "_MOTIF_WM_HINTS" || propName == "_MWM_HINTS")
+                && r.format.rawValue == 32 && r.data.count >= 20
+                && topLevels[r.window] != nil {
+                // Layout per MwmUtil.h: flags, functions, decorations,
+                // inputMode, status — 5 CARD32s. Only honor inputMode
+                // when the INPUT_MODE flag bit (0x4) is set.
+                let flags = readCARD32(r.data, offset: 0, byteOrder: byteOrder)
+                if flags & 0x4 != 0 {
+                    topLevels[r.window]?.motifInputMode = readCARD32(r.data, offset: 12, byteOrder: byteOrder)
+                }
+            }
+            return []
+
+        // Text-drawing requests: cache the most recent text drawn into
+        // each window for the click landmark's button-label lookup. We
+        // only watch direct draws to a known window — pixmap-targeted
+        // text belongs to a different flow (double-buffered widgets are
+        // rare in vintage X anyway).
+        case .imageText8(let r):
+            captureWindowText(drawableId: r.drawable,
+                              text: String(bytes: r.string, encoding: .isoLatin1) ?? "")
+            return []
+        case .polyText8(let r):
+            captureWindowText(drawableId: r.drawable,
+                              text: extractPolyText8(items: r.items))
+            return []
+        case .imageText16(let r):
+            captureWindowText(drawableId: r.drawable,
+                              text: decodeChars16(r.characters))
+            return []
+        case .polyText16(let r):
+            captureWindowText(drawableId: r.drawable,
+                              text: extractPolyText16(items: r.items, byteOrder: byteOrder))
             return []
 
         default:
             return []
         }
+    }
+
+    /// Update the per-window text cache when we see a text-drawing
+    /// request. Drops the entry when the drawable isn't a known window
+    /// (it's a pixmap, or a window we never observed CreateWindow on).
+    /// Idle no-op for empty strings.
+    private mutating func captureWindowText(drawableId: UInt32, text: String) {
+        guard !text.isEmpty else { return }
+        guard parents[drawableId] != nil || topLevels[drawableId] != nil else { return }
+        windowText[drawableId] = text
     }
 
     /// Feed a decoded server-to-client message to the detector. Currently
@@ -241,7 +339,8 @@ public struct LandmarkDetector: Sendable {
             }
             pendingPresses[ie.event] = PendingPress(
                 button: ie.detail, time: ie.time,
-                eventX: ie.eventX, eventY: ie.eventY
+                eventX: ie.eventX, eventY: ie.eventY,
+                state: ie.state
             )
             return []
         case 5:  // ButtonRelease
@@ -261,10 +360,19 @@ public struct LandmarkDetector: Sendable {
             guard let ref = resolveReference(for: ie.event, screenRoots: screenRoots) else {
                 return []
             }
+            let label = windowText[ie.event].flatMap { text -> String? in
+                guard !text.isEmpty, text.count <= labelLengthCap else { return nil }
+                // Trim and collapse whitespace so multi-line strings on a
+                // single window don't read as awkward labels.
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
             return [Landmark(clickLandmarkText(
                 ref: ref, button: pp.button,
                 x: pp.eventX, y: pp.eventY,
-                clickedWindowId: ie.event
+                clickedWindowId: ie.event,
+                modifiers: pp.state,
+                buttonLabel: label
             ))]
         default:
             return []
@@ -481,8 +589,29 @@ private func hideOrCloseText(action: HideOrCloseAction,
 
 private func clickLandmarkText(ref: LandmarkDetector.WindowReference,
                                 button: UInt8, x: Int16, y: Int16,
-                                clickedWindowId: UInt32) -> String {
-    let verb = button == 1 ? "clicks" : "clicks button \(button)"
+                                clickedWindowId: UInt32,
+                                modifiers: UInt16 = 0,
+                                buttonLabel: String? = nil) -> String {
+    // Modifier prefix: "Shift-", "Ctrl-", "Shift+Ctrl-" etc. The keyboard
+    // bits we care about live in the low 8 bits (Shift/Lock/Ctrl/Mod1..5);
+    // pointer-button bits (Button1..5 at 0x100..0x1000) are noise here
+    // since the originating ButtonPress always has its own button bit set.
+    let keyboardBits = modifiers & 0x00FF
+    let modPrefix: String
+    if keyboardBits == 0 {
+        modPrefix = ""
+    } else {
+        // Reuse the dumper's symbolic decoder, then transform "Shift|Ctrl"
+        // into "Shift+Ctrl-" hyphen-suffix form ("Ctrl-click" reads better
+        // than "Ctrl|clicks").
+        let hyphenated = modifierMaskString(keyboardBits).replacingOccurrences(of: "|", with: "+")
+        modPrefix = "\(hyphenated)-"
+    }
+    let verb = button == 1 ? "\(modPrefix)clicks" : "\(modPrefix)clicks button \(button)"
+    // Label phrase: when the clicked window has a recently-drawn short
+    // text, prefer it to the bare hex id ("on \"OK\"" instead of "on a
+    // child"). Falls through to the existing phrasing otherwise.
+    let labelPhrase = buttonLabel.map { "\"\($0)\"" }
     switch ref {
     case .root:
         return "# The user \(verb) on the desktop at (\(x),\(y))"
@@ -492,6 +621,14 @@ private func clickLandmarkText(ref: LandmarkDetector.WindowReference,
         }
         return "# The user \(verb) on an unnamed top-level (\(hexId(id))) at (\(x),\(y))"
     case .child(_, let topName, _, let cw, let ch):
+        // Prefer the label when available — "clicks on \"OK\" in
+        // \"Save?\"" reads as a workflow event, not a geometry note.
+        if let label = labelPhrase, let n = topName {
+            return "# The user \(verb) on \(label) in \"\(n)\" at (\(x),\(y))"
+        }
+        if let label = labelPhrase {
+            return "# The user \(verb) on \(label) inside an unnamed top-level at (\(x),\(y))"
+        }
         let sizePhrase: String
         if cw > 0 && ch > 0 {
             sizePhrase = "a \(cw)×\(ch) child"
@@ -550,17 +687,43 @@ private func identifyLandmarkText(windowId: UInt32, name: String,
         "\(size), \(hexId(windowId))). Not yet visible on screen."
 }
 
+/// Build the comma-separated provenance clause appended to the identify
+/// landmark. Empty when nothing is known. Each fragment is gated on its
+/// own data being present, so a client that sets only WM_CLASS still
+/// gets `(XTerm class)` without us inventing a host or argv.
+private func provenanceSuffix(wmClass: String?, wmHost: String?, wmCommand: [String]?) -> String {
+    var parts: [String] = []
+    if let cls = wmClass, !cls.isEmpty { parts.append("\(cls) class") }
+    if let host = wmHost, !host.isEmpty { parts.append("host \"\(host)\"") }
+    if let argv = wmCommand, !argv.isEmpty {
+        let joined = argv.joined(separator: " ")
+        // Cap the argv preview at ~60 chars to keep landmark lines from
+        // bloating when a vintage app launched with a long path.
+        let preview = joined.count > 60 ? String(joined.prefix(57)) + "…" : joined
+        parts.append("launched as `\(preview)`")
+    }
+    return parts.isEmpty ? "" : ", \(parts.joined(separator: ", "))"
+}
+
 private func mapLandmarkText(windowId: UInt32, name: String?,
                               width: UInt16, height: UInt16,
-                              isPrimary: Bool) -> String {
+                              isPrimary: Bool,
+                              wmClass: String? = nil,
+                              wmHost: String? = nil,
+                              wmCommand: [String]? = nil) -> String {
     let size = "\(width)×\(height)"
+    // Provenance suffix lands here (rather than on identify) because Xt
+    // sets WM_NAME first in its property-burst; the class / host / argv
+    // properties arrive *after* WM_NAME but before MapWindow, so the
+    // map landmark is the first emission point where they're all known.
+    let provenance = provenanceSuffix(wmClass: wmClass, wmHost: wmHost, wmCommand: wmCommand)
     if let n = name {
-        return "# The \"\(n)\" window appears on screen (\(hexId(windowId)), \(size))"
+        return "# The \"\(n)\" window appears on screen (\(hexId(windowId)), \(size)\(provenance))"
     }
     if isPrimary {
-        return "# A top-level window appears on screen (\(hexId(windowId)), \(size))"
+        return "# A top-level window appears on screen (\(hexId(windowId)), \(size)\(provenance))"
     }
-    return "# Another top-level window appears on screen (\(hexId(windowId)), \(size))"
+    return "# Another top-level window appears on screen (\(hexId(windowId)), \(size)\(provenance))"
 }
 
 private func readUInt32LE(_ b: [UInt8], byteOrder: ByteOrder) -> UInt32 {
@@ -572,6 +735,134 @@ private func readUInt32LE(_ b: [UInt8], byteOrder: ByteOrder) -> UInt32 {
     case .lsbFirst: return (e << 24) | (d << 16) | (c << 8) | a
     case .msbFirst: return (a << 24) | (c << 16) | (d << 8) | e
     }
+}
+
+/// Read a CARD32 at the given offset in `b`, respecting connection byte
+/// order. Caller must ensure offset+4 ≤ b.count.
+private func readCARD32(_ b: [UInt8], offset: Int, byteOrder: ByteOrder) -> UInt32 {
+    let a = UInt32(b[offset])
+    let c = UInt32(b[offset + 1])
+    let d = UInt32(b[offset + 2])
+    let e = UInt32(b[offset + 3])
+    switch byteOrder {
+    case .lsbFirst: return (e << 24) | (d << 16) | (c << 8) | a
+    case .msbFirst: return (a << 24) | (c << 16) | (d << 8) | e
+    }
+}
+
+/// Parse a WM_CLASS pair: two NUL-terminated 8-bit strings, instance
+/// then class. Tolerant of a missing trailing NUL on the class field —
+/// some clients omit it. Returns nil for either field when not present.
+private struct WMClassPair { let instance: String?; let cls: String? }
+private func parseWMClassPair(_ data: [UInt8]) -> WMClassPair {
+    var pieces: [String] = []
+    var current: [UInt8] = []
+    for b in data {
+        if b == 0 {
+            pieces.append(String(bytes: current, encoding: .isoLatin1) ?? "")
+            current.removeAll(keepingCapacity: true)
+            if pieces.count == 2 { break }
+        } else if b >= 0x20 {
+            current.append(b)
+        }
+    }
+    if !current.isEmpty, pieces.count < 2 {
+        pieces.append(String(bytes: current, encoding: .isoLatin1) ?? "")
+    }
+    let instance = pieces.indices.contains(0) && !pieces[0].isEmpty ? pieces[0] : nil
+    let cls = pieces.indices.contains(1) && !pieces[1].isEmpty ? pieces[1] : nil
+    return WMClassPair(instance: instance, cls: cls)
+}
+
+/// Split a NUL-terminated argv-style blob into Latin-1 strings. Used for
+/// WM_COMMAND.
+private func parseNULSeparatedStrings(_ data: [UInt8]) -> [String] {
+    var out: [String] = []
+    var current: [UInt8] = []
+    for b in data {
+        if b == 0 {
+            if !current.isEmpty {
+                out.append(String(bytes: current, encoding: .isoLatin1) ?? "")
+                current.removeAll(keepingCapacity: true)
+            }
+        } else {
+            current.append(b)
+        }
+    }
+    if !current.isEmpty {
+        out.append(String(bytes: current, encoding: .isoLatin1) ?? "")
+    }
+    return out
+}
+
+/// Walk a PolyText8 `items` buffer per X11 §8.7.6 and concatenate the
+/// glyph-run bytes into a Latin-1 string. Skips font-set indicators
+/// (length byte == 0xFF) since they don't carry visible text. Tolerant
+/// of a truncated final record — bails out cleanly.
+private func extractPolyText8(items: [UInt8]) -> String {
+    var i = 0
+    var bytes: [UInt8] = []
+    while i < items.count {
+        let n = items[i]
+        if n == 0xFF {
+            // Font-set indicator: 1 marker byte + 4 font-id bytes.
+            i += 5
+            continue
+        }
+        if n == 0 {
+            // Empty run: zero glyphs follow. Length byte alone moves us
+            // forward (no delta, no glyph bytes per spec ambiguity —
+            // most encoders skip emitting these entirely).
+            i += 1
+            continue
+        }
+        let count = Int(n)
+        // 1 length byte + 1 delta byte + count glyph bytes.
+        if i + 2 + count > items.count { break }
+        bytes.append(contentsOf: items[(i + 2)..<(i + 2 + count)])
+        i += 2 + count
+    }
+    return String(bytes: bytes, encoding: .isoLatin1) ?? ""
+}
+
+/// PolyText16 variant: each glyph is 2 bytes (CHAR2B, always MSB-first
+/// on the wire regardless of connection byte order — but the count byte
+/// gives glyph count, not byte count). Returns a Latin-1 string of the
+/// low byte of each CHAR2B (good enough for English-text widget labels).
+private func extractPolyText16(items: [UInt8], byteOrder: ByteOrder) -> String {
+    var i = 0
+    var bytes: [UInt8] = []
+    while i < items.count {
+        let n = items[i]
+        if n == 0xFF {
+            i += 5
+            continue
+        }
+        if n == 0 {
+            i += 1
+            continue
+        }
+        let glyphCount = Int(n)
+        let payloadBytes = glyphCount * 2
+        if i + 2 + payloadBytes > items.count { break }
+        // Take the LSB of each CHAR2B as a rough Latin-1 approximation.
+        // The high byte indexes the font's row; row=0 is the dominant
+        // case for ISO-8859-1 fonts (which is what vintage Motif uses).
+        var j = i + 2
+        for _ in 0..<glyphCount {
+            bytes.append(items[j + 1])
+            j += 2
+        }
+        i += 2 + payloadBytes
+    }
+    return String(bytes: bytes, encoding: .isoLatin1) ?? ""
+}
+
+/// ImageText16 carries a flat `[UInt16]`. Take the low byte of each
+/// for the Latin-1 approximation.
+private func decodeChars16(_ chars: [UInt16]) -> String {
+    let bytes = chars.map { UInt8($0 & 0xFF) }
+    return String(bytes: bytes, encoding: .isoLatin1) ?? ""
 }
 
 private func decodeWMName(_ data: [UInt8], format: UInt8) -> String {
@@ -589,7 +880,10 @@ private func predefinedAtomName(_ atom: UInt32) -> String? {
     // pulling in the full predefined-atoms enum here to keep the detector
     // standalone (it's reused server-side).
     switch atom {
+    case 34: return "WM_COMMAND"
+    case 36: return "WM_CLIENT_MACHINE"
     case 39: return "WM_NAME"
+    case 67: return "WM_CLASS"
     case 68: return "WM_TRANSIENT_FOR"
     default: return nil
     }

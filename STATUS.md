@@ -1,4 +1,4 @@
-# Status 2026-05-31 — twelve capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry, Motif properties, type-fallback, ClientMessage payload, WM_COMMAND argv, reply-body batch 1, reply-tail, session-mgmt naming) + console quieted
+# Status 2026-05-31 — thirteen capture wedges (above) + landmark enrichment + console quieted
 
 Two small landings on a Sun-less day. Both pure capture-side, no live
 verification needed.
@@ -367,7 +367,87 @@ mostly absent from short-replay traces). 4 new unit tests; 1211/1211
 total tests pass. No checklist count shift — these add naming polish
 on top of the already-Yes type-aware-decoding row.
 
-Thirteen commits, 108 new unit tests, no regressions, no Sun required.
+**Landmark enrichment from today's decoders.** Thirteenth wedge.
+After Todd asked the sharper question ("are there stateful landmarks
+already richer with today's data?"), four landmark enrichments
+landed that use today's wedges to make the existing landmark
+vocabulary substantially more informative — without adding any new
+landmark types.
+
+**A. Window provenance in the map landmark.** The map landmark
+("appears on screen") now picks up WM_CLASS, WM_CLIENT_MACHINE, and
+WM_COMMAND if the toolkit has written them by MapWindow time. Folded
+into the map landmark rather than the identify landmark because Xt
+sets WM_NAME *first* in its property burst — by MapWindow time the
+whole burst has landed.
+
+```
+before: # The "dogs" window appears on screen (0x5200057, 614×353)
+after:  # The "dogs" window appears on screen (0x5200057, 614×353,
+        ApplicationShell class, host "ss2")
+```
+
+For vintage captures this turns the landmark into an archival
+provenance record. Verified live against the dogs/swiftx capture.
+
+**B. Modifier prefix on click landmarks.** Click landmarks now
+prepend the modifier mask symbolically. State 0x0001 → "Shift-clicks";
+state 0x0005 → "Shift+Ctrl-clicks". PendingPress gained a `state`
+field captured at ButtonPress; pointer-button bits (Button1..5 at
+0x100..0x1000) are filtered out so they don't get mistaken for
+modifiers.
+
+```
+before: # The user clicks inside "xterm" on a 484×316 child at (64,204)
+after:  # The user Ctrl-clicks inside "xterm" on a 484×316 child at (64,204)
+```
+
+Verified live: xterm-on-swiftx capture has a real `Ctrl-click`.
+
+**C. Modal vs. non-modal dialog distinction.** When the dialog
+window has `_MOTIF_WM_HINTS.inputMode` set to a modal value
+(PRIMARY_APPLICATION_MODAL / SYSTEM_MODAL / FULL_APPLICATION_MODAL),
+the dialog landmark gains a `modal ` prefix. MODELESS (or absent)
+keeps the bare form. No corpus capture exercises this today; covered
+by unit tests.
+
+**D. Button-label cache → click-target by name.** This is the big
+visible win. LandmarkDetector now maintains a per-window text cache
+populated from ImageText8 / PolyText8 / ImageText16 / PolyText16
+requests. Vintage Motif/Xaw widgets aren't double-buffered — the
+toolkit draws each button's label directly into the button's window,
+so the latest text on the clicked window's id is almost always its
+widget label. Click landmark renders the label (cap 24 chars) in
+place of the geometry phrasing.
+
+```
+before: # The user clicks inside "bitmap" on a 60×26 child 0x... at (31,10)
+after:  # The user clicks on "File" in "bitmap" at (31,10)
+```
+
+Corpus payoff is immediate: bitmap "File", dogs "Help", editres
+"Commands", fileview "/usr/bin/X11/..", and many more across the
+captures we have. Long text (text-area contents) falls through to
+the existing geometry phrasing so xterm output doesn't masquerade
+as a label.
+
+Also gained: PolyText8 / PolyText16 items-buffer walkers that decode
+glyph runs into Latin-1 strings (skipping font-set indicators).
+ImageText16 takes the low byte of each CHAR2B for the same
+approximation.
+
+Implementation honors the order-tolerance constraint: ChangeProperty
+harvest for the four ICCCM session properties only runs for windows
+already in `topLevels` (avoids tracking arbitrary children); the
+detector's local `predefinedAtomName` table gained WM_COMMAND (34),
+WM_CLIENT_MACHINE (36), WM_CLASS (67) so propName resolution doesn't
+require `atomToName` plumbing for predefined atoms.
+
+11 new LandmarkDetector tests (47 cases total in that file now).
+1222/1222 total tests pass. No checklist count shift — these are
+content enrichments to landmark text rather than new feature rows.
+
+Fourteen commits, 119 new unit tests, no regressions, no Sun required.
 
 # Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
 
