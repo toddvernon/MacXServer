@@ -225,11 +225,13 @@ public struct LandmarkDetector: Sendable {
     /// extension request that triggered the error.
     public mutating func afterServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder,
                                              screenRoots: Set<UInt32> = [],
-                                             extensionMajorToName: [UInt8: String] = [:]) -> [Landmark] {
+                                             extensionMajorToName: [UInt8: String] = [:],
+                                             resources: ResourceRegistry = ResourceRegistry()) -> [Landmark] {
         if case .xError(let err) = msg {
             return errorLandmark(err, byteOrder: byteOrder,
                                   screenRoots: screenRoots,
-                                  extensionMajorToName: extensionMajorToName)
+                                  extensionMajorToName: extensionMajorToName,
+                                  resources: resources)
         }
         guard case .event(let e) = msg else { return [] }
         switch e.code {
@@ -281,7 +283,8 @@ public struct LandmarkDetector: Sendable {
 
     private func errorLandmark(_ err: XError, byteOrder: ByteOrder,
                                 screenRoots: Set<UInt32>,
-                                extensionMajorToName: [UInt8: String]) -> [Landmark] {
+                                extensionMajorToName: [UInt8: String],
+                                resources: ResourceRegistry) -> [Landmark] {
         let errName = errorName(err.errorCode) ?? "Error#\(err.errorCode)"
         let seq = err.sequenceNumber(byteOrder: byteOrder)
         // Failing-request name: core opcode if < 128, else look up the
@@ -303,13 +306,42 @@ public struct LandmarkDetector: Sendable {
         let resourcePhrase = resourcePhraseForError(
             code: err.errorCode, badId: badId, screenRoots: screenRoots
         )
+        // Lineage suffix: when the registry has seen this id, append
+        // "(created at seq=X)" or "(freed at seq=Y, created at seq=X)".
+        // The freed annotation is the textbook use-after-free signal —
+        // the request blew up because the client referenced a resource
+        // it had already freed. Only annotate for resource-bearing
+        // errors; BadValue gets nothing extra.
+        let lineage = lineageSuffix(forErrorCode: err.errorCode,
+                                     badId: badId, resources: resources)
         let text: String
-        if let phrase = resourcePhrase {
+        switch (resourcePhrase, lineage) {
+        case (.some(let phrase), .some(let lin)):
+            text = "# \(errName) at seq=\(seq) from \(requestPhrase) \(phrase) \(lin)"
+        case (.some(let phrase), .none):
             text = "# \(errName) at seq=\(seq) from \(requestPhrase) \(phrase)"
-        } else {
+        case (.none, .some(let lin)):
+            text = "# \(errName) at seq=\(seq) from \(requestPhrase) \(lin)"
+        case (.none, .none):
             text = "# \(errName) at seq=\(seq) from \(requestPhrase)"
         }
         return [Landmark(text)]
+    }
+
+    /// Lineage annotation for a bad-resource error. Returns
+    /// `(freed at seq=Y, created at seq=X)` when the id was seen freed,
+    /// `(created at seq=X)` when it was created but not freed, nil when
+    /// we never saw the id (capture started mid-session, server-side id,
+    /// or BadValue / non-resource error).
+    private func lineageSuffix(forErrorCode code: UInt8, badId: UInt32,
+                                resources: ResourceRegistry) -> String? {
+        let resourceCodes: Set<UInt8> = [3, 4, 5, 6, 7, 9, 12, 13, 14]
+        guard resourceCodes.contains(code), badId != 0 else { return nil }
+        guard let entry = resources.entry(badId) else { return nil }
+        if let freedAt = entry.freedAtSeq {
+            return "(freed at seq=\(freedAt), created at seq=\(entry.createdAtSeq))"
+        }
+        return "(created at seq=\(entry.createdAtSeq))"
     }
 
     private func resourcePhraseForError(code: UInt8, badId: UInt32,

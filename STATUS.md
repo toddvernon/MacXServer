@@ -1,4 +1,4 @@
-# Status 2026-05-31 — keysym; WM-property; visual catalog; XC-MISC/XTEST/RECORD; console quieted
+# Status 2026-05-31 — five capture wedges (keysym, WM-property, visual catalog, Tier-4 extensions, resource registry) + console quieted
 
 Two small landings on a Sun-less day. Both pure capture-side, no live
 verification needed.
@@ -117,11 +117,54 @@ tests in `Tier4ExtensionTests.swift` — both byte orders, every minor
 opcode shape covered. 1118/1118 total tests pass.
 
 Checklist §4: XC-MISC + XTEST + RECORD all No → Yes. Counts:
-27/35/64/1 → 30/35/61/1. Vintage-lens gap #4 marked Closed. Four of
-the top-5 vintage-lens readability gaps closed in one Sun-less day;
-only #5 (resource lineage — architectural, requires promoting
-`LandmarkDetector`'s internal window registry to a public
-`ResourceRegistry`) remains.
+27/35/64/1 → 30/35/61/1. Vintage-lens gap #4 marked Closed.
+
+**Resource registry / lineage (vintage-lens gap #5).** Fifth wedge of
+the day. The architectural one. `ResourceRegistry` is a public
+session-wide registry keyed by resource id, tracking creation +
+free-time for all six X11 resource kinds (window, pixmap, GC, font,
+cursor, colormap). Populated in `dump()`'s request-dispatch loop via
+`trackResourceLifecycle(_:seq:registry:)` — every Create* / Free* shape
+maps cleanly. ID reuse honored: new creation overwrites the slot but
+separate monotonic counters keep session-end stats honest.
+
+Two consumer features ship in the same wedge:
+
+1. **Session-end resource summary landmark.** After the existing
+   `# Session ends after Xs (N requests, M events)` line, a new
+   `# resources: 2 windows (0 freed, 2 leaked), 7 GCs (1 freed, 6 leaked),
+   4 fonts (0 freed, 4 leaked), 8 cursors (0 freed, 8 leaked)` line
+   surfaces every kind with non-zero activity. Vintage clients commonly
+   "leak" all resources at shutdown (server cleans up on disconnect),
+   so the leak counts are diagnostic, not accusatory.
+
+2. **Use-after-free / lineage annotation on XError landmarks.**
+   `LandmarkDetector.errorLandmark` now consults the registry. When the
+   bad resource id was created earlier in the session, the landmark
+   gets a `(created at seq=X)` suffix. When it was created AND freed
+   before the failing request, the suffix becomes
+   `(freed at seq=Y, created at seq=X)` — the textbook use-after-free
+   signal, surfaced automatically.
+
+LandmarkDetector keeps its window-specific state (top-level identity,
+transient-for, click resolution) since that's a different concern than
+raw lineage; the two are complementary now.
+
+Verified against the xterm and xedit corpus captures — both produce a
+clean `# resources:` line at end-of-session. Use-after-free path
+covered by synthetic unit tests (no corpus capture happens to trigger
+it). 12 new tests in `ResourceRegistryTests.swift`; 1130/1130 total
+tests pass.
+
+Checklist §3 "Resource IDs tracked" Partial → Yes; §3 "Resource
+creation lineage shown" No → Yes; §3 "Resource lifetime tracked" No →
+Yes; §6 "Resource leak detection" No → Partial (session-end count
+lands, per-resource detail still missing); §6 "Use-after-free detection"
+No → Yes. Counts: 30/35/61/1 → 34/35/57/1. Vintage-lens gap #5 Closed.
+
+**All five top-5 vintage-lens readability gaps closed in one Sun-less
+day.** Plus the console-quiet server wedge from this morning. Six
+commits, 28 new unit tests, no regressions, no Sun required.
 
 # Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
 

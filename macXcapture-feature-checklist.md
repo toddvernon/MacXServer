@@ -145,18 +145,27 @@ macXcapture from a useful tool into infrastructure.
       `atomDisplay` at `ChronoDumper.swift:227` resolves to predefined atoms first
       (`Sources/Framer/PredefinedAtoms.swift`), then session-interned, then hex. GetAtomName reply
       harvesting is **not** implemented (only the request side prints the atom number).
-- [~] Resource IDs (windows, pixmaps, GCs, fonts, cursors, colormaps) tracked across the session —
-      **Partial** (as of 2026-05-30). The `LandmarkDetector`
-      (`Sources/SwiftXCaptureCore/LandmarkDetector.swift`) tracks **windows** session-wide: the
-      full parent map for every CreateWindow, a `topLevels` table keyed by wid carrying name + size
-      + mapped state, plus `windowSizes`, `mappedWindows`, and `transientFor` maps. This is what
-      enables the landmark click-contextualization to walk up from a child to its named top-level
-      ancestor. Pixmaps / GCs / fonts / cursors / colormaps are still **not** tracked. The window
-      data is also internal to the detector — there's no public registry exposed to other passes.
-- [ ] Resource creation lineage shown (this Pixmap was created at frame N) — **No**. Not implemented
-      anywhere.
-- [ ] Resource lifetime tracked (freed at frame M, used-after-free flagged) — **No**. Not
-      implemented anywhere.
+- [x] Resource IDs (windows, pixmaps, GCs, fonts, cursors, colormaps) tracked across the session —
+      **Yes** (as of 2026-05-31). `Sources/SwiftXCaptureCore/ResourceRegistry.swift` is a public
+      session-wide registry keyed by resource id. Every CreateWindow / CreatePixmap / CreateGC /
+      CopyGC / OpenFont / CreateCursor / CreateGlyphCursor / CreateColormap registers; every
+      DestroyWindow / FreePixmap / FreeGC / CloseFont / FreeCursor / FreeColormap clears. The
+      registry lives on `ChronoContext.resources` and is populated in the request-dispatch loop
+      of `dump()` via `trackResourceLifecycle(_:seq:registry:)`. ID reuse is honored — the new
+      creation wins, but separate monotonic `createdTotal` / `freedTotal` counters keep
+      session-end stats honest. LandmarkDetector still owns its window-specific state (top-level
+      identity, transient-for, click resolution) since that's a different concern than raw
+      lineage; the two are complementary now.
+- [x] Resource creation lineage shown (this Pixmap was created at frame N) — **Yes** (as of
+      2026-05-31). XError landmark text appends `(created at seq=N)` when the bad resource id is
+      live in the registry, so a `BadDrawable` says "from CopyArea on a child of "X" (created at
+      seq=42)" instead of just "(bad resource 0x100)". Same lineage data is available to any
+      future consumer via `ResourceRegistry.entry(_:)`.
+- [x] Resource lifetime tracked (freed at frame M, used-after-free flagged) — **Yes** (as of
+      2026-05-31). When the registry has seen a resource freed earlier in the session and a
+      later request blows up referencing the same id, the XError landmark renders
+      `(freed at seq=Y, created at seq=X)` — the textbook use-after-free signal. See
+      `LandmarkDetector.lineageSuffix(forErrorCode:badId:resources:)`.
 - [x] Keysym values decoded to symbolic names — **Yes** (as of 2026-05-31). 1224-entry table
       generated from `reference/X11R6/xc/include/keysymdef.h` lives at
       `Sources/SwiftXCaptureCore/Keysyms.generated.swift` (regen script
@@ -307,11 +316,17 @@ For each: requests + replies + events + errors decoded.
 
 ## 6. Viewer — Analysis Aids
 
-- [ ] Resource leak detection (resources created but never freed) — **No**. No resource registry
-      exists; can't be built without one.
-- [ ] Use-after-free detection (resource referenced after FreeX) — **No**. Same — no registry. The
-      protocol error highlighting (below) does paint the resulting BadFoo in red, but that's
-      downstream of the actual use-after-free.
+- [~] Resource leak detection (resources created but never freed) — **Partial** (as of 2026-05-31).
+      The session-end landmark now reports `# resources: 2 windows (0 freed, 2 leaked), 1 pixmap
+      (0 freed, 1 leaked), 7 GCs (1 freed, 6 leaked)` etc. — every kind with a non-zero leak
+      count surfaces in the session bookend. No per-resource detail (which specific Pixmap leaked
+      at what seq) and no UI surfacing yet — closing to Yes wants both. Data lives in
+      `ResourceRegistry`.
+- [x] Use-after-free detection (resource referenced after FreeX) — **Yes** (as of 2026-05-31).
+      The XError landmark text gets a `(freed at seq=Y, created at seq=X)` suffix when the bad
+      resource id was seen freed earlier in the session. Driven by
+      `LandmarkDetector.lineageSuffix(forErrorCode:badId:resources:)` consulting the registry.
+      Fires automatically — no separate audit pass.
 - [~] Unknown opcode flagging (extension used without QueryExtension first) — **Partial**. The
       dumper emits `Request opcode=N (untyped)` for any extension request with no prior
       QueryExtension reply (`ChronoDumper.swift:553`). The syntax highlighter doesn't treat that
@@ -505,16 +520,18 @@ For each: requests + replies + events + errors decoded.
 
 ## Summary
 
-**Counts (127 items total, last updated 2026-05-31 after the
-XC-MISC/XTEST/RECORD wedge landed — fourth wedge of the day):**
+**Counts (127 items total, last updated 2026-05-31 after the resource
+registry / lineage wedge landed — fifth wedge of the day):**
 
-- **Yes**: 30
+- **Yes**: 34
 - **Partial**: 35
-- **No**: 61
+- **No**: 57
 - **N/A**: 1 (Linux build — explicit non-goal)
 
 (The §3 type-aware-decoding row stays Partial because CARDINAL and
-non-WM_* STRING/UTF8_STRING decoding still aren't typed; only WM_* moved.)
+non-WM_* STRING/UTF8_STRING decoding still aren't typed; only WM_* moved.
+The §6 leak-detection row also stays Partial — session-end summary lands
+the data but per-resource detail isn't surfaced.)
 
 _Changes since the morning audit: protocol-error highlighting moved Partial → Yes (landmark
 correlation), Resource IDs tracked moved No → Partial (LandmarkDetector window hierarchy),
@@ -648,11 +665,13 @@ score, it's which No rows actually matter.
    input-injection test rig for vintage X uses, and a capture taken during automated UI tests is
    undecodable without it. XC-MISC is a tiny 4-request extension; the cost is low. RECORD is what
    `xmacrorec` and similar tools use; relevant for anyone debugging macro replay.
-5. **Resource lineage (§3 + §6).** Same point as the modern lens, but the sharpest vintage use
-   case is "follow this Motif widget across the session": a MotifPushButton creates a window,
-   attaches Pixmap shadows, paints labels, gets ButtonPress events. A session-wide resource
-   registry plus a "follow window 0x..." filter turns widget-level investigations from
-   grep-on-text into a single-click drill-down.
+5. ~~**Resource lineage (§3 + §6).**~~ **Closed 2026-05-31.** `ResourceRegistry` lifts every
+   Create*/Free* pair from the request stream into a session-wide registry keyed by id.
+   Drives two consumer features today: (a) session-end landmark
+   `# resources: N pixmaps (M freed, K leaked), …` and (b) XError landmark suffix
+   `(freed at seq=Y, created at seq=X)` for use-after-free detection. The "follow this Motif
+   widget" filter UI is still future work — the data layer is in place for any consumer to
+   query via `ResourceRegistry.entry(_:)`.
 
 **Things the vintage lens highlights that the modern synopsis didn't:**
 

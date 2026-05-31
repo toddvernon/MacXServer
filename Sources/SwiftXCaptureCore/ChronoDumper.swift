@@ -65,6 +65,7 @@ public enum ChronoDumper {
                         if case .getProperty(let gp) = req {
                             ctx.seqToGetPropertyAtom[seq] = gp.property
                         }
+                        trackResourceLifecycle(req, seq: seq, registry: &ctx.resources)
                         out += format(timestamp: ts, direction: "→", line: formatRequest(req, seq: seq, ctx: ctx, byteOrder: byteOrder))
                         if firstTimestamp == nil { firstTimestamp = ts }
                         lastTimestamp = ts
@@ -109,7 +110,8 @@ public enum ChronoDumper {
                         }
                         for lm in landmarks.afterServerMessage(m, byteOrder: byteOrder,
                                                                 screenRoots: ctx.screenRoots,
-                                                                extensionMajorToName: ctx.extensionMajorToName) {
+                                                                extensionMajorToName: ctx.extensionMajorToName,
+                                                                resources: ctx.resources) {
                             out += formatLandmark(lm.text)
                         }
                     }
@@ -128,6 +130,9 @@ public enum ChronoDumper {
             if errorCount > 0 { parts.append("\(errorCount) errors") }
             let stats = parts.joined(separator: ", ")
             out += formatLandmark("# Session ends after \(elapsedPhrase) (\(stats))")
+            if let resources = ctx.resources.summaryLine() {
+                out += formatLandmark("# resources: \(resources)")
+            }
         }
 
         return out
@@ -277,6 +282,10 @@ struct ChronoContext {
     /// visualIds symbolically in CreateWindow / CreateColormap dumper
     /// output: `visual=0x21(PseudoColor d8 screen0)` instead of `0x21`.
     var visualCatalog: [UInt32: VisualCatalogEntry] = [:]
+    /// Session-wide registry of every Create* / Free* request the dumper
+    /// has seen. Powers the session-end resource summary landmark and the
+    /// "freed at seq=N" annotation on resource-bearing XError landmarks.
+    var resources = ResourceRegistry()
     /// Session keymap, populated from GetKeyboardMapping replies and
     /// ChangeKeyboardMapping requests. Indexed by keycode; each entry is the
     /// `keysymsPerKeycode`-wide row from the spec. Empty until the first
@@ -782,6 +791,51 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
 // extension-dumper registry. Anything related to a specific extension
 // belongs in its own file under Extensions/, registered via
 // ExtensionDumperRegistry — not inline here.
+
+/// Map a request's Create*/Free* shape into the resource registry. Called
+/// from the request-dispatch loop in `dump()`. Treats glyph-cursor and
+/// regular-cursor the same kind (both are CURSOR resources); CopyGC is
+/// registered as the destination GC's creation (the source must already
+/// exist for the request to be valid). FreeColors targets color cells
+/// inside a colormap, not the colormap itself, so it doesn't register.
+func trackResourceLifecycle(_ req: Request, seq: UInt16, registry: inout ResourceRegistry) {
+    switch req {
+    case .createWindow(let r):
+        registry.registerCreate(r.wid, kind: .window, atSeq: seq)
+    case .destroyWindow(let r):
+        registry.registerFree(r.window, atSeq: seq)
+    case .createPixmap(let r):
+        registry.registerCreate(r.pid, kind: .pixmap, atSeq: seq)
+    case .freePixmap(let r):
+        registry.registerFree(r.pixmap, atSeq: seq)
+    case .createGC(let r):
+        registry.registerCreate(r.cid, kind: .gc, atSeq: seq)
+    case .copyGC(let r):
+        // CopyGC's destination must already be a CreateGC'd id, per spec —
+        // but in practice we sometimes see CopyGC against an id we missed
+        // a CreateGC for (capture started mid-session). Registering here
+        // makes the destination visible to lineage queries either way.
+        registry.registerCreate(r.dstGC, kind: .gc, atSeq: seq)
+    case .freeGC(let r):
+        registry.registerFree(r.gc, atSeq: seq)
+    case .openFont(let r):
+        registry.registerCreate(r.fid, kind: .font, atSeq: seq)
+    case .closeFont(let r):
+        registry.registerFree(r.font, atSeq: seq)
+    case .createCursor(let r):
+        registry.registerCreate(r.cid, kind: .cursor, atSeq: seq)
+    case .createGlyphCursor(let r):
+        registry.registerCreate(r.cid, kind: .cursor, atSeq: seq)
+    case .freeCursor(let r):
+        registry.registerFree(r.cursor, atSeq: seq)
+    case .createColormap(let r):
+        registry.registerCreate(r.mid, kind: .colormap, atSeq: seq)
+    case .freeColormap(let r):
+        registry.registerFree(r.cmap, atSeq: seq)
+    default:
+        return
+    }
+}
 
 func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout ChronoContext) -> String {
     switch msg {
