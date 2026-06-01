@@ -507,6 +507,23 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            // Race guard: if the session torn down (cleanupOnDisconnect →
+            // destroyTopLevel) ran between this mapTopLevel's protocol-thread
+            // dispatch and our turn on main, the slot is already gone and any
+            // NSWindow we create here would be orphaned — no slot to look it
+            // up from for a later destroy, no reference from us, but visible
+            // on screen at popUpMenu level for override-redirect panels.
+            // That's the "rogue popup that survives" pattern from the xterm
+            // 2026-05-31 capture audit. Detect and bail. Same shape as the
+            // protocol-thread `if slots[id] != nil` check above; this is the
+            // main-thread bookend.
+            self.lock.lock()
+            let stillRegistered = self.slots[id] != nil
+            self.lock.unlock()
+            guard stillRegistered else {
+                self.log?.log("  bridge: skip NSWindow create for 0x\(String(id, radix: 16)) — slot removed before main thread serviced (likely disconnect race)")
+                return
+            }
             self.log?.log("  bridge: bringing up NSWindow for 0x\(String(id, radix: 16)) \(geometry.width)x\(geometry.height) (logical)")
             let scale = self.scaleFactor
 
@@ -730,6 +747,14 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         slots.removeValue(forKey: id)
         lock.unlock()
         DispatchQueue.main.async {
+            // orderOut THEN close. NSWindow.close() does call orderOut
+            // internally, but for NSPanels at popUpMenu level with
+            // hidesOnDeactivate=false (our override-redirect popup path —
+            // mapTopLevel L627-633), explicit orderOut ensures the
+            // visual disappears before any close-side asynchrony in
+            // AppKit's window-list pruning. Belt-and-suspenders aimed
+            // at the "rogue popup persists" symptom.
+            win?.orderOut(nil)
             win?.close()
         }
     }
