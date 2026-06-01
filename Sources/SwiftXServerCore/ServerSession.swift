@@ -6443,10 +6443,37 @@ public final class ServerSession: @unchecked Sendable {
         case .listProperties:          reportUnimplementedOpcode(ListProperties.opcode)
         case .setFontPath:             reportUnimplementedOpcode(SetFontPath.opcode)
         case .getFontPath:             reportUnimplementedOpcode(GetFontPath.opcode)
-        case .copyGC:                  reportUnimplementedOpcode(CopyGC.opcode)
+        case .copyGC(let r):
+            // Validate both src and dst → BadGC. Spec semantics: for each
+            // bit in valueMask, copy that component from src to dst. Order
+            // of validations matters — src first matches X.org's
+            // dispatch.c:ProcCopyGC error precedence. Unblocks the
+            // puzzle x11demo (audit 2026-05-31). Pre-fix this fell to
+            // reportUnimplementedOpcode → BadRequest.
+            guard validateGC(r.srcGC, majorOpcode: CopyGC.opcode) != nil else { break }
+            guard validateGC(r.dstGC, majorOpcode: CopyGC.opcode) != nil else { break }
+            gcs.copy(srcId: r.srcGC, dstId: r.dstGC, valueMask: r.valueMask)
         case .changeKeyboardMapping:   reportUnimplementedOpcode(ChangeKeyboardMapping.opcode)
         case .changeKeyboardControl:   reportUnimplementedOpcode(ChangeKeyboardControl.opcode)
-        case .getKeyboardControl:      reportUnimplementedOpcode(GetKeyboardControl.opcode)
+        case .getKeyboardControl:
+            // Stub reply: report X server defaults. macOS owns the actual
+            // keyboard/bell state and we don't model per-key auto-repeat,
+            // LED state, key click, or bell pitch. xmpiano calls this at
+            // init to learn whether it can ring the bell for note feedback;
+            // returning defaults lets it proceed. Pre-fix this fell to
+            // reportUnimplementedOpcode → BadRequest, which crashed xmpiano
+            // immediately (audit 2026-05-31).
+            let reply = GetKeyboardControlReply(
+                sequenceNumber: sequenceNumber,
+                globalAutoRepeat: true,
+                ledMask: 0,
+                keyClickPercent: 50,
+                bellPercent: 50,
+                bellPitch: 400,
+                bellDuration: 100,
+                autoRepeats: [UInt8](repeating: 0xFF, count: 32)
+            )
+            outbound.append(reply.encode(byteOrder: byteOrder))
         case .changePointerControl:    reportUnimplementedOpcode(ChangePointerControl.opcode)
         case .getPointerControl:       reportUnimplementedOpcode(GetPointerControl.opcode)
         case .changeHosts:             reportUnimplementedOpcode(ChangeHosts.opcode)

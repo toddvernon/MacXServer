@@ -491,6 +491,34 @@ public final class GCTable {
         gcs[id] = entry
     }
 
+    /// Copy named components from src to dst per CopyGC's value mask. For
+    /// each bit set in `valueMask`, the destination's per-bit value is
+    /// replaced by the source's (or removed if source has no value for
+    /// that bit). Mirrors `change`'s special-case: if `clipMask` is in
+    /// the mask, copy the source's clip-rectangle list too, since the
+    /// clipMask slot and the SetClipRectangles list are two faces of the
+    /// same attribute and clients expect them to move together. Silent
+    /// no-op if either id is unknown — the caller (ServerSession.handle
+    /// .copyGC) validates and emits BadGC before reaching here.
+    public func copy(srcId: UInt32, dstId: UInt32, valueMask: UInt32) {
+        guard let src = gcs[srcId], var dst = gcs[dstId] else { return }
+        var bit: UInt32 = 1
+        while bit != 0 {
+            if valueMask & bit != 0 {
+                if let v = src.values[bit] {
+                    dst.values[bit] = v
+                } else {
+                    dst.values.removeValue(forKey: bit)
+                }
+            }
+            bit <<= 1
+        }
+        if valueMask & GCBits.clipMask != 0 {
+            dst.clipRectangles = src.clipRectangles
+        }
+        gcs[dstId] = dst
+    }
+
     /// Update the GC's clip rectangles + clip origin (SetClipRectangles).
     public func setClip(_ id: UInt32, rectangles: [Rectangle], xOrigin: Int16, yOrigin: Int16) {
         guard var entry = gcs[id] else { return }
