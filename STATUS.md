@@ -1,8 +1,8 @@
 # Status 2026-05-31 -- capture-decoder marathon, Sun-less
 
 Couldn't reach the vintage Suns today, so leaned all the way into
-capture-side decoder work. Fourteen commits, all pushed. Tests:
-1083 -> 1222 (+139 new). Zero regressions. macXcapture checklist:
+capture-side decoder work. Fifteen commits, all pushed. Tests:
+1083 -> 1225 (+142 new). Zero regressions. macXcapture checklist:
 24/35/67/1 -> 36/33/57/1 -- six rows moved Yes, two moved Partial,
 six closed from No.
 
@@ -10,11 +10,13 @@ All five top-5 readability gaps from the checklist's vintage-X lens
 section closed in this one day: keysym/modifier symbolic decode,
 WM-property type-aware decode, visual catalog lookup,
 XC-MISC/XTEST/RECORD extension decoders, and the resource registry
-with lineage. Plus several follow-ups beyond the top-5 and a final
+with lineage. Plus several follow-ups beyond the top-5, a final
 landmark-text enrichment pass that surfaces today's data inside the
-existing landmark vocabulary.
+existing landmark vocabulary, and a late wedge that lifts today's
+capture-side ResourceRegistry into the live server so macxserver's
+own XError landmarks pick up the same use-after-free annotation.
 
-## The fourteen commits
+## The fifteen commits
 
 In order:
 
@@ -81,6 +83,20 @@ In order:
   modal vs non-modal dialog distinction via
   `_MOTIF_WM_HINTS.inputMode`; per-window text cache feeding button
   labels on click landmarks (`clicks on "OK" in "Save?"`).
+- `bdc393b` server-side ResourceRegistry.
+  `ServerSession` now owns a `ResourceRegistry`, calls
+  `trackResourceLifecycle` after each request decode, and threads
+  the registry into both `LandmarkDetector.afterServerMessage` call
+  sites (the event-emit path and the `emitError` path). Live
+  macxserver XError landmarks now read the same way the capture
+  viewer's do, e.g. `# BadGC at seq=100 from CopyArea on "xterm"
+  (freed at seq=88, created at seq=42)` instead of the bare
+  resource line. Three new tests in
+  `Tests/SwiftXServerCoreTests/ResourceLineageLandmarkTests.swift`
+  cover the freed-then-used, still-live, and registry-never-saw-it
+  cases. `trackResourceLifecycle` promoted from internal to public
+  in `ChronoDumper.swift` so `SwiftXServerCore` can call it. Zero
+  behavior change on the capture side.
 
 ## What's reading better now
 
@@ -189,18 +205,15 @@ New noise since today's push:
 - `AllocColorCells` and `AllocColorPlanes` replies don't have
   framer decoders. Not blocking anything; both are rarely-used
   8-bit-colormap allocation patterns.
-- Server-side ResourceRegistry population. macxserver's live XError
-  landmarks would also get the `(freed at seq=Y)` annotation if we
-  populated a registry there. Small wedge, maybe 30 minutes.
-  Skipped today to keep scope tight.
+- ~~Server-side ResourceRegistry population.~~ Done in the late
+  wedge above. macxserver's live XError landmarks now carry the
+  `(freed at seq=Y, created at seq=X)` annotation the capture
+  viewer gets. Took ~30 minutes as forecast.
 
 ## Note for next session
 
-Two reasonable continuations if vintage Suns are still offline:
+One reasonable continuation if vintage Suns are still offline:
 
-- **Server-side ResourceRegistry**, so macxserver's live XError
-  landmarks pick up the same use-after-free annotation the capture
-  viewer gets. Bounded, useful for my own server debugging.
 - **Curate `captures/` into `CORPUS.md`** as the launch deliverable
   with per-capture metadata (which Sun, which app, what's
   interesting about it). Half-day docs work, lower technical
