@@ -40,8 +40,8 @@ public final class CaptureEditorController: ObservableObject {
     }
 
     /// Best-effort first-visible line from the text view's scroll
-    /// position. Used to decide what counts as "next" / "previous"
-    /// landmark relative to the user's current view.
+    /// position. Used by code that wants to know what's at the top of
+    /// the viewport.
     public func firstVisibleLine() -> Int {
         guard let tv = textView,
               let scrollView = tv.enclosingScrollView,
@@ -53,6 +53,19 @@ public final class CaptureEditorController: ObservableObject {
             in: tc,
             fractionOfDistanceBetweenInsertionPoints: nil
         )
+        return lineNumber(at: charIndex, in: tv.string)
+    }
+
+    /// 1-based line containing the start of the current selection. Used
+    /// as the baseline for landmark next/previous navigation: after a
+    /// jump the selection is on the landmark line itself, so searching
+    /// for `line > selectedLine()` correctly steps to the next landmark
+    /// instead of re-finding the current one (which `firstVisibleLine`
+    /// would do because `scrollRangeToVisible` often lands the target
+    /// at the bottom of the viewport, leaving earlier lines at top).
+    public func selectedLine() -> Int {
+        guard let tv = textView else { return 1 }
+        let charIndex = tv.selectedRange().location
         return lineNumber(at: charIndex, in: tv.string)
     }
 

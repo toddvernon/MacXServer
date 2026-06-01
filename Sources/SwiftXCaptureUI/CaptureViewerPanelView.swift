@@ -136,7 +136,7 @@ public struct CaptureViewerPanelView: View {
 
     private func jumpNext() {
         guard !landmarks.isEmpty else { return }
-        let current = editor.firstVisibleLine()
+        let current = editor.selectedLine()
         if let target = landmarks.first(where: { $0.line > current }) {
             editor.jump(toLine: target.line)
         } else {
@@ -147,7 +147,7 @@ public struct CaptureViewerPanelView: View {
 
     private func jumpPrevious() {
         guard !landmarks.isEmpty else { return }
-        let current = editor.firstVisibleLine()
+        let current = editor.selectedLine()
         if let target = landmarks.last(where: { $0.line < current }) {
             editor.jump(toLine: target.line)
         } else {
