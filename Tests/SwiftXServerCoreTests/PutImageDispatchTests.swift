@@ -14,7 +14,15 @@ private final class RecPutImageBridge: WindowBridge, @unchecked Sendable {
         var background: RGB16
         var data: [UInt8]
     }
+    struct ARGBCall: Equatable {
+        var width: UInt16
+        var height: UInt16
+        var dstX: Int16
+        var dstY: Int16
+        var argb: [UInt8]
+    }
     var calls: [Call] = []
+    var argbCalls: [ARGBCall] = []
 
     func registerTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32) {}
     func mapTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32, topLevelExposeRects: [BoxRec], descendants: [DescendantSnapshot], overrideRedirect: Bool, byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {}
@@ -37,6 +45,20 @@ private final class RecPutImageBridge: WindowBridge, @unchecked Sendable {
             dstX: dstX, dstY: dstY, leftPad: leftPad,
             foreground: foreground, background: background,
             data: sourceData
+        ))
+    }
+
+    func drawPutImageARGB(
+        target: DrawTarget,
+        argb: [UInt8],
+        width: UInt16, height: UInt16,
+        dstX: Int16, dstY: Int16,
+        clipRectangles: [Framer.Rectangle]?
+    ) {
+        argbCalls.append(ARGBCall(
+            width: width, height: height,
+            dstX: dstX, dstY: dstY,
+            argb: argb
         ))
     }
 }
@@ -100,11 +122,11 @@ final class PutImageDispatchTests: XCTestCase {
         XCTAssertEqual(call.background, RGB16(red: 65535, green: 65535, blue: 65535))
     }
 
-    /// Non-bitmap formats (XYPixmap, ZPixmap) stay silent-dropped — none
-    /// of the clients we host today exercise them. This test pins that
-    /// behaviour so a future format=XYPixmap accidental implementation
-    /// gets caught.
-    func testZPixmapPutImageStillSilentDropped() throws {
+    /// ZPixmap depth=8 (motifbur's menu-icon path): one byte per pixel,
+    /// each byte a colormap index. Session walks the bytes through ColorTable
+    /// and hands the bridge a row-major BGRA buffer. Pre-2026-06-01 this
+    /// was silent-dropped.
+    func testZPixmapDepth8DispatchesToBridge() throws {
         let bridge = RecPutImageBridge()
         let session = ServerSession(bridge: bridge)
         _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
@@ -112,15 +134,99 @@ final class PutImageDispatchTests: XCTestCase {
         let pixmapId: UInt32 = 0x4400020
         let gcId: UInt32 = 0x4400021
         _ = session.feed(CreatePixmap(depth: 8, pid: pixmapId, drawable: 0x28,
+                                       width: 4, height: 2).encode(byteOrder: .lsbFirst))
+        _ = session.feed(CreateGC(cid: gcId, drawable: pixmapId,
+                                   valueMask: 0, valueList: []).encode(byteOrder: .lsbFirst))
+
+        // 4x2 ZPixmap depth=8: bpp=8, scanline-pad=32 → 4 bytes per row
+        // (width=4 already on the 32-bit boundary). Row 0: 1,1,1,1 (black);
+        // row 1: 0,0,0,0 (white). ColorTable pins pixel 0=white, pixel 1=black.
+        let data: [UInt8] = [
+            0x01, 0x01, 0x01, 0x01,
+            0x00, 0x00, 0x00, 0x00,
+        ]
+        _ = session.feed(PutImage(
+            format: .zPixmap, drawable: pixmapId, gc: gcId,
+            width: 4, height: 2, dstX: 0, dstY: 0,
+            leftPad: 0, depth: 8, data: data
+        ).encode(byteOrder: .lsbFirst))
+
+        XCTAssertEqual(bridge.calls.count, 0, "ZPixmap must route through ARGB path, not Bitmap")
+        XCTAssertEqual(bridge.argbCalls.count, 1, "ZPixmap depth=8 must dispatch to drawPutImageARGB")
+        let call = bridge.argbCalls[0]
+        XCTAssertEqual(call.width, 4); XCTAssertEqual(call.height, 2)
+        XCTAssertEqual(call.argb.count, 4 * 2 * 4, "ARGB buffer must be width*height*4")
+        // Row 0 (black=pixel 1): B,G,R,A = 0,0,0,255
+        XCTAssertEqual(Array(call.argb.prefix(4)), [0, 0, 0, 255])
+        // Row 1 first pixel (white=pixel 0): B,G,R,A = 255,255,255,255
+        XCTAssertEqual(Array(call.argb[16...19]), [255, 255, 255, 255])
+    }
+
+    /// ZPixmap depth=1 (viewres/xgas/xgc's button-glyph path): packed 1bpp
+    /// source, pixel 0→ColorTable[0]=white, pixel 1→ColorTable[1]=black.
+    /// Same scanline-pad=32 packing as Bitmap, different color resolution.
+    func testZPixmapDepth1DispatchesToBridge() throws {
+        let bridge = RecPutImageBridge()
+        let session = ServerSession(bridge: bridge)
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+
+        let pixmapId: UInt32 = 0x4400030
+        let gcId: UInt32 = 0x4400031
+        _ = session.feed(CreatePixmap(depth: 1, pid: pixmapId, drawable: 0x28,
+                                       width: 6, height: 3).encode(byteOrder: .lsbFirst))
+        _ = session.feed(CreateGC(cid: gcId, drawable: pixmapId,
+                                   valueMask: 0, valueList: []).encode(byteOrder: .lsbFirst))
+
+        // xgc-style 6x3 ZPixmap depth=1 = 12 bytes (4 bytes/scanline × 3 rows).
+        // Row 0: all 1-bits (in the first 6 MSB positions of byte 0).
+        // Row 1: all 0-bits. Row 2: alternating 101010.
+        var data = [UInt8](repeating: 0, count: 12)
+        data[0] = 0b11111100   // row 0 first byte: 6 of 8 high bits set
+        // row 1: zero already
+        data[8] = 0b10101000   // row 2: 101010 then pad
+        _ = session.feed(PutImage(
+            format: .zPixmap, drawable: pixmapId, gc: gcId,
+            width: 6, height: 3, dstX: 0, dstY: 0,
+            leftPad: 0, depth: 1, data: data
+        ).encode(byteOrder: .lsbFirst))
+
+        XCTAssertEqual(bridge.calls.count, 0)
+        XCTAssertEqual(bridge.argbCalls.count, 1, "ZPixmap depth=1 must dispatch to drawPutImageARGB")
+        let call = bridge.argbCalls[0]
+        XCTAssertEqual(call.width, 6); XCTAssertEqual(call.height, 3)
+        XCTAssertEqual(call.argb.count, 6 * 3 * 4)
+        // Row 0 pixel 0 (bit=1 → black): B,G,R,A = 0,0,0,255
+        XCTAssertEqual(Array(call.argb.prefix(4)), [0, 0, 0, 255])
+        // Row 1 pixel 0 (bit=0 → white): B,G,R,A = 255,255,255,255
+        let row1Start = 6 * 4
+        XCTAssertEqual(Array(call.argb[row1Start..<row1Start + 4]), [255, 255, 255, 255])
+        // Row 2: alternating black, white, black, white, black, white
+        let row2Start = 12 * 4
+        XCTAssertEqual(Array(call.argb[row2Start..<row2Start + 4]), [0, 0, 0, 255])
+        XCTAssertEqual(Array(call.argb[row2Start + 4..<row2Start + 8]), [255, 255, 255, 255])
+    }
+
+    /// XYPixmap and other depth combinations stay silent-dropped — see
+    /// SHORTCUTS for the open ledger. This pins that behaviour so a
+    /// future accidental implementation gets caught.
+    func testXYPixmapPutImageStillSilentDropped() throws {
+        let bridge = RecPutImageBridge()
+        let session = ServerSession(bridge: bridge)
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+
+        let pixmapId: UInt32 = 0x4400040
+        let gcId: UInt32 = 0x4400041
+        _ = session.feed(CreatePixmap(depth: 8, pid: pixmapId, drawable: 0x28,
                                        width: 4, height: 4).encode(byteOrder: .lsbFirst))
         _ = session.feed(CreateGC(cid: gcId, drawable: pixmapId,
                                    valueMask: 0, valueList: []).encode(byteOrder: .lsbFirst))
         _ = session.feed(PutImage(
-            format: .zPixmap, drawable: pixmapId, gc: gcId,
+            format: .xyPixmap, drawable: pixmapId, gc: gcId,
             width: 4, height: 4, dstX: 0, dstY: 0,
             leftPad: 0, depth: 8, data: [UInt8](repeating: 0, count: 16)
         ).encode(byteOrder: .lsbFirst))
-        XCTAssertEqual(bridge.calls.count, 0, "ZPixmap path must stay silent-dropped")
+        XCTAssertEqual(bridge.calls.count, 0, "XYPixmap stays silent-dropped")
+        XCTAssertEqual(bridge.argbCalls.count, 0, "XYPixmap stays silent-dropped")
     }
 
     /// Bad drawable must produce BadDrawable on the wire, not a silent drop.

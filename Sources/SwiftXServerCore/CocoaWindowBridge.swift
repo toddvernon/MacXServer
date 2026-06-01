@@ -1706,6 +1706,46 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             }
         }
 
+        blitARGB(argb, width: w, height: h,
+                 dstX: dstX, dstY: dstY,
+                 target: target, clipRectangles: clipRectangles)
+    }
+
+    /// ZPixmap PutImage. Session pre-resolves the packed-pixel source
+    /// (depth=1 or depth=8) through ColorTable into row-major BGRA bytes
+    /// matching PixelBuffer's layout (byteOrder32Little + premultipliedFirst).
+    /// Bridge just blits via the same CGImage + withDrawContext path as
+    /// the Bitmap variant. ZPixmap depth=8 is what motifbur uses for its
+    /// 24x20 menu icons; depth=1 is what viewres/xgas/xgc use for 6x3 and
+    /// 16x16 button glyphs. Pre-2026-06-01 both were silent-dropped.
+    public func drawPutImageARGB(
+        target: DrawTarget,
+        argb: [UInt8],
+        width: UInt16, height: UInt16,
+        dstX: Int16, dstY: Int16,
+        clipRectangles: [Framer.Rectangle]?
+    ) {
+        let w = Int(width), h = Int(height)
+        guard w > 0, h > 0 else { return }
+        guard argb.count == w * h * 4 else {
+            log?.log("  drawPutImageARGB: argb count mismatch (have \(argb.count)b, need \(w * h * 4)b) — drop")
+            return
+        }
+        log?.log("  drawPutImageARGB target=\(target) src=\(width)x\(height) dst=(\(dstX),\(dstY)) data=\(argb.count)b")
+        blitARGB(argb, width: w, height: h,
+                 dstX: dstX, dstY: dstY,
+                 target: target, clipRectangles: clipRectangles)
+    }
+
+    /// Shared blit tail for both `drawPutImage` (Bitmap) and `drawPutImageARGB`
+    /// (ZPixmap). Wraps the ARGB buffer in a CGImage and draws it into the
+    /// destination through `withDrawContext`, which handles clipping + the
+    /// y-flip dance documented in GRAPHICS_Y_FLIP.md. Nearest-neighbor
+    /// interpolation keeps small icons crisp through device-scale upscaling.
+    private func blitARGB(_ argb: [UInt8], width w: Int, height h: Int,
+                           dstX: Int16, dstY: Int16,
+                           target: DrawTarget,
+                           clipRectangles: [Framer.Rectangle]?) {
         let data = Data(argb)
         guard let provider = CGDataProvider(data: data as CFData) else { return }
         let info: UInt32 = CGImageAlphaInfo.premultipliedFirst.rawValue
@@ -1727,13 +1767,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             width: CGFloat(w), height: CGFloat(h)
         )
         withDrawContext(target, clipRectangles: clipRectangles) { ctx in
-            // Nearest-neighbor so the 1-bit source pixels stay crisp in the
-            // upscaled destination (window backings are device-scale, pixmaps
-            // are 1:1 logical — both want hard pixel edges for an icon).
             ctx.interpolationQuality = .none
-            // See GRAPHICS_Y_FLIP.md. Without this helper PutImage would
-            // write pixmap memory upside-down (the bug that made
-            // be8fdce's blit-only fix fail).
             ctx.drawImageRespectingYFlip(cgImage, in: dstRect)
         }
     }

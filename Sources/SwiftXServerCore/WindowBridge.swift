@@ -371,6 +371,20 @@ public protocol WindowBridge: AnyObject, Sendable {
         clipRectangles: [Rectangle]?
     )
 
+    /// Blit pre-resolved ARGB pixels into the drawable. Used by the ZPixmap
+    /// PutImage path: the session walks the depth-1 or depth-8 packed-pixel
+    /// source, resolves each pixel through ColorTable, and hands the bridge
+    /// a row-major ARGB buffer (B, G, R, A per pixel — same layout as the
+    /// PixelBuffer's CGBitmapContext: byteOrder32Little + premultipliedFirst).
+    /// `argb.count` must equal `width * height * 4`.
+    func drawPutImageARGB(
+        target: DrawTarget,
+        argb: [UInt8],
+        width: UInt16, height: UInt16,
+        dstX: Int16, dstY: Int16,
+        clipRectangles: [Rectangle]?
+    )
+
     /// Read drawable contents back as UInt32 pixels at LOGICAL X-coord
     /// scale. One UInt32 per logical pixel; in-memory layout is BGRA per
     /// the Mac CGBitmapContext format (byteOrder32Little + premultipliedFirst).
@@ -605,6 +619,13 @@ public extension WindowBridge {
         dstX: Int16, dstY: Int16,
         leftPad: UInt8,
         foreground: RGB16, background: RGB16,
+        clipRectangles: [Rectangle]?
+    ) {}
+    func drawPutImageARGB(
+        target: DrawTarget,
+        argb: [UInt8],
+        width: UInt16, height: UInt16,
+        dstX: Int16, dstY: Int16,
         clipRectangles: [Rectangle]?
     ) {}
     func readDrawablePixels(

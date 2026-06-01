@@ -2312,6 +2312,93 @@ public final class ServerSession: @unchecked Sendable {
         colors.rgb(for: pixel) ?? RGB16(red: 0, green: 0, blue: 0)
     }
 
+    /// Expand a ZPixmap depth=1 source (bpp=1, MSB-first within byte,
+    /// scanlines padded to 32 bits) into row-major BGRA bytes for the
+    /// bridge's ARGB blit path. `pixel0` paints where the source bit is 0,
+    /// `pixel1` where the source bit is 1. Returns nil if the source is
+    /// too short for the declared dimensions. Caller supplies `leftPad`
+    /// (bits of pad at the start of each scanline before image bits) per
+    /// the X11 spec; non-byte-aligned widths set it to (-width & 7).
+    func expandZPixmapDepth1(data: [UInt8], width w: Int, height h: Int,
+                              leftPad pad: Int,
+                              pixel0 c0: RGB16, pixel1 c1: RGB16) -> [UInt8]? {
+        guard w > 0, h > 0 else { return nil }
+        let scanlineBits = ((pad + w + 31) / 32) * 32
+        let scanlineBytes = scanlineBits / 8
+        guard data.count >= scanlineBytes * h else {
+            log?.log("    zPixmap-d1 short-data: have \(data.count)b, need \(scanlineBytes * h)b — drop")
+            return nil
+        }
+        let c0R = UInt8(c0.red >> 8), c0G = UInt8(c0.green >> 8), c0B = UInt8(c0.blue >> 8)
+        let c1R = UInt8(c1.red >> 8), c1G = UInt8(c1.green >> 8), c1B = UInt8(c1.blue >> 8)
+        var argb = [UInt8](repeating: 0, count: w * h * 4)
+        argb.withUnsafeMutableBufferPointer { dst in
+            data.withUnsafeBufferPointer { src in
+                for y in 0..<h {
+                    let scanlineStart = y * scanlineBytes
+                    for x in 0..<w {
+                        let bitIndex = pad + x
+                        let byteOffset = scanlineStart + bitIndex / 8
+                        let bitInByte = 7 - (bitIndex % 8)   // MSB-first
+                        let bit = (src[byteOffset] >> bitInByte) & 1
+                        let i = (y * w + x) * 4
+                        if bit == 1 {
+                            dst[i + 0] = c1B; dst[i + 1] = c1G
+                            dst[i + 2] = c1R; dst[i + 3] = 255
+                        } else {
+                            dst[i + 0] = c0B; dst[i + 1] = c0G
+                            dst[i + 2] = c0R; dst[i + 3] = 255
+                        }
+                    }
+                }
+            }
+        }
+        return argb
+    }
+
+    /// Expand a ZPixmap depth=8 source (bpp=8, scanlines padded to 32 bits)
+    /// into row-major BGRA bytes. Each source byte is a colormap index
+    /// resolved by `resolve`. Returns nil if the source is too short.
+    /// Pre-resolving via a small index→RGB16 cache keeps the per-pixel
+    /// cost flat for typical icons that use only a handful of distinct
+    /// pixel values.
+    func expandZPixmapDepth8(data: [UInt8], width w: Int, height h: Int,
+                              resolve: (UInt32) -> RGB16) -> [UInt8]? {
+        guard w > 0, h > 0 else { return nil }
+        let scanlineBytes = ((w + 3) / 4) * 4   // 8 bpp, pad to 32-bit units
+        guard data.count >= scanlineBytes * h else {
+            log?.log("    zPixmap-d8 short-data: have \(data.count)b, need \(scanlineBytes * h)b — drop")
+            return nil
+        }
+        var cache: [UInt32: (b: UInt8, g: UInt8, r: UInt8)] = [:]
+        cache.reserveCapacity(16)
+        var argb = [UInt8](repeating: 0, count: w * h * 4)
+        argb.withUnsafeMutableBufferPointer { dst in
+            data.withUnsafeBufferPointer { src in
+                for y in 0..<h {
+                    let scanlineStart = y * scanlineBytes
+                    for x in 0..<w {
+                        let pixel = UInt32(src[scanlineStart + x])
+                        let bgr: (b: UInt8, g: UInt8, r: UInt8)
+                        if let hit = cache[pixel] {
+                            bgr = hit
+                        } else {
+                            let rgb = resolve(pixel)
+                            bgr = (UInt8(rgb.blue >> 8), UInt8(rgb.green >> 8), UInt8(rgb.red >> 8))
+                            cache[pixel] = bgr
+                        }
+                        let i = (y * w + x) * 4
+                        dst[i + 0] = bgr.b
+                        dst[i + 1] = bgr.g
+                        dst[i + 2] = bgr.r
+                        dst[i + 3] = 255
+                    }
+                }
+            }
+        }
+        return argb
+    }
+
     /// Snapshot every already-mapped descendant of `windowId`. Used when a
     /// top-level becomes viewable so the bridge can emit Expose to whichever
     /// descendants have ExposureMask in their event mask. Each snapshot
@@ -5212,36 +5299,81 @@ public final class ServerSession: @unchecked Sendable {
             }
             guard validateGC(r.gc, majorOpcode: PutImage.opcode) != nil else { break }
 
-            // format=Bitmap (X depth-1, packed 1bpp) is the only path
-            // implemented today. Quickplot's icon buttons go through this:
-            // XCreatePixmapFromBitmapData → XCreatePixmap depth=N +
-            // XPutImage format=Bitmap depth=1 into the depth-N pixmap, with
-            // GC fg/bg replacing the 1/0 bits. Other formats (XYPixmap,
-            // ZPixmap) stay silent-dropped — none of the clients we host
-            // today exercise them. See SHORTCUTS.
-            if r.format != .bitmap || r.depth != 1 {
-                log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) format=\(r.format) depth=\(r.depth) \(r.width)x\(r.height) — silent-drop (non-bitmap path not implemented; see SHORTCUTS)")
-                break
-            }
-
+            // Three formats are implemented:
+            //   - Bitmap (format=0, depth=1): packed 1bpp source, expanded
+            //     via GC fg/bg. Quickplot's icon-button path:
+            //     XCreatePixmapFromBitmapData → XPutImage format=Bitmap
+            //     depth=1 into a depth-N pixmap.
+            //   - ZPixmap depth=1 (format=2, depth=1): packed 1bpp source,
+            //     pixel-value-is-color (0→ColorTable[0]=white, 1→ColorTable[1]
+            //     =black). What viewres/xgas/xgc use for 6x3 and 16x16
+            //     button glyphs.
+            //   - ZPixmap depth=8 (format=2, depth=8): byte-per-pixel
+            //     colormap-index source, looked up through ColorTable. What
+            //     motifbur uses for its 24x20 menu icons.
+            //
+            // Other combinations (XYPixmap, ZPixmap at other depths) stay
+            // silent-dropped — none of the clients we host today exercise
+            // them. See SHORTCUTS.
             guard let target = validateDrawTarget(r.drawable, majorOpcode: PutImage.opcode) else {
                 emitError(.implementation, majorOpcode: PutImage.opcode)
                 break
             }
             let (dx, dy) = target.windowOffset
             let state = gcState(r.gc, byteOrder: byteOrder)
-            let fg = resolveColor(state.foreground)
-            let bg = resolveColor(state.background)
-            log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) bitmap \(r.width)x\(r.height) at (\(r.dstX),\(r.dstY)) leftPad=\(r.leftPad)")
-            bridge?.drawPutImage(
-                target: target,
-                sourceData: r.data,
-                sourceWidth: r.width, sourceHeight: r.height,
-                dstX: r.dstX &+ dx, dstY: r.dstY &+ dy,
-                leftPad: r.leftPad,
-                foreground: fg, background: bg,
-                clipRectangles: state.clipRectangles
-            )
+            switch (r.format, r.depth) {
+            case (.bitmap, 1):
+                let fg = resolveColor(state.foreground)
+                let bg = resolveColor(state.background)
+                log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) bitmap \(r.width)x\(r.height) at (\(r.dstX),\(r.dstY)) leftPad=\(r.leftPad)")
+                bridge?.drawPutImage(
+                    target: target,
+                    sourceData: r.data,
+                    sourceWidth: r.width, sourceHeight: r.height,
+                    dstX: r.dstX &+ dx, dstY: r.dstY &+ dy,
+                    leftPad: r.leftPad,
+                    foreground: fg, background: bg,
+                    clipRectangles: state.clipRectangles
+                )
+
+            case (.zPixmap, 1):
+                // Pixel 0 → ColorTable[0] = white; pixel 1 → ColorTable[1] =
+                // black. ColorTable pins these at init (see ColorTable.swift
+                // / OPCODE_STATUS opcode 84). Pre-resolving once outside
+                // the inner loop keeps the per-pixel cost flat.
+                let c0 = resolveColor(0)
+                let c1 = resolveColor(1)
+                log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) zPixmap-d1 \(r.width)x\(r.height) at (\(r.dstX),\(r.dstY))")
+                if let argb = expandZPixmapDepth1(data: r.data,
+                                                   width: Int(r.width), height: Int(r.height),
+                                                   leftPad: Int(r.leftPad),
+                                                   pixel0: c0, pixel1: c1) {
+                    bridge?.drawPutImageARGB(
+                        target: target,
+                        argb: argb,
+                        width: r.width, height: r.height,
+                        dstX: r.dstX &+ dx, dstY: r.dstY &+ dy,
+                        clipRectangles: state.clipRectangles
+                    )
+                }
+
+            case (.zPixmap, 8):
+                log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) zPixmap-d8 \(r.width)x\(r.height) at (\(r.dstX),\(r.dstY))")
+                if let argb = expandZPixmapDepth8(data: r.data,
+                                                   width: Int(r.width), height: Int(r.height),
+                                                   resolve: { resolveColor($0) }) {
+                    bridge?.drawPutImageARGB(
+                        target: target,
+                        argb: argb,
+                        width: r.width, height: r.height,
+                        dstX: r.dstX &+ dx, dstY: r.dstY &+ dy,
+                        clipRectangles: state.clipRectangles
+                    )
+                }
+
+            default:
+                log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) format=\(r.format) depth=\(r.depth) \(r.width)x\(r.height) — silent-drop (format/depth combo not implemented; see SHORTCUTS)")
+            }
 
         case .getImage(let r):
             // ZPixmap path is implemented for both windows and pixmaps.
