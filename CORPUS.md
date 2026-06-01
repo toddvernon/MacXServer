@@ -147,9 +147,8 @@ are hard to find.
 
 The X11R6 bitmap editor. **Paired.** Heavy PolyFillRectangle (the
 edit grid), PolyText8 (menu and label text), PolySegment (highlight
-overlay), and SetClipRectangles. The swiftx capture also exercises
-SHAPE (major opcode 128) — bitmap uses SHAPE on its right-click
-context menu.
+overlay), and SetClipRectangles. Exercises SHAPE (64 calls in the
+gold) — bitmap uses SHAPE on its right-click context menu.
 
 ### dogs
 
@@ -294,10 +293,15 @@ works" demos; live xcalc works against swift-x as of 2026-05-07.
 
 ### xclipboard
 
-The X clipboard manager. **Gold-only.** Exercises PRIMARY and
-CLIPBOARD selection protocols; reads selection notifications from
-other clients. Useful for understanding the selection-roundtrip flow
-that swift-x's `selectionSinkWindow` machinery models.
+The X clipboard manager. **Gold-only.** The capture is mostly Xaw
+chrome on the wire — ChangeGC / CreateGC / PolyFillRectangle /
+PolySegment / ClearArea. Notable: 20 CopyPlane calls (text glyph
+rendering from depth-1 sources) and **18 SHAPE-extension calls**
+(the clipboard window uses SHAPE). Selection ops (SetSelectionOwner,
+ConvertSelection, etc.) are present at lower counts than the chrome
+opcodes — this capture happens to catch xclipboard at startup and
+through a few paste operations, not in a heavy selection-traffic
+loop.
 
 ### xclock
 
@@ -315,9 +319,12 @@ arrived). Uses Xaw Text widget for the display area.
 
 ### xedit
 
-Athena's text editor. **Gold-only.** Exercises Xaw Text, Scrollbar,
-Command widgets. Notable for stressing GetProperty replies (read
-file path), and ChangeProperty (clipboard) on save.
+Athena's text editor. **Gold-only.** 56 CopyPlane calls (text glyph
+rendering from depth-1 font pixmaps), 14 ImageText8, 8 PolyText8 —
+mixed text-rendering modes. 8 CreateGlyphCursor (the I-beam + other
+cursors), 20 ConfigureWindow as the user resized panes. Uses the
+Xaw Text widget; the capture is short and doesn't reach
+property-based file-load / clipboard interaction.
 
 ### xev
 
@@ -344,9 +351,11 @@ big ListFonts reply, not a sustained burst.
 
 ### xgas
 
-Motif demo of the kinetic gas model. **Paired.** Continuous
-PolyFillRectangle redraw of particles. The swiftx capture was one of
-the four caught by the 2026-05-31 audit using ZPixmap PutImage on a
+Motif demo of the kinetic gas model. **Paired.** Particles are
+drawn as text glyphs, not rectangles — 290 PolyText8 + 281 ClearArea
+form the simulation loop (label, erase, redraw). Only 9
+PolyFillRectangle and 4 PutImage. The swiftx capture was one of the
+four caught by the 2026-05-31 audit using ZPixmap PutImage on a
 path that was silently dropped.
 
 ### xgc
@@ -383,9 +392,10 @@ successes on 2026-05-31.
 
 ### xlogo
 
-The X logo. **Gold-only.** Smallest non-trivial X client: one
-window, one Xmu-drawn logo via FillPoly + PolyLine. Useful as a
-fixed point for rendering correctness.
+The X logo. **Gold-only.** Smallest non-trivial X client: 41
+requests total, the X-letter shape drawn via 10 FillPoly calls
+(4-point convex polygons forming the two crossing strokes). No
+PolyLine. Useful as a fixed point for rendering correctness.
 
 ### xmag
 
@@ -417,9 +427,11 @@ the unresolved render-pipeline thread.
 
 ### xmpiano
 
-Motif piano demo with keyboard widget. **Paired.** Was one of the
-two BROKEN-on-swiftx apps closed on 2026-05-31 (the missing opcode
-103 GetKeyboardControl handler — `afdd26b`).
+Motif piano demo with keyboard widget. **Paired.** Gold has 121
+PolySegment + 75 PolyFillRectangle + 28 CreatePixmap + 23 PutImage
+(the key bitmaps). The swiftx capture shows the bug that motivated
+`afdd26b` on 2026-05-31: 1 `GetKeyboardControl` request (opcode
+103) + 1 BadRequest error in reply, before the fix landed.
 
 ### xmter / xmtravel
 
@@ -442,12 +454,13 @@ properties on a target window via GetProperty.
 The terminal. **Paired.** The reference capture for any X server.
 Dominated by ImageText8 (196 calls in the gold — character cells
 rendered with foreground glyph + background block in one round
-trip). Also exercises CreateGlyphCursor (the I-beam), GrabButton
-(selection), GetKeyboardMapping / GetModifierMapping (keymap probe
-on startup), and ChangeProperty (window title updates as the shell
-prompt changes). The gold capture is from a short session; longer
-sessions would show much more CopyArea (for scrollback redraw) and
-selection traffic.
+trip). Also exercises 8 CreateGlyphCursor calls (the I-beam plus
+resize-edge cursors and a pirate cursor for kill targeting), 12
+GrabButton (selection), 3 GetKeyboardMapping + 3 GetModifierMapping
+(keymap probe on startup), and ChangeProperty (window title updates
+as the shell prompt changes). The gold capture is from a short
+session; longer sessions would show much more CopyArea (for
+scrollback redraw) and selection traffic.
 
 ## Indices
 
@@ -457,13 +470,26 @@ These indices point at the captures that most heavily exercise a
 specific protocol feature. Useful for "I'm implementing X, where's a
 realistic test trace for Y?"
 
-- **SHAPE extension** → oclock, xeyes, bitmap (right-click menu),
-  xcalc (80 SHAPE requests — the calculator uses SHAPE for its
-  rounded buttons)
-- **CopyPlane (depth-1 to depth-N glyph transfer)** → xmter (**299
-  calls — corpus champion**), xedit (56), xclipboard (20), xgc (16)
-- **ZPixmap PutImage** → motifanim, motifbur (6), viewres (13),
-  xgas, dogs (12)
+- **SHAPE extension** → SHAPE is more pervasive in the corpus than
+  the obvious "shaped-window" demos suggest. Counts (gold):
+  - xcalc (80) — rounded calculator buttons
+  - bitmap (64) — right-click menu
+  - xclipboard (18)
+  - viewres (6) — Athena widget chrome
+  - editres (4) — Athena widget chrome
+  - oclock (2) — the round clock window itself
+  - xmter (2)
+  - xeyes (1) — the oval-shaped window
+- **CopyPlane (depth-1 to depth-N glyph or sprite transfer)** →
+  xmter (**299 calls — corpus champion**, sprite-strip animation),
+  xedit (56), xclipboard (20), bitmap (19), xgc (16), editres (14)
+- **PutImage (any format)** → almost every Athena/Motif app uses
+  some PutImage. Heavy users: xmpiano (23 — key bitmaps), bitmap
+  (19), viewres (13), dogs (12), xgc (9), periodic (9). Most are
+  `format=bitmap` depth=1, not ZPixmap.
+- **ZPixmap PutImage at depth=8** specifically (the path closed by
+  `9a154f1` on 2026-05-31) → motifanim, motifbur, viewres, xgas —
+  the four caught by the audit. Modest counts each.
 - **GetImage on root** → xmag
 - **GrabServer / UngrabServer** → xmag (446 cycles in the swiftx capture)
 - **GrabPointer + glyph cursor** → xkill, xterm, xmag
@@ -484,16 +510,21 @@ realistic test trace for Y?"
 
 ### By identification path
 
-Documents how each client made itself identifiable to the capture
-machinery. Relevant to anyone writing capture / debugging tooling:
-some "minimalist" X clients still never set either property.
+How each capture got its filename — which signal the capture
+machinery used. Relevant to anyone writing capture / debugging
+tooling: some "minimalist" X clients never set either property
+during certain usage patterns, even if the app's normal flow would.
 
-- **WM_CLASS-identified (canonical path)**: most apps. xterm, xclock,
-  motifbur, viewres, …
-- **WM_NAME-fallback only** (no WM_CLASS published — the 2026-06-01
-  fallback motivators): ico, xmaze, puzzle, xev.
-- **No identifying property at all** (no top-level window): xkill,
-  xmag, xlsatoms, xlsclients, unidentified-5, unidentified-22.
+- **WM_CLASS-identified (canonical path)**: most apps. xterm,
+  xclock, motifbur, viewres, …
+- **WM_NAME-fallback only** (no WM_CLASS in this session — the
+  2026-06-01 fallback motivators): ico, xmaze, puzzle, xev.
+- **Neither property in this session** (so the capture lands as
+  `unidentified-N` until manually identified by wire fingerprint):
+  xkill, xmag (swiftx-side only — the user did a rubber-band
+  selection without creating a result window; the gold has full
+  WM_CLASS), xlsatoms (no top-level window at all), xlsclients
+  (no top-level), unidentified-5, unidentified-22.
 
 ## Adding to the corpus
 
