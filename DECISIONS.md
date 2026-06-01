@@ -642,6 +642,33 @@ Per-window bit preservation is economically rational only in single-framebuffer 
 
 ---
 
+## 2026-05-31 -- Don't wire capture-side decoders into macxserver's live console
+
+**Context**: A pile of new decoders landed in `SwiftXCaptureCore` (`WMProperties`, `Keysyms`, `ResourceRegistry`, full reply-body decode for 33 opcodes, ClientMessage payload decode, _MOTIF_* property decoders, type-driven property fallback). They're consumed by the capture viewer windows. The natural follow-up question: should the macxserver also use these in its live console output, since the server emits per-session log lines via `ServerSession` that currently stay terse (raw hex atom/window/keycode IDs)?
+
+The capture viewer and server's "Open .xtap..." debug menu *already* share `ChronoDumper.dump(path:)`, so post-mortem viewing is consistent. The question is specifically about the live, running-time emissions to `/tmp/macxserver/<session>.log` (plus stderr when `--verbose`).
+
+**Chosen**: **Don't do the wiring.** Use the `--capture` workflow when you want rich-decoded server-side wire visibility:
+
+```
+swiftx-server --capture       # tee every session to .xtap
+... reproduce the bug ...
+open /tmp/swift-x-captures/<instance>-<ts>.xtap
+```
+
+That gives the full benefit of today's decoders without crossing module boundaries (`SwiftXServerCore` would otherwise have to depend on `SwiftXCaptureCore`, or we'd extract a third shared module).
+
+The server's live console serves a different purpose: human-narrated running events ("WM_CLASS identified as xterm", "copy: 84 bytes written to NSPasteboard", "BadDrawable at seq=412 from CopyArea on 'Command Window'"). Story-form, intentionally narrow. Bolting on the full chrono-dump decoder soup would duplicate the viewer's job and crowd out the narration that's the live console's reason to exist.
+
+**One narrow follow-up that is worth doing**: populate `ResourceRegistry` on the server side so `ServerSession`'s XError landmarks pick up the `(freed at seq=Y, created at seq=X)` use-after-free annotation that the capture viewer already gets. That's the one decode-class that fits the live console's narrative style and matters for server debugging. Bounded (~30 min) and uses the same code we already use capture-side. Skipped on 2026-05-31 to keep scope tight; recorded here so next session can pick it up.
+
+**Rejected**:
+- **Wholesale `--verbose` decoded output in the live console** -- crowds the narration, blurs the live console's purpose vs the viewer's.
+- **Extract decoders into a third shared module** -- premature; the two consumption modes are distinct enough that sharing would force compromises on both sides.
+- **Have the server emit chrono-dump-style structured lines** -- that's literally what `--capture` already produces.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

@@ -1,453 +1,231 @@
-# Status 2026-05-31 — thirteen capture wedges (above) + landmark enrichment + console quieted
+# Status 2026-05-31 -- capture-decoder marathon, Sun-less
 
-Two small landings on a Sun-less day. Both pure capture-side, no live
-verification needed.
+Couldn't reach the vintage Suns today, so leaned all the way into
+capture-side decoder work. Fourteen commits, all pushed. Tests:
+1083 -> 1222 (+139 new). Zero regressions. macXcapture checklist:
+24/35/67/1 -> 36/33/57/1 -- six rows moved Yes, two moved Partial,
+six closed from No.
 
-**`macxserver` console quieted.** Per-session and bridge traces are now
-disk-only at `/tmp/macxserver/<instance>-<ts>.log` by default. New
-`--verbose` / `-v` flag restores stderr mirroring when debugging. Listener
-events (accept errors, shutdown) keep their stderr sink — those are rare
-and worth seeing. `09bf07e`.
+All five top-5 readability gaps from the checklist's vintage-X lens
+section closed in this one day: keysym/modifier symbolic decode,
+WM-property type-aware decode, visual catalog lookup,
+XC-MISC/XTEST/RECORD extension decoders, and the resource registry
+with lineage. Plus several follow-ups beyond the top-5 and a final
+landmark-text enrichment pass that surfaces today's data inside the
+existing landmark vocabulary.
 
-**Keysym + modifier symbolic decode for the capture viewer.** First wedge
-out of the macXcapture decoder push's Phase 4-5 work, picked as the
-highest-payoff Sun-independent gap from the checklist's vintage-lens top 5.
+## The fourteen commits
 
-Three pieces:
+In order:
 
-- 1224-entry keysym name table generated from
-  `reference/X11R6/xc/include/keysymdef.h` into
-  `Sources/SwiftXCaptureCore/Keysyms.generated.swift`. Regen script at
-  `Tools/regen_keysyms.sh`. Public API `keysymName(_:)` +
-  `modifierMaskString(_:)` + `grabModifierString(_:)` in `Keysyms.swift`.
-- `ChronoContext` now tracks a session keymap, populated from
-  `GetKeyboardMapping` replies and `ChangeKeyboardMapping` requests.
-  `KeyPress`/`KeyRelease` events translate keycode → keysym for output;
-  before the keymap is populated, falls back to bare keycode.
-- 7 dumper call sites rewritten: `GrabButton`, `GrabKey`, `UngrabButton`,
-  `UngrabKey`, the four input-event types (state field), and
-  `ChangeKeyboardMapping` payload (now prints rows as
-  `kc7=[Tab,ISO_Left_Tab] kc8=[Return]`, capped to 8 keycodes + ellipsis).
+- `09bf07e` server: quiet stderr by default, add `--verbose`.
+  Per-session and bridge traces moved to
+  `/tmp/macxserver/<inst>-<ts>.log`; only the startup banner +
+  listener events (accept errors, shutdown) hit stderr now. `-v`
+  restores the live mirror when debugging.
+- `44ce275` keysym + modifier symbolic decode. 1224-entry table
+  generated from `reference/X11R6/xc/include/keysymdef.h` via
+  `Tools/regen_keysyms.sh`. ChronoContext now tracks a session
+  keymap populated from `GetKeyboardMapping` replies and
+  `ChangeKeyboardMapping` requests; KeyPress/Release translate
+  keycode to keysym. Modifier masks render as `Shift|Ctrl|Mod1`.
+- `6a4b1ab` ICCCM WM_* type-aware property decode. WM_NORMAL_HINTS,
+  WM_HINTS, WM_STATE, WM_CLASS, WM_PROTOCOLS, WM_TRANSIENT_FOR.
+  Wires into both ChangeProperty and GetProperty reply paths.
+- `9d1a567` visual catalog lookup. `ChronoContext.visualCatalog`
+  harvested from SetupAccepted. visualIds render as
+  `0x22(PseudoColor d8)`. CreateWindow gained inline depth + visual
+  fields.
+- `6af1270` XC-MISC + XTEST + RECORD extension decoders. Three new
+  ExtensionDumpers registered. XTEST's FakeInput surfaces the
+  synthesized event-type and detail (keycode/button/absolute-vs-
+  relative).
+- `b1adba7` session-wide resource registry + lineage.
+  `ResourceRegistry` tracks Create*/Free* for all 6 X11 resource
+  kinds. Powers two consumer features: session-end summary line
+  (`# resources: 47 pixmaps (3 freed, 44 leaked)`) and
+  use-after-free annotation on XError landmarks
+  (`(freed at seq=Y, created at seq=X)`).
+- `b916974` _MOTIF_* property decoders. `_MOTIF_WM_HINTS`,
+  `_MOTIF_WM_INFO`, `_MOTIF_DRAG_WINDOW`, `_MOTIF_DRAG_RECEIVER_INFO`.
+  Includes the embedded `byte_order` tag on DnD properties.
+- `f4548b2` property type-driven fallback. CARDINAL / INTEGER /
+  STRING / UTF8_STRING / COMPOUND_TEXT / WINDOW / PIXMAP / etc.
+  decode by type atom when the property name isn't in the WM_* set.
+  Closes §3 type-aware-decoding from Partial to Yes.
+  RESOURCE_MANAGER now reads as inline text instead of `data=30567b`.
+- `a353eac` ClientMessage payload decode. WM_PROTOCOLS messages
+  render `protocol=WM_DELETE_WINDOW time=12345`;
+  `_MOTIF_WM_MESSAGES` map message codes to named MWM_F_FUNCTION_*
+  values; everything else gets the format-aware generic dump.
+- `02643bb` WM_COMMAND argv decode. Splits NUL-terminated argv into
+  a quoted list.
+- `2ed2d0a` reply-body decode batch 1 (top 10 by corpus frequency).
+  GetInputFocus, GetAtomName (also populates `atomToName` in
+  reverse), GetGeometry, QueryTree, GetWindowAttributes,
+  QueryColors, GetModifierMapping, GrabPointer/GrabKeyboard,
+  GetSelectionOwner, QueryPointer, TranslateCoordinates,
+  QueryBestSize. ~3300 reply lines across the corpus affected.
+- `3e328a5` reply-tail (final 16). ListProperties, ListFonts,
+  ListFontsWithInfo, GetFontPath, ListExtensions,
+  ListInstalledColormaps, ListHosts, GetImage, GetKeyboardControl,
+  GetPointerControl, GetPointerMapping, GetScreenSaver,
+  QueryKeymap, QueryTextExtents, LookupColor, SetModifierMapping,
+  SetPointerMapping. Closes §3 "All core replies decoded" Partial
+  to Yes.
+- `7562efd` SM_CLIENT_ID + WM_CLIENT_LEADER + WM_COLORMAP_WINDOWS
+  naming polish. Slight relabeling on top of the type-fallback.
+- `fb48a93` landmark enrichment using today's data: provenance
+  suffix on the map landmark (class + host + argv); symbolic
+  modifier prefix on click landmark (`Shift-clicks`, `Ctrl-clicks`);
+  modal vs non-modal dialog distinction via
+  `_MOTIF_WM_HINTS.inputMode`; per-window text cache feeding button
+  labels on click landmarks (`clicks on "OK" in "Save?"`).
 
-Verified against `captures/xterm-running-on-ss2-display-on-ss2.xtap` —
-live key trace now reads as `KeyPress L (keycode=92) state=none` and
-`KeyPress X (keycode=108) state=Ctrl` instead of the prior
-`keycode/btn=92 state=0x0` / `keycode/btn=108 state=0x4`. 12 new unit
-tests; 1083/1083 total tests pass.
+## What's reading better now
 
-Checklist (`macXcapture-feature-checklist.md`): two §3 rows moved No → Yes
-(keysym decode, modifier mask decode). Counts: 24/35/67/1 → 26/35/65/1.
-Vintage-lens gap #1 closed.
-
-**WM-property type-aware decode (vintage-lens gap #2).** Second wedge of
-the day, same pattern. The five ICCCM WM_* properties plus WM_TRANSIENT_FOR
-now decode inline on both the `ChangeProperty` request and `GetProperty`
-reply paths:
-
-- WM_NORMAL_HINTS — flags list + populated size/min/max/inc/aspect/base/
-  gravity fields (gravity rendered by name).
-- WM_HINTS — flag list, input bool, initialState name, icon refs, urgency.
-- WM_STATE — state name, icon window.
-- WM_CLASS — instance/class strings split from the NUL-terminated pair.
-- WM_PROTOCOLS — atom-name list resolved through `ctx.atomToName`.
-- WM_TRANSIENT_FOR — single window id.
-- Fallback: generic `ATOM`-typed properties get the atom-list renderer
-  even when the property name isn't in the WM_* set.
-
-Layouts in `Sources/SwiftXCaptureCore/WMProperties.swift`, ported from
-`reference/libX11/src/Xatomtype.h` and ICCCM §4. `ChronoContext` gained
-`seqToGetPropertyAtom` for request → reply pairing. New
-`previewBytesRaw(_:format:)` overload lets the reply path call the
-generic preview without an enum round-trip.
-
-Verified against the corpus: `xterm` capture shows
-`prop=WM_NORMAL_HINTS ... flags=PSize|PWinGravity PSize=484x316
-gravity=NorthWest` and `prop=WM_HINTS ... flags=Input|State input=true
-initialState=Normal`; `xedit` shows `prop=WM_PROTOCOLS ... type=ATOM
-... atoms=[WM_DELETE_WINDOW]`. 15 new unit tests; 1098/1098 total tests
-pass.
-
-Checklist §3 "Property values decoded with type awareness" row stays
-Partial (WM_* done; CARDINAL and non-WM_* STRING decoding still
-fall through to `previewBytes`). Vintage-lens gap #2 marked Closed.
-
-**Visual catalog lookup (vintage-lens gap #3).** Third wedge of the day,
-same pattern again. `ChronoContext.visualCatalog` is populated at the
-SetupAccepted landing by walking every screen → allowedDepths → visuals
-tuple; entries record depth + class + bitsPerRgbValue + screen index.
-`visualDisplay(_:ctx:)` renders a visualId as `0x22(PseudoColor d8)`,
-falling back to bare hex when the catalog hasn't been populated. The
-spec sentinels for `CreateWindow.visual=0` and `CreateWindow.depth=0`
-render as `CopyFromParent` by name.
-
-Two dumper sites rewired: CreateWindow gained explicit `depth=` and
-`visual=` fields (previously only the class field was printed);
-CreateColormap's visual now resolves through the new helper instead of
-the old `windowDisplay` shorthand.
-
-Verified against the corpus: ico, auto-box, and xmag captures now show
-`visual=0x22(PseudoColor d8)` where before they showed bare hex; xterm
-still reads `visual=CopyFromParent` because xterm inherits its parent's
-visual rather than picking one explicitly. 5 new unit tests; 1103/1103
-total tests pass.
-
-Checklist row §3 "Visual and depth references resolved" moved No → Yes
-(27/35/64/1). Vintage-lens gap #3 marked Closed.
-
-**XC-MISC / XTEST / RECORD extension decoders (vintage-lens gap #4).**
-Fourth wedge of the day. Three new `ExtensionDumper` implementations
-registered in `ExtensionDumperRegistry.builtins`:
-
-- `XcMiscDumper` — three requests (GetVersion, GetXIDRange, GetXIDList).
-  Layouts from `reference/X11R6/xc/include/extensions/xcmiscstr.h`.
-- `XTestDumper` — four requests (GetVersion, CompareCursor, FakeInput,
-  GrabControl). FakeInput is the meaty one — synthesized input event:
-  the `detail` field is labeled per `type` (keycode for Key*,
-  button for Button*, absolute/relative for MotionNotify). Layouts from
-  `reference/xproto/include/X11/extensions/xtestproto.h`.
-- `RecordDumper` — all eight context-management requests. Trailing
-  variable-length CLIENTSPEC and RECORDRANGE lists surface as counts
-  only; per-element walks deferred. Layouts from
-  `/opt/X11/include/X11/extensions/recordproto.h`.
-
-No corpus capture exercises any of these (they're for external
-captures: input-injection rigs, macro-recording tools, long-running
-sessions that exhaust the resource-id pool). Verified via 15 new unit
-tests in `Tier4ExtensionTests.swift` — both byte orders, every minor
-opcode shape covered. 1118/1118 total tests pass.
-
-Checklist §4: XC-MISC + XTEST + RECORD all No → Yes. Counts:
-27/35/64/1 → 30/35/61/1. Vintage-lens gap #4 marked Closed.
-
-**Resource registry / lineage (vintage-lens gap #5).** Fifth wedge of
-the day. The architectural one. `ResourceRegistry` is a public
-session-wide registry keyed by resource id, tracking creation +
-free-time for all six X11 resource kinds (window, pixmap, GC, font,
-cursor, colormap). Populated in `dump()`'s request-dispatch loop via
-`trackResourceLifecycle(_:seq:registry:)` — every Create* / Free* shape
-maps cleanly. ID reuse honored: new creation overwrites the slot but
-separate monotonic counters keep session-end stats honest.
-
-Two consumer features ship in the same wedge:
-
-1. **Session-end resource summary landmark.** After the existing
-   `# Session ends after Xs (N requests, M events)` line, a new
-   `# resources: 2 windows (0 freed, 2 leaked), 7 GCs (1 freed, 6 leaked),
-   4 fonts (0 freed, 4 leaked), 8 cursors (0 freed, 8 leaked)` line
-   surfaces every kind with non-zero activity. Vintage clients commonly
-   "leak" all resources at shutdown (server cleans up on disconnect),
-   so the leak counts are diagnostic, not accusatory.
-
-2. **Use-after-free / lineage annotation on XError landmarks.**
-   `LandmarkDetector.errorLandmark` now consults the registry. When the
-   bad resource id was created earlier in the session, the landmark
-   gets a `(created at seq=X)` suffix. When it was created AND freed
-   before the failing request, the suffix becomes
-   `(freed at seq=Y, created at seq=X)` — the textbook use-after-free
-   signal, surfaced automatically.
-
-LandmarkDetector keeps its window-specific state (top-level identity,
-transient-for, click resolution) since that's a different concern than
-raw lineage; the two are complementary now.
-
-Verified against the xterm and xedit corpus captures — both produce a
-clean `# resources:` line at end-of-session. Use-after-free path
-covered by synthetic unit tests (no corpus capture happens to trigger
-it). 12 new tests in `ResourceRegistryTests.swift`; 1130/1130 total
-tests pass.
-
-Checklist §3 "Resource IDs tracked" Partial → Yes; §3 "Resource
-creation lineage shown" No → Yes; §3 "Resource lifetime tracked" No →
-Yes; §6 "Resource leak detection" No → Partial (session-end count
-lands, per-resource detail still missing); §6 "Use-after-free detection"
-No → Yes. Counts: 30/35/61/1 → 34/35/57/1. Vintage-lens gap #5 Closed.
-
-**All five top-5 vintage-lens readability gaps closed in one Sun-less
-day.** Plus the console-quiet server wedge from this morning.
-
-**Bonus: `_MOTIF_*` property decoders.** With the top-5 closed, picked
-the highest-leverage *purely vintage* follow-up: four Motif-specific
-property decoders that no modern audience cares about but every vintage
-CDE/Motif client sets at realize time. Wired into the existing
-`decodeKnownWMProperty` dispatcher in `WMProperties.swift`:
-
-- `_MOTIF_WM_HINTS` — flags + functions + decorations + inputMode +
-  status. Layout from `reference/motif/lib/Xm/MwmUtil.h`
-  `PropMotifWmHints`. The mwm/dtwm communication channel; every Motif
-  top-level uses it.
-- `_MOTIF_WM_INFO` — mwm-startup flags + wmWindow id. Layout same
-  header. Published by the running window manager on the root.
-- `_MOTIF_DRAG_WINDOW` — single WINDOW id, the DnD root-window proxy.
-  Reuses the existing `decodeSingleWindow` path.
-- `_MOTIF_DRAG_RECEIVER_INFO` — 16-byte header for a drop target.
-  Layout from `reference/motif/lib/Xm/DragICCI.h`
-  `xmDragReceiverInfoStruct`. Has an embedded `byte_order` byte ('l'/
-  'B') that overrides the X11 connection's endianness — Motif's DnD
-  properties are self-describing so any client can read them
-  regardless of its own byte order. Decoder honors this.
-
-Plus the `_MWM_*` alias variants (`_MWM_HINTS`, `_MWM_INFO`) — the
-Motif source uses both spellings interchangeably.
-
-Verified against the corpus: dogs/motifanim/fileview etc. now render
-`prop=_MOTIF_DRAG_WINDOW ... window=0x2400001` (proxy resolution),
-`prop=_MOTIF_WM_HINTS ... flags=INPUT_MODE inputMode=MODELESS`
-(non-modal dialog), `prop=_MOTIF_DRAG_RECEIVER_INFO ... endian=msb
-protocol=0 style=PREFER_PREREGISTER proxy=None sites=2 heap=72`
-(fileview as a 2-site drop target). 11 new unit tests; 1141/1141 total
-tests pass. No checklist count shifts — the type-aware row was already
-Partial and this extends its coverage without flipping it.
-
-**Type-driven property decode fallback.** Seventh wedge — closes the
-§3 "type-aware decoding" row from Partial → Yes. The dispatcher in
-`WMProperties.swift` gained a `decodePropertyByType` fallback that
-fires whenever the property name didn't match a WM_* / _MOTIF_* case:
-
-- **CARDINAL** / **INTEGER**: render as decimal lists (unsigned /
-  signed). Format-width-aware: 8/16/32 bits. Truncated to 8 elements
-  with `…(+N)` tail.
-- **STRING** / **UTF8_STRING** / **COMPOUND_TEXT**: render as quoted
-  text up to 200 chars (Latin-1 for STRING/COMPOUND_TEXT, UTF-8 for
-  UTF8_STRING). Newlines/CR/tab escaped; control bytes → `?`; longer
-  bodies show `…" (N bytes)` suffix.
-- **WINDOW** / **PIXMAP** / **COLORMAP** / **CURSOR** / **FONT** /
-  **DRAWABLE**: render as resource-id lists with `None` for id=0.
-- **ATOM**: already covered by `decodeAtomList`.
-
-Verified against the corpus: `RESOURCE_MANAGER` now reads as
-`value="! Reserved for resources that should apply...\n"` (truncated
-preview of the actual Xrm text) instead of `data=30567b`;
-`_MOTIF_DEFAULT_BINDINGS` shows its osfKey binding list inline;
-`WM_CLIENT_MACHINE` resolves to the hostname string.
-
-One stale test in WMPropertyTests had to be updated — its
-"unknown-property returns nil" assumption no longer holds when the
-type is recognized. Replaced with a positive test for the new path.
-15 new unit tests; 1157/1157 total tests pass. Checklist §3 row
-Partial → Yes: 34/35/57/1 → 35/34/57/1.
-
-**ClientMessage payload decode.** Eighth wedge. The wire-level decoder
-for ClientMessage was already in place (type atom + window + 20-byte
-payload), but the payload bytes were opaque. Now decoded by type:
-
-- `WM_PROTOCOLS` (format=32): `protocol=WM_DELETE_WINDOW time=12345`
-  / `protocol=WM_TAKE_FOCUS time=CurrentTime`. The close-window / focus
-  handshake every Motif/CDE client uses. Resolves the protocol atom via
-  `ctx.atomToName` + predefined atoms; `time=0` → `CurrentTime`.
-- `_MOTIF_WM_MESSAGES` (format=32): renders the message code as a
-  named MWM_F_FUNCTION_* function id (24 values from MwmUtil.h), plus
-  timestamp + first argument word.
-- Generic fallback: format=32 → 5 CARD32 hex list; format=16 → 10
-  CARD16; format=8 → 20 bytes as hex tuples.
-
-No corpus capture exercises a resolved-type ClientMessage today —
-captures are short and rarely include close-window flows — so verified
-via 10 unit tests covering all branches plus the no-atom + unresolved
-cases. 1167/1167 total tests pass. Checklist counts unchanged (this
-wedge enriches the already-Yes "core events decoded" row rather than
-flipping anything).
-
-**WM_COMMAND argv decode.** Ninth wedge. ICCCM §4.1.2.7 spec'd as a
-STRING property where each argv element is a NUL-terminated 8-bit
-string laid out back-to-back; libX11's `XSetCommand` emits
-`arg0\0arg1\0...argN\0`. Named-property dispatcher now splits on NUL
-and renders as `argv=["xterm", "-bg", "black", "-fg", "cyan", "-e",
-"ls"]`. Forgiving on a missing trailing NUL — surfaces the final
-fragment rather than dropping it. Non-printable bytes become `?` so a
-weird byte doesn't break the line.
-
-No corpus capture sets WM_COMMAND (vintage clients commonly set it
-via XSetStandardProperties early in main(), but our short captures
-catch shortly after the connection setup and most clients we have
-captured don't call SSP). Decoder is unit-tested only — 5 new cases:
-single arg, multiple args, malformed trailing fragment, empty data,
-format=32 rejection.
-
-1172/1172 total tests pass. Doesn't move a checklist row — extends
-the named-property dispatcher which is already part of the Yes
-type-aware-decoding row.
-
-**Reply-body decode for 10 more opcodes.** Tenth wedge — biggest of
-the day by reply lines affected (~3300 in the corpus). Targets the §3
-"All core replies decoded — Partial" row. The dumper's reply path
-gained dispatch blocks for the ten most-frequent unenriched opcodes,
-picked by corpus-wide frequency count:
-
-- `GetInputFocus` (1654 hits): `focus=0x140000E revertTo=parent`
-  (`None` / `PointerRoot` sentinels named).
-- `GetAtomName` (493 hits): `atom=0x7F → name="-Misc-Fixed-Medium-..."`
-  Also populates `ctx.atomToName` in reverse so later atom references
-  resolve symbolically.
-- `GetGeometry` (295 hits): `root=0x2B at (0,0) 484x316 border=0 depth=8`
-- `QueryTree` (143 hits): `root=… parent=… children=[…,…(+N)]`
-  (8-element cap with leak-indicator tail).
-- `QueryColors` (80 hits): `rgb=[(0,0,0),(255,255,255),…(+N)]`
-  (4-triple cap; 8-bit components extracted from the wire's 16-bit
-  values).
-- `GetModifierMapping` (72 hits): `perMod=2 Shift=[50,62] Ctrl=[37]`
-  with empty slots suppressed and Lock/Mod1..5 named.
-- `GrabPointer` + `GrabKeyboard` (combined 117 hits): `status=success`
-  / `status=frozen` etc.
-- `GetSelectionOwner` (58 hits): `owner=0x2800029` / `owner=None`.
-- `QueryPointer` (41 hits): root + win coords + child + button mask
-  symbolic.
-- `TranslateCoordinates` (38 hits): `dst=(621,299) child=0x100051F`.
-- `QueryBestSize` (29 hits): `best=32x32`.
-- `GetWindowAttributes` (29 hits): class + visual (resolved through
-  the catalog) + mapState + override.
-
-Combined with the 7 already-decoded replies (InternAtom,
-QueryExtension, QueryFont, AllocColor, AllocNamedColor, GetProperty,
-GetKeyboardMapping), the chrono dump now renders rich detail for 17
-of 30 reply-producing opcodes. The remaining ~12 (ListFonts,
-GetMotionEvents, ListHosts, etc.) are longer-tail / less-common —
-deferred without ceremony.
-
-Verified against the corpus: xterm capture now reads
-`Reply (GetAtomName) atom=0x7F → name="-Misc-Fixed-Medium-R-Semi
-Condensed--13-120-75-75-C-60-ISO8859-1"`; dogs capture
-`Reply (QueryTree) root=0x2B parent=None children=[0x2400001,...,
-…(+11)]`. 17 new unit tests + bonus end-to-end round-trip through
-`formatServerMessage` for every decoder. 1189/1189 total tests pass.
-
-**Reply-tail: the remaining 16 reply decoders.** Eleventh wedge. With
-the most-frequent batch covered in the previous commit, this wedge
-closes the §3 "All core replies decoded" row — Partial → Yes —
-by wiring the rest:
-
-- `ListProperties` — atom list per window, resolved via atom table.
-- `ListFonts` — font name list (cap 4 with tail count).
-- `ListFontsWithInfo` — per-font metadata with end-of-list marker.
-- `GetFontPath` — server's font-search dirs.
-- `ListExtensions` — extension catalog.
-- `ListInstalledColormaps` — installed cmap stack.
-- `ListHosts` — access-control list + enabled flag.
-- `GetImage` — depth + visual + pixel-byte count.
-- `GetKeyboardControl` — autoRepeat + LED mask + bell params.
-- `GetPointerControl` — acceleration ratio + threshold.
-- `GetPointerMapping` — button id remap.
-- `GetScreenSaver` — timeout + interval + blanking prefs.
-- `QueryKeymap` — count of keys currently held down.
-- `QueryTextExtents` — overall width + ascent/descent + direction.
-- `LookupColor` — exact + visual RGB triples.
-- `SetModifierMapping` / `SetPointerMapping` — status enum
-  (Success/Busy/Failed).
-
-Verified against the corpus: `Reply (LookupColor) exact=(0,255,255)
-visual=(0,255,255)` (cyan), `Reply (GetImage) depth=8 visual=
-0x22(PseudoColor d8) bytes=4096`, `Reply (ListProperties) atoms=
-[WM_STATE,WM_PROTOCOLS,0x98,…,WM_CLASS,WM_HINTS,WM_NORMAL_HINTS,…(+4)]`.
-
-The only reply-producing opcodes that stay bare are AllocColorCells /
-AllocColorPlanes (no framer decoder — rarely-used cmap-allocation
-patterns) and GetMotionEvents (framer assumes nEvents=0 by design).
-**33 of 33 viable reply-producing opcodes now render rich detail.**
-
-18 new tests via end-to-end round-trip through formatServerMessage
-(35 cases in ReplyDecodeTests total now). 1207/1207 total tests pass.
-
-Checklist §3 "All core replies decoded" Partial → Yes:
-35/34/57/1 → 36/33/57/1.
-
-**SM_CLIENT_ID + WM_CLIENT_LEADER + WM_COLORMAP_WINDOWS named
-decoders.** Twelfth wedge — completes the remaining ICCCM
-session-management property surface. These three all decoded
-adequately via the type-fallback path already, but the named cases
-add light contextual labeling:
-
-- `SM_CLIENT_ID` (STRING, format=8) → `smId="<uuid-string>"` instead
-  of the generic `value="..."`.
-- `WM_CLIENT_LEADER` (WINDOW, format=32) → `leader=0x2400001` instead
-  of the generic `windows=[0x2400001]`.
-- `WM_COLORMAP_WINDOWS` (WINDOW list, format=32) →
-  `colormapWindows=[0x..,..]` (capped at 8).
-
-No corpus capture sets these in our short sessions (session-mgmt is
-mostly absent from short-replay traces). 4 new unit tests; 1211/1211
-total tests pass. No checklist count shift — these add naming polish
-on top of the already-Yes type-aware-decoding row.
-
-**Landmark enrichment from today's decoders.** Thirteenth wedge.
-After Todd asked the sharper question ("are there stateful landmarks
-already richer with today's data?"), four landmark enrichments
-landed that use today's wedges to make the existing landmark
-vocabulary substantially more informative — without adding any new
-landmark types.
-
-**A. Window provenance in the map landmark.** The map landmark
-("appears on screen") now picks up WM_CLASS, WM_CLIENT_MACHINE, and
-WM_COMMAND if the toolkit has written them by MapWindow time. Folded
-into the map landmark rather than the identify landmark because Xt
-sets WM_NAME *first* in its property burst — by MapWindow time the
-whole burst has landed.
+All taken from real corpus dumps:
 
 ```
-before: # The "dogs" window appears on screen (0x5200057, 614×353)
-after:  # The "dogs" window appears on screen (0x5200057, 614×353,
-        ApplicationShell class, host "ss2")
+KeyPress event:
+  before: KeyPress ... keycode/btn=108 state=0x4
+  after:  KeyPress ... X (keycode=108) state=Ctrl
+
+WM_NORMAL_HINTS ChangeProperty:
+  before: prop=WM_NORMAL_HINTS ... data=72b
+  after:  prop=WM_NORMAL_HINTS ... flags=PSize|PWinGravity
+          PSize=484x316 gravity=NorthWest
+
+CreateWindow:
+  before: CreateWindow ... class=inputOutput ... mask=0x80A
+  after:  CreateWindow ... class=inputOutput depth=8
+          visual=0x22(PseudoColor d8) mask=0x80A
+
+RESOURCE_MANAGER GetProperty reply:
+  before: Reply (GetProperty) prop=RESOURCE_MANAGER ... data=30567b
+  after:  Reply (GetProperty) prop=RESOURCE_MANAGER type=STRING
+          format=8 value="! Reserved for resources that should..."
+          (30567 bytes)
+
+GetGeometry reply:
+  before: Reply (GetGeometry)
+  after:  Reply (GetGeometry) root=0x2B at (0,0) 484x316 border=0 depth=8
+
+GetModifierMapping reply:
+  before: Reply (GetModifierMapping)
+  after:  Reply (GetModifierMapping) perMod=3 Shift=[106,117]
+          Lock=[126] Ctrl=[83] Mod1=[127,129] Mod2=[20] Mod3=[26]
+          Mod4=[105] Mod5=[32,80,104]
+
+XError landmark (when registry has seen the resource):
+  before: # BadGC at seq=100 from CopyArea (bad resource 0x300)
+  after:  # BadGC at seq=100 from CopyArea (bad resource 0x300)
+          (freed at seq=88, created at seq=42)
+
+Map landmark for a top-level:
+  before: # The "dogs" window appears on screen (0x5200057, 614x353)
+  after:  # The "dogs" window appears on screen (0x5200057, 614x353,
+          ApplicationShell class, host "ss2")
+
+Click landmark on a button:
+  before: # The user clicks inside "bitmap" on a 60x26 child 0x... at (31,10)
+  after:  # The user clicks on "File" in "bitmap" at (31,10)
+
+Click landmark with modifier state:
+  before: # The user clicks inside "xterm" on a 484x316 child at (64,204)
+  after:  # The user Ctrl-clicks inside "xterm" on a 484x316 child at (64,204)
+
+Session-end summary:
+  before: # Session ends after 11.43s (297 requests, 22 events)
+  after:  # Session ends after 11.43s (297 requests, 22 events)
+          # resources: 2 windows (0 freed, 2 leaked), 1 pixmap
+          (0 freed, 1 leaked), 7 GCs (1 freed, 6 leaked), ...
 ```
 
-For vintage captures this turns the landmark into an archival
-provenance record. Verified live against the dogs/swiftx capture.
+## Checklist progress (macXcapture-feature-checklist.md)
 
-**B. Modifier prefix on click landmarks.** Click landmarks now
-prepend the modifier mask symbolically. State 0x0001 → "Shift-clicks";
-state 0x0005 → "Shift+Ctrl-clicks". PendingPress gained a `state`
-field captured at ButtonPress; pointer-button bits (Button1..5 at
-0x100..0x1000) are filtered out so they don't get mistaken for
-modifiers.
+Started: 24 Yes / 35 Partial / 67 No / 1 N/A.
+Ended:   36 Yes / 33 Partial / 57 No / 1 N/A.
 
-```
-before: # The user clicks inside "xterm" on a 484×316 child at (64,204)
-after:  # The user Ctrl-clicks inside "xterm" on a 484×316 child at (64,204)
-```
+Row-level closures:
 
-Verified live: xterm-on-swiftx capture has a real `Ctrl-click`.
+- §3 Keysym values decoded to symbolic names: No -> Yes.
+- §3 Modifier masks decoded symbolically: No -> Yes.
+- §3 Resource IDs tracked across the session: Partial -> Yes.
+- §3 Resource creation lineage shown: No -> Yes.
+- §3 Resource lifetime tracked: No -> Yes.
+- §3 Visual and depth references resolved: No -> Yes.
+- §3 Property values decoded with type awareness: Partial -> Yes.
+- §3 All core replies decoded: Partial -> Yes.
+- §4 XC-MISC: No -> Yes.
+- §4 XTEST: No -> Yes.
+- §4 RECORD: No -> Yes.
+- §6 Use-after-free detection: No -> Yes.
+- §6 Resource leak detection: No -> Partial (session-end summary
+  lands the data; per-resource detail still missing).
 
-**C. Modal vs. non-modal dialog distinction.** When the dialog
-window has `_MOTIF_WM_HINTS.inputMode` set to a modal value
-(PRIMARY_APPLICATION_MODAL / SYSTEM_MODAL / FULL_APPLICATION_MODAL),
-the dialog landmark gains a `modal ` prefix. MODELESS (or absent)
-keeps the bare form. No corpus capture exercises this today; covered
-by unit tests.
+The vintage-X-lens section's top-5 readability gaps are all now
+marked Closed.
 
-**D. Button-label cache → click-target by name.** This is the big
-visible win. LandmarkDetector now maintains a per-window text cache
-populated from ImageText8 / PolyText8 / ImageText16 / PolyText16
-requests. Vintage Motif/Xaw widgets aren't double-buffered — the
-toolkit draws each button's label directly into the button's window,
-so the latest text on the clicked window's id is almost always its
-widget label. Click landmark renders the label (cap 24 chars) in
-place of the geometry phrasing.
+## What's still open
 
-```
-before: # The user clicks inside "bitmap" on a 60×26 child 0x... at (31,10)
-after:  # The user clicks on "File" in "bitmap" at (31,10)
-```
+Carrying over from prior status entries, no progress today on:
 
-Corpus payoff is immediate: bitmap "File", dogs "Help", editres
-"Commands", fileview "/usr/bin/X11/..", and many more across the
-captures we have. Long text (text-area contents) falls through to
-the existing geometry phrasing so xterm output doesn't masquerade
-as a label.
+- Framer-shared bug investigation (open since 05-19).
+- dtpad Gap B: text-area paint loss on resize (05-25).
+- dtpad menu-bar erase on dialog popup (05-25).
+- Horizontal scrollbar reverse-image rendering (05-25).
+- Clip-shape and descendant-window shape rendering (stored but
+  not yet rendered; no hosted client needs them today).
+- ShapeNotify per-session, not cross-session (low priority).
 
-Also gained: PolyText8 / PolyText16 items-buffer walkers that decode
-glyph runs into Latin-1 strings (skipping font-set indicators).
-ImageText16 takes the low byte of each CHAR2B for the same
-approximation.
+New noise since today's push:
 
-Implementation honors the order-tolerance constraint: ChangeProperty
-harvest for the four ICCCM session properties only runs for windows
-already in `topLevels` (avoids tracking arbitrary children); the
-detector's local `predefinedAtomName` table gained WM_COMMAND (34),
-WM_CLIENT_MACHINE (36), WM_CLASS (67) so propName resolution doesn't
-require `atomToName` plumbing for predefined atoms.
+- The 57 remaining No rows on the macXcapture checklist. Most are
+  not vintage-specific: modern Tier-2 extensions (RANDR, COMPOSITE,
+  DAMAGE, XFIXES, XINPUT2, Present, GLX, SYNC), viewer UI features
+  (structured navigation, follow-this-resource, bookmarks), `.pcap`
+  export, cookie redaction.
+- `AllocColorCells` and `AllocColorPlanes` replies don't have
+  framer decoders. Not blocking anything; both are rarely-used
+  8-bit-colormap allocation patterns.
+- Server-side ResourceRegistry population. macxserver's live XError
+  landmarks would also get the `(freed at seq=Y)` annotation if we
+  populated a registry there. Small wedge, maybe 30 minutes.
+  Skipped today to keep scope tight.
 
-11 new LandmarkDetector tests (47 cases total in that file now).
-1222/1222 total tests pass. No checklist count shift — these are
-content enrichments to landmark text rather than new feature rows.
+## Note for next session
 
-Fourteen commits, 119 new unit tests, no regressions, no Sun required.
+Two reasonable continuations if vintage Suns are still offline:
+
+- **Server-side ResourceRegistry**, so macxserver's live XError
+  landmarks pick up the same use-after-free annotation the capture
+  viewer gets. Bounded, useful for my own server debugging.
+- **Curate `captures/` into `CORPUS.md`** as the launch deliverable
+  with per-capture metadata (which Sun, which app, what's
+  interesting about it). Half-day docs work, lower technical
+  density, but it's the project's most distinctive deliverable for
+  the OSS launch (the checklist's vintage synopsis explicitly names
+  the corpus as the project's most valuable asset).
+
+Or start with whatever's actually on the Sun-availability front.
+
+## Tooling notes for this session and next
+
+- `tail -F /tmp/macxserver/<instance>-*.log` is the right way to
+  watch a server session now that stderr is quiet by default.
+  `--verbose` mirrors the disk log to stderr if you want both.
+- Both capture viewer windows (the macXcapture app and macxserver's
+  "Open .xtap..." in the debug menu) feed off the same
+  `ChronoDumper.dump(path:)` call, so every decoder enrichment from
+  today applies to both viewers automatically. Run with `--capture`
+  and open the resulting `.xtap` to get the rich-decoded server
+  trace; that's the right "I want server-side wire visibility"
+  workflow.
+
+Previous status entries below.
+
+---
 
 # Status 2026-05-30 — three-day rollup (SHAPE; capture v2 GUI; macXcapture decoder push)
 
