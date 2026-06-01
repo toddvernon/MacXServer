@@ -1,3 +1,109 @@
+# Status 2026-06-01 -- group-5 audit came back clean; one audit-tool fix
+
+Sun-less again today. Picked up the "group 5" thread STATUS flagged
+yesterday: run the same silent-lie audit recipe over the 10
+`unidentified-*` swiftx captures in `captures/` (sessions
+macXserver recorded where `WM_CLASS` didn't resolve, so they document
+real client behavior from unknown apps). One commit, `fecca15`, tests
+unchanged at 1237.
+
+## What the audit found
+
+Empty. No new server-side silent lies. The only errors across all 10
+captures were:
+
+- One `BadRequest from CopyGC` in what turned out to be a **puzzle**
+  capture — already closed yesterday in `afdd26b` (opcode 57). The
+  capture predates the fix.
+- One `BadAtom` from an atom-walker that succeeded on 131 prior
+  `GetAtomName` requests before probing a missing atom. That's
+  legitimate "atom not found", not a server bug — real introspection
+  tools tolerate it routinely.
+
+Audit recipe coming back empty is itself a useful hand-off signal:
+yesterday afternoon's four closures + the morning's Phase 1 decoder
+push appear to have caught the genuine wedges. Worth saying explicitly
+since it changes what "next campaign" should look at.
+
+## Identifications for the unidentified-* captures
+
+While the bulk pass ran I read `WM_NAME` and matched wire fingerprints
+against the X11R6 demo catalog. All 10 now identified:
+
+| File | Actually is | Distinctive fingerprint |
+|---|---|---|
+| unidentified-3 | **ico** | `WM_NAME="Ico"`, 2865 ClearArea+PolySegment cycles |
+| unidentified-4 | **xmaze** | `WM_NAME="Xmaze"`, 11889 PolyFillRectangle + CopyPlane |
+| unidentified-5 | X3D-PEX probe | one `QueryExtension` and out (probably Xt init) |
+| unidentified-9 | **puzzle** | `WM_NAME="puzzle"` (pre-`afdd26b` capture) |
+| unidentified-11 | **xev** | `WM_NAME="Event Tester"`, 219 MotionNotify |
+| unidentified-14 | atom walker (xlsatoms-like) | 132 GetAtomName + 1 BadAtom probe |
+| unidentified-15 | xlsclients-like | InternAtom WM_STATE + QueryTree walk |
+| unidentified-17 | **xmag** | GrabServer+PolyRectangle+UngrabServer drumbeat, GetImage at end |
+| unidentified-22 | aborted introspection startup | 9 requests, no clear endpoint |
+| unidentified-23 | **xkill** | GrabPointer→ButtonPress→AllowEvents→UngrabPointer + GlyphCursor |
+
+Worth noting: yesterday's STATUS said "textedit / xmag / xprop /
+xlsclients have no swiftx-side captures." That's wrong for xmag and
+xlsclients — we have them, just under unlabeled names. Still missing
+textedit and xprop captures.
+
+## Tooling closure
+
+The audit surfaced one audit-tool lie. `Dumper.summarize`'s `[typed]`
+marker came from a hand-maintained `typedOpcodes` set in
+`Sources/SwiftXCaptureCore/Dumper.swift:425`. Drift was the obvious
+failure mode -- the set hadn't been kept in sync with the framer's
+`Request.decode` switch, and the audit recipe trusts the marker. Three
+opcodes (CopyPlane / GetImage / CreateCursor) momentarily looked like
+framer-untyped silent lies this morning before I realized the set was
+just stale on those entries.
+
+Fixed in `fecca15`: replaced the 36-line static set with a
+3-line computed `Set<UInt8>` populated during the same c2s walk that
+already counts `unknownRequests`. Any opcode that decodes as a
+non-`.unknown` `Request` case in the current capture gets `[typed]`.
+Self-consistent by construction; no static set to drift. Re-summarized
+the three earlier offenders -- CopyPlane / GetImage / CreateCursor now
+read `[typed]`. 1237 tests still pass, zero regressions.
+
+## What's still open
+
+Pure Sun-access blocker -- yesterday's six "should work" claims
+(motifanim, motifbur, viewres, xgas, xgc, puzzle, xmpiano, xterm
+clipboard receive) still need live re-verification. No code change
+moves that needle.
+
+Same Sun-less continuations STATUS listed yesterday remain reasonable:
+
+- **Curate `captures/` into `CORPUS.md`** as the OSS-launch
+  deliverable. Today's identification work is a nice down-payment on
+  that -- the 10 unidentified-* captures all have wire fingerprints
+  now. Could rename them and start a CORPUS.md per-file manifest.
+- **xmmap Expose verbosity** investigation (1558 events vs gold's
+  140) -- the one render-pipeline finding from yesterday's audit.
+- **macXcapture Phase 4-5** -- 57 No rows left on
+  `macXcapture-feature-checklist.md`. Mostly modern Tier-2 extensions
+  + viewer UI features.
+- **Multi-client capture for editres** so we can debug its lockup.
+
+Plus the latent ledger items (CopyArea same-window memmove clip,
+GetProperty type filter, SetSelectionOwner time gate, GC subWindowMode,
+CWBorderWidth in ConfigureWindow, WarpPointer cursor movement,
+GetPointerMapping wheel buttons, CWBackPixmap/CWBorderPixmap) -- still
+none surfaced as live blockers.
+
+## Note for next session
+
+The "audit came back empty" finding probably means the per-app
+silent-lie recipe has run its course for the apps we have captures
+for. If we want to keep pushing on launch quality without Sun access,
+the highest-density work is CORPUS.md curation (visibility for OSS
+launch) or Phase 4-5 decoder coverage (closes more checklist rows).
+xmmap render-verbosity is a concrete bug but narrower.
+
+---
+
 # Status 2026-05-31 -- afternoon capture-audit campaign, four silent-lie closures
 
 Picked up after the morning rollup with a structured pass over the
