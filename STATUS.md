@@ -1,4 +1,196 @@
-# Status 2026-05-31 -- capture-decoder marathon, Sun-less
+# Status 2026-05-31 -- afternoon capture-audit campaign, four silent-lie closures
+
+Picked up after the morning rollup with a structured pass over the
+ss2 captures, working through groups from "works on both" to "BROKEN
+on swiftx" looking for cases where we lie or silently fail on the
+wire instead of emitting honest XErrors. Five afternoon commits
+(`9a154f1`, `71368c8`, `260154d`, `afdd26b`) closed real wedges
+across four apps and ledgered the rest. Tests: 1225 -> 1237 (+12).
+Zero regressions.
+
+## The audit recipe that worked
+
+Per-group: bulk `macxcapture summary` over every swiftx-side capture
+in the group, compare error / reply / event counts against the
+matching gold (ss2->ss2) capture, cross-ref the per-opcode list
+against `OPCODE_STATUS.md` low-confidence rows and `SHORTCUTS.md`
+open lies. Spot-check specific captures only when the bulk signal
+pointed at something. Most groups confirmed in 5-10 minutes of
+shell work — agent fan-out wasn't needed.
+
+The methodology earned its keep on group 1 immediately: discovered
+the SHORTCUTS claim "no client we host today exercises [ZPixmap
+PutImage]" was empirically false (four apps did). Without a
+systematic pass nobody would have noticed.
+
+## Group-by-group results
+
+**Group 1 -- "works on both, no notes" (17 apps, 10 with swiftx
+captures).** Zero errors emitted in any session, matching gold's
+zero errors. SendEvent never used the 0/1 sentinels we don't
+resolve. But: **4 of the 10 use ZPixmap PutImage** (motifbur,
+viewres, xgas, xgc) which was silently dropped per a SHORTCUTS
+ledger entry that claimed otherwise.
+
+Fixed in `9a154f1`. New `case .putImage` dispatch in `ServerSession`
+switches on (format, depth): bitmap depth=1 stays the existing GC
+fg/bg path; ZPixmap depth=1 resolves pixels 0/1 through ColorTable
+(white/black per init pins); ZPixmap depth=8 walks bpp=8 source
+byte-by-byte through ColorTable with a small inline cache. Bridge
+half: new `drawPutImageARGB` sharing a `blitARGB` helper with the
+Bitmap path. Three new tests in `PutImageDispatchTests` cover all
+three branches. SHORTCUTS open entry narrowed to XYPixmap + ZPixmap
+at other depths. OPCODE_STATUS row 72 (PutImage) deduped + updated
+to describe the three implemented combos; row 84 (AllocColor)
+deduped too. Six other duplicate rows surfaced incidentally (22,
+23, 24, 25, 27, 32) -- left for a future docs hygiene pass.
+
+**Group 2 -- "cosmetic on swiftx" (2 apps).** bitmap is clean at the
+wire (the 58 untyped requests were SHAPE extension, handled per the
+2026-05-28 work; menus-white-on-drag is a render-path issue the
+audit can't diagnose without a fresh drag capture). xterm's 4
+BadWindow errors at seq=1054-1056 all target `0xFFFE0001` --
+that's our internal `selectionSinkWindow` ID, handed out as the
+`requestor` in our outbound SelectionRequest events.
+
+Fixed in `71368c8`. Register `selectionSinkWindow` as a real
+InputOnly child of root in WindowTable, same pattern as the
+existing `mwmStubWindow` at 0xFFFE_0002. Pre-fix the ICCCM reply
+chain (ChangeWindowAttributes setting PropertyChangeMask, then
+ChangeProperty writing the converted data, then SendEvent for
+SelectionNotify) failed all three steps with BadWindow because
+the requestor had no WindowTable entry, so the line ~4730
+ChangeProperty-on-sink intercept that pushes to NSPasteboard
+never ran. xterm-source clipboard receive was silently broken
+for ICCCM-strict clients. The 2026-05-08 "Cut/paste both
+directions PRIMARY only" memory entry was optimistic. Four new
+tests in `SelectionSinkWindowTests` cover the full reply chain
+plus the QueryTree leak (which is now consistent with mwmStub
+per spec).
+
+xterm's "rogue popup that survives reparent" cosmetic note led
+to a separate defensive fix in `260154d`. The popup is window
+`0x4400025`, xterm's right-click Main Options menu --
+override-redirect=true, never `DestroyWindow`'d during the
+session (reused across invocations). The plausible mechanism:
+a race between `mapTopLevel`'s main-async NSPanel construction
+and `destroyTopLevel`'s slot removal. If destroy wins, the
+deferred mapTopLevel runs, creates the panel, `orderFrontRegardless()`'s
+it, and orphans it on screen with no slot for cleanup.
+mapTopLevel's main-async now re-checks `slots[id]` under the
+bridge lock before constructing the panel and bails if the slot
+is gone. destroyTopLevel adds explicit `orderOut` before `close`
+as belt-and-suspenders for the popUpMenu-level + hidesOnDeactivate=
+false case. Both edits are in `DispatchQueue.main.async` blocks --
+no session state mutated, no wire bytes emitted, single-threaded-
+against-MIT contract preserved. Cannot verify the visual fix
+without Sun access for live xterm repro.
+
+**Group 3 -- "partial render on swiftx" (3 apps, 2 with swiftx
+captures).** motifanim uses zPixmap depth=8 -- already fixed by
+`9a154f1`. The "dog bitmap doesn't render" symptom should be
+resolved at the wire level; needs Sun re-test to confirm
+visually. xmmap's "scroll smears" is a render-verbosity issue
+(1558 Expose events vs gold's 140 -- 11x more), not a silent
+lie at the wire. Likely fallout from the per-clip-rect Expose
+enumeration in MapWindow/MapSubwindows/ConfigureWindow (Region
+Steps E1/E1.5/E2). xmmap's scroll pattern apparently hits the
+clip-rect inflation case where dt-Motif hits the consolidation
+case. Worth a focused investigation when Suns are back, but no
+audit-level fix today. xmtravel/xmtr has no swiftx capture so
+the "we show a menu bar that doesn't exist on ss2" note is
+unverifiable from the wire.
+
+**Group 4 -- "BROKEN on swiftx" (7 apps, 2 with swiftx captures).**
+xmpiano BadRequests on opcode 103 (GetKeyboardControl) at init.
+puzzle BadRequests on opcode 57 (CopyGC) at startup. Both have
+Phase 1 framer decoders + reply types since 2026-05-29 but no
+server handler -- the unimplemented-opcode dispatch path fired
+honest BadRequest, which is spec-correct never-lie behavior but
+fatal for clients that need the opcode.
+
+Fixed in `afdd26b`. New `GCTable.copy(srcId:dstId:valueMask:)`
+implements opcode 57 with the per-bit value transfer + the
+clipMask-copies-clip-rectangles spec rule. New
+`case .getKeyboardControl` returns a stub `GetKeyboardControlReply`
+with X server defaults (globalAutoRepeat=true, ledMask=0,
+50% key click and bell, 400Hz pitch, 100ms duration, all-bits
+auto-repeats vector). Six new tests in
+`CopyGCAndGetKeyboardControlTests`. OPCODE_STATUS gains rows
+57 + 103 with the audit provenance. Unblocks puzzle and xmpiano
+once Sun re-test confirms.
+
+editres's swiftx capture doesn't actually contain the lockup
+(session ended cleanly at 17s after normal sync-grab pointer
+tracking). The lockup happens when editres sends a
+`_XEDITRES_PROTOCOL` ClientMessage to a target client to
+introspect its widget tree -- multi-client interaction the
+capture doesn't include. Defer until a multi-client trace
+exists.
+
+textedit / xmag / xprop / xlsclients have no swiftx-side
+captures. Symptom-only diagnoses noted in conversation; real
+audit needs the wire.
+
+## Per-app status moves (audit -> code -> Sun verify)
+
+- **motifanim** "partial" -> likely "works" (dog bitmap path
+  fixed at the wire by ZPixmap; needs Sun re-test).
+- **motifbur** "works no notes" -> "works no notes, now actually
+  paints icons correctly" (ZPixmap fix shipped; needs Sun re-test
+  to confirm zero visible regression).
+- **viewres** / **xgas** / **xgc** -- same as motifbur; were
+  silently dropping pixel data on a path nobody noticed.
+- **xterm** clipboard receive: ICCCM-strict path now actually
+  works. Cosmetic rogue popup: defensive race fix shipped, can't
+  verify.
+- **puzzle** "BROKEN" -> "should work" (CopyGC implemented).
+- **xmpiano** "BROKEN" -> "should work" (GetKeyboardControl stub).
+
+## What's still blocked
+
+- Live re-verification of every "should work" claim above. Pure
+  Sun-access blocker.
+- editres lockup -- needs a multi-client capture (editres + target).
+- xmmap scroll-smear render-verbosity investigation.
+- textedit / xmag / xprop / xlsclients -- need swiftx captures.
+- The bigger SHORTCUTS open items (CopyArea same-window memmove
+  clip, GetProperty type filter, SetSelectionOwner time gate,
+  GC subWindowMode, CWBorderWidth in ConfigureWindow,
+  WarpPointer cursor movement, GetPointerMapping wheel buttons,
+  CWBackPixmap/CWBorderPixmap) -- none surfaced as live blockers
+  in today's audit, all stay on the latent ledger.
+
+## Note for next session
+
+Three reasonable Sun-less continuations:
+
+- **Hunt silent lies in the unidentified-* swiftx captures** as a
+  group-5 pass. Same recipe as today; the unidentified captures
+  are macXserver-recorded sessions where `WM_CLASS` didn't
+  resolve, so they document real bugs from unknown clients.
+- **Curate `captures/` into `CORPUS.md`** as the launch
+  deliverable (still on the list from the morning rollup; the
+  audit work didn't displace it).
+- **Investigate xmmap Expose verbosity** if you want to push on
+  the one render-pipeline finding the audit surfaced.
+
+When Sun access returns: re-verify the six "should work" claims
+above against the live apps, then promote them in
+`project_ss2_app_status` memory.
+
+## Tooling note added today
+
+The audit recipe is simple enough to script if we end up running
+it routinely: a per-app `summary` + a grep-against-OPCODE_STATUS
++ a per-opcode classifier could highlight the suspicious cases
+automatically. Not building it today -- four runs found four
+bugs, the manual flow worked. Worth revisiting if the
+pre-OSS-launch audit campaign expands.
+
+---
+
+# Status 2026-05-31 (morning) -- capture-decoder marathon, Sun-less
 
 Couldn't reach the vintage Suns today, so leaned all the way into
 capture-side decoder work. Fifteen commits, all pushed. Tests:
