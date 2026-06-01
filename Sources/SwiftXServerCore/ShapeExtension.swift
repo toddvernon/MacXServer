@@ -333,20 +333,68 @@ extension ServerSession {
 
     // MARK: - Apply shape to rendering (Phase 3 hook)
 
-    /// Push the window's current bounding shape into the rendering layer. For a
-    /// top-level this masks the NSWindow to the bounding region (the visible
-    /// payoff: oclock's round face, xeyes' oval). Descendant and clip-shape
-    /// application aren't wired in this cut — they're stored and queryable but
-    /// not yet visually applied (see SHORTCUTS.md / scope decision).
+    /// Push the window's current bounding/clip shape into the rendering layer.
+    /// Two paths:
+    ///
+    /// - **Top-level**: mask the NSWindow to the bounding region (the visible
+    ///   payoff: oclock's round face, xeyes' oval). The NSWindow masking
+    ///   handles all drawing into the top-level's backing.
+    /// - **Descendant**: fold the shape into the clipList machinery via
+    ///   `recomputeClipsForSubtreeContaining` (which now respects
+    ///   `boundingShape` + `clipShape` per `Region/ClipList.swift`), then
+    ///   repaint the top-level subtree's backgrounds so newly-exposed parent
+    ///   regions get filled and the shaped descendant draws within its new
+    ///   region. Emit Expose on the changed descendant so the client redraws
+    ///   content. xcalc's rounded buttons take this path.
     func setWindowShape(windowId: UInt32) {
-        guard let win = windows.get(windowId), let bridge = bridge else { return }
-        // Only top-levels map to an NSWindow we can mask in this first cut.
-        guard win.parent == config.rootWindowId else { return }
-        // nil bounding shape -> unshaped (rectangular); a region -> its rects.
-        let rects: [Rectangle]? = win.boundingShape.map { region in
-            region.rects.map { boxToRect($0) }
+        guard let win = windows.get(windowId) else { return }
+        // Recompute the containing top-level's clip tree first. The engine
+        // folds boundingShape/clipShape in for every window, so this is
+        // load-bearing for both:
+        //   - top-level shape: narrows descendants' parentVisible so
+        //     children of a shaped top-level are correctly clipped (the
+        //     NSWindow mask handles the top-level's own pixels, but the
+        //     clipList machinery handles every other consumer like
+        //     VisibilityNotify state and descendant rendering)
+        //   - descendant shape: narrows the descendant's own borderClip and
+        //     clipList so its rendering respects the shape (xcalc buttons).
+        // Pure WindowTable bookkeeping; runs without a bridge so tests can
+        // assert against the recomputed clipList.
+        recomputeClipsForSubtreeContaining(windowId)
+        // Bridge-side side effects (NSWindow mask for top-levels; repaint +
+        // Expose for descendants) only run when a bridge is attached.
+        guard let bridge = bridge, let bo = byteOrder else { return }
+        if win.parent == config.rootWindowId {
+            // Top-level: mask the NSWindow. nil -> unshaped (rectangular);
+            // a region -> its rects.
+            let rects: [Rectangle]? = win.boundingShape.map { region in
+                region.rects.map { boxToRect($0) }
+            }
+            bridge.setWindowBoundingShape(topLevel: windowId, rects: rects, deviceRects: win.boundingShapeDeviceRects)
+            return
         }
-        bridge.setWindowBoundingShape(topLevel: windowId, rects: rects, deviceRects: win.boundingShapeDeviceRects)
+        // Descendant: repaint the full subtree's backgrounds + emit Expose
+        // on the changed window so the client redraws its content into the
+        // newly-shaped region.
+        guard let (topId, dx, dy) = topLevelAndOffset(for: windowId) else { return }
+        let paints = mappedBackgroundPaints(topLevelId: topId, byteOrder: bo)
+        if !paints.isEmpty {
+            bridge.paintWindowRects(topLevel: topId, rects: paints)
+        }
+        if let entry = windows.get(windowId),
+           entry.eventMask & MockWindowBridge.exposureMask != 0 {
+            // Expose for the window's new clipList in window-local coords.
+            let localRects = entry.clipList.rects.map {
+                BoxRec(
+                    x1: $0.x1 - Int32(dx), y1: $0.y1 - Int32(dy),
+                    x2: $0.x2 - Int32(dx), y2: $0.y2 - Int32(dy)
+                )
+            }
+            MockWindowBridge.emitExposesForRects(
+                window: windowId, rects: localRects,
+                byteOrder: bo, sequence: sequenceNumber, outbound: outbound
+            )
+        }
     }
 
     // MARK: - ShapeNotify

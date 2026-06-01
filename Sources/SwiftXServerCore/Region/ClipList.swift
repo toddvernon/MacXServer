@@ -80,8 +80,26 @@ public enum ClipListEngine {
             x2: interiorBox.x2 + bw, y2: interiorBox.y2 + bw
         )
 
-        let borderClip = parentVisible.intersected(with: Region(box: borderBox))
-        var clipList = parentVisible.intersected(with: Region(box: interiorBox))
+        // SHAPE bounding/clip regions are stored window-local; the clipList
+        // tree is in top-level coords. Translate by (baseDx, baseDy) to bring
+        // them into the same frame. The borderBox/interiorBox intersect that
+        // follows is a defensive clamp matching R6's `REGION_UNION(borderSize,
+        // winSize)` belt-and-suspenders at `dix/window.c:1604` — protects
+        // against a client publishing a shape larger than the window's own
+        // box. Spec-wise the shape defines the extent; clamping is harmless
+        // when the shape is sane and corrective when it isn't.
+        let boundingClamp: Region = {
+            guard let shape = entry.boundingShape else { return Region(box: borderBox) }
+            return shape.translated(dx: baseDx, dy: baseDy)
+                .intersected(with: Region(box: borderBox))
+        }()
+        let interiorClamp: Region = {
+            guard let shape = entry.clipShape else { return Region(box: interiorBox) }
+            return shape.translated(dx: baseDx, dy: baseDy)
+                .intersected(with: Region(box: interiorBox))
+        }()
+        let borderClip = parentVisible.intersected(with: boundingClamp)
+        var clipList = parentVisible.intersected(with: interiorClamp)
 
         // Mapped children obscure this window's interior. Process each:
         // recurse to compute the child's regions, then subtract its

@@ -1,3 +1,68 @@
+# Status 2026-06-01 (afternoon) -- CORPUS.md curation surfaces SHAPE-on-descendants gap; fixed
+
+The CORPUS.md fact-check pass surfaced a concrete actionable bug. The
+xcalc gold capture turned out to use SHAPE heavily (80 calls = 40
+buttons × 2 ShapeMask ops: Bounding Set + Clip Set per button widget).
+Cross-referencing with SHORTCUTS line 106 ("SHAPE: bounding-on-top-level
+only; clip + descendant shapes stored but not visually applied") meant
+xcalc's rounded buttons couldn't actually render rounded on swift-x even
+with SHAPE shipped — which matched Todd's empirical observation that
+xcalc buttons "have always been rectangular." The SHORTCUTS entry's
+claim "no client we host needs them yet" was empirically false.
+
+## What landed
+
+- **`ClipListEngine.recomputeSubtree` folds boundingShape + clipShape
+  into the clip computation** (`Sources/SwiftXServerCore/Region/ClipList.swift`).
+  A window's `boundingShape` translates from window-local to top-level
+  coords and intersects into `borderClip` (clamped to borderBox as a
+  defensive R6-style belt-and-suspenders). `clipShape` intersects into
+  `clipList` before the children-subtract loop. The translation pattern
+  matches R6's `SetWinSize`/`SetBorderSize` in `dix/window.c:1557-1612`.
+- **`setWindowShape` now runs for both top-levels AND descendants**
+  (`Sources/SwiftXServerCore/ShapeExtension.swift:349-401`). Always
+  calls `recomputeClipsForSubtreeContaining` first so the WindowTable
+  bookkeeping is correct for visibility/clip consumers. Top-levels
+  additionally call `bridge.setWindowBoundingShape` (NSWindow mask).
+  Descendants additionally `paintWindowRects` the subtree and emit
+  Expose on the changed window if it has ExposureMask.
+- **`mappedBackgroundPaints` promoted from `private` to internal** in
+  `ServerSession.swift:2525` so the ShapeExtension extension can call
+  it. No semantic change.
+- **5 new tests** in `Tests/SwiftXServerCoreTests/ShapeOnDescendantTests.swift`
+  cover: descendant bounding narrows borderClip; descendant clip narrows
+  clipList but not borderClip; combined bounding+clip; second shape
+  replaces first (recompute fires); top-level shape still works.
+- **SHORTCUTS line 106 rewritten** to reflect closure. The remaining gap
+  documented: Expose-on-shape-change is "repaint affected subtree"
+  rather than R6's precise `oldClip − newClip` delta. Acceptable because
+  shape changes are typically once at widget realize, so any client
+  overdraw is one-shot.
+- **OPCODE_STATUS SHAPE section updated** to describe the descendant
+  application path.
+
+Tests 1243 → 1248 (+5 new), zero regressions.
+
+## What's still blocked
+
+- **Live xcalc visual verification.** Sun-access blocker. The wire
+  contract is now correct (clipList reflects shape, paint+Expose are
+  emitted), but I can't run xcalc to confirm the rounded buttons
+  actually render rounded until Sun is back.
+- Same Sun-only re-verification list as the morning entry.
+
+## Methodology note
+
+The corpus fact-check pass found this bug. The CORPUS.md draft claimed
+SHAPE was used by oclock/xeyes/bitmap. Running `macxcapture summary`
+across every gold capture for SHAPE counts surfaced xcalc (80 calls,
+heaviest in corpus). Cross-referencing with SHORTCUTS revealed the
+empirical "no client needs descendant SHAPE" claim was wrong. The
+corpus-as-truth recipe — never trust a doc claim a capture can
+contradict — paid off again.
+
+---
+
 # Status 2026-06-01 -- group-5 audit clean, two tooling closures, corpus renamed
 
 Sun-less again today. Picked up the "group 5" thread STATUS flagged

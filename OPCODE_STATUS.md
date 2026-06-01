@@ -174,12 +174,17 @@ SHAPE traffic with zero XErrors (CapturedAppReplayTests).
 | 7 | ShapeInputSelected | impl | medium | Reports this session's interest. |
 | 8 | ShapeGetRectangles | impl | high | Region's rects (YXBanded), or the single default rect when unshaped. |
 
-Visual application: **bounding shape on a top-level** is applied (the
-FlippedXView blit is clipped to the region; the NSWindow goes non-opaque so
-the area outside shows through; clicks outside the region are swallowed).
-**Clip shape and descendant-window shape are stored and queryable but not yet
-visually applied** — see SHORTCUTS. The region algebra (the 5 ops × nil/concrete
-destination) is a faithful port of `Xext/shape.c:RegionOperate`.
+Visual application: **bounding shape on a top-level** is applied via NSWindow
+masking (the FlippedXView blit is clipped to the region; the NSWindow goes
+non-opaque so the area outside shows through; clicks outside the region are
+swallowed). **Bounding + clip shape on descendants** apply via the clipList
+machinery as of 2026-06-01: `ClipListEngine.recomputeSubtree` translates a
+window's `boundingShape` to top-level coords and intersects into `borderClip`,
+and intersects `clipShape` into `clipList` before the children-subtract step.
+xcalc's rounded buttons (40 buttons × 2 ShapeMask calls each) take this path.
+Residual gap: Expose-on-shape-change paints the whole new clipList rather than
+R6's precise `oldClip − newClip` delta — see SHORTCUTS. The region algebra (the
+5 ops × nil/concrete destination) is a faithful port of `Xext/shape.c:RegionOperate`.
 
 ## Per-opcode notes
 

@@ -2522,7 +2522,7 @@ public final class ServerSession: @unchecked Sendable {
     /// background fill plus one rect-pair per already-mapped descendant
     /// (border ring + interior bg). Order is parent-then-children so
     /// descendant paints land on top of their parent.
-    private func mappedBackgroundPaints(topLevelId: UInt32, byteOrder: ByteOrder) -> [WindowBackgroundRect] {
+    func mappedBackgroundPaints(topLevelId: UInt32, byteOrder: ByteOrder) -> [WindowBackgroundRect] {
         guard let top = windows.get(topLevelId) else { return [] }
         var out: [WindowBackgroundRect] = []
         out.append(contentsOf: paintRectsForWindow(entry: top, dx: 0, dy: 0, byteOrder: byteOrder))
