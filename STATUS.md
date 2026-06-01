@@ -1,11 +1,11 @@
-# Status 2026-06-01 -- group-5 audit came back clean; one audit-tool fix
+# Status 2026-06-01 -- group-5 audit clean, two tooling closures, corpus renamed
 
 Sun-less again today. Picked up the "group 5" thread STATUS flagged
 yesterday: run the same silent-lie audit recipe over the 10
-`unidentified-*` swiftx captures in `captures/` (sessions
-macXserver recorded where `WM_CLASS` didn't resolve, so they document
-real client behavior from unknown apps). One commit, `fecca15`, tests
-unchanged at 1237.
+`unidentified-*` swiftx captures in `captures/` (sessions macXserver
+recorded where `WM_CLASS` didn't resolve, so they document real
+client behavior from unknown apps). Four commits, tests 1237 -> 1243
+(+6 new), zero regressions.
 
 ## What the audit found
 
@@ -28,79 +28,117 @@ since it changes what "next campaign" should look at.
 ## Identifications for the unidentified-* captures
 
 While the bulk pass ran I read `WM_NAME` and matched wire fingerprints
-against the X11R6 demo catalog. All 10 now identified:
+against the X11R6 demo catalog. All 10 identified, 8 renamed in
+`aceff00`:
 
-| File | Actually is | Distinctive fingerprint |
+| Was | Renamed to | Distinctive fingerprint |
 |---|---|---|
 | unidentified-3 | **ico** | `WM_NAME="Ico"`, 2865 ClearArea+PolySegment cycles |
 | unidentified-4 | **xmaze** | `WM_NAME="Xmaze"`, 11889 PolyFillRectangle + CopyPlane |
-| unidentified-5 | X3D-PEX probe | one `QueryExtension` and out (probably Xt init) |
+| unidentified-5 | (kept) | tiny X3D-PEX probe, unclear app |
 | unidentified-9 | **puzzle** | `WM_NAME="puzzle"` (pre-`afdd26b` capture) |
 | unidentified-11 | **xev** | `WM_NAME="Event Tester"`, 219 MotionNotify |
-| unidentified-14 | atom walker (xlsatoms-like) | 132 GetAtomName + 1 BadAtom probe |
-| unidentified-15 | xlsclients-like | InternAtom WM_STATE + QueryTree walk |
+| unidentified-14 | **xlsatoms** | matches xlsatoms ss2 gold exactly |
+| unidentified-15 | **xlsclients** | InternAtom WM_STATE + QueryTree walk |
 | unidentified-17 | **xmag** | GrabServer+PolyRectangle+UngrabServer drumbeat, GetImage at end |
-| unidentified-22 | aborted introspection startup | 9 requests, no clear endpoint |
+| unidentified-22 | (kept) | aborted xkill-like startup, ambiguous |
 | unidentified-23 | **xkill** | GrabPointer→ButtonPress→AllowEvents→UngrabPointer + GlyphCursor |
 
-Worth noting: yesterday's STATUS said "textedit / xmag / xprop /
-xlsclients have no swiftx-side captures." That's wrong for xmag and
-xlsclients — we have them, just under unlabeled names. Still missing
-textedit and xprop captures.
+Yesterday's STATUS said "textedit / xmag / xprop / xlsclients have no
+swiftx-side captures." Wrong for xmag and xlsclients — we have them,
+just under unlabeled names. Still missing textedit and xprop captures.
 
-## Tooling closure
+## Two tooling closures
+
+### Dumper `[typed]` marker derives from framer truth (`fecca15`)
 
 The audit surfaced one audit-tool lie. `Dumper.summarize`'s `[typed]`
 marker came from a hand-maintained `typedOpcodes` set in
 `Sources/SwiftXCaptureCore/Dumper.swift:425`. Drift was the obvious
-failure mode -- the set hadn't been kept in sync with the framer's
+failure mode — the set hadn't been kept in sync with the framer's
 `Request.decode` switch, and the audit recipe trusts the marker. Three
 opcodes (CopyPlane / GetImage / CreateCursor) momentarily looked like
 framer-untyped silent lies this morning before I realized the set was
 just stale on those entries.
 
-Fixed in `fecca15`: replaced the 36-line static set with a
-3-line computed `Set<UInt8>` populated during the same c2s walk that
-already counts `unknownRequests`. Any opcode that decodes as a
-non-`.unknown` `Request` case in the current capture gets `[typed]`.
-Self-consistent by construction; no static set to drift. Re-summarized
-the three earlier offenders -- CopyPlane / GetImage / CreateCursor now
-read `[typed]`. 1237 tests still pass, zero regressions.
+Replaced the 36-line static set with a 3-line computed `Set<UInt8>`
+populated during the same c2s walk that already counts
+`unknownRequests`. Any opcode that decodes as a non-`.unknown`
+`Request` case in the current capture gets `[typed]`. Self-consistent
+by construction; no static set to drift.
+
+### Server falls back to WM_NAME for capture identification (`69e04f5`)
+
+Of the 10 captures the audit identified, **4 only ever set WM_NAME,
+never WM_CLASS** (ico, xmaze, puzzle, xev). They landed as
+`unidentified-N` despite publishing a perfectly usable name. The
+existing identification path was strict WM_CLASS-only.
+
+Added two-tier identification with override semantics:
+
+- `ServerSession` tracks an `IdentificationSource` enum
+  (`.none < .wmName < .wmClass`). First WM_NAME arrival fires
+  `onIdentified(name, "")` when source is still `.none`. WM_CLASS
+  fires again with the canonical instance+class when source <
+  `.wmClass`. Subsequent WM_NAME writes (xterm rewriting to the shell
+  prompt) don't re-fire.
+- `SessionCapture.rename` now allows multiple calls — last wins. Safe
+  because Recorder buffers in-memory until `finalize()`; rename is
+  just a planned-path swap with no on-disk churn.
+
+Six new server tests cover the fallback, override, no-refire,
+WM_ICON_NAME-suppression, and empty-name cases. The remaining 6
+unidentified captures (xkill, xmag, xlsatoms, xlsclients, the two
+probes) are CLI tools that never set any property — they need a
+different signal (cursor-glyph fingerprint?), left for later. So the
+fallback covers 40% of today's gap with a one-property check; the
+remaining 60% need a more ambitious approach if we want them.
 
 ## What's still open
 
-Pure Sun-access blocker -- yesterday's six "should work" claims
+Pure Sun-access blocker — yesterday's six "should work" claims
 (motifanim, motifbur, viewres, xgas, xgc, puzzle, xmpiano, xterm
 clipboard receive) still need live re-verification. No code change
 moves that needle.
 
-Same Sun-less continuations STATUS listed yesterday remain reasonable:
+Sun-less continuations:
 
 - **Curate `captures/` into `CORPUS.md`** as the OSS-launch
-  deliverable. Today's identification work is a nice down-payment on
-  that -- the 10 unidentified-* captures all have wire fingerprints
-  now. Could rename them and start a CORPUS.md per-file manifest.
+  deliverable. Today's rename pass is the natural prelude — now every
+  swiftx-side capture in the corpus has a real name (or a kept
+  `unidentified-N` for the two unknowns).
 - **xmmap Expose verbosity** investigation (1558 events vs gold's
-  140) -- the one render-pipeline finding from yesterday's audit.
-- **macXcapture Phase 4-5** -- 57 No rows left on
+  140) — the one render-pipeline finding from yesterday's audit.
+- **macXcapture Phase 4-5** — 57 No rows left on
   `macXcapture-feature-checklist.md`. Mostly modern Tier-2 extensions
   + viewer UI features.
 - **Multi-client capture for editres** so we can debug its lockup.
+- **Cursor-glyph identification fallback** for CLI tools that don't
+  set WM_NAME (xkill uses font="cursor" + glyphs 144/148/78/76, xmag
+  similar). Hacky lookup table but would close the remaining 60% of
+  today's identification gap.
 
 Plus the latent ledger items (CopyArea same-window memmove clip,
 GetProperty type filter, SetSelectionOwner time gate, GC subWindowMode,
 CWBorderWidth in ConfigureWindow, WarpPointer cursor movement,
-GetPointerMapping wheel buttons, CWBackPixmap/CWBorderPixmap) -- still
+GetPointerMapping wheel buttons, CWBackPixmap/CWBorderPixmap) — still
 none surfaced as live blockers.
 
 ## Note for next session
 
-The "audit came back empty" finding probably means the per-app
-silent-lie recipe has run its course for the apps we have captures
-for. If we want to keep pushing on launch quality without Sun access,
-the highest-density work is CORPUS.md curation (visibility for OSS
-launch) or Phase 4-5 decoder coverage (closes more checklist rows).
-xmmap render-verbosity is a concrete bug but narrower.
+"Audit came back empty" probably means the per-app silent-lie recipe
+has run its course for the apps we have captures for. The
+WM_NAME-fallback work means future server-side captures should land
+named (for any app that creates a top-level window), so the next
+unidentified-* batch will be smaller and weirder.
+
+Highest-density Sun-less work right now:
+
+- **CORPUS.md curation** — the launch deliverable; today's renames
+  are the down-payment.
+- **macXcapture Phase 4-5 decoder coverage** — closes checklist rows.
+- **xmmap Expose verbosity** — concrete render-pipeline bug, narrow
+  scope.
 
 ---
 
