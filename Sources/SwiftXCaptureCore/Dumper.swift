@@ -74,6 +74,7 @@ public enum Dumper {
         var nextSeq: UInt16 = 1
         var offset = setupReqSize
         var requestCounts: [UInt8: Int] = [:]
+        var typedOpcodes: Set<UInt8> = []
         var totalRequests = 0
         var unknownRequests = 0
         while offset < c2sBytes.count {
@@ -94,7 +95,11 @@ public enum Dumper {
                 }
                 nextSeq &+= 1
                 requestCounts[opcode, default: 0] += 1
-                if case .unknown = req { unknownRequests += 1 }
+                if case .unknown = req {
+                    unknownRequests += 1
+                } else {
+                    typedOpcodes.insert(opcode)
+                }
             } catch {
                 throw DumpError.requestParseFailed(offset: offset, underlying: "\(error)")
             }
@@ -194,7 +199,7 @@ public enum Dumper {
             } else {
                 name = "(unassigned)"
             }
-            let typedMark = (Self.typedOpcodes.contains(opcode)) ? " [typed]" : ""
+            let typedMark = typedOpcodes.contains(opcode) ? " [typed]" : ""
             out += "    \(String(format: "%3d", opcode)) \(name.padding(toLength: 28, withPad: " ", startingAt: 0)) \(count)\(typedMark)\n"
         }
         out += "\n"
@@ -422,38 +427,4 @@ public enum Dumper {
         }
     }
 
-    static let typedOpcodes: Set<UInt8> = [
-        CreateWindow.opcode, ChangeWindowAttributes.opcode, GetWindowAttributes.opcode,
-        DestroyWindow.opcode, DestroySubwindows.opcode, ReparentWindow.opcode,
-        MapWindow.opcode, MapSubwindows.opcode, UnmapWindow.opcode, UnmapSubwindows.opcode,
-        ConfigureWindow.opcode, GetGeometry.opcode, QueryTree.opcode,
-        InternAtom.opcode, GetAtomName.opcode,
-        ChangeProperty.opcode, DeleteProperty.opcode, GetProperty.opcode,
-        SetSelectionOwner.opcode, GetSelectionOwner.opcode, SendEvent.opcode,
-        GrabPointer.opcode, UngrabPointer.opcode, GrabButton.opcode,
-        GrabKeyboard.opcode, UngrabKeyboard.opcode, GrabKey.opcode, AllowEvents.opcode,
-        GrabServer.opcode, UngrabServer.opcode,
-        QueryPointer.opcode, TranslateCoordinates.opcode, WarpPointer.opcode,
-        SetInputFocus.opcode, GetInputFocus.opcode, QueryKeymap.opcode,
-        OpenFont.opcode, CloseFont.opcode, QueryFont.opcode, ListFonts.opcode,
-        CreatePixmap.opcode, FreePixmap.opcode,
-        CreateGC.opcode, FreeGC.opcode, SetDashes.opcode, SetClipRectangles.opcode,
-        ClearArea.opcode, CopyArea.opcode,
-        ChangeGC.opcode,
-        PolyLine.opcode, PolySegment.opcode, PolyArc.opcode,
-        FillPoly.opcode, PolyRectangle.opcode, PolyFillRectangle.opcode, PolyFillArc.opcode,
-        PutImage.opcode, PolyText8.opcode, ImageText8.opcode,
-        AllocColor.opcode, AllocNamedColor.opcode, QueryColors.opcode, LookupColor.opcode,
-        QueryBestSize.opcode, QueryExtension.opcode, Bell.opcode,
-        CreateGlyphCursor.opcode, FreeCursor.opcode, RecolorCursor.opcode,
-        ListExtensions.opcode,
-        GetKeyboardMapping.opcode, GetModifierMapping.opcode, GetPointerMapping.opcode,
-        // Phase 1 (2026-05-29) — decode-only coverage.
-        ChangeSaveSet.opcode, ListProperties.opcode,
-        SetFontPath.opcode, GetFontPath.opcode, CopyGC.opcode,
-        ChangeKeyboardMapping.opcode, ChangeKeyboardControl.opcode, GetKeyboardControl.opcode,
-        ChangePointerControl.opcode, GetPointerControl.opcode,
-        ChangeHosts.opcode, ListHosts.opcode, SetAccessControl.opcode,
-        RotateProperties.opcode, SetPointerMapping.opcode, SetModifierMapping.opcode,
-    ]
 }
