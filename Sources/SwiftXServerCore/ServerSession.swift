@@ -4378,7 +4378,6 @@ public final class ServerSession: @unchecked Sendable {
             // E1.5: capture pre-move state so we can compute the area of
             // parent newly uncovered by this window's move/resize.
             let preMoveBorderClip = windows.get(r.window)?.borderClip ?? .empty
-            let preMoveClipList = windows.get(r.window)?.clipList ?? .empty
             let preMoveParent = windows.get(r.window)?.parent
             // Snapshot pre-move clipLists for every window in this top-level's
             // subtree. The post-recompute delta cascade compares against this
@@ -4651,45 +4650,14 @@ public final class ServerSession: @unchecked Sendable {
                 //   via ConfigureWindow, the children need to redraw at
                 //   their new positions; Expose is the standard signal.
                 //   Test broadly after building.
-                // - 2026-06-01: scope Expose to the genuinely-newly-revealed
-                //   region (newClipList − translated_oldClipList) instead
-                //   of the full new clipList. Per X spec, a geometry
-                //   change only needs Expose for pixels that weren't
-                //   previously visible. Under any bit-gravity, the
-                //   overlap of "where the old pixels are now" and "where
-                //   the new window is" is preserved (or could be
-                //   preserved by the server); only the strip outside
-                //   that overlap is genuinely "new" and needs Expose.
-                //   xmmap scrolls a 1000×1000 child 107 times; pre-fix
-                //   we emitted the full 7-rect clipList per scroll
-                //   (1183 Exposes); post-fix only the newly-revealed
-                //   1-row strip per scroll (one or two rects per
-                //   scroll). For Motif's grow/resize reflow this still
-                //   emits Expose for the genuinely-new SE/right/bottom
-                //   strips, so dtpad's chrome redraw stays correct.
                 if (sizeGrew || posChanged) && (entry.eventMask & MockWindowBridge.exposureMask != 0) {
-                    let dx = Int32(new.x) - Int32(old.x)
-                    let dy = Int32(new.y) - Int32(old.y)
-                    let translatedOld = preMoveClipList.translated(dx: dx, dy: dy)
-                    // `entry` was captured before recomputeClips; re-fetch
-                    // to read the post-recompute clipList.
-                    let freshClipList = windows.get(r.window)?.clipList ?? .empty
-                    let newlyRevealed = freshClipList.subtracting(translatedOld)
-                    if !newlyRevealed.isEmpty {
-                        guard let (_, wdx, wdy) = topLevelAndOffset(for: r.window) else { break }
-                        let localRects = newlyRevealed.rects.map {
-                            BoxRec(
-                                x1: $0.x1 - Int32(wdx), y1: $0.y1 - Int32(wdy),
-                                x2: $0.x2 - Int32(wdx), y2: $0.y2 - Int32(wdy)
-                            )
-                        }
-                        log?.log("  → emit Expose on 0x\(String(r.window, radix: 16)) \(localRects.count) rect(s) newly-revealed (sizeGrew=\(sizeGrew) posChanged=\(posChanged))")
-                        MockWindowBridge.emitExposesForRects(
-                            window: r.window, rects: localRects,
-                            byteOrder: byteOrder, sequence: sequenceNumber,
-                            outbound: outbound
-                        )
-                    }
+                    log?.log("  → emit Expose on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height) (sizeGrew=\(sizeGrew) posChanged=\(posChanged))")
+                    let rects = exposeRectsForWindow(r.window)
+                    MockWindowBridge.emitExposesForRects(
+                        window: r.window, rects: rects,
+                        byteOrder: byteOrder, sequence: sequenceNumber,
+                        outbound: outbound
+                    )
                 }
             } else if stackChanged, let entry = windows.get(r.window) {
                 // Stack-only change (no geometry mutation). Still need to
