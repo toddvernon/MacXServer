@@ -1,3 +1,66 @@
+# Status 2026-06-01 (late afternoon) -- xmmap investigation; R6 reveals Step F missing; tightening reverted
+
+Picked up the xmmap thread (1558 Exposes vs gold's 140) from yesterday's
+audit. Diff'd the captures, found 107 ConfigureWindow pure-moves on a
+1000×1000 child. Tightened the Expose-on-ConfigureWindow path to emit
+only the newly-revealed region (newClip − translated_oldClip) instead
+of the full new clipList; brought wire count down to 532. Then Todd
+asked "should you compare against MIT server", and the R6 source
+revealed the deeper picture: the over-emit isn't a bug, it's a
+*workaround* for a missing blit.
+
+## What R6 actually does
+
+`reference/X11R6/xc/programs/Xserver/mi/miwindow.c:miSlideAndSizeWindow`
+(lines 590-943): on geometry change R6 categorizes children into
+per-win-gravity buckets, computes the moved window's own bit-gravity
+preserved region, then **calls `pScreen->CopyWindow` (line 873) to
+physically blit the preserved pixels in the framebuffer**, then
+Exposes only the residual (clipList − blit'd). The blit is the
+mechanism by which "preserved" content actually stays correct on
+screen across moves.
+
+swift-x doesn't blit. The over-emit (paint full new clipList + Expose
+full new clipList) is the deliberate workaround: it gives the client
+a clean slate + a redraw trigger, which is visually correct *because
+the client repaints everything*. Cutting the Expose to only
+newly-revealed without the blit leaves the intersection region
+showing stale content at stale absolute positions — visually broken
+scrolling.
+
+This isn't speculation. The 2026-05-25 attempt at the blit
+(commits `bc75692` … `4031fdb`) hit exactly this class of issue:
+the blit itself worked, but the paint side over-extended past the
+moved widget's clip and produced "SlateBlue menu color leaks under
+quickplot command-line." Reverted in `1c66da2`, with the blit
+implementation preserved as `_unused_blitWindowRegion` for revival.
+
+## What landed today
+
+- Reverted my Expose-tightening commit (`f443d95` → reverted in
+  `b09640d`). Wire count returns to 1558 on xmmap; visuals stay
+  known-good.
+- Added a comprehensive SHORTCUTS entry for **Step F** documenting
+  the R6 model, the prior attempt's failure mode, and the path
+  forward: feature flag + revive `_unused_blitWindowRegion` +
+  strict paint-rect clipping + per-gravity-class processing + live
+  Sun-side capture-diff validation against xmmap + quickplot +
+  dtpad before flipping the flag default.
+
+The methodology lesson worth keeping: today's investigation moved
+fast through three wrong models (bit-gravity gate, region-delta on
+moved window, region-delta on siblings) before R6 revealed the
+load-bearing thing all three were missing. **Compare against R6
+earlier next time** — the source is in the tree, the answer is
+authoritative, and we've now hit this same "we don't blit" fallout
+twice (2026-05-25 and today). Step F is the principled fix.
+
+## Tests
+
+1248, zero regressions (unchanged from before today's xmmap work).
+
+---
+
 # Status 2026-06-01 (afternoon) -- CORPUS.md curation surfaces SHAPE-on-descendants gap; fixed
 
 The CORPUS.md fact-check pass surfaced a concrete actionable bug. The
