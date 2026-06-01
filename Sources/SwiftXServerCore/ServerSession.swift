@@ -119,9 +119,23 @@ public final class ServerSession: @unchecked Sendable {
     public private(set) var wmInstance: String?
     public private(set) var wmClass: String?
 
-    /// Fired once when WM_CLASS first becomes known on this session. The
-    /// listener wires this up to the FileLogSink (rename) and the bridge
-    /// (title prefix). Called from the read thread.
+    /// Tracks the strongest identifying signal we've observed so far,
+    /// so a later high-priority signal (WM_CLASS) can override an earlier
+    /// low-priority one (WM_NAME) but not vice versa. Many CLI-era X
+    /// demos (ico, xmaze, xev, puzzle) only set WM_NAME — without this
+    /// fallback their captures land as `unidentified-N`.
+    enum IdentificationSource: Int { case none = 0, wmName = 1, wmClass = 2 }
+    private var identificationSource: IdentificationSource = .none
+
+    /// Fired when the client identifies itself. May fire twice on a
+    /// single session: once when WM_NAME arrives (passing the raw name
+    /// as `instance` and `""` as `cls`) and again when WM_CLASS arrives
+    /// with the canonical instance+class — listeners that move files on
+    /// disk should treat the second call as an override of the first.
+    /// Suppressed for re-arrivals of an already-seen source (xterm
+    /// rewriting WM_NAME to the shell prompt doesn't re-fire). The
+    /// listener wires this up to the FileLogSink (rename) and the
+    /// SessionCapture (rename). Called from the read thread.
     public var onIdentified: (@Sendable (String, String) -> Void)?
 
     private var phase: Phase = .awaitingSetup
@@ -4726,17 +4740,32 @@ public final class ServerSession: @unchecked Sendable {
                 let trimmed = r.data.prefix(while: { $0 != 0 })
                 let title = String(decoding: trimmed, as: UTF8.self)
                 bridge?.setTopLevelTitle(id: r.window, title: titleForDisplay(title))
+                // WM_NAME is a fallback identifier for clients that never
+                // set WM_CLASS (Athena demos like ico/xev, the Motif
+                // puzzle demo, etc.). Fire onIdentified on first WM_NAME
+                // arrival only — re-arrivals (xterm rewriting WM_NAME to
+                // the current shell prompt) don't re-fire. WM_CLASS later
+                // overrides via the source-priority check below.
+                if r.property == 39,
+                   identificationSource.rawValue < IdentificationSource.wmName.rawValue,
+                   !title.isEmpty {
+                    identificationSource = .wmName
+                    log?.log("WM_NAME: \"\(title)\" (fallback identifier — no WM_CLASS yet)")
+                    onIdentified?(title, "")
+                }
             }
             // WM_CLASS lands as two null-terminated strings: instance + class.
-            // First sighting identifies the client — rename the per-session
-            // log file (via onIdentified) and re-emit the window title with
-            // the new prefix so a window mapped before WM_CLASS still gets
-            // updated.
-            if r.property == atoms.lookupOrZero("WM_CLASS"), wmInstance == nil {
+            // First sighting fires onIdentified — rename the per-session
+            // log file and capture file (overriding any earlier WM_NAME
+            // fallback) and re-emit the window title with the new prefix
+            // so a window mapped before WM_CLASS still gets updated.
+            if r.property == atoms.lookupOrZero("WM_CLASS"),
+               identificationSource.rawValue < IdentificationSource.wmClass.rawValue {
                 let parts = parseWMClass(r.data)
                 if let inst = parts.instance {
                     wmInstance = inst
                     wmClass = parts.cls
+                    identificationSource = .wmClass
                     log?.log("WM_CLASS: instance=\"\(inst)\" class=\"\(parts.cls ?? "")\"")
                     onIdentified?(inst, parts.cls ?? "")
                     // Re-emit the title for this window if it already has

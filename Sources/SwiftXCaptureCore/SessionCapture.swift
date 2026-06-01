@@ -16,11 +16,15 @@ import Foundation
 //      and a UI listing's "hidden file" filter can flag it.
 //
 //   2. **Identified.** When the session observes a useful client name
-//      (WM_CLASS, WM_NAME, or whatever signal fires first), it calls
+//      (WM_NAME first, WM_CLASS later if available), it calls
 //      `rename(toClientName:)` which switches the Recorder's planned
-//      output path to `<timestamp>-<client-name>.xtap`. First call
-//      wins (idempotent) so an early WM_CLASS isn't overridden by a
-//      later WM_NAME.
+//      output path to `<timestamp>-<client-name>.xtap`. May be called
+//      multiple times — last call wins. The server gates this on a
+//      source-priority enum so an early WM_NAME doesn't get overridden
+//      by stale data, but the canonical WM_CLASS does override an
+//      earlier WM_NAME fallback. Recorder buffers until finalize(), so
+//      the rename is just a planned-path swap; no on-disk artifact
+//      churn.
 //
 //   3. **Finalized.** Session disconnect calls `finalize()`, which
 //      flushes the buffered frames. If `rename(toClientName:)` was
@@ -78,13 +82,17 @@ public final class SessionCapture: CaptureSink, @unchecked Sendable {
     }
 
     /// Switch the planned output path to a named one derived from the
-    /// client's identifier. Idempotent: subsequent calls are no-ops, so
-    /// the first signal wins (typically WM_CLASS arrives before
-    /// WM_NAME). Safe to call after finalize() but has no effect.
+    /// client's identifier. May be called multiple times — last call
+    /// wins. The server fires this first on WM_NAME (fallback) and
+    /// again on WM_CLASS (canonical) so the second call overrides the
+    /// first when a client publishes both. Recorder buffers frames
+    /// until finalize(), so renames before finalize are just planned-
+    /// path swaps with no on-disk file moves. The `renamed` flag stays
+    /// set after the first successful call so finalize() doesn't apply
+    /// the unidentified-N fallback.
     public func rename(toClientName name: String) {
         lock.lock()
         defer { lock.unlock() }
-        guard !renamed else { return }
         let sanitized = Self.sanitize(name)
         guard !sanitized.isEmpty else { return }
         let timestamp = Self.timestampString()

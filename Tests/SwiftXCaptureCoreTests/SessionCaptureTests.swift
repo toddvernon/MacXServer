@@ -73,19 +73,23 @@ final class SessionCaptureTests: XCTestCase {
         try? FileManager.default.removeItem(atPath: dir)
     }
 
-    func testRenameIsIdempotent() throws {
-        // First identify signal wins. A later WM_NAME mustn't override
-        // the WM_CLASS that already named the file.
+    func testRenameLastCallWins() throws {
+        // Last rename wins so an early WM_NAME fallback can be overridden
+        // by a later WM_CLASS canonical name. Server-side priority gating
+        // in ServerSession.IdentificationSource controls who calls this
+        // and in what order; SessionCapture itself trusts the caller.
         let dir = uniqueTempDirPath()
         let cap = try SessionCapture(sessionId: 1, directory: dir)
-        cap.rename(toClientName: "xterm")
-        cap.rename(toClientName: "should-be-ignored")
+        cap.rename(toClientName: "Event Tester")   // WM_NAME fallback
+        cap.rename(toClientName: "xterm")          // WM_CLASS override
         try cap.finalize()
 
         let captured = try files(in: dir)
         XCTAssertEqual(captured.count, 1)
-        XCTAssertTrue(captured[0].hasSuffix("-xterm.xtap"))
-        XCTAssertFalse(captured[0].contains("ignored"))
+        XCTAssertTrue(captured[0].hasSuffix("-xterm.xtap"),
+                      "WM_CLASS override should win; got \(captured[0])")
+        XCTAssertFalse(captured[0].contains("Event"),
+                       "the earlier WM_NAME rename must not survive")
         try? FileManager.default.removeItem(atPath: dir)
     }
 
