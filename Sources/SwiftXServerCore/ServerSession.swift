@@ -221,6 +221,14 @@ public final class ServerSession: @unchecked Sendable {
     /// runs in ChronoDumper post-mortem.
     private var landmarks = LandmarkDetector()
 
+    /// Session-wide resource registry. Mirrors the capture-side feature
+    /// from `ChronoDumper`: every Create*/Free* request updates the
+    /// registry, and `LandmarkDetector` consults it when an XError lands
+    /// on a resource-bearing code so the log line gets a
+    /// `(freed at seq=Y, created at seq=X)` suffix — the textbook
+    /// use-after-free signal. Same type the capture viewer uses.
+    private var resources = ResourceRegistry()
+
     /// Pointer buttons currently held. Used to manage the X11 implicit
     /// pointer grab that activates on the first ButtonPress and ends when
     /// all buttons are released. `implicitGrab` flag distinguishes our
@@ -972,7 +980,8 @@ public final class ServerSession: @unchecked Sendable {
         // emits "# The user clicks on ..." inline in the server log.
         let synth = ServerMessage.event(Event(bytes: encoded))
         for lm in landmarks.afterServerMessage(synth, byteOrder: order,
-                                                screenRoots: [config.rootWindowId]) {
+                                                screenRoots: [config.rootWindowId],
+                                                resources: resources) {
             log?.log(lm.text)
         }
 
@@ -3303,7 +3312,8 @@ public final class ServerSession: @unchecked Sendable {
         let synth = ServerMessage.xError(XError(bytes: bytes))
         for lm in landmarks.afterServerMessage(synth, byteOrder: order,
                                                 screenRoots: [config.rootWindowId],
-                                                extensionMajorToName: [Self.shapeMajorOpcode: "SHAPE"]) {
+                                                extensionMajorToName: [Self.shapeMajorOpcode: "SHAPE"],
+                                                resources: resources) {
             log?.log(lm.text)
         }
     }
@@ -3502,6 +3512,7 @@ public final class ServerSession: @unchecked Sendable {
         do {
             let request = try Request.decode(from: bytes, byteOrder: byteOrder)
             log?.log("req[\(sequenceNumber)] \(opcodeName(request))")
+            trackResourceLifecycle(request, seq: sequenceNumber, registry: &resources)
             dispatch(request, byteOrder: byteOrder)
             // Feed the detector and surface any landmarks to the same log
             // stream. Same vocabulary the capture viewer uses post-mortem.

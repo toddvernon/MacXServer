@@ -805,7 +805,7 @@ func formatRequest(_ req: Request, seq: UInt16, ctx: ChronoContext, byteOrder: B
 /// registered as the destination GC's creation (the source must already
 /// exist for the request to be valid). FreeColors targets color cells
 /// inside a colormap, not the colormap itself, so it doesn't register.
-func trackResourceLifecycle(_ req: Request, seq: UInt16, registry: inout ResourceRegistry) {
+public func trackResourceLifecycle(_ req: Request, seq: UInt16, registry: inout ResourceRegistry) {
     switch req {
     case .createWindow(let r):
         registry.registerCreate(r.wid, kind: .window, atSeq: seq)
