@@ -517,6 +517,33 @@ public final class ServerSession: @unchecked Sendable {
             mapped: false,
             eventMask: 0
         ))
+
+        // Register the clipboard receive window as a real (invisible) child
+        // of root. We hand this id out as the `requestor` field in our
+        // outbound SelectionRequest events when the user does Cmd-C. ICCCM
+        // selection owners (xterm, dt-apps) reply by setting PropertyChange
+        // Mask on it via ChangeWindowAttributes, writing the converted data
+        // via ChangeProperty, and SendEvent'ing a SelectionNotify back.
+        // Without a WindowTable entry every one of those validates to
+        // BadWindow and the line ~4730 ChangeProperty-on-sink interception
+        // never runs, so the clipboard data is silently dropped for any
+        // strict-ICCCM source client. Surfaced by the 2026-05-31 group-2
+        // capture audit (xterm capture seq 1054-1056). Same shape as
+        // `mwmStubWindow` above — InputOnly, unmapped, never bridged to
+        // an NSWindow.
+        windows.insert(WindowEntry(
+            id: selectionSinkWindow,
+            parent: config.rootWindowId,
+            depth: 0,
+            x: -1, y: -1, width: 1, height: 1,
+            borderWidth: 0,
+            windowClass: .inputOnly,
+            visual: 0,
+            valueMask: 0,
+            valueList: [],
+            mapped: false,
+            eventMask: 0
+        ))
         let motifWmInfoAtom = atoms.intern("_MOTIF_WM_INFO")
         let mwmInfoBytes: [UInt8] = {
             // MWM_INFO_STARTUP_STANDARD = 1
