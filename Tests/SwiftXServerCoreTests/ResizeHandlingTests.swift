@@ -43,9 +43,13 @@ final class ResizeHandlingTests: XCTestCase {
         _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
         let root = ServerConfig.default.rootWindowId
 
-        sendCreate(session, wid: 0xA0001, parent: root, x: 0, y: 0, w: 200, h: 200, eventMask: 0)
-        // Inner with ExposureMask
-        sendCreate(session, wid: 0xA0002, parent: 0xA0001, x: 0, y: 0, w: 200, h: 200,
+        // Parent must be big enough that the inner's growth is actually
+        // newly-visible (per the 2026-06-01 region-delta Expose model:
+        // Expose fires only for pixels that weren't previously visible).
+        sendCreate(session, wid: 0xA0001, parent: root, x: 0, y: 0, w: 600, h: 600, eventMask: 0)
+        // Inner with ExposureMask, starts small enough that growing to
+        // 400x300 reveals new pixels inside the parent.
+        sendCreate(session, wid: 0xA0002, parent: 0xA0001, x: 0, y: 0, w: 100, h: 100,
                    eventMask: MockWindowBridge.exposureMask)
         // Both windows must be mapped before ConfigureWindow can emit
         // Expose — per spec, unmapped windows aren't viewable, so the

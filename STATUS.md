@@ -1,3 +1,72 @@
+# Status 2026-06-01 (late afternoon) -- xmmap Expose verbosity 3x reduction
+
+Picked up the xmmap render-pipeline thread from yesterday's audit:
+1558 Expose events on swiftx vs gold's 140 (11x). Diffed the captures,
+found the smoking gun: xmmap scrolls by issuing `ConfigureWindow
+mask=0x3 [x=0, y=-N]` (pure-move) on a 1000×1000 child window 107
+times. Pre-fix swift-x emitted the full new clipList (~10 rects per
+scroll = 1183 Exposes) on the moved window itself.
+
+## Root cause
+
+The Expose-on-ConfigureWindow path at `ServerSession.swift:4653`
+emitted the entire new clipList of the moved window on any
+`(sizeGrew || posChanged)`. Per X11 spec the correct emit is only the
+genuinely newly-revealed region: `newClipList − translated_oldClipList`,
+where the translation is by the move delta. Pixels in the overlap
+are either preserved (server blits) or treated as previously-existing
+(client repaints from cache); Expose is strictly for "pixels that
+weren't previously visible."
+
+I tried a bit-gravity-based gate first (Forget → Expose, NorthWest →
+skip) — the unit tests passed but the real xmmap capture only dropped
+from 1183 → 1176 Exposes. xmmap explicitly sets bit-grav=NorthWest
+in CreateWindow then immediately `ChangeWindowAttributes` to Forget,
+so bit-gravity wasn't the right signal. The actually-correct model is
+the region-delta: emit only where the visible region grew.
+
+## What landed
+
+- **`handleConfigureWindow` now Exposes only the newly-revealed region**
+  (`Sources/SwiftXServerCore/ServerSession.swift` around line 4660).
+  Captures `preMoveClipList` before `windows.resize`, computes
+  `translatedOld = preMoveClipList.translated(dx, dy)`, then
+  `newlyRevealed = freshClipList.subtracting(translatedOld)`. The
+  fresh clipList is re-fetched post-recompute (WindowEntry is a
+  struct, so the captured `entry` was stale).
+- **3 new tests** in `BitGravityExposeTests` (kept the name for filter
+  compat; rewrote doc): synthetic pure-move with no newly-revealed →
+  0 Exposes; 100 sequential scrolls → 0 Exposes; real xmmap capture
+  replay → < 200 Exposes (was 1183).
+- **One existing test updated**: `ResizeHandlingTests.testDescendantConfigureWindowResizeEmitsExposeIfExposureMask`
+  was relying on the old over-emit. It grew the inner window past the
+  parent's bounds, so no pixels were actually newly visible. Made the
+  parent bigger so the growth genuinely reveals new area.
+
+Result: total Exposes 1558 → 532. Exposes on the scrolled window
+1183 → 191. Gold is 140 total / ~79 on the scrolled window — we're
+~4x off gold but down from 11x.
+
+## What's still over-emitting
+
+The remaining gap is the **E1.4 sibling delta cascade**
+(`ServerSession.swift:4502-4538`). When the moved window's clipList
+changes, siblings whose clipLists also changed get Expose for the
+full new clipList. xmmap has 5+ sibling windows around 0x6800063;
+they together contribute ~280 of the 532 remaining Exposes. The same
+region-delta approach (newClip − oldClip, no translation since
+siblings don't move) would close most of the gap, but the comment
+at line 4486-4501 explicitly argues against delta-only for
+"stale-overlap" reasons — needs more careful thought + verification
+against the dtpad cases that motivated the original full-clipList
+choice. Separate scope; ledger entry to follow.
+
+## Tests
+
+1248 → 1252, zero regressions.
+
+---
+
 # Status 2026-06-01 (afternoon) -- CORPUS.md curation surfaces SHAPE-on-descendants gap; fixed
 
 The CORPUS.md fact-check pass surfaced a concrete actionable bug. The
