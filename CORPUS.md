@@ -24,11 +24,11 @@ The corpus exists for three purposes:
 
 ## What's in the corpus
 
-- **72 capture files** (`.xtap`) plus matching `.xtap.json` sidecars,
-  totaling **50 distinct X clients**.
+- **71 capture files** (`.xtap`) plus matching `.xtap.json` sidecars,
+  totaling **49 distinct X clients**.
 - **22 fully paired**: a gold (ss2 → ss2) and a swiftx-side (ss2 →
   swift-x) capture for the same app. Diff-ready.
-- **23 ss2-only golds**: captured on the Sun but not yet exercised
+- **22 ss2-only golds**: captured on the Sun but not yet exercised
   against our server.
 - **5 swiftx-only**: clients that don't have a clean run-and-quit
   pattern on the Sun (xkill, xlsclients, xmaze) or unidentified
@@ -136,34 +136,28 @@ swiftx capture; the rest are gold-only or swiftx-only.
 
 ### auto-box
 
-`reference/X11R6/contrib/programs/auto_box` — a small Athena demo
-that draws and animates a rectangle. **Gold-only.** Lightweight
-Athena vbox/Box widget hierarchy + repeated PolyLine + ClearArea
-cycles. Useful as a minimum-Athena-app baseline.
-
-### beach-ball
-
-A bouncing-ball animation from the X11R6 demo set. **Gold-only.**
-Fixed-size pixmap (the ball image) repeatedly CopyArea'd to new
-positions; classic example of "pixmap as sprite" used by many
-pre-RENDER X clients.
+`reference/X11R6/contrib/programs/auto_box` — a 3D graphics demo
+using the X3D-PEX extension. **Gold-only.** 152 of the 181 requests
+are X3D-PEX extension calls (opcode 130). Notable as one of the
+few PEX-exercising captures in the corpus; PEX (the X 3D
+extension) is mostly extinct in 2026 and traces of real PEX traffic
+are hard to find.
 
 ### bitmap
 
-The X11R6 bitmap editor. **Paired.** Exercises ImageText8 and
-ImageText16 for menu text, FillRectangle for the grid, PolySegment
-for the highlight overlay. The swiftx capture also exercises SHAPE
-(major opcode 128) — bitmap uses SHAPE on its right-click context
-menu.
+The X11R6 bitmap editor. **Paired.** Heavy PolyFillRectangle (the
+edit grid), PolyText8 (menu and label text), PolySegment (highlight
+overlay), and SetClipRectangles. The swiftx capture also exercises
+SHAPE (major opcode 128) — bitmap uses SHAPE on its right-click
+context menu.
 
 ### dogs
 
 `reference/motif/demos/unsupported/dogs` — multi-window dog images,
-the Motif demo (not the Athena `xdogs`).
-**Paired.** First-window-appears landmark fires on this one
-specifically because of its memorable name. Exercises CreateWindow
-with `bg-pix` from a CreatePixmap'd source — a classic vintage
-"window IS a sprite" pattern.
+the Motif demo (not the Athena `xdogs`). **Paired.** Creates 26
+pixmaps + 12 PutImages the dog bitmaps into them, then redraws via
+151 PolySegment + 65 PolyFillRectangle + 31 CopyArea. Window
+backgrounds are plain CWBackPixel (just a color), not bg-pixmap.
 
 ### editres
 
@@ -195,32 +189,39 @@ fallback work was motivated by.
 ### maze / xmaze
 
 `reference/X11R6/contrib/programs/maze` (Athena) and `xmaze` (Motif
-variant). **maze: gold-only. xmaze: swiftx-only.** Both build a
-random maze with PolyFillRectangle and walk a solution path with
-small CopyPlane'd 64×64 pawns at depth=1. xmaze's swiftx capture
-(11889 PolyFillRectangle requests, 54 synthesized ConfigureNotify
-events) was a primary motivator for closing the ZPixmap PutImage gap
-on 2026-05-31 — see commits `9a154f1` and `afdd26b`.
+variant). **maze: gold-only. xmaze: swiftx-only.** Build a random
+maze with heavy PolyFillRectangle: 3755 of them in maze, 11889 in
+xmaze's swiftx capture (the latter also has 54 synthesized
+ConfigureNotify events). CopyPlane is only used incidentally
+(2 / 8 calls), not as the primary mechanism. xmaze's swiftx capture
+was a primary motivator for closing the ZPixmap PutImage gap on
+2026-05-31 — see commits `9a154f1` and `afdd26b`.
 
 ### motifanim
 
-A Motif animation demo. **Paired.** Bitmap-driven sprite animation
-with ZPixmap PutImage at depth=8 — the path that was silently
-dropped before `9a154f1` (2026-05-31). The swiftx capture predates
-the fix and should re-render correctly post-fix; awaiting Sun
+A Motif animation demo. **Paired.** Animation runs through CopyArea
+(277 in the gold) from pre-rendered offscreen pixmaps, with a
+small number of PutImage calls in the mix — including at least one
+ZPixmap depth=8 PutImage (81×47, 3948 bytes) that was silently
+dropped pre-`9a154f1` (2026-05-31). The swiftx capture predates the
+fix and should re-render correctly post-fix; awaiting Sun
 re-verification.
 
 ### motifbur
 
-Motif burgundy demo with icon-button bar. **Paired.** Uses ZPixmap
-PutImage to paint its toolbar icons. One of the four captures the
-2026-05-31 audit caught silently dropping ZPixmap data.
+Motif burgundy demo with icon-button bar. **Paired.** Exercises
+ZPixmap PutImage on its toolbar icons (6 PutImage calls in the
+gold) — was one of the four captures the 2026-05-31 audit caught
+silently dropping ZPixmap data.
 
 ### motifgif
 
-A Motif GIF viewer. **Gold-only.** Heavy PutImage traffic in the
-GIF-decoded path; XmDrawingArea recipient. Useful for testing
-PutImage at large image sizes.
+A Motif GIF picker (`WM_CLASS=motifgif/XMclient`, top-level "Picture
+Selection Window"). **Gold-only.** Mostly the file-picker chrome
+on the wire — PolySegment / PolyFillRectangle / ClearArea
+dominate. Only 3 PutImage calls (rendered when a GIF is actually
+selected), so this is not the heavy image-decode workload the name
+suggests.
 
 ### motifshell
 
@@ -308,8 +309,9 @@ verifying idle behavior.
 ### xconsole
 
 Athena terminal that captures system console messages. **Gold-only.**
-Long-running text-streaming app; exercises XmText / Xaw Text widget
-incremental rendering.
+Long-running text-streaming app — though this capture is short
+(~35 requests total, caught at startup before any console messages
+arrived). Uses Xaw Text widget for the display area.
 
 ### xedit
 
@@ -334,9 +336,11 @@ testing.
 
 ### xfontsel
 
-Font browser. **Gold-only.** Heavy ListFonts traffic to enumerate
-the font catalog; QueryFont per selection to render the preview.
-Useful for stressing the font path on any server implementation.
+Font browser. **Gold-only.** Short interactive session: 1 ListFonts
+call to populate the dropdowns, 5 QueryFont calls as the user picked
+fonts to preview. Mostly Xaw chrome on the wire (PolyText8 for menu
+text). The actual heavy "enumerate the catalog" workload is a single
+big ListFonts reply, not a sustained burst.
 
 ### xgas
 
@@ -369,9 +373,13 @@ xlsclients is the X Consortium name.
 ### xlfonts / xlsatoms
 
 List fonts / atoms. **xlfonts: gold-only. xlsatoms: paired.**
-xlfonts hammers ListFonts; xlsatoms hammers GetAtomName in a tight
-loop until the first BadAtom (their probe-until-fail pattern). The
-xlsatoms capture pair was one of the audit successes on 2026-05-31.
+xlfonts is tiny — 3 requests, one big ListFonts that returns the
+full catalog as a single (large) reply. xlsatoms hammers GetAtomName
+in a tight loop until the first BadAtom (their probe-until-fail
+pattern; 341 calls in the gold, 132 in the swiftx capture, both
+ending in the legitimate BadAtom that signals "you ran off the end
+of the atom table"). The xlsatoms capture pair was one of the audit
+successes on 2026-05-31.
 
 ### xlogo
 
@@ -394,10 +402,11 @@ count.
 
 ### xmforc / xmform / xmfonts / xmgetres
 
-Motif demo apps from the `Xm/demo` directory. **xmform/xmfonts/
-xmgetres: gold-only. xmforc: paired.** Various ways of exercising
-XmForm, font enumeration, and XmGetResources. Together they cover a
-good spread of XmManager / XmRowColumn / XmGetColors behavior.
+Motif demo apps from `reference/motif/demos/unsupported/`.
+**xmform/xmfonts/xmgetres: gold-only. xmforc: paired.** Various
+ways of exercising XmForm, font enumeration, and XmGetResources.
+Together they cover a good spread of XmManager / XmRowColumn /
+XmGetColors behavior.
 
 ### xmlist / xmmap
 
@@ -414,10 +423,14 @@ two BROKEN-on-swiftx apps closed on 2026-05-31 (the missing opcode
 
 ### xmter / xmtravel
 
-Motif terminal-emulator demo / Motif travel-form demo. **xmter:
-paired. xmtravel: gold-only.** xmter exercises the Motif text
-widget's terminal-mode rendering — a separate code path from XmText
-in document mode.
+Motif demo apps (WM_CLASS `XMdemos` / `XMtravel`). **xmter: paired.
+xmtravel: gold-only.** xmter is the corpus's heaviest CopyPlane
+user by a wide margin — 299 calls in the gold, drawing 64×64
+regions out of a 64×1920 depth-1 source pixmap (looks like a
+30-frame sprite-strip animation). A useful capture for stressing
+CopyPlane code paths. xmtravel is a Motif form / travel-agent
+demo: 86 CreateWindows, heavy PolySegment + SetClipRectangles +
+ClearArea redraw.
 
 ### xprop
 
@@ -427,9 +440,14 @@ properties on a target window via GetProperty.
 ### xterm
 
 The terminal. **Paired.** The reference capture for any X server.
-Exercises ChangeKeyboardMapping, ChangeProperty (window title
-updates), CopyArea (scrollback), font rendering via PolyText8 +
-ImageText8. Two-way clipboard via PRIMARY and CLIPBOARD selections.
+Dominated by ImageText8 (196 calls in the gold — character cells
+rendered with foreground glyph + background block in one round
+trip). Also exercises CreateGlyphCursor (the I-beam), GrabButton
+(selection), GetKeyboardMapping / GetModifierMapping (keymap probe
+on startup), and ChangeProperty (window title updates as the shell
+prompt changes). The gold capture is from a short session; longer
+sessions would show much more CopyArea (for scrollback redraw) and
+selection traffic.
 
 ## Indices
 
@@ -439,23 +457,30 @@ These indices point at the captures that most heavily exercise a
 specific protocol feature. Useful for "I'm implementing X, where's a
 realistic test trace for Y?"
 
-- **SHAPE extension** → oclock, xeyes, bitmap (right-click menu)
-- **CopyPlane (depth-1 to depth-8 transfer)** → xmaze, maze, motifbur
-- **ZPixmap PutImage** → motifanim, motifbur, viewres, xgas
+- **SHAPE extension** → oclock, xeyes, bitmap (right-click menu),
+  xcalc (80 SHAPE requests — the calculator uses SHAPE for its
+  rounded buttons)
+- **CopyPlane (depth-1 to depth-N glyph transfer)** → xmter (**299
+  calls — corpus champion**), xedit (56), xclipboard (20), xgc (16)
+- **ZPixmap PutImage** → motifanim, motifbur (6), viewres (13),
+  xgas, dogs (12)
 - **GetImage on root** → xmag
 - **GrabServer / UngrabServer** → xmag (446 cycles in the swiftx capture)
-- **GrabPointer + glyph cursor** → xkill
-- **Atom-walk (GetAtomName loop)** → xlsatoms
+- **GrabPointer + glyph cursor** → xkill, xterm, xmag
+- **Atom-walk (GetAtomName loop)** → xlsatoms (341 / 132)
 - **QueryTree + WM_STATE walk** → xlsclients
-- **Selection PRIMARY/CLIPBOARD** → xterm, xclipboard
-- **ListFonts / QueryFont** → xfontsel, xlfonts
-- **XmText rendering** → motifshell, xmeditor, xmter (terminal mode),
-  fileview
+- **PRIMARY/CLIPBOARD selections** → xterm, xclipboard
+- **ListFonts / QueryFont** → xlfonts (1 big ListFonts), xfontsel
+  (1 ListFonts + 5 QueryFont in a short session)
+- **Heavy ImageText8** → xterm (196 calls)
 - **MotionNotify stream** → xev (219 events)
 - **CopyGC** → puzzle (motivated opcode 57 implementation)
 - **GetKeyboardControl** → xmpiano (motivated opcode 103
   implementation)
-- **PolySegment + ClearArea redraw loop** → ico
+- **PolySegment + ClearArea redraw loop** → ico (2865 / 2865)
+- **PolyFillRectangle stress** → xmaze (11889), maze (3755)
+- **X3D-PEX (3D graphics)** → auto-box (152 calls — the only PEX
+  capture in the corpus)
 
 ### By identification path
 
