@@ -3,8 +3,8 @@
 `captures/` is a collection of real X11 wire traffic from a 1990s
 Sun workstation running real X clients of the era. It is one of the
 project's most distinctive assets — a working X11R6 environment with
-genuine SunOS / Solaris software is rare to capture today, and the
-sessions here are not synthesized.
+genuine SunOS-era Motif / OpenWindows / Athena software is rare to
+capture today, and the sessions here are not synthesized.
 
 The corpus exists for three purposes:
 
@@ -16,8 +16,9 @@ The corpus exists for three purposes:
    the C2S byte stream against any X server, including ours, so a
    capture is a self-contained reproduction of the client's behavior
    without needing the Sun.
-3. **Reference traces for the X community.** Vintage Motif / CDE / Athena
-   wire traffic at protocol resolution is hard to come by in 2026. The
+3. **Reference traces for the X community.** Vintage Motif / Athena /
+   OpenWindows wire traffic at protocol resolution is hard to come by
+   in 2026. The
    per-app entries below note what each capture exercises so anyone
    debugging a vintage X client (on any server) has a starting point.
 
@@ -46,11 +47,27 @@ All ss2-side traffic was recorded against:
   PseudoColor frame buffer with 6 visuals per the SetupAccepted reply
   (PseudoColor, DirectColor, GrayScale, StaticColor, TrueColor,
   StaticGray).
+- **OS**: SunOS 4.1.4.
 - **X server**: X Consortium release 6000 (X11R6), the canonical
   reference X server of the era.
-- **Window manager / desktop**: CDE 1.0 with `dtwm` (the Motif-derived
-  window manager) for the dt-app and Motif captures. Plain X for the
-  Athena demos.
+- **Window manager**: standalone Motif `mwm` (not CDE / `dtwm`).
+  Motif on SunOS 4.1.4 came as a commercial binary-only product back
+  in the day — Motif libraries plus the `mwm` window manager,
+  shipped as Sun-format binaries with no source. This machine has
+  the exact binaries the project author bought originally for the
+  quickplot work, recovered recently from someone who'd held onto
+  them. The libraries came without headers; CDE-Motif headers from
+  Solaris 2.6 turned out to work as a build-time stand-in (different
+  era, same ABI), which is why quickplot rebuilt cleanly when the
+  environment came back online. No CDE / dtwm captures in this
+  corpus — all Motif clients (`xm*`, `motif*`) ran under standalone
+  `mwm`.
+
+This is what makes the corpus rare: SunOS 4.1.4 + commercial-binary
+Motif + a real ss2 was a common 1990s industrial workstation
+configuration, but the Motif binaries are essentially unobtainable
+in 2026. Captures of how that toolkit actually behaves on the wire
+are not reproducible by re-installing modern software.
 
 `display-on-ss2` captures: `macxcapture --listen :6000 --forward
 ss2.example.com:6000` running on a workstation alongside the Sun, with
@@ -160,9 +177,10 @@ items in STATUS.
 
 ### fileview
 
-CDE's file-content viewer (`dtfileview`-ish). **Paired.** Mid-sized
-Motif app: ScrolledText widget for content, menu bar, status line.
-Exercises XmText programmatic content updates.
+OpenWindows / SunView file manager (Sun's pre-CDE bundled file
+viewer, `WM_CLASS=fileview/Fileview`). **Paired.** Mid-sized Xt app
+with menu bar and content pane. Exercises Xt save-under/override
+patterns at startup. Distinct from CDE's `dtfile`.
 
 ### ico
 
@@ -235,10 +253,10 @@ implementation on 2026-05-31 (`afdd26b`).
 
 ### textedit
 
-OpenWindows text editor — the canonical Solaris text widget showing
-what NeWS-era TextSubwindow looked like. **Gold-only.** Heavy
-RasterText extension usage; the gold capture is one of our few
-"non-X-Consortium-toolkit" reference traces.
+OpenWindows text editor — the canonical SunOS-era text widget,
+predating CDE's `dtpad`. **Gold-only.** One of the corpus's few
+"non-X-Consortium-toolkit" reference traces, since OpenWindows used
+Sun's own XView / OPEN LOOK toolkit rather than Motif or Athena.
 
 ### unidentified-5
 
