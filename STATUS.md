@@ -1,102 +1,70 @@
-# Status 2026-06-01 (end of day)
+# Status 2026-06-02 (end of day)
 
-Two pushes today: xmmap Expose analysis in the morning (kept in git, see
-commit 04873d5 for the detailed write-up), and a `--scale 2` opt-in
-feature in the afternoon-evening. The scale-picker feature is the
-operative thread for the next session.
+Layer 2 of the scale picker shipped: Preferences > Display now exposes the
+size choice as a UI control, so the CLI `--scale {2,3}` flag isn't the
+only way to land at 2x. SCALE_PICKER.md called this out as the natural
+next step after yesterday's "kind of OK, not jarring" read.
 
-## Scale picker — shipped, awaiting Sun-box validation
+## What landed
 
-`--scale {2,3}` CLI flag on macxserver. Default unchanged (picker still
-prefers 3x). `--scale 2` re-picks the logical-root via the existing
-preset table at scale=2, which on a 14"/16" MBP lands at 1280×900 (the
-Sun-authentic size SunOS-era Motif apps assume) instead of the 3x
-picker's 1008×648 or 1280×720. Motif frame chrome auto-scales by
-`scaleFactor/3` with integer-point snap so bevels stay crisp at any
-backingScale. Native NSWindow chrome stays 28pt (no public AppKit API
-to scale it; the cost is honest).
+A three-way radio in Preferences > Display:
 
-Two commits on main:
-- `4b11510` — the hack version (CLI flag + scaling, no polish)
-- `43934f7` — spec'd polish (integer-point snap on Motif dims, 5 new
-  tests for forcedScale, removed phantom pixmap-Lanczos item from spec
-  because nearest-neighbor was already in place)
+- **Auto — picks best size for display.** Defers to the picker (today
+  that prefers 3x). Default for fresh installs.
+- **Comfortable — window size parity with Mac (3×).**
+- **Compact — slightly smaller windows (2×).**
 
-1253 tests green. SCALE_PICKER.md documents the design and known
-orthogonal issues. Revert path is one commit (or two) on the `4b11510`
-ancestor.
+Backed by a new UserDefaults key `display.scale` ("auto" / "comfortable"
+/ "compact"). Read once at server startup via a transient `Preferences()`
+instance, mapped to a `forcedScale: Double?` and passed into
+`DisplayConfig.forMainDisplay(forcedScale:)` the same way the CLI flag
+does. CLI still wins for the process when present; without it, the
+preference applies. Restart-the-server contract unchanged.
 
-Visual evaluation on the 16" MBP with `xterm` and `quickplot` replays
-side-by-side (2x on :0, 3x on :1): Todd's read is "kind of OK, not as
-jarring as expected" — which is the read this feature has bailed on
-twice before for being too jarring on paper. The aesthetic worry that
-killed prior attempts didn't survive seeing it run.
+Display tab also got a small layout pass: panel header relabelled from
+"Window Frame" to "Display" (it now covers both Display Size and the
+existing Window Frame controls), trailing `Spacer()` changed to
+`Spacer(minLength: 16)` so when the content fills the dialog the bottom
+description doesn't sit flush against the edge.
 
-### What still needs validation
+## Files touched
 
-The functional argument for the feature ("quickplot's USPosition fits
-at 1280×900 root, doesn't at 1008×648 / 1280×720") is currently
-unverified against live quickplot — we tested with the captured replay
-from `/tmp/swift-x-captures/2026-05-30T13-05-57-qp.xtap`, which proves
-the math but not the live behavior. Sun-box test tomorrow with real
-quickplot from u5 closes that.
+- `Sources/SwiftXServer/Preferences.swift` — new `displayScale`
+  accessor, `DisplayScalePreference` enum with `.auto/.comfortable/.compact`
+  cases and a `forcedScale` mapping.
+- `Sources/SwiftXServer/ServerEntry.swift` — `forcedScale = CLI ??
+  Preferences().displayScale.forcedScale`. `--help` updated to note
+  the precedence.
+- `Sources/SwiftXServer/PreferencesPanelView.swift` — Display tab
+  restructured; new `@Published displayScale` on the panel model.
+- `MacXServer.xcodeproj` — `xcodegen generate` ran clean (no tracked
+  changes since no new files).
 
-### Open decision
+Build green, 1253 tests pass.
 
-After tomorrow's Sun-box test, two paths:
+## What I didn't verify
 
-- **Promote to Preferences UI (Layer 2).** SCALE_PICKER.md describes
-  it: a "Display: Comfortable / Compact" toggle plus the existing
-  Motif-frame toggle. Straightforward wiring; ~1 hour.
-- **Revert and move on.** Two commits, one revert each. Spec and
-  memory stay in git history for the next time the topic surfaces.
+I didn't launch the app and eyeball the Preferences panel myself. The
+labels and the bottom-padding fix came from Todd's feedback in the
+session; the panel needs a real visual check next time the laptop is
+in front of someone. The three-way radio plus the existing Window Frame
+section plus the Motif Resources block makes the Display tab the densest
+one in the dialog; if it overflows on a small window, it'll want a
+`ScrollView` wrapper, but I'd rather see that on screen before adding
+one speculatively.
 
-## Orthogonal issue surfaced today (not addressed)
+## Carrying forward
 
-`AllocColor` pixel-value drift on cross-session replay. Replaying a
-swiftx-captured `.xtap` against a fresh swiftx server can produce
-wrong colors because our PseudoColor allocator may return different
-pixel values than the original session did, while the captured
-drawing bytes still reference the originals. Visible when comparing
-quickplot replays today. Pre-existing issue documented in DECISIONS
-as "stateful translation needed for cross-server replay." Not
-specific to the scale picker.
+The Sun-box validation pass from yesterday's STATUS is still open:
+launch real quickplot from u5 against `macxserver` set to Compact (or
+`--scale 2`) on the laptop, confirm the command window USPosition
+(30, 260) fits at 1280×900. The new control just changes the way you
+opt in, not the underlying picker behavior, so yesterday's test plan
+applies as written. After that, the open question from yesterday
+("promote to Preferences UI or revert?") is half-answered: the UI is
+in. The other half — keep or revert — still needs the live look.
 
-If we want capture-based regression testing to work cleanly, this
-needs to be addressed eventually. Not urgent — same-server replay
-(SunOS→SunOS) already works fine; the issue only bites when
-swiftx→swiftx replay is the testing strategy.
+The orthogonal AllocColor pixel-value drift on cross-session replay is
+still parked. Same status as yesterday.
 
-## Carrying forward from this morning
-
-xmmap Expose over-emit is still the open architectural thread from
-this morning's investigation. R6 source reveals the over-emit is a
-*workaround* for a missing `CopyWindow` blit, not a bug. The
-"tighten the Expose to newly-revealed region" approach was reverted
-(b09640d) because without the blit, it leaves stale content in the
-intersection region. Real fix is the blit-on-move pipeline (Step F
-in the ledger). Not yet attempted; deferred.
-
-ss2 app status memo (`project_ss2_app_status.md`) remains the ground
-truth for per-app status. STALE-stamped memos for quickplot, dt-apps,
-and dthelpview are accurate on architectural lessons, not on current
-behavior — pending u5 recapture.
-
-## For next session
-
-1. **Sun-box validation pass for `--scale 2`.** Launch real quickplot
-   from u5 against `macxserver --scale 2` on the laptop. Confirm:
-   - Command Window at USPosition (30, 260) fits on screen instead of
-     going off the bottom
-   - Other dt-apps and Motif apps render at appropriate sizes
-   - Motif chrome bevels look crisp (not muddy) at the integer-snapped
-     21pt title bar
-   - No new console warnings or rendering glitches vs 3x
-2. **Decide on Layer 2 (Preferences UI) or revert.**
-3. **Optionally re-attempt the xmmap blit-on-move (Step F).** Separate
-   thread; pick up the morning's investigation when ready.
-
-Memory has fresh entries for the +0.5 offset analysis (which we
-re-derived today after I couldn't recall a prior session's claim).
-No new feedback memories to log; Todd's "kind of OK, not jarring" read
-was the operative signal of the day.
+The xmmap blit-on-move (Step F) is also still on the back burner.

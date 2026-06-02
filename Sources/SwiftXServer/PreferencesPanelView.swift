@@ -139,10 +139,36 @@ private struct DisplayTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             PanelHeader(
-                icon: "macwindow",
-                title: "Window Frame",
-                caption: "Optional OSF/Motif-style chrome around X windows."
+                icon: "display",
+                title: "Display",
+                caption: "How X content is sized on screen and how windows are framed."
             )
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Display size:")
+                    .foregroundStyle(.secondary)
+                Picker("", selection: $model.displayScale) {
+                    Text("Auto — picks best size for display")
+                        .tag(DisplayScalePreference.auto)
+                    Text("Comfortable — window size parity with Mac (3\u{00d7})")
+                        .tag(DisplayScalePreference.comfortable)
+                    Text("Compact — slightly smaller windows (2\u{00d7})")
+                        .tag(DisplayScalePreference.compact)
+                }
+                .labelsHidden()
+                .pickerStyle(.radioGroup)
+                .padding(.leading, 4)
+            }
+
+            Text("Takes effect on the next server launch. The macxserver --scale flag overrides this for one run.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider().padding(.vertical, 4)
+
+            Text("Window Frame")
+                .font(.headline)
 
             Toggle("Use Motif window frame for new X windows", isOn: $model.motifFrameEnabled)
                 .toggleStyle(.checkbox)
@@ -195,7 +221,7 @@ private struct DisplayTab: View {
                 }
             }
 
-            Spacer()
+            Spacer(minLength: 16)
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -300,6 +326,14 @@ final class PreferencesPanelModel: ObservableObject {
         }
     }
 
+    @Published var displayScale: DisplayScalePreference {
+        didSet {
+            if displayScale != prefs.displayScale {
+                prefs.displayScale = displayScale
+            }
+        }
+    }
+
     var captureDirectory: String { prefs.captureDirectory }
 
     /// Path of the user-editable resources file. Same path the resources
@@ -317,6 +351,7 @@ final class PreferencesPanelModel: ObservableObject {
         self.captureSessions = preferences.captureSessions
         self.motifFrameEnabled = preferences.motifFrameEnabled
         self.motifFrameButtonStyle = preferences.motifFrameButtonStyle
+        self.displayScale = preferences.displayScale
     }
 
     /// Reseed the user resources file from the bundled defaults. Same

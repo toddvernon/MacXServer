@@ -110,9 +110,11 @@ enum ServerEntry {
                 process. When capture is on, every accepted client writes its own
                 .xtap to /tmp/swift-x-captures/ (configurable in Preferences).
 
-                --scale forces the display scale (2 or 3). Default lets the picker
-                choose, which prefers 3x. --scale 2 re-picks the logical-root size
-                to the largest preset that fits at 2x. See SCALE_PICKER.md.
+                --scale forces the display scale (2 or 3) for this process,
+                overriding the Preferences > Display setting. Without --scale,
+                the Preferences value applies (default: Auto, which prefers 3x).
+                --scale 2 re-picks the logical-root size to the largest preset
+                that fits at 2x. See SCALE_PICKER.md.
 
                 --verbose mirrors per-session and bridge traces to stderr. By default
                 they're disk-only at /tmp/macxserver/<instance>-<timestamp>.log;
@@ -154,8 +156,11 @@ enum ServerEntry {
 
         // Detect the connected display and pick a logical-root + integer-scale
         // combination per `SERVER_RESOLUTION_SCALING_AND_FONTS.md`. `--scale`
-        // forces a specific value (see SCALE_PICKER.md).
-        let displayConfig = DisplayConfig.forMainDisplay(forcedScale: forcedScale)
+        // forces a specific value; otherwise the Preferences > Display setting
+        // applies (default `.auto` = picker chooses). See SCALE_PICKER.md.
+        let prefScale = Preferences().displayScale.forcedScale
+        let resolvedScale = forcedScale ?? prefScale
+        let displayConfig = DisplayConfig.forMainDisplay(forcedScale: resolvedScale)
         let serverConfig = ServerConfig(displayConfig: displayConfig)
 
         // Auto-scale the Motif frame to match the chosen X scale. At 3x (today's

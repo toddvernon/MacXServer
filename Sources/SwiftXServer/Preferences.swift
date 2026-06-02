@@ -22,6 +22,7 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         static let captureDirectory = "capture.directory"     // string
         static let motifFrameEnabled     = "motifFrame.enabled"     // bool
         static let motifFrameButtonStyle = "motifFrame.buttonStyle" // "motif" | "trafficLights"
+        static let displayScale          = "display.scale"          // "auto" | "comfortable" | "compact"
     }
 
     /// Where server-side captures land when capture is enabled. /tmp is
@@ -43,6 +44,7 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
             Key.captureDirectory: Self.defaultCaptureDirectory,
             Key.motifFrameEnabled: false,
             Key.motifFrameButtonStyle: "motif",
+            Key.displayScale: "auto",
         ])
     }
 
@@ -104,6 +106,24 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         }
     }
 
+    /// Display size at server startup. `.auto` defers to the picker
+    /// (which prefers 3x today). `.comfortable` forces 3x; `.compact`
+    /// forces 2x. CLI `--scale {2,3}` overrides this for one process.
+    /// Read once at startup; change takes effect on next launch.
+    var displayScale: DisplayScalePreference {
+        get {
+            switch defaults.string(forKey: Key.displayScale) {
+            case "comfortable": return .comfortable
+            case "compact":     return .compact
+            default:            return .auto
+            }
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: Key.displayScale)
+            NotificationCenter.default.post(name: Self.didChange, object: self)
+        }
+    }
+
     /// When the Motif frame is on, controls whether the three title-bar
     /// buttons render as Motif raised glyphs or as Mac-style colored dots.
     var motifFrameButtonStyle: MotifFrameButtonStyle {
@@ -131,6 +151,26 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
     /// our top-level `current` already returns ClipboardPreferences, so we
     /// vend a thin adapter that reads through to the live keys here.
     var motifFrameProvider: MotifFramePreferencesProvider { MotifFrameProviderAdapter(prefs: self) }
+}
+
+/// User-facing scale choice. `.auto` lets `DisplayConfig.pick` decide
+/// (today the picker prefers 3x). `.comfortable` and `.compact` force a
+/// scale on every display; if the chosen scale doesn't fit, the picker
+/// falls back per its usual rules. SCALE_PICKER.md is the design doc.
+enum DisplayScalePreference: String, CaseIterable {
+    case auto
+    case comfortable
+    case compact
+
+    /// Scale to pass to `DisplayConfig.forMainDisplay(forcedScale:)`.
+    /// `nil` means "no override — let the picker choose."
+    var forcedScale: Double? {
+        switch self {
+        case .auto:        return nil
+        case .comfortable: return 3
+        case .compact:     return 2
+        }
+    }
 }
 
 /// Forwards the protocol's `current` requirement to live reads of the
