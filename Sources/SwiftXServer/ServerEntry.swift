@@ -80,6 +80,9 @@ enum ServerEntry {
         // Per-session and bridge traces always go to disk (/tmp/macxserver/).
         // --verbose additionally mirrors them to stderr; default is quiet.
         var verbose = false
+        // --scale {2,3} forces a specific scale. Default (nil) lets the picker
+        // choose, which prefers 3x. See SCALE_PICKER.md for the design.
+        var forcedScale: Double? = nil
 
         let args = Array(CommandLine.arguments.dropFirst())
         var i = 0
@@ -96,7 +99,8 @@ enum ServerEntry {
             switch args[i] {
             case "-h", "--help":
                 print("""
-                usage: macxserver [--host HOST] [--port PORT] [--capture | --no-capture] [--verbose]
+                usage: macxserver [--host HOST] [--port PORT] [--capture | --no-capture]
+                                  [--scale {2,3}] [--verbose]
 
                 Listens for X client connections on HOST:PORT (default 0.0.0.0:6000
                 which is X DISPLAY :0). Top-level X windows become real NSWindows on
@@ -105,6 +109,10 @@ enum ServerEntry {
                 --capture / --no-capture override the Preferences toggle for this
                 process. When capture is on, every accepted client writes its own
                 .xtap to /tmp/swift-x-captures/ (configurable in Preferences).
+
+                --scale forces the display scale (2 or 3). Default lets the picker
+                choose, which prefers 3x. --scale 2 re-picks the logical-root size
+                to the largest preset that fits at 2x. See SCALE_PICKER.md.
 
                 --verbose mirrors per-session and bridge traces to stderr. By default
                 they're disk-only at /tmp/macxserver/<instance>-<timestamp>.log;
@@ -127,6 +135,12 @@ enum ServerEntry {
                 captureOverride = false
             case "--verbose", "-v":
                 verbose = true
+            case "--scale":
+                i += 1
+                guard i < args.count, let s = Double(args[i]), s == 2 || s == 3 else {
+                    writeStderr("--scale needs 2 or 3\n"); exit(2)
+                }
+                forcedScale = s
             default:
                 writeStderr("unknown arg: \(args[i])\n")
                 exit(2)
@@ -139,9 +153,22 @@ enum ServerEntry {
         let listener = Listener(host: host, port: port, log: stderrLog)
 
         // Detect the connected display and pick a logical-root + integer-scale
-        // combination per `SERVER_RESOLUTION_SCALING_AND_FONTS.md`.
-        let displayConfig = DisplayConfig.forMainDisplay()
+        // combination per `SERVER_RESOLUTION_SCALING_AND_FONTS.md`. `--scale`
+        // forces a specific value (see SCALE_PICKER.md).
+        let displayConfig = DisplayConfig.forMainDisplay(forcedScale: forcedScale)
         let serverConfig = ServerConfig(displayConfig: displayConfig)
+
+        // Auto-scale the Motif frame to match the chosen X scale. At 3x (today's
+        // default) the multiplier is 1.0; at 2x it's ~0.67. Keeps Motif chrome
+        // proportional to X content. Native NSWindow chrome stays 28pt because
+        // we can't scale it (no public AppKit API). See SCALE_PICKER.md.
+        var motifTheme = MotifTheme.current
+        let chromeScale = displayConfig.scale / 3.0
+        motifTheme.titleBarHeight *= chromeScale
+        motifTheme.bevelWidth *= chromeScale
+        motifTheme.frameWidth *= chromeScale
+        MotifTheme.install(motifTheme)
+
         // Bridge log is the volume driver (every drawXxx, windowDidMove). The
         // bridge is shared across sessions so it can't write to a per-session
         // file; either we send these to stderr or we drop them. Off unless

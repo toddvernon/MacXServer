@@ -619,7 +619,14 @@ public final class ServerSession: @unchecked Sendable {
         )
         let frameSettings = file.motifFrameSettings
         if !frameSettings.isEmpty {
-            MotifTheme.install(MotifTheme.fromResourceFile(frameSettings))
+            var theme = MotifTheme.fromResourceFile(frameSettings)
+            // Auto-scale chrome to match the chosen X scale (SCALE_PICKER.md).
+            // At 3x (today's default) the multiplier is 1.0 so this is a no-op.
+            let chromeScale = config.scaleFactor / 3.0
+            theme.titleBarHeight *= chromeScale
+            theme.bevelWidth *= chromeScale
+            theme.frameWidth *= chromeScale
+            MotifTheme.install(theme)
         }
     }
 

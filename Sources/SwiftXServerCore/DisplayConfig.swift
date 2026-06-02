@@ -82,8 +82,13 @@ public struct DisplayConfig: Equatable, Sendable {
     /// pixels. First (scale, logical) combination whose device dimensions
     /// don't exceed the native pixel dimensions wins. Falls back to scale=1
     /// at native dimensions if no preset fits (very small or unusual displays).
-    public static func pick(nativeWidth: Int, nativeHeight: Int) -> DisplayConfig {
-        for scale in scaleCandidates {
+    ///
+    /// `forcedScale` (if set) restricts the search to that scale only. See
+    /// `SCALE_PICKER.md` for the design rationale. Used by `--scale 2`.
+    public static func pick(nativeWidth: Int, nativeHeight: Int,
+                            forcedScale: Double? = nil) -> DisplayConfig {
+        let scales = forcedScale.map { [$0] } ?? scaleCandidates
+        for scale in scales {
             for c in logicalCandidates {
                 let dw = Int((Double(c.width) * scale).rounded())
                 let dh = Int((Double(c.height) * scale).rounded())
@@ -99,6 +104,8 @@ public struct DisplayConfig: Equatable, Sendable {
             }
         }
         // Fallback for tiny / unusual displays: 1:1 with whatever's there.
+        // (Also the path if `forcedScale` is set and no preset fits at that scale —
+        // probably wrong but matches the existing "always return something" contract.)
         return DisplayConfig(
             logicalWidth: max(nativeWidth, 1),
             logicalHeight: max(nativeHeight, 1),
@@ -112,7 +119,7 @@ public struct DisplayConfig: Equatable, Sendable {
     /// On a system with no main screen (very unusual on macOS), falls back
     /// to the Studio Display preset.
     @MainActor
-    public static func forMainDisplay() -> DisplayConfig {
+    public static func forMainDisplay(forcedScale: Double? = nil) -> DisplayConfig {
         guard let screen = NSScreen.main else {
             return .studioDisplay
         }
@@ -120,7 +127,7 @@ public struct DisplayConfig: Equatable, Sendable {
         let pointsFrame = screen.frame
         let pixelW = Int((pointsFrame.width * backingScale).rounded())
         let pixelH = Int((pointsFrame.height * backingScale).rounded())
-        return pick(nativeWidth: pixelW, nativeHeight: pixelH)
+        return pick(nativeWidth: pixelW, nativeHeight: pixelH, forcedScale: forcedScale)
     }
 
     // MARK: - Named presets
