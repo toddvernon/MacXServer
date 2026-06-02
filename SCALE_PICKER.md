@@ -75,20 +75,23 @@ No `--logical-root` flag in v1. Defer until a real need surfaces.
 
 ## Implementation
 
-Three changes, ~50 lines total plus tests:
+Four changes, ~80 lines total plus tests:
 
-1. **`DisplayConfig.pick`**: add an optional `forcedScale: Double?` parameter. When set, skip the scale-candidate loop and use only that value. Existing zero-arg path unchanged.
+1. **`DisplayConfig.pick`**: add an optional `forcedScale: Double?` parameter. When set, only that scale is tried; first preset logical-root that fits wins. Existing zero-arg path unchanged.
 
-2. **`ServerEntry`**: parse `--scale` from CommandLine. Pass the value to `DisplayConfig.forMainDisplay(forcedScale:)` (also new). After getting back the chosen displayConfig, compute the scaled MotifTheme and install it before the bridge is built.
+2. **`ServerEntry`**: parse `--scale` from CommandLine. Pass to `DisplayConfig.forMainDisplay(forcedScale:)`. After getting back the chosen displayConfig, compute the scaled MotifTheme (integer-point snap on `titleBarHeight`, `bevelWidth`, `frameWidth`) and install before the bridge is built.
 
-3. **Tests**: extend `DisplayConfigTests` with cases for `forcedScale: 2` on each preset display dimension. Verify the picker chooses the expected logical-root or surfaces an error when no preset fits.
+3. **`ServerSession`**: the per-session resource-file load re-installs `MotifTheme` from the file's `[motif-frame]` section. Apply the same `scaleFactor/3` scaling + integer-point snap after the resource-file install so the scaling survives.
+
+4. **Tests**: `DisplayConfigTests` gets `forcedScale` coverage — Studio Display, 14"/16" MBP, 4K external (--scale 3 = no-op), tiny display fallback.
+
+The integer-point snap is what makes bevels stay crisp at 2x. At scale=2 with chromeScale=2/3, raw values are fractional (32×2/3 = 21.333pt etc.). Snapping to whole points means every dim lands on integer device pixels regardless of `backingScale` (1, 2, or 3), which is what the bevel-drawing loop in `MotifFrameView` already relies on for line crispness.
 
 No changes to:
 
-- `CocoaWindowBridge`. It reads `scaleFactor` from its init parameter; doesn't care where that came from.
-- `MotifFrameView`. It reads `MotifTheme.current` on every draw; auto-picks up the scaled theme.
-- `ResourceTables`, `PixelBuffer`, anything else holding scaleFactor as `let`. They're all initialized from the chosen displayConfig.
-- The resource file loader. Order of operations is documented (load resources, then apply scale) but no API change.
+- `CocoaWindowBridge`. Reads `scaleFactor` from its init parameter; doesn't care where it came from. Pixmap composite path already uses `interpolationQuality = .none` + `shouldInterpolate: false` — nearest-neighbor is already in place, no fast-path needed.
+- `MotifFrameView`. Reads `MotifTheme.current` on every draw; auto-picks up the scaled theme.
+- `ResourceTables`, `PixelBuffer`, anything else holding scaleFactor as `let`. All initialized from the chosen displayConfig.
 
 ## What's out of scope
 
@@ -120,6 +123,10 @@ The 14"-MBP-native-3x → 14"-MBP-native-2x pair is the diagnostic pair: it conf
 
 ## Done condition
 
-CLI flag works. Motif theme scales. Tests green. Eight launches in the test grid above complete without surprises. If the test pass surfaces something unexpected, file it as its own ticket rather than blocking this commit.
+CLI flag works. Motif theme scales with integer-point snap. Tests green. Eight launches in the test grid above complete without surprises. If the test pass surfaces something unexpected, file it as its own ticket rather than blocking this commit.
 
 If the feature feels not-worth-shipping after using it for a week, revert is one commit. If it feels worth shipping, the next step is the Preferences UI (Layer 2 from the planning conversation), which is straightforward wiring on top of the foundation this lays.
+
+## Known orthogonal issues surfaced during prototyping
+
+- **AllocColor pixel-value drift on cross-session replay.** Replaying a swiftx-captured `.xtap` against a fresh swiftx server can produce wrong colors because our PseudoColor allocator may return different pixel values than the original session, while the captured drawing bytes still reference the originals. Not specific to this feature; affects any replay-based testing. Documented in DECISIONS as "stateful translation needed for cross-server replay."

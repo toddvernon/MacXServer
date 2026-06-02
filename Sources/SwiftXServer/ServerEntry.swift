@@ -159,14 +159,14 @@ enum ServerEntry {
         let serverConfig = ServerConfig(displayConfig: displayConfig)
 
         // Auto-scale the Motif frame to match the chosen X scale. At 3x (today's
-        // default) the multiplier is 1.0; at 2x it's ~0.67. Keeps Motif chrome
-        // proportional to X content. Native NSWindow chrome stays 28pt because
-        // we can't scale it (no public AppKit API). See SCALE_PICKER.md.
+        // default) the multiplier is 1.0; at 2x it's ~0.67. Snap to integer
+        // points so each dim lands on whole device pixels regardless of the
+        // screen's backingScale, keeping bevels crisp. See SCALE_PICKER.md.
         var motifTheme = MotifTheme.current
         let chromeScale = displayConfig.scale / 3.0
-        motifTheme.titleBarHeight *= chromeScale
-        motifTheme.bevelWidth *= chromeScale
-        motifTheme.frameWidth *= chromeScale
+        motifTheme.titleBarHeight = (motifTheme.titleBarHeight * chromeScale).rounded()
+        motifTheme.bevelWidth = (motifTheme.bevelWidth * chromeScale).rounded()
+        motifTheme.frameWidth = (motifTheme.frameWidth * chromeScale).rounded()
         MotifTheme.install(motifTheme)
 
         // Bridge log is the volume driver (every drawXxx, windowDidMove). The

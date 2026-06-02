@@ -621,11 +621,12 @@ public final class ServerSession: @unchecked Sendable {
         if !frameSettings.isEmpty {
             var theme = MotifTheme.fromResourceFile(frameSettings)
             // Auto-scale chrome to match the chosen X scale (SCALE_PICKER.md).
-            // At 3x (today's default) the multiplier is 1.0 so this is a no-op.
+            // At 3x the multiplier is 1.0 so this is a no-op. Integer-point
+            // snap keeps bevels on whole device pixels at any backingScale.
             let chromeScale = config.scaleFactor / 3.0
-            theme.titleBarHeight *= chromeScale
-            theme.bevelWidth *= chromeScale
-            theme.frameWidth *= chromeScale
+            theme.titleBarHeight = (theme.titleBarHeight * chromeScale).rounded()
+            theme.bevelWidth = (theme.bevelWidth * chromeScale).rounded()
+            theme.frameWidth = (theme.frameWidth * chromeScale).rounded()
             MotifTheme.install(theme)
         }
     }
