@@ -94,6 +94,16 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private let lookupLock = NSLock()
     private var pixmapBufferLookups: [UInt64: @Sendable (UInt32) -> PixelBuffer?] = [:]
     private var windowClipLookups:   [UInt64: @Sendable (UInt32) -> [Framer.Rectangle]?] = [:]
+    /// Per-window device-resolution clip narrowing for SHAPE-shaped
+    /// descendants. Lookup returns (rects: window-local DEVICE-pixel
+    /// bands, originX/Y: window borderBox top-left in TOP-LEVEL logical
+    /// coords) when the window has both bounding+clip device-rect masks;
+    /// nil otherwise. `withDrawContext` adds this as a CG clip path
+    /// alongside the logical `windowClip`, so client draw ops on the
+    /// shaped window can't paint past the curve and erase the device-
+    /// resolution border ring. See ServerSession's
+    /// `windowDeviceClipForBridge`.
+    private var windowDeviceClipLookups: [UInt64: @Sendable (UInt32) -> ([Framer.Rectangle], Int16, Int16)?] = [:]
     private var colorTableLookups:   [UInt64: @Sendable () -> ColorTable?] = [:]
 
     public func registerPixmapBufferLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> PixelBuffer?) {
@@ -120,6 +130,23 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     public func registerWindowClipLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> [Framer.Rectangle]?) {
         lookupLock.lock(); defer { lookupLock.unlock() }
         windowClipLookups[token] = lookup
+    }
+    public func registerWindowDeviceClipLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> ([Framer.Rectangle], Int16, Int16)?) {
+        lookupLock.lock(); defer { lookupLock.unlock() }
+        windowDeviceClipLookups[token] = lookup
+    }
+    public func unregisterWindowDeviceClipLookup(token: UInt64) {
+        lookupLock.lock(); defer { lookupLock.unlock() }
+        windowDeviceClipLookups.removeValue(forKey: token)
+    }
+    private func lookupWindowDeviceClip(_ id: UInt32) -> ([Framer.Rectangle], Int16, Int16)? {
+        lookupLock.lock()
+        let closures = Array(windowDeviceClipLookups.values)
+        lookupLock.unlock()
+        for lookup in closures {
+            if let v = lookup(id) { return v }
+        }
+        return nil
     }
     public func unregisterWindowClipLookup(token: UInt64) {
         lookupLock.lock(); defer { lookupLock.unlock() }
@@ -234,11 +261,13 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // GC-clip-only so legacy tests still pass and so a draw on
             // a window the bridge doesn't know about still happens.
             let windowClip = self.lookupWindowClip(windowId)
+            let deviceClip = self.lookupWindowDeviceClip(windowId)
             DispatchQueue.main.async { [weak self] in
                 guard let self = self,
                       let view = self.slot(topLevel)?.view,
                       let ctx = view.backing else { return }
-                self.withClip(ctx, windowClip: windowClip, gcClip: translatedClip) {
+                self.withClip(ctx, windowClip: windowClip, deviceClip: deviceClip,
+                              gcClip: translatedClip) {
                     body(ctx)
                 }
                 view.setNeedsDisplay(view.bounds)
@@ -852,10 +881,11 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
     // MARK: - Drawing
 
-    public func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
+    public func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, capStyle: UInt8, segments: [LineSegment], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
         withDrawContext(target, clipRectangles: clipRectangles) { [weak self] ctx in
             applyForeground(ctx, foreground)
             self?.applyStrokePlane(ctx, clientLineWidth: lineWidth)
+            self?.applyLineCap(ctx, capStyle)
             self?.applyDashes(ctx, dashes, dashOffset: dashOffset)
             for s in segments {
                 ctx.move(to: CGPoint(x: CGFloat(s.x1), y: CGFloat(s.y1)))
@@ -865,11 +895,12 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
-    public func drawPolyLine(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
+    public func drawPolyLine(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, capStyle: UInt8, points: [DrawPoint], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
         guard !points.isEmpty else { return }
         withDrawContext(target, clipRectangles: clipRectangles) { [weak self] ctx in
             applyForeground(ctx, foreground)
             self?.applyStrokePlane(ctx, clientLineWidth: lineWidth)
+            self?.applyLineCap(ctx, capStyle)
             self?.applyDashes(ctx, dashes, dashOffset: dashOffset)
             ctx.beginPath()
             ctx.move(to: CGPoint(x: CGFloat(points[0].x), y: CGFloat(points[0].y)))
@@ -940,6 +971,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private func withClip(
         _ ctx: CGContext,
         windowClip: [Framer.Rectangle]?,
+        deviceClip: ([Framer.Rectangle], Int16, Int16)? = nil,
         gcClip: [Framer.Rectangle]?,
         _ body: () -> Void
     ) {
@@ -953,6 +985,26 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 CGRect(x: CGFloat($0.x), y: CGFloat($0.y),
                        width: CGFloat($0.width), height: CGFloat($0.height))
             })
+        }
+        // Device-resolution SHAPE clip for shaped descendants: a CGPath
+        // built from window-local device-pixel rects + window origin,
+        // converted into top-level logical coords with sub-pixel
+        // precision. Stacked on top of the logical windowClip so client
+        // draws can't paint past the curve into our device-resolution
+        // border ring. Skipped when scaleFactor is zero (test paths).
+        if let (devRects, ox, oy) = deviceClip, !devRects.isEmpty, self.scaleFactor > 0 {
+            let scale = self.scaleFactor
+            let path = CGMutablePath()
+            for r in devRects {
+                path.addRect(CGRect(
+                    x: Double(ox) + Double(r.x) / scale,
+                    y: Double(oy) + Double(r.y) / scale,
+                    width:  Double(r.width)  / scale,
+                    height: Double(r.height) / scale
+                ))
+            }
+            ctx.addPath(path)
+            ctx.clip()
         }
         if let rects = gcClip {
             ctx.clip(to: rects.map {
@@ -997,6 +1049,18 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         let cw = max(Int(clientLineWidth), 1)
         ctx.translateBy(x: 0.5, y: 0.5)
         ctx.setLineWidth(CGFloat(cw))
+    }
+
+    /// Map the X11 cap-style byte to CG. X11: 0 NotLast (treat as Butt at
+    /// stroke-end level — the "don't draw last point" semantics only matter
+    /// for chained thin lines), 1 Butt, 2 Round, 3 Projecting (= square,
+    /// extends half a line-width past the endpoint).
+    private func applyLineCap(_ ctx: CGContext, _ capStyle: UInt8) {
+        switch capStyle {
+        case 2: ctx.setLineCap(.round)
+        case 3: ctx.setLineCap(.square)
+        default: ctx.setLineCap(.butt)
+        }
     }
 
     public func drawFillPoly(target: DrawTarget, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Framer.Rectangle]?) {
@@ -2189,6 +2253,83 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                     applyFill(ctx, r.color)
                     ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
                                     width: CGFloat(r.width), height: CGFloat(r.height)))
+                }
+            }
+            view.setNeedsDisplay(view.bounds)
+        }
+    }
+
+    public func paintShapedDescendantBg(
+        topLevel: UInt32,
+        windowOriginX: Int16, windowOriginY: Int16,
+        windowFullWidth: Int32, windowFullHeight: Int32,
+        bgColor: RGB16, borderColor: RGB16, drawBorder: Bool,
+        boundingDeviceRects: [Framer.Rectangle], clipDeviceRects: [Framer.Rectangle]
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
+            // Backing CTM is logical-coords (X-protocol space) with a
+            // logical->device scale built in. Device rects are window-local
+            // device px; convert to top-level logical CGFloat by adding the
+            // window origin (logical) and dividing the device offsets by
+            // scaleFactor. The CTM then maps each sub-logical-pixel rect
+            // back to exactly one device row — the union of all rects is
+            // the stadium at full backing resolution.
+            let scale = Double(self.scaleFactor)
+            guard scale > 0 else { return }
+            // ox/oy are the window's INTERIOR origin in top-level logical
+            // coords. Device rects are in interior-local device px (see
+            // bitmapToDeviceRects + R6 dix/window.c:1544: shape regions
+            // live in interior-local). For bounding, rect.x can be negative
+            // to cover the border ring (-bw_logical * scale device px).
+            let ox = Double(windowOriginX)
+            let oy = Double(windowOriginY)
+            func makePath(_ rects: [Framer.Rectangle]) -> CGPath {
+                let p = CGMutablePath()
+                for r in rects {
+                    p.addRect(CGRect(
+                        x: ox + Double(r.x) / scale,
+                        y: oy + Double(r.y) / scale,
+                        width:  Double(r.width)  / scale,
+                        height: Double(r.height) / scale
+                    ))
+                }
+                return p
+            }
+            // windowFullWidth/Height isn't needed for the fill — the
+            // shape paths define their own areas. Kept in the signature
+            // for any future call site (e.g. clearing the window before
+            // shape paint) but unused here today.
+            _ = windowFullWidth; _ = windowFullHeight
+
+            self.withClip(ctx, nil) {
+                // Border ring via even-odd fill of (bounding ∪ clip):
+                // a pixel inside both shapes is in "even" count and stays
+                // unfilled; a pixel only in bounding (the ring) is "odd"
+                // and gets the border color. Single fill path — no
+                // clip-intersect rasterization, which previously left
+                // 1-device-pixel speckles at the curve edge where the
+                // bounding and clip clip-pass boundaries didn't agree.
+                if drawBorder && !boundingDeviceRects.isEmpty && !clipDeviceRects.isEmpty {
+                    let ring = CGMutablePath()
+                    ring.addPath(makePath(boundingDeviceRects))
+                    ring.addPath(makePath(clipDeviceRects))
+                    applyFill(ctx, borderColor)
+                    ctx.addPath(ring)
+                    ctx.fillPath(using: .evenOdd)
+                } else if drawBorder && !boundingDeviceRects.isEmpty {
+                    // Bounding only (no clip mask): the whole bounding
+                    // shape gets border color; the bg pass below would
+                    // narrow it. Same fillPath approach for consistency.
+                    applyFill(ctx, borderColor)
+                    ctx.addPath(makePath(boundingDeviceRects))
+                    ctx.fillPath(using: .winding)
+                }
+                if !clipDeviceRects.isEmpty {
+                    applyFill(ctx, bgColor)
+                    ctx.addPath(makePath(clipDeviceRects))
+                    ctx.fillPath(using: .winding)
                 }
             }
             view.setNeedsDisplay(view.bounds)

@@ -11,6 +11,7 @@ private final class RecordingBridge: WindowBridge, @unchecked Sendable {
         var topLevel: UInt32
         var foreground: RGB16
         var lineWidth: UInt32
+        var capStyle: UInt8
         var segments: [LineSegment]
     }
     struct FillPolyCall: Equatable {
@@ -39,9 +40,9 @@ private final class RecordingBridge: WindowBridge, @unchecked Sendable {
     func destroyTopLevel(id: UInt32, byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {}
     func setTopLevelTitle(id: UInt32, title: String) {}
 
-    func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
+    func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, capStyle: UInt8, segments: [LineSegment], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
         guard case .window(_, let topLevel, _, _) = target else { return }
-        polySegments.append(PolySegmentCall(topLevel: topLevel, foreground: foreground, lineWidth: lineWidth, segments: segments))
+        polySegments.append(PolySegmentCall(topLevel: topLevel, foreground: foreground, lineWidth: lineWidth, capStyle: capStyle, segments: segments))
     }
     func drawFillPoly(target: DrawTarget, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Framer.Rectangle]?) {
         guard case .window(_, let topLevel, _, _) = target else { return }
@@ -89,6 +90,43 @@ final class DrawingDispatchTests: XCTestCase {
         XCTAssertEqual(call.topLevel, 0xA0001)
         XCTAssertEqual(call.foreground, RGB16(red: 0xFFFF, green: 0, blue: 0))
         XCTAssertEqual(call.segments, [LineSegment(x1: 15, y1: 25, x2: 60, y2: 70)])
+        // Default cap-style is Butt (1) per X11 spec.
+        XCTAssertEqual(call.capStyle, 1)
+    }
+
+    /// Regression: cap-style from CreateGC must propagate through GCState
+    /// into the bridge so CG can set the line cap. xcalc/Athena's
+    /// `XmuShapeOval` draws each button's bounding-shape pixmap as a single
+    /// thick line with `cap_style = CapRound` (2) + `line_width = button
+    /// height`, relying on the rounded caps to turn the line into a
+    /// stadium. Pre-fix the byte was silently dropped, CG defaulted to
+    /// butt, the bounding pixmap read back as a flat-ended rectangle, and
+    /// buttons rendered square with black blocks on the sides.
+    func testPolySegmentPropagatesCapStyle() {
+        let bridge = RecordingBridge()
+        let session = ServerSession(bridge: bridge)
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        let root = ServerConfig.default.rootWindowId
+
+        sendCreate(session, wid: 0xA0001, parent: root, x: 0, y: 0, w: 200, h: 200)
+
+        // GC mask = lineWidth | capStyle; values = lineWidth=15 then capStyle=2 (Round).
+        // GCBits order in the values list is by bit index (function ... capStyle).
+        var values: [UInt8] = []
+        values.append(contentsOf: encodeUInt32(15, byteOrder: .lsbFirst))           // lineWidth
+        values.append(contentsOf: encodeUInt32(2,  byteOrder: .lsbFirst))           // capStyle = CapRound
+        let createGC = CreateGC(cid: 0xB0001, drawable: 0xA0001,
+                                valueMask: GCBits.lineWidth | GCBits.capStyle,
+                                valueList: values)
+        _ = session.feed(createGC.encode(byteOrder: .lsbFirst))
+
+        _ = session.feed(PolySegment(drawable: 0xA0001, gc: 0xB0001, segments: [
+            Segment(x1: 5, y1: 5, x2: 50, y2: 5)
+        ]).encode(byteOrder: .lsbFirst))
+
+        XCTAssertEqual(bridge.polySegments.count, 1)
+        XCTAssertEqual(bridge.polySegments[0].capStyle, 2)
+        XCTAssertEqual(bridge.polySegments[0].lineWidth, 15)
     }
 
     func testFillPolyEvenOddDefault() {

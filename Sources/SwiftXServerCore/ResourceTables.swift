@@ -105,6 +105,15 @@ public struct WindowEntry: Equatable, Sendable {
     /// rendering aid — the X-protocol shape is `boundingShape`.
     public var boundingShapeDeviceRects: [Rectangle]?
 
+    /// Companion to `boundingShapeDeviceRects` for the CLIP shape. Captured
+    /// from the source pixmap at device resolution when a
+    /// ShapeMask op=Set/Clip lands. Used by the shaped-descendant paint
+    /// path so the inner bg fills follow the curve at full backing
+    /// resolution instead of staircasing along the logical clipList. nil =
+    /// no device clip mask cached. Invalidated on any non-mask clip
+    /// mutation. Purely a rendering aid.
+    public var clipShapeDeviceRects: [Rectangle]?
+
     /// Last VisibilityNotify state emitted for this window (raw value of
     /// VisibilityState: 0=Unobscured, 1=PartiallyObscured, 2=FullyObscured).
     /// nil = no state yet (initial, or window is currently unmapped). Used
@@ -160,6 +169,7 @@ public struct WindowEntry: Equatable, Sendable {
         boundingShape: Region? = nil,
         clipShape: Region? = nil,
         boundingShapeDeviceRects: [Rectangle]? = nil,
+        clipShapeDeviceRects: [Rectangle]? = nil,
         lastVisibilityState: UInt8? = nil,
         prevSib: UInt32? = nil,
         nextSib: UInt32? = nil,
@@ -188,6 +198,7 @@ public struct WindowEntry: Equatable, Sendable {
         self.boundingShape = boundingShape
         self.clipShape = clipShape
         self.boundingShapeDeviceRects = boundingShapeDeviceRects
+        self.clipShapeDeviceRects = clipShapeDeviceRects
         self.lastVisibilityState = lastVisibilityState
         self.prevSib = prevSib
         self.nextSib = nextSib
@@ -360,6 +371,15 @@ public final class WindowTable: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
         w.boundingShapeDeviceRects = rects
+        _windows[id] = w
+    }
+
+    /// Set (or clear, with nil) the device-resolution visual mask for the
+    /// clip shape (see WindowEntry.clipShapeDeviceRects).
+    public func setClipShapeDeviceRects(_ id: UInt32, _ rects: [Rectangle]?) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.clipShapeDeviceRects = rects
         _windows[id] = w
     }
 

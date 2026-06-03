@@ -150,6 +150,144 @@ final class ShapeOnDescendantTests: XCTestCase {
         XCTAssertEqual(regionArea(entry.borderClip), 50 * 50)
     }
 
+    /// Regression for SHORTCUTS line 52 (closed 2026-06-02): the OUTER
+    /// border-ring rect in `paintRectsForWindow` was painted unclipped
+    /// over the full (w+2*bw, h+2*bw) box. With b849a3d's descendant
+    /// SHAPE in place, the inner bg was correctly shape-narrowed but the
+    /// border ring still painted over the full rect — xcalc symptom:
+    /// each button looked like a black rectangle with a thin grey strip
+    /// down the middle. Post-fix, the border ring is emitted from
+    /// `entry.borderClip.rects`, so a shape-narrowed border ring covers
+    /// only the visible border area and the parent shows through where
+    /// the shape clipped the window away.
+    func testBorderRingPaintsClippedToBorderClip() throws {
+        let session = runningSession()
+        // Top-level (parent) is 200×200, no bg/border so it doesn't add paints.
+        let parent: UInt32 = ServerConfig.default.resourceIdBase + 1
+        let child: UInt32  = ServerConfig.default.resourceIdBase + 2
+        _ = session.feed(CreateWindow(
+            depth: 0, wid: parent, parent: root,
+            x: 0, y: 0, width: 200, height: 200, borderWidth: 0,
+            windowClass: .inputOutput, visual: 0, valueMask: 0, valueList: []
+        ).encode(byteOrder: .lsbFirst))
+        _ = session.feed(MapWindow(window: parent).encode(byteOrder: .lsbFirst))
+        // Child mimics an Athena Command button: bw=1, bg=some, border=black,
+        // mapped at (10,10), 40×20.
+        func u32le(_ v: UInt32) -> [UInt8] {
+            [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)]
+        }
+        var values: [UInt8] = []
+        values.append(contentsOf: u32le(0xFFFFFF))  // backPixel
+        values.append(contentsOf: u32le(1))         // borderPixel = blackPixel
+        _ = session.feed(CreateWindow(
+            depth: 0, wid: child, parent: parent,
+            x: 10, y: 10, width: 40, height: 20, borderWidth: 1,
+            windowClass: .inputOutput, visual: 0,
+            valueMask: CW.backPixel | CW.borderPixel, valueList: values
+        ).encode(byteOrder: .lsbFirst))
+        _ = session.feed(MapWindow(window: child).encode(byteOrder: .lsbFirst))
+        _ = session.outbound.drain()
+
+        // Pre-shape: unshaped borderClip = full borderBox = 42×22 = 924.
+        guard let pre = session.windows.get(child) else { return XCTFail() }
+        XCTAssertEqual(regionArea(pre.borderClip), 42 * 22)
+
+        // Apply a bounding shape that's narrower than the window: 20×22 at
+        // x=10 (window-local). After clamp to borderBox the visible bounding
+        // is the 20-wide vertical strip.
+        applyShape(session, to: child, kind: ShapeKind.bounding,
+                   rects: [Rectangle(x: 10, y: -1, width: 20, height: 22)])
+
+        guard let post = session.windows.get(child) else { return XCTFail() }
+        let borderClipArea = regionArea(post.borderClip)
+        XCTAssertLessThan(borderClipArea, 42 * 22,
+                          "bounding shape should narrow borderClip below full borderBox")
+
+        // The fix: border-paint rects come from borderClip, not the full
+        // outer box. Sum their areas and compare to borderClip's area.
+        let paints = session.mappedBackgroundPaints(topLevelId: parent, byteOrder: .lsbFirst)
+        // borderPixel resolves to blackPixel == RGB(0,0,0); easy to filter.
+        let borderPaints = paints.filter {
+            $0.color == RGB16(red: 0, green: 0, blue: 0)
+        }
+        XCTAssertFalse(borderPaints.isEmpty, "border ring should emit at least one paint rect")
+        let borderArea: Int64 = borderPaints.reduce(0) {
+            $0 + Int64($1.width) * Int64($1.height)
+        }
+        XCTAssertEqual(borderArea, borderClipArea,
+                       "border-ring paints should sum to borderClip area, not full borderBox area")
+    }
+
+    /// Regression for the device-paint routing (added 2026-06-02): when a
+    /// shaped descendant has both bounding- and clip-shape device rects
+    /// cached (captured at ShapeMask-Set time from the source pixmap),
+    /// `paintRectsForWindow` must SUPPRESS its rect output for that window
+    /// and `mappedShapedDescendantPaints` must emit a single record so the
+    /// bridge can paint via the device-resolution clip path. Without the
+    /// suppress, the staircased rect paint fights the curve-following
+    /// device paint.
+    func testDeviceShapeRoutingSuppressesRectPaintAndEmitsShapedRecord() throws {
+        let session = runningSession()
+        let parent: UInt32 = ServerConfig.default.resourceIdBase + 1
+        let child: UInt32  = ServerConfig.default.resourceIdBase + 2
+        _ = session.feed(CreateWindow(
+            depth: 0, wid: parent, parent: root,
+            x: 0, y: 0, width: 200, height: 200, borderWidth: 0,
+            windowClass: .inputOutput, visual: 0, valueMask: 0, valueList: []
+        ).encode(byteOrder: .lsbFirst))
+        _ = session.feed(MapWindow(window: parent).encode(byteOrder: .lsbFirst))
+        func u32le(_ v: UInt32) -> [UInt8] {
+            [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)]
+        }
+        var vals: [UInt8] = []
+        vals.append(contentsOf: u32le(0xFFFFFF))
+        vals.append(contentsOf: u32le(1))
+        _ = session.feed(CreateWindow(
+            depth: 0, wid: child, parent: parent,
+            x: 10, y: 20, width: 40, height: 20, borderWidth: 1,
+            windowClass: .inputOutput, visual: 0,
+            valueMask: CW.backPixel | CW.borderPixel, valueList: vals
+        ).encode(byteOrder: .lsbFirst))
+        _ = session.feed(MapWindow(window: child).encode(byteOrder: .lsbFirst))
+        _ = session.outbound.drain()
+
+        // Install device rects directly — this is the post-condition of a
+        // ShapeMask op=Set with a pixmap source. Two arbitrary 1-device-px
+        // bands per mask are enough to exercise the routing.
+        session.windows.setBoundingShapeDeviceRects(child, [
+            Rectangle(x: 0, y: 0, width: 42 * 3, height: 1),
+            Rectangle(x: 0, y: 1, width: 42 * 3, height: 1)
+        ])
+        session.windows.setClipShapeDeviceRects(child, [
+            Rectangle(x: 3, y: 3, width: 40 * 3, height: 1),
+            Rectangle(x: 3, y: 4, width: 40 * 3, height: 1)
+        ])
+
+        let rectPaints = session.mappedBackgroundPaints(topLevelId: parent, byteOrder: .lsbFirst)
+        let childRectPaints = rectPaints.filter {
+            // Anything inside the child's borderBox in top-level coords.
+            $0.x >= 9 && $0.y >= 19 && $0.x < 51 && $0.y < 41
+        }
+        XCTAssertTrue(childRectPaints.isEmpty,
+                      "shaped descendant with device rects must not emit logical rect paints")
+
+        let shaped = session.mappedShapedDescendantPaints(topLevelId: parent, byteOrder: .lsbFirst)
+        XCTAssertEqual(shaped.count, 1, "exactly one shaped paint record for the child")
+        let s = try XCTUnwrap(shaped.first)
+        XCTAssertEqual(s.topLevel, parent)
+        // Origin is the INTERIOR top-left in top-level logical coords —
+        // matches the interior-local coord system the device rects use
+        // (R6 dix/window.c:1544 / bitmapToDeviceRects). Negative device
+        // x/y in the bounding rects extends into the border ring.
+        XCTAssertEqual(s.windowOriginX, 10)
+        XCTAssertEqual(s.windowOriginY, 20)
+        XCTAssertEqual(s.windowFullWidth,  42)
+        XCTAssertEqual(s.windowFullHeight, 22)
+        XCTAssertTrue(s.drawBorder)
+        XCTAssertEqual(s.boundingDeviceRects.count, 2)
+        XCTAssertEqual(s.clipDeviceRects.count, 2)
+    }
+
     /// Sum the areas of a region's boxes.
     private func regionArea(_ region: Region) -> Int64 {
         var total: Int64 = 0

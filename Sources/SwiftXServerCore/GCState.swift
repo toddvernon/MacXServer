@@ -41,6 +41,14 @@ public struct GCState: Equatable, Sendable {
     public var foreground: UInt32 = 0       // pixel value (= whitePixel)
     public var background: UInt32 = 1       // pixel value (= blackPixel)
     public var lineWidth: UInt32 = 0        // 0 = 1px thin line per X11 spec
+    /// X11 cap-style: 0 NotLast, 1 Butt (default), 2 Round, 3 Projecting.
+    /// Athena's `XmuShapeOval` (xcalc buttons) draws the bounding-shape
+    /// pixmap as a single thick line with `cap_style = CapRound` and
+    /// `line_width = button_height`, relying on the rounded end caps to
+    /// turn the line into a stadium. Default CG cap is butt; without
+    /// honoring this, the bounding-shape pixmap reads back as a flat-
+    /// ended rectangle and buttons render square.
+    public var capStyle: UInt8 = 1
     public var fillRuleEvenOdd: Bool = true
     public var font: UInt32 = 0             // X font id; 0 = none set
     /// Drawing function (X11 GC `function` attribute). Default = GXcopy = 3
@@ -96,6 +104,7 @@ public struct GCState: Equatable, Sendable {
         if let v = entry.values[GCBits.foreground] { state.foreground = v }
         if let v = entry.values[GCBits.background] { state.background = v }
         if let v = entry.values[GCBits.lineWidth]  { state.lineWidth  = v }
+        if let v = entry.values[GCBits.capStyle]   { state.capStyle = UInt8(truncatingIfNeeded: v) }
         if let v = entry.values[GCBits.fillRule]   { state.fillRuleEvenOdd = (v == 0) }
         if let v = entry.values[GCBits.font]       { state.font = v }
         if let v = entry.values[GCBits.dashOffset] { state.dashOffset = v }

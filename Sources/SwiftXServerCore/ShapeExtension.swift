@@ -109,11 +109,15 @@ extension ServerSession {
             }
             srcRgn = bitmapToRegion(pixmapId: r.src, width: Int(pix.width), height: Int(pix.height))
         }
-        // For the dominant case (Set the bounding shape from a pixmap) also
-        // capture a device-resolution mask now, while the pixmap is alive, so
-        // the NSWindow clip follows the curve at full backing resolution.
+        // Capture a device-resolution mask now (while the source pixmap is
+        // still alive) for the two paint-affecting cases: Set/Bounding drives
+        // the top-level NSWindow clip + the shaped-descendant border-ring
+        // paint; Set/Clip drives the shaped-descendant inner-bg paint.
+        // Neither survives a non-mask mutation (Union/Subtract/Invert
+        // invalidate the cache in combineShape).
         var deviceRects: [Rectangle]? = nil
-        if r.op == ShapeOp.set, r.destKind == ShapeKind.bounding, r.src != 0 {
+        if r.op == ShapeOp.set, r.src != 0,
+           r.destKind == ShapeKind.bounding || r.destKind == ShapeKind.clip {
             deviceRects = bitmapToDeviceRects(pixmapId: r.src, xOff: r.xOff, yOff: r.yOff)
         }
         combineShape(dest: r.dest, destKind: r.destKind, src: srcRgn,
@@ -169,6 +173,7 @@ extension ServerSession {
                 windows.setBoundingShapeDeviceRects(r.dest, nil)
             } else {
                 windows.setClipShape(r.dest, moved)
+                windows.setClipShapeDeviceRects(r.dest, nil)
             }
             setWindowShape(windowId: r.dest)
         }
@@ -280,6 +285,10 @@ extension ServerSession {
             windows.setBoundingShapeDeviceRects(dest, deviceRects)
         } else {
             windows.setClipShape(dest, newShape)
+            // Same cache discipline for the clip-shape device mask: the mask
+            // path provides it on Set; every other mutation invalidates so
+            // the descendant paint falls back to the logical clipList.
+            windows.setClipShapeDeviceRects(dest, deviceRects)
         }
 
         setWindowShape(windowId: dest)
@@ -373,13 +382,35 @@ extension ServerSession {
             bridge.setWindowBoundingShape(topLevel: windowId, rects: rects, deviceRects: win.boundingShapeDeviceRects)
             return
         }
-        // Descendant: repaint the full subtree's backgrounds + emit Expose
-        // on the changed window so the client redraws its content into the
-        // newly-shaped region.
+        // Descendant: targeted repaint of just THIS window + the area of the
+        // parent's bg under the window's borderBox. The earlier whole-subtree
+        // walk (b849a3d) was O(N) per shape op and dominated cost during
+        // xcalc's resize-time reshape storm (40 buttons × 2 ShapeMask each
+        // × full-subtree walk). The targeted version is O(1) per op:
+        //   - parent's bg painted in (parent.clipList ∩ child.borderBox)
+        //     covers the case where the shape narrowed and parent now shows
+        //   - child's own bg/border painted via the regular rect path (or
+        //     the device-mask path if Set/Bounding+Set/Clip carried pixmap
+        //     masks)
+        // The top-level's own bg never needs repainting on a descendant
+        // shape change — it's only the parent's region under the child
+        // that's affected.
         guard let (topId, dx, dy) = topLevelAndOffset(for: windowId) else { return }
-        let paints = mappedBackgroundPaints(topLevelId: topId, byteOrder: bo)
-        if !paints.isEmpty {
-            bridge.paintWindowRects(topLevel: topId, rects: paints)
+        let (rectPaints, shapedPaint) = paintsForShapedDescendantChange(
+            child: win, dx: dx, dy: dy, byteOrder: bo
+        )
+        if !rectPaints.isEmpty {
+            bridge.paintWindowRects(topLevel: topId, rects: rectPaints)
+        }
+        if let s = shapedPaint {
+            bridge.paintShapedDescendantBg(
+                topLevel: topId,
+                windowOriginX: s.windowOriginX, windowOriginY: s.windowOriginY,
+                windowFullWidth: s.windowFullWidth, windowFullHeight: s.windowFullHeight,
+                bgColor: s.bgColor, borderColor: s.borderColor, drawBorder: s.drawBorder,
+                boundingDeviceRects: s.boundingDeviceRects,
+                clipDeviceRects: s.clipDeviceRects
+            )
         }
         if let entry = windows.get(windowId),
            entry.eventMask & MockWindowBridge.exposureMask != 0 {

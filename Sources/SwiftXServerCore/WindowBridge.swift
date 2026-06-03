@@ -270,8 +270,8 @@ public protocol WindowBridge: AnyObject, Sendable {
     // path in pixels. Applied via CGContext.setLineDash inside the clip
     // scope.
 
-    func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32)
-    func drawPolyLine(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32)
+    func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, capStyle: UInt8, segments: [LineSegment], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32)
+    func drawPolyLine(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, capStyle: UInt8, points: [DrawPoint], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32)
     func drawFillPoly(target: DrawTarget, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Rectangle]?)
     /// PolyFillRectangle. `function` is the X GC drawing function — primarily
     /// 3 (GXcopy, overwrite) or 6 (GXxor, toggle). XOR is what Athena/Motif
@@ -330,6 +330,18 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// empty). On disconnect, call `unregisterWindowClipLookup(token:)`.
     func registerWindowClipLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> [Rectangle]?)
     func unregisterWindowClipLookup(token: UInt64)
+
+    /// Per-window device-resolution clip lookup for SHAPE-shaped
+    /// descendants. Returns (rects: window-local device-pixel bands,
+    /// originX/Y: window borderBox top-left in top-level logical coords)
+    /// when the window has both bounding+clip device-rect masks; nil
+    /// otherwise. Bridge applies this as a CG clip path on top of the
+    /// logical `windowClip` so client draws on the shaped window can't
+    /// paint past the device-resolution curve and erase the shape's
+    /// border ring (xcalc button-press symptom: outline parts vanish).
+    /// Default no-op for mock/test bridges.
+    func registerWindowDeviceClipLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> ([Rectangle], Int16, Int16)?)
+    func unregisterWindowDeviceClipLookup(token: UInt64)
 
     /// CopyArea: copies a rectangular region of pixels from `src` to `dst`.
     /// All five spec-supported variants resolve via DrawTarget: window→window
@@ -525,6 +537,30 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// (rectangular window). Default no-op for mock/test bridges.
     func setWindowBoundingShape(topLevel: UInt32, rects: [Rectangle]?, deviceRects: [Rectangle]?)
 
+    /// Paint the bg + border ring of a SHAPE-shaped descendant window at
+    /// device resolution. Bypasses the logical-clipList-based
+    /// `paintWindowRects` path so the rounded curve doesn't staircase at
+    /// the display scale. `windowOriginX/Y` is the window's INTERIOR
+    /// top-left in top-level logical coords (matching the device rects'
+    /// interior-local origin per R6 dix/window.c:1544); the device rects
+    /// can carry negative x/y to cover the border ring. `windowFullWidth/
+    /// Height` is the full borderBox extent (interior + 2*borderWidth) and
+    /// is used as the over-broad rect we fill through the device-rect clip
+    /// — the clip narrows it to the actual stadium. `boundingDeviceRects`
+    /// and `clipDeviceRects` are interior-local device-pixel rect bands
+    /// — sourced from `WindowEntry.boundingShapeDeviceRects` /
+    /// `clipShapeDeviceRects`, captured at ShapeMask-Set time. When
+    /// `drawBorder` is false, the border-ring step is skipped (window had
+    /// borderWidth=0 or no borderPixel). Default no-op for mock bridges;
+    /// only the Cocoa bridge implements the device-rect paint.
+    func paintShapedDescendantBg(
+        topLevel: UInt32,
+        windowOriginX: Int16, windowOriginY: Int16,
+        windowFullWidth: Int32, windowFullHeight: Int32,
+        bgColor: RGB16, borderColor: RGB16, drawBorder: Bool,
+        boundingDeviceRects: [Rectangle], clipDeviceRects: [Rectangle]
+    )
+
     /// Read a depth-1 pixmap's full backing at DEVICE resolution (one UInt32
     /// per device pixel, 0xAARRGGBB). Used by the SHAPE path to build a
     /// device-resolution bounding mask before the source pixmap is freed.
@@ -551,6 +587,43 @@ public struct WindowBackgroundRect: Equatable, Sendable {
     public var color: RGB16
     public init(x: Int16, y: Int16, width: UInt16, height: UInt16, color: RGB16) {
         self.x = x; self.y = y; self.width = width; self.height = height; self.color = color
+    }
+}
+
+/// One device-resolution paint job for a SHAPE-shaped descendant: enough
+/// state for `bridge.paintShapedDescendantBg` to build the CG clip path
+/// and fill it. Built by `ServerSession.mappedShapedDescendantPaints`.
+public struct ShapedDescendantPaint: Equatable, Sendable {
+    public var topLevel: UInt32
+    /// Window borderBox top-left in top-level logical coords (already
+    /// adjusted to include the border-width offset).
+    public var windowOriginX: Int16
+    public var windowOriginY: Int16
+    /// Full borderBox extent in logical points (interior + 2*borderWidth).
+    public var windowFullWidth: Int32
+    public var windowFullHeight: Int32
+    public var bgColor: RGB16
+    public var borderColor: RGB16
+    public var drawBorder: Bool
+    /// Window-local device-pixel rect bands captured from the source
+    /// pixmap at ShapeMask-Set time. Bounding is the full visible window
+    /// shape (border included); clip is the visible interior (border
+    /// excluded). Border ring = bounding minus clip.
+    public var boundingDeviceRects: [Rectangle]
+    public var clipDeviceRects: [Rectangle]
+    public init(
+        topLevel: UInt32,
+        windowOriginX: Int16, windowOriginY: Int16,
+        windowFullWidth: Int32, windowFullHeight: Int32,
+        bgColor: RGB16, borderColor: RGB16, drawBorder: Bool,
+        boundingDeviceRects: [Rectangle], clipDeviceRects: [Rectangle]
+    ) {
+        self.topLevel = topLevel
+        self.windowOriginX = windowOriginX; self.windowOriginY = windowOriginY
+        self.windowFullWidth = windowFullWidth; self.windowFullHeight = windowFullHeight
+        self.bgColor = bgColor; self.borderColor = borderColor; self.drawBorder = drawBorder
+        self.boundingDeviceRects = boundingDeviceRects
+        self.clipDeviceRects = clipDeviceRects
     }
 }
 
@@ -582,8 +655,8 @@ public extension WindowBridge {
     func registerColorTableLookup(token: UInt64, _ lookup: @escaping @Sendable () -> ColorTable?) {}
     func unregisterColorTableLookup(token: UInt64) {}
     // Default no-ops so unit-test bridges don't have to implement every method.
-    func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, segments: [LineSegment], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
-    func drawPolyLine(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, points: [DrawPoint], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
+    func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, capStyle: UInt8, segments: [LineSegment], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
+    func drawPolyLine(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, capStyle: UInt8, points: [DrawPoint], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {}
     func drawFillPoly(target: DrawTarget, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Rectangle]?) {}
     func drawPolyFillRectangle(
         target: DrawTarget,
@@ -604,6 +677,8 @@ public extension WindowBridge {
     func setWindowClipLookup(_ lookup: @escaping @Sendable (UInt32) -> [Rectangle]) {}
     func registerWindowClipLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> [Rectangle]?) {}
     func unregisterWindowClipLookup(token: UInt64) {}
+    func registerWindowDeviceClipLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> ([Rectangle], Int16, Int16)?) {}
+    func unregisterWindowDeviceClipLookup(token: UInt64) {}
     func copyArea(
         src: DrawTarget,
         dst: DrawTarget,
@@ -667,6 +742,13 @@ public extension WindowBridge {
     ) {}
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {}
     func setWindowBoundingShape(topLevel: UInt32, rects: [Rectangle]?, deviceRects: [Rectangle]?) {}
+    func paintShapedDescendantBg(
+        topLevel: UInt32,
+        windowOriginX: Int16, windowOriginY: Int16,
+        windowFullWidth: Int32, windowFullHeight: Int32,
+        bgColor: RGB16, borderColor: RGB16, drawBorder: Bool,
+        boundingDeviceRects: [Rectangle], clipDeviceRects: [Rectangle]
+    ) {}
     func readDepth1MaskDevicePixels(pixmapId: UInt32) -> (pixels: [UInt32], width: Int, height: Int)? { nil }
     func setCursor(topLevel: UInt32, glyph: UInt16?) {}
     func setTopLevelWindowBackground(id: UInt32, color: RGB16) {}
