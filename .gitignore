@@ -16,6 +16,12 @@ xcuserdata/
 # Re-fetchable with reference/fetch.sh.
 reference/
 
+# Claude Code project settings symlink (lives in Dropbox; per-Mac setup).
+.claude
+
+# Local scratch / capture screenshots — not for the repo.
+capture_screen_ui/
+
 # Cross-machine Claude Code memory now lives IN the git tree as
 # .claude-memory/ — was previously gitignored and Dropbox-synced, which
 # caused sync-delay friction and occasional conflict copies during

@@ -33,6 +33,13 @@ public struct ServerConfig: Sendable {
     /// at the cost of AA edges between cells.
     public var scaleFactor: Double
 
+    /// Same as `scaleFactor` rounded to an `Int32` for the device-coord
+    /// region system (`DEVICE_COORDS_REFACTOR.md`). Internal regions
+    /// (`clipList`, `borderClip`, `boundingShape`, `clipShape`) store
+    /// coordinates in device pixels; `BoxRec.scaledToDevice(by:)` /
+    /// `Region.scaledToDevice(by:)` use this. Always ≥ 1.
+    public var deviceScale: Int32 { max(1, Int32(scaleFactor.rounded())) }
+
     /// Studio Display preset. Used as fallback when no real display info
     /// is available (e.g., test environment where the session is driven
     /// directly without a Cocoa runloop).

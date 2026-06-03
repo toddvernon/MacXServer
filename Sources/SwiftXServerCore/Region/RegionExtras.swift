@@ -328,3 +328,64 @@ private func coalesceInPlace(_ rects: inout [BoxRec], prevBand: Int, curBand: In
     }
     rects.removeLast(curCount)
 }
+
+// MARK: - Logical <-> device scaling
+
+extension BoxRec {
+    /// Multiply every coordinate by `s`. Used when converting a box from
+    /// X-protocol logical pixels (the wire format) into device pixels (the
+    /// internal coordinate system for all clipping after the device-coord
+    /// refactor; see DEVICE_COORDS_REFACTOR.md). `s == 1` is a no-op.
+    public func scaledToDevice(by s: Int32) -> BoxRec {
+        if s == 1 { return self }
+        return BoxRec(x1: x1 * s, y1: y1 * s, x2: x2 * s, y2: y2 * s)
+    }
+
+    /// Inverse of `scaledToDevice`: shrink a device-coord box to logical
+    /// with floor on the top-left corner (`x1`, `y1`) and ceil on the
+    /// bottom-right (`x2`, `y2`). The "conservative" reading: every
+    /// logical pixel that has any device-pixel coverage is included.
+    /// Used by `ShapeGetRectangles` / `ShapeQueryExtents` when emitting a
+    /// reply to a client that expects logical-pixel rectangles.
+    public func scaledToLogical(by s: Int32) -> BoxRec {
+        if s == 1 { return self }
+        // Floor for non-negative is integer division; for negative we
+        // round toward -inf so the result represents the logical pixel
+        // that contains the device pixel.
+        func floorDiv(_ a: Int32, _ b: Int32) -> Int32 {
+            let q = a / b
+            let r = a % b
+            return (r != 0 && (r ^ b) < 0) ? q - 1 : q
+        }
+        func ceilDiv(_ a: Int32, _ b: Int32) -> Int32 {
+            let q = a / b
+            let r = a % b
+            return (r != 0 && (r ^ b) > 0) ? q + 1 : q
+        }
+        return BoxRec(
+            x1: floorDiv(x1, s), y1: floorDiv(y1, s),
+            x2: ceilDiv(x2, s),  y2: ceilDiv(y2, s)
+        )
+    }
+}
+
+extension Region {
+    /// Multiply every box by `s`. See `BoxRec.scaledToDevice`. `s == 1` is
+    /// a no-op. The y-x banded invariant is preserved under uniform integer
+    /// scaling.
+    public func scaledToDevice(by s: Int32) -> Region {
+        if s == 1 || isEmpty { return self }
+        let scaled = rects.map { $0.scaledToDevice(by: s) }
+        return Region.rects(scaled, order: .yxBanded)
+    }
+
+    /// Inverse of `scaledToDevice`. See `BoxRec.scaledToLogical` for the
+    /// floor/ceil convention. The conservative ceil/floor can create
+    /// touching/overlapping bands; the `.unsorted` order path through
+    /// `Region.rects` runs the normalize step which coalesces them.
+    public func scaledToLogical(by s: Int32) -> Region {
+        if s == 1 || isEmpty { return self }
+        let scaled = rects.map { $0.scaledToLogical(by: s) }
+        return Region.rects(scaled, order: .unsorted)
+    }
+}

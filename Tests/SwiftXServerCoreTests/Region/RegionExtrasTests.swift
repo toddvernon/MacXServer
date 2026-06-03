@@ -260,4 +260,76 @@ final class RegionExtrasTests: XCTestCase {
         XCTAssertNil(normalized.validate())
         XCTAssertEqual(normalized.rects, [BoxRec(x1: 0, y1: 0, x2: 10, y2: 20)])
     }
+
+    // MARK: - Logical ↔ device scaling (DEVICE_COORDS_REFACTOR.md)
+
+    func testBoxScaledToDeviceMultipliesByScale() {
+        let b = BoxRec(x1: 4, y1: 5, x2: 14, y2: 20)
+        XCTAssertEqual(b.scaledToDevice(by: 3), BoxRec(x1: 12, y1: 15, x2: 42, y2: 60))
+        XCTAssertEqual(b.scaledToDevice(by: 1), b, "scale 1 is a no-op")
+    }
+
+    func testBoxScaledToLogicalConservative() {
+        // Device box covering exactly logical (1..5, 2..7) at scale 3
+        // round-trips back to itself.
+        let exact = BoxRec(x1: 3, y1: 6, x2: 15, y2: 21)
+        XCTAssertEqual(exact.scaledToLogical(by: 3),
+                       BoxRec(x1: 1, y1: 2, x2: 5, y2: 7))
+
+        // Device box that fractionally covers logical pixels: floor on
+        // x1/y1, ceil on x2/y2 → conservative (every logical pixel with
+        // ANY device coverage is included).
+        let partial = BoxRec(x1: 4, y1: 7, x2: 14, y2: 20)   // (4..14, 7..20) at scale 3
+        // x1=4 → floor(4/3)=1; y1=7 → floor(7/3)=2; x2=14 → ceil(14/3)=5; y2=20 → ceil(20/3)=7
+        XCTAssertEqual(partial.scaledToLogical(by: 3),
+                       BoxRec(x1: 1, y1: 2, x2: 5, y2: 7))
+    }
+
+    func testBoxScaledToLogicalHandlesNegatives() {
+        // -1 device px in interior-local coords is in the border ring.
+        // floor(-1/3) = -1 because Swift's / rounds toward zero;
+        // floor wants -1 (round toward -inf).
+        XCTAssertEqual(BoxRec(x1: -3, y1: -3, x2: 0, y2: 0).scaledToLogical(by: 3),
+                       BoxRec(x1: -1, y1: -1, x2: 0, y2: 0))
+        // Partial: x1=-2 → floor(-2/3)=-1; x2=-1 → ceil(-1/3)=0
+        XCTAssertEqual(BoxRec(x1: -2, y1: -2, x2: -1, y2: -1).scaledToLogical(by: 3),
+                       BoxRec(x1: -1, y1: -1, x2: 0, y2: 0))
+    }
+
+    func testRegionScaledToDevicePreservesBanding() {
+        // Two y-adjacent bands of the same x extent. Scaling by 3
+        // produces two y-adjacent bands of the same (scaled) x extent —
+        // the y-x banded invariant survives uniform integer scaling.
+        let r = Region.rects([
+            BoxRec(x1: 0, y1: 0, x2: 10, y2: 5),
+            BoxRec(x1: 0, y1: 5, x2: 10, y2: 10),
+        ], order: .unsorted)
+        let scaled = r.scaledToDevice(by: 3)
+        XCTAssertNil(scaled.validate(), "banded invariant preserved")
+        XCTAssertEqual(scaled.boundingBox,
+                       BoxRec(x1: 0, y1: 0, x2: 30, y2: 30))
+    }
+
+    func testRegionScaledToLogicalRoundTrip() {
+        // A logical region → device → logical should return the
+        // original. Pin this so the conversion functions form a
+        // proper inverse on exact-scale-aligned boxes.
+        let logical = Region.rects([
+            BoxRec(x1: 1, y1: 2, x2: 5, y2: 7),
+            BoxRec(x1: 10, y1: 2, x2: 14, y2: 7),
+        ], order: .unsorted)
+        let roundTripped = logical.scaledToDevice(by: 3).scaledToLogical(by: 3)
+        XCTAssertEqual(roundTripped.rects, logical.rects)
+    }
+
+    func testEmptyRegionScaleIsEmpty() {
+        XCTAssertEqual(Region.empty.scaledToDevice(by: 3), Region.empty)
+        XCTAssertEqual(Region.empty.scaledToLogical(by: 3), Region.empty)
+    }
+
+    func testServerConfigDeviceScaleIsInt32RoundedScale() {
+        let cfg = ServerConfig.default
+        XCTAssertEqual(cfg.deviceScale, Int32(cfg.scaleFactor.rounded()))
+        XCTAssertGreaterThanOrEqual(cfg.deviceScale, 1)
+    }
 }
