@@ -13,13 +13,16 @@ xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 
 # External X11 reference material — synced via Dropbox, not via git.
-# Re-fetchable with reference/fetch.sh.
+# Re-fetchable with reference/fetch.sh. (`reference` is a symlink on this
+# Mac so the bare-name form matches; `reference/` would skip symlinks.)
+reference
 reference/
 
 # Claude Code project settings symlink (lives in Dropbox; per-Mac setup).
 .claude
 
-# Local scratch / capture screenshots — not for the repo.
+# Local scratch / capture screenshots — file or dir, both excluded.
+capture_screen_ui
 capture_screen_ui/
 
 # Cross-machine Claude Code memory now lives IN the git tree as

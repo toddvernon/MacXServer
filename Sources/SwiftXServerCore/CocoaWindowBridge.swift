@@ -980,18 +980,27 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         ctx.saveGState()
         ctx.setShouldAntialias(false)
         ctx.interpolationQuality = .none
+        // The window clipList is now device-coord (DEVICE_COORDS_REFACTOR.md).
+        // To make CG rasterize it at exact device pixels, swap to identity
+        // CTM for the clip-path build, apply the clip, then concat back to
+        // the original CTM for the drawing body. The clip is stored in
+        // absolute device coords in the gstate, so the CTM swap doesn't
+        // disturb it. Restoring the CTM also lets the body draw at logical
+        // X coords as before — the CTM scales them to device, where they
+        // get checked against the (already-device) clip.
         if let rects = windowClip {
+            let savedCTM = ctx.ctm
+            ctx.concatenate(savedCTM.inverted())
             ctx.clip(to: rects.map {
                 CGRect(x: CGFloat($0.x), y: CGFloat($0.y),
                        width: CGFloat($0.width), height: CGFloat($0.height))
             })
+            ctx.concatenate(savedCTM)
         }
-        // Device-resolution SHAPE clip for shaped descendants: a CGPath
-        // built from window-local device-pixel rects + window origin,
-        // converted into top-level logical coords with sub-pixel
-        // precision. Stacked on top of the logical windowClip so client
-        // draws can't paint past the curve into our device-resolution
-        // border ring. Skipped when scaleFactor is zero (test paths).
+        // Legacy device-rect SHAPE clip kept until phase 6 deletes the
+        // surrounding lookup plumbing. With the windowClip now device-
+        // coord, this path is redundant for shaped descendants and the
+        // session-side lookup will be retired.
         if let (devRects, ox, oy) = deviceClip, !devRects.isEmpty, self.scaleFactor > 0 {
             let scale = self.scaleFactor
             let path = CGMutablePath()
@@ -1007,6 +1016,12 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             ctx.clip()
         }
         if let rects = gcClip {
+            // GC clip rectangles are at logical X coords (drawable-local
+            // translated to top-level-logical by withDrawContext). They go
+            // through the current (scaled) CTM at clip() time, so they
+            // produce a device-pixel clip aligned to whole logical pixels.
+            // That matches X11 semantics: SetClipRectangles is defined at
+            // logical pixel granularity.
             ctx.clip(to: rects.map {
                 CGRect(x: CGFloat($0.x), y: CGFloat($0.y),
                        width: CGFloat($0.width), height: CGFloat($0.height))
@@ -2248,13 +2263,22 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
-            self.withClip(ctx, nil) {
-                for r in rects {
-                    applyFill(ctx, r.color)
-                    ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
-                                    width: CGFloat(r.width), height: CGFloat(r.height)))
-                }
+            // Window-bg paint rects are now in device coords
+            // (DEVICE_COORDS_REFACTOR.md). Fill under identity CTM so each
+            // rect lands at exact device pixels rather than going through
+            // CTM scaling. The save/restore symmetry keeps the CTM intact
+            // for any subsequent ops on this context.
+            ctx.saveGState()
+            ctx.setShouldAntialias(false)
+            ctx.interpolationQuality = .none
+            let savedCTM = ctx.ctm
+            ctx.concatenate(savedCTM.inverted())
+            for r in rects {
+                applyFill(ctx, r.color)
+                ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
+                                width: CGFloat(r.width), height: CGFloat(r.height)))
             }
+            ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
     }
