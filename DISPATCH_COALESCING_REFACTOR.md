@@ -10,6 +10,33 @@ Supersedes the earlier paint-only proposal; this one extends the same
 mechanism to every bridge call so it helps xterm and any
 non-shape-using client too, not just xcalc.
 
+## What macOS already gives us for free
+
+Each X top-level is its own NSWindow with its own CGBitmapContext. The
+macOS WindowServer keeps that backing alive between AppKit redraws.
+We've been getting backing-store-for-free at the **top-level
+boundary** the whole time:
+
+- Another macOS window covering our X top-level → no Expose needed,
+  compositor restores from the saved NSWindow contents on uncover.
+- A different X client's top-level covering ours → same, each is its
+  own NSWindow.
+- Dragging our X window around the screen → no Expose, compositor
+  moves the rendered NSWindow.
+- Mission Control / window-cycle transitions → free.
+
+R6 had none of this — every cross-window cover/uncover triggered Expose
+because the server had one shared framebuffer. This is a real reason
+swift-x has felt fast despite the naive per-mutation dispatch model:
+macOS is doing the hardest work invisibly.
+
+**Where macOS does NOT help** is *intra*-NSWindow: descendant X
+windows that live inside a single top-level all share that NSWindow's
+backing CGContext. xcalc's 40 buttons live in one NSWindow; cover /
+uncover / resize / reshape *among descendants of the same top-level*
+gets no compositor assistance. That's the surface this refactor
+targets.
+
 ## Motivation
 
 The paint-per-mutation model dispatches every visible-pixel-affecting
@@ -215,22 +242,35 @@ the backing: `GetImage` window source, `CopyArea` window source,
 ### Phase 4 — Expose accumulation
 
 Per-window Expose accumulator. Mutation handlers route Expose intent
-through it. Flush emits one Expose per window with union region. xcalc
-resize Expose count drops from ~80 to ~40, with each Expose carrying
-the final clipList rather than an intermediate.
+through it. Flush emits one Expose per window with union region.
+
+**Scope of the win is intra-NSWindow only.** Inter-window cover /
+uncover (dragging another macOS window over an X top-level, or
+switching apps) is already handled by the macOS compositor — no
+Exposes are emitted there in the first place. The Phase 4 win is
+specifically for descendants inside a single NSWindow: xcalc's 40
+buttons during a resize, Motif widget cascades on layout change,
+descendant SHAPE updates. xcalc resize Expose count drops from ~80 to
+~40, with each Expose carrying the final clipList rather than an
+intermediate.
 
 **Stop and validate:**
 - **xcalc resize on the Sun, local network**: faster than phase 2.
+  This is the intra-NSWindow case where the refactor's win lives.
 - **xcalc resize on the WAN-bridged Sun** (the hardest case): should
-  drop dramatically — target ≥4× from today. This is the big one.
-- **Cover/uncover**: drag a macOS window over an X window then off
-  again. The X content underneath should reappear correctly — clients
-  still receive Expose for real coverage changes.
+  drop dramatically — target ≥4× from today. Same intra-window path,
+  amplified by network latency.
+- **Cover/uncover (inter-window)**: drag a macOS window over an X
+  window then off again. Should be already-fast and unchanged by this
+  refactor — macOS compositor handles it. Verifies we haven't broken
+  that path.
 - **Motif menu pop on dtpad / dtcalc**: popdown still triggers redraw
   of the underlying area. (Save-under isn't part of this refactor;
-  we still rely on Expose for popup-revealed pixels.)
-- Expected: drastically faster xcalc resize, no regressions on
-  cover/uncover or menu interactions. If a menu doesn't re-render its
+  we still rely on Expose for popup-revealed pixels — the underlying
+  area is intra-NSWindow descendant territory.)
+- Expected: drastically faster xcalc resize (intra-window win),
+  inter-window cover/uncover unchanged (still free via macOS),
+  popdowns still re-render. If a menu doesn't re-render its
   underlying area, we're coalescing an Expose we shouldn't.
 
 ### Phase 5 — Telemetry + STATUS + DECISIONS
@@ -322,7 +362,21 @@ problem (overlapping-window-heavy workflows, which our target
 Motif/Athena apps mostly don't have).
 
 This refactor matches the actual constraint shape: fast server, slow
-clients, batched protocol traffic, dispatch overhead and Expose
-round-trips being the bottleneck. The architectural model is
+clients, batched protocol traffic, dispatch overhead and intra-NSWindow
+Expose round-trips being the bottleneck. The architectural model is
 "record + replay per batch," which is small, testable, and reversible
 if a phase fails validation.
+
+The split of labor that emerges:
+
+- **Inter-NSWindow visibility** (top-level cover/uncover, app switch,
+  Mission Control): handled by macOS for free. We do nothing.
+- **Intra-NSWindow visibility** (descendant cover/uncover, resize
+  cascade, SHAPE updates): handled by this refactor's Expose
+  accumulation.
+- **Intra-NSWindow drawing throughput** (xterm output stream, oclock
+  tick, xeyes motion): handled by this refactor's dispatch
+  accumulation.
+
+Three layers, each at the right granularity. No reinvention of
+macOS-provided mechanisms.
