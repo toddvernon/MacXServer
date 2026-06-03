@@ -951,21 +951,25 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         ctx.setShouldAntialias(false)
         ctx.interpolationQuality = .none
         // The window clipList is device-coord (DEVICE_COORDS_REFACTOR.md).
-        // To make CG rasterize it at exact device pixels, swap to identity
-        // CTM for the clip-path build, apply the clip, then concat back to
-        // the original CTM for the drawing body. The clip is stored in
-        // absolute device coords in the gstate, so the CTM swap doesn't
-        // disturb it. Restoring the CTM also lets the body draw at logical
-        // X coords as before — the CTM scales them to device, where they
-        // get checked against the (already-device) clip.
+        // To make CG rasterize it at exact device pixels, undo just the
+        // logical→device SCALE part of the backing's CTM while leaving the
+        // y-flip in place, apply the clip, then re-apply the scale for the
+        // drawing body. The clip is stored in absolute device coords in
+        // the gstate, so the CTM swap doesn't disturb it.
+        //
+        // CRITICAL: do NOT use `ctx.concatenate(currentCTM.inverted())`
+        // here — that removes the y-flip AND the scale, and subsequent
+        // device-coord rects land at the wrong y in bitmap memory
+        // (everything renders upside-down). The backing CTM is
+        // `translate(0, h) → scale(1, -1) → scale(s, s)`; we only want to
+        // undo the last step.
         if let rects = windowClip {
-            let savedCTM = ctx.ctm
-            ctx.concatenate(savedCTM.inverted())
-            ctx.clip(to: rects.map {
-                CGRect(x: CGFloat($0.x), y: CGFloat($0.y),
-                       width: CGFloat($0.width), height: CGFloat($0.height))
-            })
-            ctx.concatenate(savedCTM)
+            applyDeviceCoordCTM(ctx) {
+                ctx.clip(to: rects.map {
+                    CGRect(x: CGFloat($0.x), y: CGFloat($0.y),
+                           width: CGFloat($0.width), height: CGFloat($0.height))
+                })
+            }
         }
         if let rects = gcClip {
             // GC clip rectangles are at logical X coords (drawable-local
@@ -988,6 +992,29 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// route here. Equivalent to the pre-2026-05-20 `withClip` shape.
     private func withClip(_ ctx: CGContext, _ clipRects: [Framer.Rectangle]?, _ body: () -> Void) {
         withClip(ctx, windowClip: nil, gcClip: clipRects, body)
+    }
+
+    /// Run `body` with the backing CGContext's CTM temporarily reduced to
+    /// "logical→device scale removed, y-flip preserved." Use this whenever
+    /// you need to interpret coordinates as exact device pixels: device-
+    /// coord clip paths, device-coord bg paints, etc.
+    ///
+    /// The backing context's full CTM is `translate(0, deviceHeight) →
+    /// scale(1, -1) → scale(s, s)`. Inverting it via
+    /// `ctx.concatenate(savedCTM.inverted())` would remove the y-flip
+    /// too — the trap that caused the upside-down-xcalc bug on first
+    /// landing of DEVICE_COORDS_REFACTOR.md phase 4. Instead, undo only
+    /// the scale step with `scaleBy(1/s, 1/s)`. Net CTM after that:
+    /// `translate(0, h) → scale(1, -1)`, which still maps user (x, y) to
+    /// device (x, deviceHeight - y) — y-down, no scaling. Drawing at
+    /// device-coord rects then lands at the right place.
+    ///
+    /// `scaleFactor == 0` (early-init test paths) is treated as 1.
+    private func applyDeviceCoordCTM(_ ctx: CGContext, _ body: () -> Void) {
+        let s = CGFloat(self.scaleFactor > 0 ? self.scaleFactor : 1)
+        ctx.scaleBy(x: 1/s, y: 1/s)
+        body()
+        ctx.scaleBy(x: s, y: s)
     }
 
     /// Apply the GC's SetDashes pattern to the context. nil / empty pattern =
@@ -1051,16 +1078,17 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
             // Caller passes device-coord rects (handleClearArea intersects
             // the request rect with the device-coord clipList). Fill under
-            // identity CTM so each rect lands at exact device pixels.
+            // device-coord CTM — the helper preserves the y-flip while
+            // undoing the logical→device scale.
             ctx.saveGState()
             ctx.setShouldAntialias(false)
             ctx.interpolationQuality = .none
-            let savedCTM = ctx.ctm
-            ctx.concatenate(savedCTM.inverted())
-            applyFill(ctx, background)
-            for r in rects {
-                ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
-                                width: CGFloat(r.width), height: CGFloat(r.height)))
+            self.applyDeviceCoordCTM(ctx) {
+                applyFill(ctx, background)
+                for r in rects {
+                    ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
+                                    width: CGFloat(r.width), height: CGFloat(r.height)))
+                }
             }
             ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
@@ -2219,19 +2247,19 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
             // Window-bg paint rects are now in device coords
-            // (DEVICE_COORDS_REFACTOR.md). Fill under identity CTM so each
-            // rect lands at exact device pixels rather than going through
-            // CTM scaling. The save/restore symmetry keeps the CTM intact
-            // for any subsequent ops on this context.
+            // (DEVICE_COORDS_REFACTOR.md). Fill under device-coord CTM —
+            // the helper undoes the logical→device scale but keeps the
+            // y-flip so coords land at the right vertical position. See
+            // `applyDeviceCoordCTM` for the trap to avoid.
             ctx.saveGState()
             ctx.setShouldAntialias(false)
             ctx.interpolationQuality = .none
-            let savedCTM = ctx.ctm
-            ctx.concatenate(savedCTM.inverted())
-            for r in rects {
-                applyFill(ctx, r.color)
-                ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
-                                width: CGFloat(r.width), height: CGFloat(r.height)))
+            self.applyDeviceCoordCTM(ctx) {
+                for r in rects {
+                    applyFill(ctx, r.color)
+                    ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
+                                    width: CGFloat(r.width), height: CGFloat(r.height)))
+                }
             }
             ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
