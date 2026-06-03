@@ -383,7 +383,7 @@ extension ServerSession {
     ///   region. Emit Expose on the changed descendant so the client redraws
     ///   content. xcalc's rounded buttons take this path.
     func setWindowShape(windowId: UInt32) {
-        guard let win = windows.get(windowId) else { return }
+        guard windows.get(windowId) != nil else { return }
         // Recompute the containing top-level's clip tree first. The engine
         // folds boundingShape/clipShape in for every window, so this is
         // load-bearing for both:
@@ -397,6 +397,15 @@ extension ServerSession {
         // Pure WindowTable bookkeeping; runs without a bridge so tests can
         // assert against the recomputed clipList.
         recomputeClipsForSubtreeContaining(windowId)
+        // Re-fetch the window entry AFTER the recompute. WindowEntry is a
+        // value type, so a snapshot taken before recompute would carry the
+        // PRIOR (stale) borderClip / clipList — paintRectsForWindow would
+        // then emit the old clip-shape's rects even though the new one was
+        // just set, leaving xcalc buttons stuck in the post-Bounding /
+        // pre-Clip intermediate visual (small grey region inside the new
+        // larger bounding stadium). The wire diff at
+        // /tmp/swift-x-captures/2026-06-03T10-51-17-xcalc.xtap caught this.
+        guard let win = windows.get(windowId) else { return }
         // Bridge-side side effects (NSWindow mask for top-levels; repaint +
         // Expose for descendants) only run when a bridge is attached.
         guard let bridge = bridge, let bo = byteOrder else { return }
