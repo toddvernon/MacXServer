@@ -1936,7 +1936,7 @@ public final class ServerSession: @unchecked Sendable {
         // are still old at this point (the client hasn't sent
         // ConfigureWindow on them yet — that's handled per-descendant in
         // handleConfigureWindow's grow-paint block).
-        ClipListEngine.recomputeClips(forTopLevel: id, in: windows)
+        ClipListEngine.recomputeClips(forTopLevel: id, in: windows, scale: config.deviceScale)
 
         // FlippedXView.resizeBacking allocates a fresh bitmap and (for
         // the newly-claimed L-shape on grow) fills it with white. Paint
@@ -2167,7 +2167,7 @@ public final class ServerSession: @unchecked Sendable {
     /// `windowId` is unknown or its top-level can't be resolved.
     func recomputeClipsForSubtreeContaining(_ windowId: UInt32) {
         guard let (topId, _, _) = topLevelAndOffset(for: windowId) else { return }
-        ClipListEngine.recomputeClips(forTopLevel: topId, in: windows)
+        ClipListEngine.recomputeClips(forTopLevel: topId, in: windows, scale: config.deviceScale)
         emitVisibilityChanges(forTopLevel: topId)
     }
 
@@ -4133,7 +4133,7 @@ public final class ServerSession: @unchecked Sendable {
                 }
             } else {
                 if let topId = preDestroyTopId, topId != r.window {
-                    ClipListEngine.recomputeClips(forTopLevel: topId, in: windows)
+                    ClipListEngine.recomputeClips(forTopLevel: topId, in: windows, scale: config.deviceScale)
                     emitVisibilityChanges(forTopLevel: topId)
                 }
                 // Per X11 spec: parents with SubstructureNotifyMask receive
@@ -5930,7 +5930,7 @@ public final class ServerSession: @unchecked Sendable {
                 log?.log("  ReparentWindow window=0x\(String(r.window, radix: 16)) old-parent=0x\(String(oldParent, radix: 16)) new-parent=0x\(String(r.parent, radix: 16)) at (\(r.x),\(r.y))")
                 // Recompute both old and new top-level subtrees.
                 if let oldTopId, oldTopId != r.window {
-                    ClipListEngine.recomputeClips(forTopLevel: oldTopId, in: windows)
+                    ClipListEngine.recomputeClips(forTopLevel: oldTopId, in: windows, scale: config.deviceScale)
                     emitVisibilityChanges(forTopLevel: oldTopId)
                 }
                 recomputeClipsForSubtreeContaining(r.window)

@@ -40,10 +40,17 @@ public struct ServerConfig: Sendable {
     /// `Region.scaledToDevice(by:)` use this. Always ≥ 1.
     public var deviceScale: Int32 { max(1, Int32(scaleFactor.rounded())) }
 
-    /// Studio Display preset. Used as fallback when no real display info
-    /// is available (e.g., test environment where the session is driven
-    /// directly without a Cocoa runloop).
-    public static let `default` = ServerConfig(displayConfig: .studioDisplay)
+    /// Default used by `ServerSession()` when no config is passed —
+    /// scale=1 so test code that asserts directly on region values
+    /// doesn't have to multiply through. The real (Cocoa-driven)
+    /// `macxserver` path builds its own `ServerConfig(displayConfig:)`
+    /// with the picked retina display, so its scale is whatever
+    /// `DisplayConfig.forMainDisplay` chose (typically 3).
+    public static let `default` = ServerConfig(displayConfig: .scaleOne)
+
+    /// Same as `.default` today. Kept as an explicit name for tests that
+    /// want to make the scale=1 choice visible at the callsite.
+    public static let test = ServerConfig(displayConfig: .scaleOne)
 
     public init(
         rootWindowId: UInt32,

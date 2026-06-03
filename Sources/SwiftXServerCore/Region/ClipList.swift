@@ -22,38 +22,55 @@ public enum ClipListEngine {
     /// window in its subtree. Call after any mutation that could affect
     /// the visible-region tree (map, unmap, configure, destroy, reparent).
     ///
+    /// `scale` is the logical->device multiplier (`ServerConfig.deviceScale`).
+    /// Window dimensions (`x`, `y`, `width`, `height`, `borderWidth`) on
+    /// `WindowEntry` are stored at X-protocol logical pixels; we multiply
+    /// by `scale` at box construction so every region the engine touches
+    /// is in DEVICE pixels. The output `clipList` and `borderClip` on every
+    /// window are device-coord regions in top-level-device-local coords.
+    ///
+    /// `entry.boundingShape` and `entry.clipShape` are expected to be in
+    /// window-local DEVICE coords (the convention set by phase 3 of
+    /// `DEVICE_COORDS_REFACTOR.md`). The translation by `baseDx, baseDy`
+    /// (which are already device-coord top-level-local) brings them into
+    /// the same frame.
+    ///
     /// If `topId` doesn't refer to a known top-level, no-ops. (Handlers
     /// resolve the top-level from the mutated window before calling.)
-    public static func recomputeClips(forTopLevel topId: UInt32, in windows: WindowTable) {
+    public static func recomputeClips(
+        forTopLevel topId: UInt32,
+        in windows: WindowTable,
+        scale: Int32 = 1
+    ) {
         guard let entry = windows.get(topId) else { return }
-        let bw = Int32(entry.borderWidth)
+        let bw = Int32(entry.borderWidth) * scale
         // For a top-level, the parent-visible region is the top-level's
         // own full border-included extent. The intersect-with-borderBox
         // in the recursion yields borderClip == borderBox, which is what
         // we want for the root of the subtree.
         let topBorderBox = BoxRec(
             x1: -bw, y1: -bw,
-            x2: Int32(entry.width) + bw,
-            y2: Int32(entry.height) + bw
+            x2: Int32(entry.width) * scale + bw,
+            y2: Int32(entry.height) * scale + bw
         )
         recomputeSubtree(
             topId,
             parentVisible: Region(box: topBorderBox),
             in: windows,
-            baseDx: 0, baseDy: 0
+            baseDx: 0, baseDy: 0,
+            scale: scale
         )
     }
 
     /// Recurse for one window. `parentVisible` is the region (in top-level
-    /// coords) within which this window is allowed to be visible — for
-    /// the top-level this is its own border-box; for a descendant this is
-    /// the parent's clipList after subtracting earlier-processed siblings.
-    /// `baseDx`/`baseDy` is this window's origin in top-level coords.
+    /// device coords) within which this window is allowed to be visible.
+    /// `baseDx`/`baseDy` is this window's origin in top-level DEVICE coords.
     private static func recomputeSubtree(
         _ windowId: UInt32,
         parentVisible: Region,
         in windows: WindowTable,
-        baseDx: Int32, baseDy: Int32
+        baseDx: Int32, baseDy: Int32,
+        scale: Int32
     ) {
         guard let entry = windows.get(windowId) else { return }
 
@@ -64,30 +81,28 @@ public enum ClipListEngine {
             windows.setBorderClip(windowId, .empty)
             for childId in directChildren(of: windowId, in: windows) {
                 recomputeSubtree(childId, parentVisible: .empty, in: windows,
-                                 baseDx: 0, baseDy: 0)
+                                 baseDx: 0, baseDy: 0, scale: scale)
             }
             return
         }
 
-        let bw = Int32(entry.borderWidth)
+        let bw = Int32(entry.borderWidth) * scale
         let interiorBox = BoxRec(
             x1: baseDx, y1: baseDy,
-            x2: baseDx + Int32(entry.width),
-            y2: baseDy + Int32(entry.height)
+            x2: baseDx + Int32(entry.width) * scale,
+            y2: baseDy + Int32(entry.height) * scale
         )
         let borderBox = BoxRec(
             x1: interiorBox.x1 - bw, y1: interiorBox.y1 - bw,
             x2: interiorBox.x2 + bw, y2: interiorBox.y2 + bw
         )
 
-        // SHAPE bounding/clip regions are stored window-local; the clipList
-        // tree is in top-level coords. Translate by (baseDx, baseDy) to bring
-        // them into the same frame. The borderBox/interiorBox intersect that
-        // follows is a defensive clamp matching R6's `REGION_UNION(borderSize,
-        // winSize)` belt-and-suspenders at `dix/window.c:1604` — protects
-        // against a client publishing a shape larger than the window's own
-        // box. Spec-wise the shape defines the extent; clamping is harmless
-        // when the shape is sane and corrective when it isn't.
+        // SHAPE bounding/clip regions are stored window-local in DEVICE
+        // pixels (phase 3). Translate by (baseDx, baseDy) — also device
+        // — to bring them into top-level frame. The borderBox/interiorBox
+        // intersect that follows is a defensive clamp matching R6's
+        // `REGION_UNION(borderSize, winSize)` belt-and-suspenders at
+        // `dix/window.c:1604`.
         let boundingClamp: Region = {
             guard let shape = entry.boundingShape else { return Region(box: borderBox) }
             return shape.translated(dx: baseDx, dy: baseDy)
@@ -116,13 +131,13 @@ public enum ClipListEngine {
                 // Unmapped child: clear its (and descendants') clips and
                 // move on without affecting our clipList.
                 recomputeSubtree(childId, parentVisible: .empty, in: windows,
-                                 baseDx: 0, baseDy: 0)
+                                 baseDx: 0, baseDy: 0, scale: scale)
                 continue
             }
-            let childBaseDx = baseDx + Int32(childEntry.x)
-            let childBaseDy = baseDy + Int32(childEntry.y)
+            let childBaseDx = baseDx + Int32(childEntry.x) * scale
+            let childBaseDy = baseDy + Int32(childEntry.y) * scale
             recomputeSubtree(childId, parentVisible: clipList, in: windows,
-                             baseDx: childBaseDx, baseDy: childBaseDy)
+                             baseDx: childBaseDx, baseDy: childBaseDy, scale: scale)
             if let updated = windows.get(childId) {
                 clipList = clipList.subtracting(updated.borderClip)
             }

@@ -137,4 +137,12 @@ public struct DisplayConfig: Equatable, Sendable {
         logicalWidth: 1280, logicalHeight: 900, scale: 3,
         nativePixelWidth: 5120, nativePixelHeight: 2880
     )
+
+    /// scale=1 preset for tests that assert on region values without
+    /// caring about retina upscaling. Same logical dims as the studio
+    /// display so screen-derived assertions stay valid.
+    public static let scaleOne = DisplayConfig(
+        logicalWidth: 1280, logicalHeight: 900, scale: 1,
+        nativePixelWidth: 1280, nativePixelHeight: 900
+    )
 }

@@ -38,6 +38,12 @@ final class ShapeExtensionTests: XCTestCase {
         func readDrawablePixels(from src: DrawTarget, srcX: Int16, srcY: Int16, width: Int, height: Int) -> [UInt32] {
             return grid
         }
+        // bitmapToRegion reads device-resolution pixels now
+        // (DEVICE_COORDS_REFACTOR.md). With scaleFactor==1 the device
+        // grid is just `grid`.
+        func readDepth1MaskDevicePixels(pixmapId: UInt32) -> (pixels: [UInt32], width: Int, height: Int)? {
+            (grid, gw, grid.count / max(1, gw))
+        }
     }
 
     private func runningSession(bridge: WindowBridge? = nil, byteOrder: ByteOrder = .lsbFirst) -> ServerSession {
@@ -368,14 +374,11 @@ final class ShapeExtensionTests: XCTestCase {
         let stored = session.windows.get(win)
         let shape = stored?.boundingShape
         XCTAssertNotNil(shape, "ShapeMask should have set a bounding region")
-        // The region must be the drawn 20x20 square, NOT the full 64x64 rect.
+        // Region is device-coord (DEVICE_COORDS_REFACTOR.md). CocoaWindowBridge
+        // uses scaleFactor=1 by default in unit tests, so the device-coord
+        // box equals the logical-coord box (the drawn 20x20 square).
         XCTAssertEqual(shape?.boundingBox, BoxRec(x1: 10, y1: 10, x2: 30, y2: 30),
                        "bitmapToRegion should yield the black shape, not the whole pixmap")
-        // A Set/Bounding mask also captures the device-resolution visual mask.
-        XCTAssertNotNil(stored?.boundingShapeDeviceRects,
-                        "Set/Bounding ShapeMask should cache a device-resolution mask")
-        XCTAssertFalse(stored?.boundingShapeDeviceRects?.isEmpty ?? true,
-                       "device mask should cover the drawn square")
     }
 
     // MARK: - Errors

@@ -79,14 +79,17 @@ extension ServerSession {
             emitError(.length, majorOpcode: Self.shapeMajorOpcode, minorOpcode: UInt16(ShapeMinor.rectangles))
             return
         }
-        // Build the source region from the rect list. We always normalize
-        // rather than trust the ordering hint — strictly more lenient than
-        // shape.c's VerifyRectOrder (which would BadMatch a mis-claimed
-        // order) and never yields a wrong region. See SHORTCUTS.md.
-        let boxes = r.rectangles.map { rectToBox($0) }
+        // Build the source region from the rect list. Client supplies rects
+        // at X-protocol LOGICAL coords; we scale to DEVICE coords as we
+        // enter the internal region system (DEVICE_COORDS_REFACTOR.md).
+        // We always normalize rather than trust the ordering hint —
+        // strictly more lenient than shape.c's VerifyRectOrder.
+        let s = config.deviceScale
+        let boxes = r.rectangles.map { rectToBox($0).scaledToDevice(by: s) }
         let srcRgn = Region.rects(boxes, order: .unsorted)
         combineShape(dest: r.dest, destKind: r.destKind, src: srcRgn,
-                     op: r.op, xOff: r.xOff, yOff: r.yOff, minor: ShapeMinor.rectangles)
+                     op: r.op, xOff: Int32(r.xOff) * s, yOff: Int32(r.yOff) * s,
+                     minor: ShapeMinor.rectangles)
     }
 
     private func handleShapeMask(_ r: ShapeMask, byteOrder: ByteOrder) {
@@ -107,22 +110,21 @@ extension ServerSession {
                 emitError(.match, majorOpcode: Self.shapeMajorOpcode, minorOpcode: UInt16(ShapeMinor.mask))
                 return
             }
-            srcRgn = bitmapToRegion(pixmapId: r.src, width: Int(pix.width), height: Int(pix.height))
+            // bitmapToRegion reads the depth-1 pixmap at DEVICE resolution
+            // — that's what the underlying PixelBuffer stores anyway, and
+            // matches our new device-coord shape-region convention.
+            srcRgn = bitmapToRegion(pixmapId: r.src,
+                                    width: Int(pix.width)  * Int(config.deviceScale),
+                                    height: Int(pix.height) * Int(config.deviceScale))
         }
-        // Capture a device-resolution mask now (while the source pixmap is
-        // still alive) for the two paint-affecting cases: Set/Bounding drives
-        // the top-level NSWindow clip + the shaped-descendant border-ring
-        // paint; Set/Clip drives the shaped-descendant inner-bg paint.
-        // Neither survives a non-mask mutation (Union/Subtract/Invert
-        // invalidate the cache in combineShape).
-        var deviceRects: [Rectangle]? = nil
-        if r.op == ShapeOp.set, r.src != 0,
-           r.destKind == ShapeKind.bounding || r.destKind == ShapeKind.clip {
-            deviceRects = bitmapToDeviceRects(pixmapId: r.src, xOff: r.xOff, yOff: r.yOff)
-        }
+        // The deviceRects sidecar is retired in phase 6 of the
+        // DEVICE_COORDS_REFACTOR; nil for now to keep the field present
+        // until cleanup deletes it.
+        let deviceRects: [Rectangle]? = nil
+        let s = config.deviceScale
         combineShape(dest: r.dest, destKind: r.destKind, src: srcRgn,
-                     op: r.op, xOff: r.xOff, yOff: r.yOff, minor: ShapeMinor.mask,
-                     deviceRects: deviceRects)
+                     op: r.op, xOff: Int32(r.xOff) * s, yOff: Int32(r.yOff) * s,
+                     minor: ShapeMinor.mask, deviceRects: deviceRects)
     }
 
     private func handleShapeCombine(_ r: ShapeCombine, byteOrder: ByteOrder) {
@@ -145,8 +147,13 @@ extension ServerSession {
             emitError(.value, majorOpcode: Self.shapeMajorOpcode, badResourceId: UInt32(r.srcKind), minorOpcode: UInt16(ShapeMinor.combine))
             return
         }
+        // ShapeCombine offsets are at logical X-protocol coords; scale to
+        // device. The src region (from another window's shape) is already
+        // device-coord.
+        let s = config.deviceScale
         combineShape(dest: r.dest, destKind: r.destKind, src: srcRgn,
-                     op: r.op, xOff: r.xOff, yOff: r.yOff, minor: ShapeMinor.combine)
+                     op: r.op, xOff: Int32(r.xOff) * s, yOff: Int32(r.yOff) * s,
+                     minor: ShapeMinor.combine)
     }
 
     private func handleShapeOffset(_ r: ShapeOffset, byteOrder: ByteOrder) {
@@ -164,8 +171,11 @@ extension ServerSession {
         }
         // shape.c: only an existing (set) region is translated; an unshaped
         // window stays unshaped. Either way a ShapeNotify is sent.
+        // xOff/yOff are at logical X-protocol coords; scale to device since
+        // the region is device-coord internally.
         if let region = existing {
-            let moved = region.translated(dx: Int32(r.xOff), dy: Int32(r.yOff))
+            let s = config.deviceScale
+            let moved = region.translated(dx: Int32(r.xOff) * s, dy: Int32(r.yOff) * s)
             if r.destKind == ShapeKind.bounding {
                 windows.setBoundingShape(r.dest, moved)
                 // The cached device mask no longer matches the moved region;
@@ -185,8 +195,27 @@ extension ServerSession {
             emitError(.window, majorOpcode: Self.shapeMajorOpcode, badResourceId: r.window, minorOpcode: UInt16(ShapeMinor.queryExtents))
             return
         }
-        let bExtent = win.boundingShape.map { regionExtent($0) } ?? boxExtent(defaultBoundingRegion(for: win))
-        let cExtent = win.clipShape.map { regionExtent($0) } ?? boxExtent(defaultClipRegion(for: win))
+        // Shape regions are device-coord internally; the protocol expects
+        // extents in X-protocol logical pixels. Scale each region's
+        // bounding box back to logical with the conservative ceil/floor
+        // round-trip (BoxRec.scaledToLogical) before computing the extent.
+        let s = config.deviceScale
+        func logicalExtent(_ region: Region) -> (x: Int16, y: Int16, w: UInt16, h: UInt16) {
+            return boxExtent(Region(box: region.boundingBox.scaledToLogical(by: s)))
+        }
+        let bExtent: (x: Int16, y: Int16, w: UInt16, h: UInt16)
+        let cExtent: (x: Int16, y: Int16, w: UInt16, h: UInt16)
+        if let region = win.boundingShape {
+            bExtent = logicalExtent(region)
+        } else {
+            // Default region is built in device coords; scale back for reply.
+            bExtent = boxExtent(Region(box: boundingDefaultBox(for: win).scaledToLogical(by: s)))
+        }
+        if let region = win.clipShape {
+            cExtent = logicalExtent(region)
+        } else {
+            cExtent = boxExtent(Region(box: clipDefaultBox(for: win).scaledToLogical(by: s)))
+        }
         let reply = ShapeQueryExtentsReply(
             sequenceNumber: sequenceNumber,
             boundingShaped: win.boundingShape != nil,
@@ -232,16 +261,20 @@ extension ServerSession {
             return
         }
         // Unshaped -> the single default rectangle (border-inclusive bounding /
-        // interior clip), matching shape.c's `if (!region)` branch.
-        let boxes: [BoxRec]
+        // interior clip), matching shape.c's `if (!region)` branch. Regions
+        // are device-coord internally; scale back to logical with the
+        // conservative ceil/floor convention for the reply (every logical
+        // pixel with any device-pixel coverage is reported in).
+        let s = config.deviceScale
+        let logicalRegion: Region
         if let region {
-            boxes = region.rects
+            logicalRegion = region.scaledToLogical(by: s)
         } else if r.kind == ShapeKind.bounding {
-            boxes = [boundingDefaultBox(for: win)]
+            logicalRegion = Region(box: boundingDefaultBox(for: win).scaledToLogical(by: s))
         } else {
-            boxes = [clipDefaultBox(for: win)]
+            logicalRegion = Region(box: clipDefaultBox(for: win).scaledToLogical(by: s))
         }
-        let rects = boxes.map { boxToRect($0) }
+        let rects = logicalRegion.rects.map { boxToRect($0) }
         // YXBanded (3): our Region stores y-x banded, so that's the honest claim.
         let reply = ShapeGetRectanglesReply(sequenceNumber: sequenceNumber, ordering: 3, rectangles: rects)
         outbound.append(reply.encode(byteOrder: byteOrder))
@@ -254,7 +287,7 @@ extension ServerSession {
     /// apply to rendering and send ShapeNotify. Faithful to shape.c's
     /// RegionOperate including the per-op nil-destination handling.
     private func combineShape(dest: UInt32, destKind: UInt8, src: Region?,
-                              op: UInt8, xOff: Int16, yOff: Int16, minor: UInt8,
+                              op: UInt8, xOff: Int32, yOff: Int32, minor: UInt8,
                               deviceRects: [Rectangle]? = nil) {
         guard op <= ShapeOp.invert else {
             emitError(.value, majorOpcode: Self.shapeMajorOpcode, badResourceId: UInt32(op), minorOpcode: UInt16(minor))
@@ -264,9 +297,11 @@ extension ServerSession {
         // Root window has no shape (shape.c: `if (!pWin->parent)`).
         if dest == config.rootWindowId { return }
 
+        // xOff/yOff are in DEVICE coords (callers scale at the protocol
+        // boundary). All shape regions in the engine are device-coord too.
         let translatedSrc: Region? = {
             guard let src else { return nil }
-            return (xOff != 0 || yOff != 0) ? src.translated(dx: Int32(xOff), dy: Int32(yOff)) : src
+            return (xOff != 0 || yOff != 0) ? src.translated(dx: xOff, dy: yOff) : src
         }()
 
         let current = (destKind == ShapeKind.bounding) ? win.boundingShape : win.clipShape
@@ -329,13 +364,23 @@ extension ServerSession {
     }
 
     // MARK: - Default regions (shape.c CreateBoundingShape / CreateClipShape)
+    //
+    // Returns DEVICE-coord regions matching the rest of the engine
+    // (DEVICE_COORDS_REFACTOR.md). WindowEntry stores logical sizes; we
+    // scale here.
 
     private func boundingDefaultBox(for win: WindowEntry) -> BoxRec {
-        let bw = Int32(win.borderWidth)
-        return BoxRec(x1: -bw, y1: -bw, x2: Int32(win.width) + bw, y2: Int32(win.height) + bw)
+        let s = config.deviceScale
+        let bw = Int32(win.borderWidth) * s
+        return BoxRec(x1: -bw, y1: -bw,
+                      x2: Int32(win.width)  * s + bw,
+                      y2: Int32(win.height) * s + bw)
     }
     private func clipDefaultBox(for win: WindowEntry) -> BoxRec {
-        BoxRec(x1: 0, y1: 0, x2: Int32(win.width), y2: Int32(win.height))
+        let s = config.deviceScale
+        return BoxRec(x1: 0, y1: 0,
+                      x2: Int32(win.width)  * s,
+                      y2: Int32(win.height) * s)
     }
     private func defaultBoundingRegion(for win: WindowEntry) -> Region { Region(box: boundingDefaultBox(for: win)) }
     private func defaultClipRegion(for win: WindowEntry) -> Region { Region(box: clipDefaultBox(for: win)) }
@@ -438,11 +483,16 @@ extension ServerSession {
         guard let win = windows.get(windowId), let bo = byteOrder else { return }
         let region = (kind == ShapeKind.bounding) ? win.boundingShape : win.clipShape
         let shaped = region != nil
+        // Region is device-coord; ShapeNotify carries logical pixels per
+        // the X protocol. Scale extent back at the wire boundary.
+        let s = config.deviceScale
         let extent: (x: Int16, y: Int16, w: UInt16, h: UInt16)
         if let region {
-            extent = regionExtent(region)
+            extent = boxExtent(Region(box: region.boundingBox.scaledToLogical(by: s)))
         } else {
-            extent = boxExtent(kind == ShapeKind.bounding ? defaultBoundingRegion(for: win) : defaultClipRegion(for: win))
+            let defBox = (kind == ShapeKind.bounding ? boundingDefaultBox(for: win)
+                                                     : clipDefaultBox(for: win)).scaledToLogical(by: s)
+            extent = boxExtent(Region(box: defBox))
         }
         let event = ShapeNotifyEvent(
             type: Self.shapeEventBase + ShapeMinor.queryVersion,  // ShapeNotify == base + 0
@@ -454,22 +504,31 @@ extension ServerSession {
 
     // MARK: - Bitmap -> Region (shape.c BITMAP_TO_REGION)
 
-    /// Convert a depth-1 pixmap to a region of its set bits. "Set" follows the
-    /// server's paper/ink convention (whitePixel=0=clear, blackPixel=1=set), so
-    /// a set bit reads back as fully black via readDrawablePixels (0xAARRGGBB
-    /// with RGB==0). Same convention as the FillStippled bit reader. Builds one
-    /// 1-pixel-tall box per horizontal run of set bits, then normalizes (which
-    /// coalesces vertically adjacent identical bands).
+    /// Convert a depth-1 pixmap to a region of its set bits at DEVICE
+    /// resolution. The pixmap's PixelBuffer is allocated at device scale
+    /// (`reference_pixmap_device_scale` memory), so reading at device res
+    /// gives sub-X-pixel precision for shape curves — the win for retina
+    /// rendering. "Set" follows the server's paper/ink convention
+    /// (whitePixel=0=clear, blackPixel=1=set); a set bit reads as fully
+    /// black (`(p & 0x00FFFFFF) == 0`).
+    ///
+    /// `width`/`height` are in DEVICE pixels (logical pixmap dims times
+    /// scale). Output region is in device-coord pixmap-local coordinates;
+    /// caller translates by `xOff/yOff` (also device) when applying.
     private func bitmapToRegion(pixmapId: UInt32, width: Int, height: Int) -> Region {
-        guard width > 0, height > 0, let bridge = bridge else { return .empty }
-        let pixels = bridge.readDrawablePixels(from: .pixmap(id: pixmapId, depth: 1),
-                                               srcX: 0, srcY: 0, width: width, height: height)
-        guard pixels.count >= width * height else { return .empty }
+        guard width > 0, height > 0, let bridge = bridge,
+              let grid = bridge.readDepth1MaskDevicePixels(pixmapId: pixmapId) else { return .empty }
+        let gw = grid.width, gh = grid.height
+        guard gw > 0, gh > 0, grid.pixels.count >= gw * gh else { return .empty }
+        // Walk at min(requested, available) so a stale-size request degrades
+        // gracefully instead of overrunning the buffer.
+        let walkW = min(width, gw)
+        let walkH = min(height, gh)
         var boxes: [BoxRec] = []
-        for y in 0..<height {
+        for y in 0..<walkH {
             var runStart = -1
-            for x in 0..<width {
-                let set = (pixels[y * width + x] & 0x00FFFFFF) == 0   // fully black
+            for x in 0..<walkW {
+                let set = (grid.pixels[y * gw + x] & 0x00FFFFFF) == 0
                 if set {
                     if runStart < 0 { runStart = x }
                 } else if runStart >= 0 {
@@ -478,7 +537,7 @@ extension ServerSession {
                 }
             }
             if runStart >= 0 {
-                boxes.append(BoxRec(x1: Int32(runStart), y1: Int32(y), x2: Int32(width), y2: Int32(y + 1)))
+                boxes.append(BoxRec(x1: Int32(runStart), y1: Int32(y), x2: Int32(walkW), y2: Int32(y + 1)))
             }
         }
         return Region.rects(boxes, order: .yxSorted)
