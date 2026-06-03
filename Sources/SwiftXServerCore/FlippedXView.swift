@@ -142,13 +142,6 @@ public final class FlippedXView: NSView {
         }
     }
 
-    /// Device-resolution version of the bounding shape (window-local DEVICE
-    /// pixels), used for the visual clip so the window edge follows the curve
-    /// at full backing resolution instead of magnified logical-pixel steps.
-    /// nil = fall back to scaling `boundingShapeRects` (logical) up. Set in
-    /// lockstep with `boundingShapeRects` by the bridge.
-    public var boundingShapeDeviceRects: [Framer.Rectangle]?
-
     /// Logical X-protocol dimensions (what the client sees).
     public private(set) var logicalWidth: Int = 0
     public private(set) var logicalHeight: Int = 0
@@ -560,24 +553,15 @@ public final class FlippedXView: NSView {
             // shape. Paired with the clear layer.backgroundColor + non-opaque
             // NSWindow, this makes everything outside the region see-through.
             cg.clear(bounds)
+            // boundingShapeRects are window-local DEVICE px
+            // (DEVICE_COORDS_REFACTOR.md). Convert to points by dividing by
+            // backingScale -- imgRect spans `deviceWidth / backingScale`
+            // points, so device-px / backingScale lands in the same frame.
+            let bs = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
             let clip = CGMutablePath()
-            if let dev = boundingShapeDeviceRects {
-                // Device-pixel mask: convert device px -> points (÷ backing
-                // scale). Same units the blit lands in (imgRect spans
-                // deviceWidth/backingScale points), so the clip follows the
-                // curve at full backing resolution.
-                let bs = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
-                for r in dev {
-                    clip.addRect(CGRect(x: CGFloat(r.x) / bs, y: CGFloat(r.y) / bs,
-                                        width: CGFloat(r.width) / bs, height: CGFloat(r.height) / bs))
-                }
-            } else {
-                // No device mask (rect-based shape): scale the logical rects.
-                let s = logicalWidth > 0 ? imgPointsW / CGFloat(logicalWidth) : 1
-                for r in shapeRects {
-                    clip.addRect(CGRect(x: CGFloat(r.x) * s, y: CGFloat(r.y) * s,
-                                        width: CGFloat(r.width) * s, height: CGFloat(r.height) * s))
-                }
+            for r in shapeRects {
+                clip.addRect(CGRect(x: CGFloat(r.x) / bs, y: CGFloat(r.y) / bs,
+                                    width: CGFloat(r.width) / bs, height: CGFloat(r.height) / bs))
             }
             cg.addPath(clip)
             cg.clip()

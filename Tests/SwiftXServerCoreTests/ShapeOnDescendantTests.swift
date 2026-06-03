@@ -218,75 +218,13 @@ final class ShapeOnDescendantTests: XCTestCase {
                        "border-ring paints should sum to borderClip area, not full borderBox area")
     }
 
-    /// Regression for the device-paint routing (added 2026-06-02): when a
-    /// shaped descendant has both bounding- and clip-shape device rects
-    /// cached (captured at ShapeMask-Set time from the source pixmap),
-    /// `paintRectsForWindow` must SUPPRESS its rect output for that window
-    /// and `mappedShapedDescendantPaints` must emit a single record so the
-    /// bridge can paint via the device-resolution clip path. Without the
-    /// suppress, the staircased rect paint fights the curve-following
-    /// device paint.
-    func testDeviceShapeRoutingSuppressesRectPaintAndEmitsShapedRecord() throws {
-        let session = runningSession()
-        let parent: UInt32 = ServerConfig.default.resourceIdBase + 1
-        let child: UInt32  = ServerConfig.default.resourceIdBase + 2
-        _ = session.feed(CreateWindow(
-            depth: 0, wid: parent, parent: root,
-            x: 0, y: 0, width: 200, height: 200, borderWidth: 0,
-            windowClass: .inputOutput, visual: 0, valueMask: 0, valueList: []
-        ).encode(byteOrder: .lsbFirst))
-        _ = session.feed(MapWindow(window: parent).encode(byteOrder: .lsbFirst))
-        func u32le(_ v: UInt32) -> [UInt8] {
-            [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)]
-        }
-        var vals: [UInt8] = []
-        vals.append(contentsOf: u32le(0xFFFFFF))
-        vals.append(contentsOf: u32le(1))
-        _ = session.feed(CreateWindow(
-            depth: 0, wid: child, parent: parent,
-            x: 10, y: 20, width: 40, height: 20, borderWidth: 1,
-            windowClass: .inputOutput, visual: 0,
-            valueMask: CW.backPixel | CW.borderPixel, valueList: vals
-        ).encode(byteOrder: .lsbFirst))
-        _ = session.feed(MapWindow(window: child).encode(byteOrder: .lsbFirst))
-        _ = session.outbound.drain()
-
-        // Install device rects directly — this is the post-condition of a
-        // ShapeMask op=Set with a pixmap source. Two arbitrary 1-device-px
-        // bands per mask are enough to exercise the routing.
-        session.windows.setBoundingShapeDeviceRects(child, [
-            Rectangle(x: 0, y: 0, width: 42 * 3, height: 1),
-            Rectangle(x: 0, y: 1, width: 42 * 3, height: 1)
-        ])
-        session.windows.setClipShapeDeviceRects(child, [
-            Rectangle(x: 3, y: 3, width: 40 * 3, height: 1),
-            Rectangle(x: 3, y: 4, width: 40 * 3, height: 1)
-        ])
-
-        let rectPaints = session.mappedBackgroundPaints(topLevelId: parent, byteOrder: .lsbFirst)
-        let childRectPaints = rectPaints.filter {
-            // Anything inside the child's borderBox in top-level coords.
-            $0.x >= 9 && $0.y >= 19 && $0.x < 51 && $0.y < 41
-        }
-        XCTAssertTrue(childRectPaints.isEmpty,
-                      "shaped descendant with device rects must not emit logical rect paints")
-
-        let shaped = session.mappedShapedDescendantPaints(topLevelId: parent, byteOrder: .lsbFirst)
-        XCTAssertEqual(shaped.count, 1, "exactly one shaped paint record for the child")
-        let s = try XCTUnwrap(shaped.first)
-        XCTAssertEqual(s.topLevel, parent)
-        // Origin is the INTERIOR top-left in top-level logical coords —
-        // matches the interior-local coord system the device rects use
-        // (R6 dix/window.c:1544 / bitmapToDeviceRects). Negative device
-        // x/y in the bounding rects extends into the border ring.
-        XCTAssertEqual(s.windowOriginX, 10)
-        XCTAssertEqual(s.windowOriginY, 20)
-        XCTAssertEqual(s.windowFullWidth,  42)
-        XCTAssertEqual(s.windowFullHeight, 22)
-        XCTAssertTrue(s.drawBorder)
-        XCTAssertEqual(s.boundingDeviceRects.count, 2)
-        XCTAssertEqual(s.clipDeviceRects.count, 2)
-    }
+    // (Removed 2026-06-03 in phase 6 of DEVICE_COORDS_REFACTOR.md:
+    // testDeviceShapeRoutingSuppressesRectPaintAndEmitsShapedRecord was
+    // testing the now-deleted boundingShapeDeviceRects/clipShapeDeviceRects
+    // sidecar fields and mappedShapedDescendantPaints walker. The new
+    // model puts shape regions directly in device coords on `boundingShape`
+    // and `clipShape` so paintRectsForWindow emits device-coord rects via
+    // the normal path — no sidecar, no separate walker.)
 
     /// Sum the areas of a region's boxes.
     private func regionArea(_ region: Region) -> Int64 {

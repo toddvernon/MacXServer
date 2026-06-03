@@ -14,18 +14,16 @@ final class ShapeExtensionTests: XCTestCase {
     private final class ShapePixelBridge: WindowBridge, @unchecked Sendable {
         let grid: [UInt32]
         let gw: Int
-        // Records the most recent setWindowBoundingShape call (Phase 3 forward).
+        // Records the most recent setWindowBoundingShape call.
         var shapeCallCount = 0
         var lastShapeTopLevel: UInt32?
         var lastShapeRects: [Framer.Rectangle]?
         init(grid: [UInt32] = [], width: Int = 0) { self.grid = grid; self.gw = width }
         var scaleFactor: Double { 1 }
-        var lastShapeDeviceRects: [Framer.Rectangle]?
-        func setWindowBoundingShape(topLevel: UInt32, rects: [Framer.Rectangle]?, deviceRects: [Framer.Rectangle]?) {
+        func setWindowBoundingShape(topLevel: UInt32, rects: [Framer.Rectangle]?) {
             shapeCallCount += 1
             lastShapeTopLevel = topLevel
             lastShapeRects = rects
-            lastShapeDeviceRects = deviceRects
         }
         func registerTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32) {}
         func mapTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32,

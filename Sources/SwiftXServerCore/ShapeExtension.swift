@@ -117,14 +117,10 @@ extension ServerSession {
                                     width: Int(pix.width)  * Int(config.deviceScale),
                                     height: Int(pix.height) * Int(config.deviceScale))
         }
-        // The deviceRects sidecar is retired in phase 6 of the
-        // DEVICE_COORDS_REFACTOR; nil for now to keep the field present
-        // until cleanup deletes it.
-        let deviceRects: [Rectangle]? = nil
         let s = config.deviceScale
         combineShape(dest: r.dest, destKind: r.destKind, src: srcRgn,
                      op: r.op, xOff: Int32(r.xOff) * s, yOff: Int32(r.yOff) * s,
-                     minor: ShapeMinor.mask, deviceRects: deviceRects)
+                     minor: ShapeMinor.mask)
     }
 
     private func handleShapeCombine(_ r: ShapeCombine, byteOrder: ByteOrder) {
@@ -178,12 +174,8 @@ extension ServerSession {
             let moved = region.translated(dx: Int32(r.xOff) * s, dy: Int32(r.yOff) * s)
             if r.destKind == ShapeKind.bounding {
                 windows.setBoundingShape(r.dest, moved)
-                // The cached device mask no longer matches the moved region;
-                // drop it so the view falls back to the scaled logical region.
-                windows.setBoundingShapeDeviceRects(r.dest, nil)
             } else {
                 windows.setClipShape(r.dest, moved)
-                windows.setClipShapeDeviceRects(r.dest, nil)
             }
             setWindowShape(windowId: r.dest)
         }
@@ -287,8 +279,7 @@ extension ServerSession {
     /// apply to rendering and send ShapeNotify. Faithful to shape.c's
     /// RegionOperate including the per-op nil-destination handling.
     private func combineShape(dest: UInt32, destKind: UInt8, src: Region?,
-                              op: UInt8, xOff: Int32, yOff: Int32, minor: UInt8,
-                              deviceRects: [Rectangle]? = nil) {
+                              op: UInt8, xOff: Int32, yOff: Int32, minor: UInt8) {
         guard op <= ShapeOp.invert else {
             emitError(.value, majorOpcode: Self.shapeMajorOpcode, badResourceId: UInt32(op), minorOpcode: UInt16(minor))
             return
@@ -313,17 +304,8 @@ extension ServerSession {
 
         if destKind == ShapeKind.bounding {
             windows.setBoundingShape(dest, newShape)
-            // Update the device-resolution visual mask: the mask path provides
-            // it (op=Set from a pixmap); every other bounding mutation
-            // invalidates it (nil) so the view falls back to the scaled
-            // logical region.
-            windows.setBoundingShapeDeviceRects(dest, deviceRects)
         } else {
             windows.setClipShape(dest, newShape)
-            // Same cache discipline for the clip-shape device mask: the mask
-            // path provides it on Set; every other mutation invalidates so
-            // the descendant paint falls back to the logical clipList.
-            windows.setClipShapeDeviceRects(dest, deviceRects)
         }
 
         setWindowShape(windowId: dest)
@@ -419,51 +401,63 @@ extension ServerSession {
         // Expose for descendants) only run when a bridge is attached.
         guard let bridge = bridge, let bo = byteOrder else { return }
         if win.parent == config.rootWindowId {
-            // Top-level: mask the NSWindow. nil -> unshaped (rectangular);
-            // a region -> its rects.
+            // Top-level: mask the NSWindow with device-coord shape rects.
+            // The view's clip path divides by backingScale to convert device
+            // px → points; same coordinate path the descendant rendering
+            // takes via paintWindowRects + identity-CTM clip.
             let rects: [Rectangle]? = win.boundingShape.map { region in
                 region.rects.map { boxToRect($0) }
             }
-            bridge.setWindowBoundingShape(topLevel: windowId, rects: rects, deviceRects: win.boundingShapeDeviceRects)
+            bridge.setWindowBoundingShape(topLevel: windowId, rects: rects)
             return
         }
-        // Descendant: targeted repaint of just THIS window + the area of the
-        // parent's bg under the window's borderBox. The earlier whole-subtree
-        // walk (b849a3d) was O(N) per shape op and dominated cost during
-        // xcalc's resize-time reshape storm (40 buttons × 2 ShapeMask each
-        // × full-subtree walk). The targeted version is O(1) per op:
-        //   - parent's bg painted in (parent.clipList ∩ child.borderBox)
-        //     covers the case where the shape narrowed and parent now shows
-        //   - child's own bg/border painted via the regular rect path (or
-        //     the device-mask path if Set/Bounding+Set/Clip carried pixmap
-        //     masks)
-        // The top-level's own bg never needs repainting on a descendant
-        // shape change — it's only the parent's region under the child
-        // that's affected.
+        // Descendant: paint the parent's bg under the window's borderBox
+        // (covers shape-narrowed-now-parent-shows), then the window's own
+        // bg/border via paintRectsForWindow. With device-coord regions
+        // throughout the engine, paintRectsForWindow emits device-coord
+        // rects that paintWindowRects fills at identity CTM — the curve
+        // lands at exact device pixels by the same code path every
+        // descendant paint uses. No special shape paint, no dual
+        // representation, no transient invalidation dance.
         guard let (topId, dx, dy) = topLevelAndOffset(for: windowId) else { return }
-        let (rectPaints, shapedPaint) = paintsForShapedDescendantChange(
-            child: win, dx: dx, dy: dy, byteOrder: bo
-        )
-        if !rectPaints.isEmpty {
-            bridge.paintWindowRects(topLevel: topId, rects: rectPaints)
-        }
-        if let s = shapedPaint {
-            bridge.paintShapedDescendantBg(
-                topLevel: topId,
-                windowOriginX: s.windowOriginX, windowOriginY: s.windowOriginY,
-                windowFullWidth: s.windowFullWidth, windowFullHeight: s.windowFullHeight,
-                bgColor: s.bgColor, borderColor: s.borderColor, drawBorder: s.drawBorder,
-                boundingDeviceRects: s.boundingDeviceRects,
-                clipDeviceRects: s.clipDeviceRects
+        var rects: [WindowBackgroundRect] = []
+        let s = config.deviceScale
+        if let parent = windows.get(win.parent), parent.backPixel != nil {
+            // Build child's borderBox in device coords (matches parent.clipList
+            // and our region engine).
+            let bw = Int32(win.borderWidth) * s
+            let childBorderBox = BoxRec(
+                x1: Int32(dx) * s - bw, y1: Int32(dy) * s - bw,
+                x2: Int32(dx) * s + Int32(win.width)  * s + bw,
+                y2: Int32(dy) * s + Int32(win.height) * s + bw
             )
+            let parentBg = windowBackground(parent.id, byteOrder: bo)
+            let exposedInParent = parent.clipList.intersected(with: Region(box: childBorderBox))
+            for box in exposedInParent.rects {
+                let w = box.x2 - box.x1, h = box.y2 - box.y1
+                guard w > 0, h > 0 else { continue }
+                rects.append(WindowBackgroundRect(
+                    x: Int16(clamping: box.x1), y: Int16(clamping: box.y1),
+                    width: UInt16(clamping: w), height: UInt16(clamping: h),
+                    color: parentBg
+                ))
+            }
+        }
+        rects.append(contentsOf: paintRectsForWindow(entry: win, dx: dx, dy: dy, byteOrder: bo))
+        if !rects.isEmpty {
+            bridge.paintWindowRects(topLevel: topId, rects: rects)
         }
         if let entry = windows.get(windowId),
            entry.eventMask & MockWindowBridge.exposureMask != 0 {
-            // Expose for the window's new clipList in window-local coords.
-            let localRects = entry.clipList.rects.map {
-                BoxRec(
-                    x1: $0.x1 - Int32(dx), y1: $0.y1 - Int32(dy),
-                    x2: $0.x2 - Int32(dx), y2: $0.y2 - Int32(dy)
+            // Expose payload is window-local LOGICAL pixels; scale device
+            // clipList back to logical, then subtract logical (dx, dy).
+            let dxI = Int32(dx)
+            let dyI = Int32(dy)
+            let localRects = entry.clipList.rects.map { box -> BoxRec in
+                let logical = box.scaledToLogical(by: s)
+                return BoxRec(
+                    x1: logical.x1 - dxI, y1: logical.y1 - dyI,
+                    x2: logical.x2 - dxI, y2: logical.y2 - dyI
                 )
             }
             MockWindowBridge.emitExposesForRects(
@@ -543,40 +537,6 @@ extension ServerSession {
         return Region.rects(boxes, order: .yxSorted)
     }
 
-    /// Build a device-resolution visual mask from a depth-1 pixmap: one
-    /// 1-device-pixel-tall band per run of set bits, in window-local DEVICE
-    /// pixels (the pixmap-local device coords plus the logical offset scaled to
-    /// device). Same "fully black = set" convention as bitmapToRegion. nil if
-    /// the pixmap's device pixels can't be read. Used only for the NSWindow
-    /// clip — the X-protocol region stays logical (bitmapToRegion).
-    private func bitmapToDeviceRects(pixmapId: UInt32, xOff: Int16, yOff: Int16) -> [Rectangle]? {
-        guard let bridge = bridge,
-              let grid = bridge.readDepth1MaskDevicePixels(pixmapId: pixmapId) else { return nil }
-        let w = grid.width, h = grid.height
-        guard w > 0, h > 0, grid.pixels.count >= w * h else { return nil }
-        let scaleInt = max(1, Int(bridge.scaleFactor.rounded()))
-        let offX = Int(xOff) * scaleInt
-        let offY = Int(yOff) * scaleInt
-        var rects: [Rectangle] = []
-        for y in 0..<h {
-            var runStart = -1
-            for x in 0..<w {
-                let set = (grid.pixels[y * w + x] & 0x00FFFFFF) == 0
-                if set {
-                    if runStart < 0 { runStart = x }
-                } else if runStart >= 0 {
-                    rects.append(Rectangle(x: Int16(clamping: offX + runStart), y: Int16(clamping: offY + y),
-                                           width: UInt16(clamping: x - runStart), height: 1))
-                    runStart = -1
-                }
-            }
-            if runStart >= 0 {
-                rects.append(Rectangle(x: Int16(clamping: offX + runStart), y: Int16(clamping: offY + y),
-                                       width: UInt16(clamping: w - runStart), height: 1))
-            }
-        }
-        return rects
-    }
 
     // MARK: - Small helpers
 

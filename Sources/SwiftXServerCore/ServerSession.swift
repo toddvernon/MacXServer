@@ -372,25 +372,6 @@ public final class ServerSession: @unchecked Sendable {
                 )
             }
         }
-        // Device-resolution shape clip for SHAPE-shaped descendants.
-        // Pre-fix, client draw ops (xcalc's button-press
-        // ClearArea/PolyFillRectangle) clipped only to the logical
-        // clipList, whose staircase steps extend past the device clip
-        // curve and overpainted our device-resolution border ring — the
-        // "outline parts vanish on press" symptom. With this lookup
-        // wired, withDrawContext applies the device clip on top of
-        // clipList so client draws stay strictly inside the curve.
-        bridge?.registerWindowDeviceClipLookup(token: bridgeHandlerToken) { [weak self] id -> ([Framer.Rectangle], Int16, Int16)? in
-            guard let self = self, let entry = self.windows.get(id),
-                  entry.parent != self.config.rootWindowId,
-                  let rects = entry.clipShapeDeviceRects, !rects.isEmpty,
-                  let (_, dx, dy) = self.topLevelAndOffset(for: id) else { return nil }
-            // Device rects are in INTERIOR-local coords (per
-            // bitmapToDeviceRects + the X11 SHAPE convention of
-            // dix/window.c:1544). Origin to pair them with is the
-            // window's interior top-left in top-level logical coords.
-            return (rects, dx, dy)
-        }
         coordinator.registerRootPropertyObserver(token: bridgeHandlerToken, observer: self)
         // All AppKit-side callbacks hop onto protocolQueue, run the handler,
         // and flush any bytes the handler appended to outbound. Since
@@ -2595,132 +2576,7 @@ public final class ServerSession: @unchecked Sendable {
         return out
     }
 
-    /// Companion to `mappedBackgroundPaints`: walks the same subtree and
-    /// collects device-resolution paint records for SHAPE-shaped descendants
-    /// (those carrying both `boundingShapeDeviceRects` and
-    /// `clipShapeDeviceRects`). Each record is dispatched through
-    /// `bridge.paintShapedDescendantBg` so the bg/border fills follow the
-    /// curve at full backing resolution. Top-level shape uses the
-    /// NSWindow-mask path, not this — only descendants land here.
-    /// `paintRectsForWindow` returns empty rects for the same set of
-    /// windows so we don't double-paint.
-    func mappedShapedDescendantPaints(topLevelId: UInt32, byteOrder: ByteOrder) -> [ShapedDescendantPaint] {
-        guard windows.get(topLevelId) != nil else { return [] }
-        var out: [ShapedDescendantPaint] = []
-        var queue: [UInt32] = [topLevelId]
-        while !queue.isEmpty {
-            let id = queue.removeFirst()
-            for (childId, w) in windows.windows where w.parent == id && w.mapped {
-                queue.append(childId)
-                guard windowUsesDeviceShapePaint(w),
-                      let (_, dx, dy) = topLevelAndOffset(for: childId),
-                      let bRects = w.boundingShapeDeviceRects,
-                      let cRects = w.clipShapeDeviceRects else { continue }
-                let bg = w.backPixel.map { _ in windowBackground(w.id, byteOrder: byteOrder) }
-                        ?? RGB16(red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF)
-                let borderColor = w.borderPixel.map { resolveColor($0) }
-                                ?? RGB16(red: 0, green: 0, blue: 0)
-                let drawBorder = w.borderWidth > 0 && w.borderPixel != nil
-                let fullW = Int32(w.width) + 2 * Int32(w.borderWidth)
-                let fullH = Int32(w.height) + 2 * Int32(w.borderWidth)
-                // Device rects use INTERIOR-local coords (see
-                // bitmapToDeviceRects + R6 dix/window.c:1544: shape regions
-                // live in interior-local with negative xOff/yOff allowing
-                // bounding to extend into the border). `dx`/`dy` from
-                // topLevelAndOffset is the interior top-left in top-level
-                // logical coords — pair them as-is.
-                out.append(ShapedDescendantPaint(
-                    topLevel: topLevelId,
-                    windowOriginX: dx,
-                    windowOriginY: dy,
-                    windowFullWidth: fullW,
-                    windowFullHeight: fullH,
-                    bgColor: bg, borderColor: borderColor, drawBorder: drawBorder,
-                    boundingDeviceRects: bRects, clipDeviceRects: cRects
-                ))
-            }
-        }
-        return out
-    }
 
-    /// Targeted bg/border paint for a SHAPE descendant whose shape just
-    /// changed. Returns (a) rect paints for the parent's bg in the area
-    /// under the child's borderBox (covers shape-narrowed-now-parent-shows),
-    /// plus the child's own bg/border via `paintRectsForWindow`; and
-    /// (b) an optional shaped paint record when the child has both
-    /// device-rect masks. Replaces the whole-subtree
-    /// `mappedBackgroundPaints` walk that dominated cost during
-    /// resize-time reshape storms (xcalc: 40 buttons × 2 ShapeMask =
-    /// 80 shape ops per resize × O(subtree) walk). The top-level's own
-    /// bg never needs repainting on a descendant shape change, and
-    /// other descendants in the subtree are unaffected by this window's
-    /// shape change, so they're skipped too.
-    func paintsForShapedDescendantChange(
-        child: WindowEntry, dx: Int16, dy: Int16, byteOrder: ByteOrder
-    ) -> (rects: [WindowBackgroundRect], shaped: ShapedDescendantPaint?) {
-        var rects: [WindowBackgroundRect] = []
-        let bw = Int32(child.borderWidth)
-        let childBorderBox = BoxRec(
-            x1: Int32(dx) - bw, y1: Int32(dy) - bw,
-            x2: Int32(dx) + Int32(child.width) + bw,
-            y2: Int32(dy) + Int32(child.height) + bw
-        )
-        if let parent = windows.get(child.parent), parent.backPixel != nil {
-            let parentBg = windowBackground(parent.id, byteOrder: byteOrder)
-            let exposedInParent = parent.clipList.intersected(with: Region(box: childBorderBox))
-            for box in exposedInParent.rects {
-                let w = box.x2 - box.x1
-                let h = box.y2 - box.y1
-                guard w > 0, h > 0 else { continue }
-                rects.append(WindowBackgroundRect(
-                    x: Int16(clamping: box.x1), y: Int16(clamping: box.y1),
-                    width: UInt16(clamping: w), height: UInt16(clamping: h),
-                    color: parentBg
-                ))
-            }
-        }
-        // `paintRectsForWindow` returns empty for shaped-with-device-rects
-        // windows; for those the shaped record below carries the bg/border.
-        // Otherwise the rect path covers it.
-        rects.append(contentsOf: paintRectsForWindow(entry: child, dx: dx, dy: dy, byteOrder: byteOrder))
-
-        var shaped: ShapedDescendantPaint? = nil
-        if windowUsesDeviceShapePaint(child),
-           let bRects = child.boundingShapeDeviceRects,
-           let cRects = child.clipShapeDeviceRects {
-            let bg = child.backPixel.map { _ in windowBackground(child.id, byteOrder: byteOrder) }
-                    ?? RGB16(red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF)
-            let borderColor = child.borderPixel.map { resolveColor($0) }
-                            ?? RGB16(red: 0, green: 0, blue: 0)
-            let drawBorder = child.borderWidth > 0 && child.borderPixel != nil
-            shaped = ShapedDescendantPaint(
-                topLevel: topLevelAndOffset(for: child.id)?.0 ?? 0,
-                // Interior origin (dx, dy) pairs with the device rects'
-                // interior-local coords — see mappedShapedDescendantPaints
-                // comment.
-                windowOriginX: dx, windowOriginY: dy,
-                windowFullWidth:  Int32(child.width)  + 2 * Int32(child.borderWidth),
-                windowFullHeight: Int32(child.height) + 2 * Int32(child.borderWidth),
-                bgColor: bg, borderColor: borderColor, drawBorder: drawBorder,
-                boundingDeviceRects: bRects, clipDeviceRects: cRects
-            )
-        }
-        return (rects, shaped)
-    }
-
-    /// True when a window should be painted via the device-resolution
-    /// shape path instead of the logical rect path. Requires being a
-    /// descendant (not a top-level — those use NSWindow masking) and
-    /// having both bounding + clip device-rect masks captured at
-    /// ShapeMask-Set time. Used by both `paintRectsForWindow` (to skip
-    /// the logical rects for these windows) and
-    /// `mappedShapedDescendantPaints` (to emit the device record).
-    private func windowUsesDeviceShapePaint(_ entry: WindowEntry) -> Bool {
-        guard entry.parent != config.rootWindowId else { return false }
-        guard let b = entry.boundingShapeDeviceRects, !b.isEmpty else { return false }
-        guard let c = entry.clipShapeDeviceRects, !c.isEmpty else { return false }
-        return true
-    }
 
     /// Produce the paint rects for a single window. With borderWidth > 0,
     /// emits the border ring drawn in borderPixel (the window's borderClip
@@ -2747,13 +2603,7 @@ public final class ServerSession: @unchecked Sendable {
     ///
     /// `(dx, dy)` is the window's content top-left in top-level pixel coords
     /// (already includes any ancestor offsets).
-    private func paintRectsForWindow(entry: WindowEntry, dx: Int16, dy: Int16, byteOrder: ByteOrder) -> [WindowBackgroundRect] {
-        // Shaped descendants with device-rect masks paint via
-        // `paintShapedDescendantBg` on the bridge (device-resolution clip).
-        // Suppress the logical rect-based output here so the same pixels
-        // don't get painted twice (and so the staircased rect-version
-        // doesn't fight the curve-following device version).
-        if windowUsesDeviceShapePaint(entry) { return [] }
+    func paintRectsForWindow(entry: WindowEntry, dx: Int16, dy: Int16, byteOrder: ByteOrder) -> [WindowBackgroundRect] {
         var out: [WindowBackgroundRect] = []
         let bw = entry.borderWidth
         let hasBorder = bw > 0 && entry.borderPixel != nil
@@ -2973,7 +2823,7 @@ public final class ServerSession: @unchecked Sendable {
     /// (set at CreateWindow time, optionally overridden by
     /// ChangeWindowAttributes); falls back to white when no bg pixel was
     /// configured. Used by ClearArea and by the paint-on-map flow.
-    private func windowBackground(_ windowId: UInt32, byteOrder: ByteOrder) -> RGB16 {
+    func windowBackground(_ windowId: UInt32, byteOrder: ByteOrder) -> RGB16 {
         guard let w = windows.get(windowId) else {
             return RGB16(red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF)
         }
@@ -3684,7 +3534,6 @@ public final class ServerSession: @unchecked Sendable {
         bridge?.unregisterPixmapBufferLookup(token: bridgeHandlerToken)
         bridge?.unregisterColorTableLookup(token: bridgeHandlerToken)
         bridge?.unregisterWindowClipLookup(token: bridgeHandlerToken)
-        bridge?.unregisterWindowDeviceClipLookup(token: bridgeHandlerToken)
         coordinator.unregisterRootPropertyObserver(token: bridgeHandlerToken)
         guard let bridge = bridge, let bo = byteOrder else { return }
         // Snapshot top-level ids first (mutating windows during walk would
@@ -4287,16 +4136,6 @@ public final class ServerSession: @unchecked Sendable {
                 if !paints.isEmpty {
                     bridge?.paintWindowRects(topLevel: r.window, rects: paints)
                 }
-                for s in mappedShapedDescendantPaints(topLevelId: r.window, byteOrder: byteOrder) {
-                    bridge?.paintShapedDescendantBg(
-                        topLevel: s.topLevel,
-                        windowOriginX: s.windowOriginX, windowOriginY: s.windowOriginY,
-                        windowFullWidth: s.windowFullWidth, windowFullHeight: s.windowFullHeight,
-                        bgColor: s.bgColor, borderColor: s.borderColor, drawBorder: s.drawBorder,
-                        boundingDeviceRects: s.boundingDeviceRects,
-                        clipDeviceRects: s.clipDeviceRects
-                    )
-                }
                 // Root substructure notify for new top-level visibility
                 // (fires only if a WM-style client registered
                 // SubstructureNotifyMask on root).
@@ -4645,21 +4484,6 @@ public final class ServerSession: @unchecked Sendable {
                 }
                 let sizeChanged = old.width != new.width || old.height != new.height
                 let posChanged = old.x != new.x || old.y != new.y
-                // SHAPE device-rect masks were captured at the previous
-                // window dimensions; a resize invalidates them. If we kept
-                // stale rects, the next ShapeMask Bounding-Set would paint
-                // with the new bounding mask but a still-old clip mask,
-                // leaving a thick black fringe where the new bounding
-                // extended past the old clip (xcalc resize symptom).
-                // Dropping both makes `windowUsesDeviceShapePaint` return
-                // false until BOTH masks refresh; the rect-based paint
-                // staircases at logical resolution in the gap, which is
-                // visible but correct.
-                if sizeChanged && (entry.boundingShapeDeviceRects != nil
-                                   || entry.clipShapeDeviceRects != nil) {
-                    windows.setBoundingShapeDeviceRects(r.window, nil)
-                    windows.setClipShapeDeviceRects(r.window, nil)
-                }
                 // Per X11 spec: emit ConfigureNotify if the configuration
                 // actually changed, on every window with StructureNotifyMask
                 // set in its event mask. xterm's Xt geometry manager waits
@@ -4740,33 +4564,6 @@ public final class ServerSession: @unchecked Sendable {
                               otherTop == topId else { continue }
                         let newClip = otherEntry.clipList
                         if newClip == oldClip { continue }
-                        // Skip the cascade body entirely for SHAPE-shaped
-                        // descendants with device-rect masks. Two reasons:
-                        // (a) painting their bg over the new clipList
-                        //     overwrites the device-resolution border ring
-                        //     at the curve's sub-logical-pixel fringe
-                        //     (drop shadow / outline loss);
-                        // (b) re-emitting their device shape paint at the
-                        //     OTHER window's CURRENT interior origin can
-                        //     land on top of the moving SOURCE window's
-                        //     NEW position when xcalc's resize shifts
-                        //     things around — the OTHER's OLD position
-                        //     is now where the SOURCE went. The visible
-                        //     result was "C-shape" old-shape outlines
-                        //     inside the new button area.
-                        // Their device shape paint from the prior
-                        // ShapeMask survives. Their own next Configure
-                        // (followed by ShapeMask Bounding + Clip)
-                        // re-emits the correct paint at the correct
-                        // position. For xcalc's non-overlapping grid
-                        // this is exactly right; overlap cases get brief
-                        // stale pixels that self-heal at the next reshape.
-                        if let bRects = otherEntry.boundingShapeDeviceRects, !bRects.isEmpty,
-                           let cRects = otherEntry.clipShapeDeviceRects,   !cRects.isEmpty,
-                           otherEntry.parent != config.rootWindowId {
-                            _ = bRects; _ = cRects
-                            continue
-                        }
                         // Paint this window's own bg (with ParentRelative
                         // walk if backPixel is nil) over the FULL new
                         // clipList.
