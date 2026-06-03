@@ -203,8 +203,12 @@ final class ShapeOnDescendantTests: XCTestCase {
         XCTAssertLessThan(borderClipArea, 42 * 22,
                           "bounding shape should narrow borderClip below full borderBox")
 
-        // The fix: border-paint rects come from borderClip, not the full
-        // outer box. Sum their areas and compare to borderClip's area.
+        // Border-paint rects come from `borderClip - interiorBox` (matches
+        // R6 mi/dix: PW_BORDER paints over `borderClip - winSize` only,
+        // dix/window.c:1403). For this case interiorBox in top-level coords
+        // is (10,10)-(50,30) = 40×20 = 800. borderClip is the shape-narrowed
+        // 20×22 strip at (20,9)-(40,31). Their difference is two horizontal
+        // 20×1 strips (above and below the interior), area 40 total.
         let paints = session.mappedBackgroundPaints(topLevelId: parent, byteOrder: .lsbFirst)
         // borderPixel resolves to blackPixel == RGB(0,0,0); easy to filter.
         let borderPaints = paints.filter {
@@ -214,8 +218,10 @@ final class ShapeOnDescendantTests: XCTestCase {
         let borderArea: Int64 = borderPaints.reduce(0) {
             $0 + Int64($1.width) * Int64($1.height)
         }
-        XCTAssertEqual(borderArea, borderClipArea,
-                       "border-ring paints should sum to borderClip area, not full borderBox area")
+        XCTAssertLessThan(borderArea, Int64(borderClipArea),
+                          "border-ring paints should NOT cover the full borderClip — that would blast the interior with the border color where bg can't reach (children's areas)")
+        XCTAssertEqual(borderArea, 40,
+                       "ring is (borderClip - interiorBox) = two 20×1 strips above and below the interior")
     }
 
     // (Removed 2026-06-03 in phase 6 of DEVICE_COORDS_REFACTOR.md:

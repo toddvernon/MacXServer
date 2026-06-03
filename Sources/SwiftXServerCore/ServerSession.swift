@@ -2578,13 +2578,10 @@ public final class ServerSession: @unchecked Sendable {
 
 
 
-    /// Produce the paint rects for a single window. With borderWidth > 0,
-    /// emits the border ring drawn in borderPixel (the window's borderClip
-    /// region, which is borderBox narrowed by ancestor obscuring and any
-    /// SHAPE bounding shape), then a set of INNER rects (the content area,
-    /// clipped to the window's clipList) in backPixel. The inner-on-top-of-
-    /// outer ordering leaves only the ring visible. With borderWidth == 0,
-    /// emits only the clipped bg rects.
+    /// Produce the paint rects for a single window. Mirrors R6 mi/dix:
+    /// PW_BORDER paints over `borderClip - winSize` (just the ring) and
+    /// PW_BACKGROUND paints over `clipList` (the interior). The two
+    /// regions DON'T overlap, so order between them doesn't matter.
     ///
     /// Inner-rect clipping (added 2026-05-20) follows X.org's miPaintWindow
     /// invariant: bg fills only the window's visible interior (clipList).
@@ -2592,14 +2589,19 @@ public final class ServerSession: @unchecked Sendable {
     /// descendant windows — the dthelpview "form blue painted over white
     /// DisplayArea" path that produces image 1's all-blue look.
     ///
-    /// Border-ring borderClip clipping (added 2026-06-02) closes the gap
-    /// ledgered as SHORTCUTS line 52: pre-fix, the outer ring painted as
-    /// one unclipped rect over (w+2*bw, h+2*bw), which (a) ignored ancestor
-    /// obscuring and (b) ignored SHAPE — visible on xcalc, whose Athena
-    /// buttons set borderWidth=1 + borderPixel=black + an oval bounding
-    /// shape; the unclipped black ring painted on top of the
-    /// shape-narrowed inner bg, giving each button black blocks on the
-    /// left and right where the parent should have shown through.
+    /// Border-ring-not-borderClip (added 2026-06-03): R6 paints PW_BORDER
+    /// over `borderClip - winSize`, where `winSize` is the window's
+    /// interior region BEFORE children are subtracted (dix/window.c
+    /// SetWinSize). We approximate winSize as the interiorBox in device
+    /// coords. The earlier 2026-06-02 fix painted over the full
+    /// `borderClip`, which works for childless windows (subsequent bg
+    /// paint over `clipList` overpaints the interior portion of the
+    /// border), but breaks for windows WITH children: `clipList` excludes
+    /// children's borderClips, so bg never overpaints children's areas,
+    /// and the border-color blast stays visible. Symptom on xcalc: every
+    /// time the top-level was painted, all 40 child buttons went solid
+    /// black with the top-level's borderPixel (= 0x1 = black) until each
+    /// button's own paintRectsForWindow repainted them, one at a time.
     ///
     /// `(dx, dy)` is the window's content top-left in top-level pixel coords
     /// (already includes any ancestor offsets).
@@ -2609,7 +2611,43 @@ public final class ServerSession: @unchecked Sendable {
         let hasBorder = bw > 0 && entry.borderPixel != nil
         if hasBorder, let bp = entry.borderPixel {
             let borderColor = resolveColor(bp)
-            for box in entry.borderClip.rects {
+            // R6 mi/dix paints PW_BORDER over (borderClip - winSize) only —
+            // just the ring, NOT the whole borderClip. Our `borderClip` is
+            // the full visible bounding area (border + interior) and our
+            // `clipList` is the interior MINUS children's borderClips. The
+            // difference borderClip - clipList includes children's areas
+            // (border ring + children-interior), so painting border over
+            // borderClip blasts children with the parent's borderPixel.
+            // For a top-level with borderPixel = black + child windows
+            // (xcalc parent + 40 buttons), every child went solid black
+            // each time the top-level was painted.
+            //
+            // R6's `winSize` is the interior region BEFORE children are
+            // subtracted (dix/window.c:SetWinSize): parent-clipped box
+            // intersected with clipShape (if set). For Athena Command
+            // buttons, the clipShape is the inner stadium and the bounding
+            // shape is the outer stadium one pixel larger; using interiorBox
+            // alone (the rect) makes the border ring rectangular and leaves
+            // the top/bottom stadium connectors out of the painted set. The
+            // visible result was buttons that looked like `( ... )` — only
+            // the curved ends visible, top/bottom of the stadium missing.
+            let s = config.deviceScale
+            let interiorBoxDevice = BoxRec(
+                x1: Int32(dx) * s, y1: Int32(dy) * s,
+                x2: (Int32(dx) + Int32(entry.width)) * s,
+                y2: (Int32(dy) + Int32(entry.height)) * s
+            )
+            let baseDx = Int32(dx) * s
+            let baseDy = Int32(dy) * s
+            let winSize: Region = {
+                guard let clipShape = entry.clipShape else {
+                    return Region(box: interiorBoxDevice)
+                }
+                return clipShape.translated(dx: baseDx, dy: baseDy)
+                    .intersected(with: Region(box: interiorBoxDevice))
+            }()
+            let borderRing = entry.borderClip.subtracting(winSize)
+            for box in borderRing.rects {
                 let w = box.x2 - box.x1
                 let h = box.y2 - box.y1
                 guard w > 0, h > 0 else { continue }
