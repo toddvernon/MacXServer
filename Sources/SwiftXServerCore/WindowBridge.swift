@@ -62,6 +62,25 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// trips between window and pixmap stay pixel-lossless.
     var scaleFactor: Double { get }
 
+    /// DISPATCH_COALESCING_REFACTOR.md phase 1+ entry points. Each
+    /// drawing-related bridge method appends a deferred op to a
+    /// per-top-level queue instead of calling `DispatchQueue.main.async`
+    /// directly. `flushTopLevel(_:)` drains one top-level's queue and
+    /// dispatches its ops as a single main async block;
+    /// `flushAllDeferred()` does the same for every queued top-level
+    /// (phase 2 calls this at end of read batch).
+    ///
+    /// Phase 1 default: the bridge flushes immediately after every
+    /// append, preserving today's dispatch cadence — these entry points
+    /// are no-ops for callers because there's nothing pending by the
+    /// time they're called. Phase 2 moves the per-append flush to
+    /// `Listener.runAccepting` instead, at which point these methods
+    /// actually batch.
+    ///
+    /// Default no-op for mocks; only `CocoaWindowBridge` implements.
+    func flushTopLevel(_ topLevel: UInt32)
+    func flushAllDeferred()
+
     /// The client created a new top-level window (parent = root). The bridge
     /// records geometry; the actual NSWindow is created lazily on map.
     func registerTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32)
@@ -669,4 +688,6 @@ public extension WindowBridge {
     func setCursor(topLevel: UInt32, glyph: UInt16?) {}
     func setTopLevelWindowBackground(id: UInt32, color: RGB16) {}
     func reconfigureTopLevel(id: UInt32, geometry: TopLevelGeometry) {}
+    func flushTopLevel(_ topLevel: UInt32) {}
+    func flushAllDeferred() {}
 }

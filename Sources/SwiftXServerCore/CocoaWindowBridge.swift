@@ -96,6 +96,65 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private var windowClipLookups:   [UInt64: @Sendable (UInt32) -> [Framer.Rectangle]?] = [:]
     private var colorTableLookups:   [UInt64: @Sendable () -> ColorTable?] = [:]
 
+    // MARK: - Deferred main-thread op accumulator
+    //
+    // Phase 1 of DISPATCH_COALESCING_REFACTOR.md. Every bridge call that
+    // would normally do `DispatchQueue.main.async { ... }` instead
+    // appends a closure to this per-top-level queue, then calls
+    // `flushTopLevel(_:)`. In phase 1 the flush runs IMMEDIATELY after
+    // each append — same dispatch count, same behavior, just routed
+    // through a buffer. In phase 2, `flushTopLevel` calls move to
+    // `Listener.runAccepting`'s end-of-read-batch hook and the
+    // per-append flush goes away, so a whole batch of ops becomes one
+    // main-thread block per top-level.
+    //
+    // The closures are `@Sendable () -> Void`. They look up the view /
+    // backing context at run time inside themselves rather than
+    // capturing them, because capturing CGContext / NSView from the
+    // protocolQueue thread would be unsafe.
+    private let deferredOpsLock = NSLock()
+    private var deferredOps: [UInt32: [@Sendable () -> Void]] = [:]
+
+    /// Append a deferred op to a top-level's queue. Internal — used by
+    /// every bridge method that previously did its own
+    /// `DispatchQueue.main.async`.
+    private func appendDeferred(topLevel: UInt32, op: @escaping @Sendable () -> Void) {
+        deferredOpsLock.lock()
+        deferredOps[topLevel, default: []].append(op)
+        deferredOpsLock.unlock()
+    }
+
+    /// Drain one top-level's deferred ops and dispatch them as a single
+    /// `main.async` block. Phase 1: called immediately after every
+    /// `appendDeferred`, preserving today's dispatch cadence. Phase 2+:
+    /// called by `Listener.runAccepting` at end of read batch and by
+    /// any handler that needs to flush before reading the backing.
+    public func flushTopLevel(_ topLevel: UInt32) {
+        deferredOpsLock.lock()
+        let ops = deferredOps[topLevel] ?? []
+        deferredOps[topLevel] = nil
+        deferredOpsLock.unlock()
+        if ops.isEmpty { return }
+        DispatchQueue.main.async {
+            for op in ops { op() }
+        }
+    }
+
+    /// Drain every top-level's deferred ops. Phase 2 entry point for
+    /// `Listener.runAccepting` to call after each read-batch finishes
+    /// processing. Each non-empty top-level gets one `main.async` block.
+    public func flushAllDeferred() {
+        deferredOpsLock.lock()
+        let snapshot = deferredOps
+        deferredOps.removeAll(keepingCapacity: true)
+        deferredOpsLock.unlock()
+        for (_, ops) in snapshot where !ops.isEmpty {
+            DispatchQueue.main.async {
+                for op in ops { op() }
+            }
+        }
+    }
+
     public func registerPixmapBufferLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> PixelBuffer?) {
         lookupLock.lock(); defer { lookupLock.unlock() }
         pixmapBufferLookups[token] = lookup
@@ -234,7 +293,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // GC-clip-only so legacy tests still pass and so a draw on
             // a window the bridge doesn't know about still happens.
             let windowClip = self.lookupWindowClip(windowId)
-            DispatchQueue.main.async { [weak self] in
+            appendDeferred(topLevel: topLevel) { [weak self] in
                 guard let self = self,
                       let view = self.slot(topLevel)?.view,
                       let ctx = view.backing else { return }
@@ -243,6 +302,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 }
                 view.setNeedsDisplay(view.bounds)
             }
+            flushTopLevel(topLevel)
         case .pixmap(let id, let depth):
             guard let buffer = self.lookupPixmapBuffer(id) else { return }
             self.withClip(buffer.context, clipRectangles) {
@@ -1073,7 +1133,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
     public func clearArea(topLevel: UInt32, rects: [Framer.Rectangle], background: RGB16) {
         if rects.isEmpty { return }
-        DispatchQueue.main.async { [weak self] in
+        appendDeferred(topLevel: topLevel) { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
             // Caller passes device-coord rects (handleClearArea intersects
@@ -1093,6 +1153,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
+        flushTopLevel(topLevel)
     }
 
     /// Read pixels out of a drawable as 32-bit BGRA at LOGICAL X-coord scale.
@@ -1296,7 +1357,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         dstX: Int16, dstY: Int16,
         width: UInt16, height: UInt16
     ) {
-        DispatchQueue.main.async { [weak self] in
+        appendDeferred(topLevel: topLevel) { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view,
                   let ctx = view.backing,
@@ -1356,6 +1417,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
             view.setNeedsDisplay(view.bounds)
         }
+        flushTopLevel(topLevel)
     }
 
     public func drawPolyRectangle(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, rectangles: [Framer.Rectangle], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
@@ -2181,14 +2243,15 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     }
 
     public func setCursor(topLevel: UInt32, glyph: UInt16?) {
-        DispatchQueue.main.async { [weak self] in
+        appendDeferred(topLevel: topLevel) { [weak self] in
             guard let view = self?.slot(topLevel)?.view else { return }
             view.currentCursor = nsCursor(forXCursorGlyph: glyph)
         }
+        flushTopLevel(topLevel)
     }
 
     public func setTopLevelWindowBackground(id: UInt32, color: RGB16) {
-        DispatchQueue.main.async { [weak self] in
+        appendDeferred(topLevel: id) { [weak self] in
             guard let self = self, let slot = self.slot(id) else { return }
             // RGB16 stores values in the high byte (e.g., 0xFFFF for max).
             // NSColor takes 0..1 floats, so divide by 0xFFFF.
@@ -2201,10 +2264,11 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             // window's content area, NSWindow.backgroundColor is hidden).
             slot.view?.liveResizeBackground = CGColor(red: r, green: g, blue: b, alpha: 1.0)
         }
+        flushTopLevel(id)
     }
 
     public func setWindowBoundingShape(topLevel: UInt32, rects: [Framer.Rectangle]?) {
-        DispatchQueue.main.async { [weak self] in
+        appendDeferred(topLevel: topLevel) { [weak self] in
             guard let self = self, let slot = self.slot(topLevel) else { return }
             // `rects` is device-coord post-DEVICE_COORDS_REFACTOR; the view's
             // clip-path build divides by backingScale to map to points.
@@ -2223,6 +2287,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             }
             slot.view?.needsDisplay = true
         }
+        flushTopLevel(topLevel)
     }
 
     public func readDepth1MaskDevicePixels(pixmapId: UInt32) -> (pixels: [UInt32], width: Int, height: Int)? {
@@ -2243,7 +2308,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     }
 
     public func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {
-        DispatchQueue.main.async { [weak self] in
+        appendDeferred(topLevel: topLevel) { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
             // Window-bg paint rects are now in device coords
@@ -2264,6 +2329,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
+        flushTopLevel(topLevel)
     }
 
     /// (2026-05-25) Reverted. Caused widget bg colors to bleed into
