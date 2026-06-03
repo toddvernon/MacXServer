@@ -1097,13 +1097,20 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
-            self.withClip(ctx, nil) {
-                applyFill(ctx, background)
-                for r in rects {
-                    ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
-                                    width: CGFloat(r.width), height: CGFloat(r.height)))
-                }
+            // Caller passes device-coord rects (handleClearArea intersects
+            // the request rect with the device-coord clipList). Fill under
+            // identity CTM so each rect lands at exact device pixels.
+            ctx.saveGState()
+            ctx.setShouldAntialias(false)
+            ctx.interpolationQuality = .none
+            let savedCTM = ctx.ctm
+            ctx.concatenate(savedCTM.inverted())
+            applyFill(ctx, background)
+            for r in rects {
+                ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
+                                width: CGFloat(r.width), height: CGFloat(r.height)))
             }
+            ctx.restoreGState()
             view.setNeedsDisplay(view.bounds)
         }
     }

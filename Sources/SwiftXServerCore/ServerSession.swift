@@ -1995,12 +1995,18 @@ public final class ServerSession: @unchecked Sendable {
             if !paintRects.isEmpty {
                 bridge?.paintWindowRects(topLevel: id, rects: paintRects)
             }
-            // Expose for the FULL new clipList in window-local coords.
+            // Expose for the FULL new clipList in window-local logical
+            // coords. newClip is device-coord; scale each rect to logical
+            // first, then subtract the descendant's logical offset.
             guard entry.eventMask & exposureMask != 0 else { continue }
-            let localRects = newClip.rects.map {
-                BoxRec(
-                    x1: $0.x1 - Int32(dx), y1: $0.y1 - Int32(dy),
-                    x2: $0.x2 - Int32(dx), y2: $0.y2 - Int32(dy)
+            let s = config.deviceScale
+            let dxI = Int32(dx)
+            let dyI = Int32(dy)
+            let localRects = newClip.rects.map { box -> BoxRec in
+                let logical = box.scaledToLogical(by: s)
+                return BoxRec(
+                    x1: logical.x1 - dxI, y1: logical.y1 - dyI,
+                    x2: logical.x2 - dxI, y2: logical.y2 - dyI
                 )
             }
             log?.log("  → emit Expose on descendant 0x\(String(descId, radix: 16)) (\(localRects.count) rect(s), full-new-clipList)")
@@ -2243,10 +2249,14 @@ public final class ServerSession: @unchecked Sendable {
     /// the border-inclusive borderClip back onto the interior.
     private func interiorVisibleRegion(of id: UInt32, entry: WindowEntry) -> Region {
         guard let (_, dx, dy) = topLevelAndOffset(for: id) else { return .empty }
+        // borderClip is device-coord (DEVICE_COORDS_REFACTOR.md); build the
+        // matching interior box in device coords too. dx/dy from
+        // topLevelAndOffset are logical Int16; entry.width/height likewise.
+        let s = config.deviceScale
         let interiorBox = BoxRec(
-            x1: Int32(dx), y1: Int32(dy),
-            x2: Int32(dx) + Int32(entry.width),
-            y2: Int32(dy) + Int32(entry.height)
+            x1: Int32(dx) * s, y1: Int32(dy) * s,
+            x2: Int32(dx) * s + Int32(entry.width)  * s,
+            y2: Int32(dy) * s + Int32(entry.height) * s
         )
         return entry.borderClip.intersected(with: Region(box: interiorBox))
     }
@@ -2266,11 +2276,19 @@ public final class ServerSession: @unchecked Sendable {
     func exposeRectsForWindow(_ windowId: UInt32) -> [BoxRec] {
         guard let entry = windows.get(windowId) else { return [] }
         guard let (_, dx, dy) = topLevelAndOffset(for: windowId) else { return [] }
+        // clipList is device-coord (DEVICE_COORDS_REFACTOR.md); Expose event
+        // payload on the wire is logical X-protocol pixels (UInt16). Scale
+        // each rect back to logical with the conservative ceil/floor
+        // convention (every logical pixel with any device-pixel coverage
+        // is included), then translate to window-local logical coords by
+        // subtracting (dx, dy).
+        let s = config.deviceScale
         let dxI = Int32(dx)
         let dyI = Int32(dy)
-        return entry.clipList.rects.map {
-            BoxRec(x1: $0.x1 - dxI, y1: $0.y1 - dyI,
-                   x2: $0.x2 - dxI, y2: $0.y2 - dyI)
+        return entry.clipList.rects.map { box in
+            let logical = box.scaledToLogical(by: s)
+            return BoxRec(x1: logical.x1 - dxI, y1: logical.y1 - dyI,
+                          x2: logical.x2 - dxI, y2: logical.y2 - dyI)
         }
     }
 
@@ -2346,13 +2364,20 @@ public final class ServerSession: @unchecked Sendable {
                     bridge?.paintWindowRects(topLevel: topLevelId, rects: paintRects)
                 }
 
-                // Emit Expose to this ancestor over its portion (window-
-                // local coords).
+                // Emit Expose to this ancestor over its portion. Expose
+                // wire payload is window-local LOGICAL pixels; `portion`
+                // is device-coord (DEVICE_COORDS_REFACTOR.md). Scale each
+                // rect to logical first, then translate to window-local
+                // by subtracting the ancestor's logical offset.
                 if entry.eventMask & MockWindowBridge.exposureMask != 0 {
-                    let localRects = portion.rects.map {
-                        BoxRec(
-                            x1: $0.x1 - Int32(dx), y1: $0.y1 - Int32(dy),
-                            x2: $0.x2 - Int32(dx), y2: $0.y2 - Int32(dy)
+                    let s = config.deviceScale
+                    let dxI = Int32(dx)
+                    let dyI = Int32(dy)
+                    let localRects = portion.rects.map { box -> BoxRec in
+                        let logical = box.scaledToLogical(by: s)
+                        return BoxRec(
+                            x1: logical.x1 - dxI, y1: logical.y1 - dyI,
+                            x2: logical.x2 - dxI, y2: logical.y2 - dyI
                         )
                     }
                     MockWindowBridge.emitExposesForRects(
@@ -3538,10 +3563,18 @@ public final class ServerSession: @unchecked Sendable {
         // pixel right through any descendant windows whose clipList ought
         // to mask them — the dthelpview 2026-05-19 "leftover blue button
         // rectangles inside the white DisplayArea on expand" bug.
+        //
+        // clipList is device-coord (DEVICE_COORDS_REFACTOR.md); build reqBox
+        // in device coords too by scaling r.x/r.y/fillW/fillH/dx/dy. The
+        // clipped output rects pass through to the bridge as device-coord
+        // (Int16 storage; clamp at conversion). The bridge applies them at
+        // identity CTM in withClip.
+        let s = config.deviceScale
         let reqBox = BoxRec(
-            x1: Int32(r.x) + Int32(dx), y1: Int32(r.y) + Int32(dy),
-            x2: Int32(r.x) + Int32(dx) + Int32(fillW),
-            y2: Int32(r.y) + Int32(dy) + Int32(fillH)
+            x1: (Int32(r.x) + Int32(dx)) * s,
+            y1: (Int32(r.y) + Int32(dy)) * s,
+            x2: (Int32(r.x) + Int32(dx) + Int32(fillW)) * s,
+            y2: (Int32(r.y) + Int32(dy) + Int32(fillH)) * s
         )
         let clippedRects: [Framer.Rectangle]
         if reqBox.isEmpty {
@@ -4749,12 +4782,19 @@ public final class ServerSession: @unchecked Sendable {
                         if !paintRects.isEmpty {
                             bridge?.paintWindowRects(topLevel: topId, rects: paintRects)
                         }
-                        // Expose the FULL new clipList in window-local coords.
+                        // Expose the FULL new clipList in window-local logical
+                        // coords. newClip is device-coord; scale each rect to
+                        // logical and translate by the otherEntry's logical
+                        // offset (odx, ody).
                         if otherEntry.eventMask & MockWindowBridge.exposureMask != 0 {
-                            let localRects = newClip.rects.map {
-                                BoxRec(
-                                    x1: $0.x1 - Int32(odx), y1: $0.y1 - Int32(ody),
-                                    x2: $0.x2 - Int32(odx), y2: $0.y2 - Int32(ody)
+                            let s = config.deviceScale
+                            let odxI = Int32(odx)
+                            let odyI = Int32(ody)
+                            let localRects = newClip.rects.map { box -> BoxRec in
+                                let logical = box.scaledToLogical(by: s)
+                                return BoxRec(
+                                    x1: logical.x1 - odxI, y1: logical.y1 - odyI,
+                                    x2: logical.x2 - odxI, y2: logical.y2 - odyI
                                 )
                             }
                             MockWindowBridge.emitExposesForRects(
