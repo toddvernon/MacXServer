@@ -44,6 +44,16 @@ public final class MotifFrameView: NSView {
     /// frame stay with `self`.
     public let clientView: NSView
 
+    /// Pointer-moved handler used while the cursor is over the FRAME
+    /// CHROME (not the X client area — the clientView gets its own
+    /// mouseMoved). Bridge installs this so the session's global pointer
+    /// cache keeps updating across the chrome and root-pollers like xeyes
+    /// don't freeze their pupils while the cursor is over the frame.
+    /// Args: (x, y in clientView-local X-logical pixels — may be negative
+    /// or exceed the client size, since the chrome is outside it; raw
+    /// modifier flags).
+    public var pointerMovedHandler: ((Int16, Int16, UInt) -> Void)?
+
     public override var isFlipped: Bool { true }
 
     public init(frame frameRect: NSRect, clientView: NSView) {
@@ -380,6 +390,39 @@ public final class MotifFrameView: NSView {
         if let o = dragOrigin, let wo = dragWindowOrigin {
             window?.setFrameOrigin(NSPoint(x: wo.x + now.x - o.x, y: wo.y + now.y - o.y))
         }
+    }
+
+    public override func mouseMoved(with event: NSEvent) {
+        guard let handler = pointerMovedHandler else { return }
+        // Report the cursor in clientView-local X-logical pixels. Outside
+        // the client rect (which is always the case here since the chrome
+        // is around it) at least one coord is negative or beyond width/
+        // height — that's intentional. The session translates these to
+        // root coords via the top-level's WM-emulation origin and pushes
+        // to the bridge's global pointer cache.
+        let pointsInClient = clientView.convert(event.locationInWindow, from: nil)
+        let backingScale = window?.backingScaleFactor ?? 2.0
+        let scale = (clientView as? FlippedXView)?.scaleFactor ?? 1.0
+        let lx = Int16(clamping: Int((pointsInClient.x * backingScale / CGFloat(scale)).rounded()))
+        let ly = Int16(clamping: Int((pointsInClient.y * backingScale / CGFloat(scale)).rounded()))
+        handler(lx, ly, event.modifierFlags.rawValue)
+    }
+
+    /// Install an always-active tracking area covering the whole frame
+    /// (including chrome). Without it, AppKit only delivers mouseMoved
+    /// while a button is held; root-pollers like xeyes need bare-hover
+    /// updates so their last-known root_x/root_y stays fresh while the
+    /// cursor is over the frame chrome.
+    public override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
     }
 
     public override func mouseUp(with event: NSEvent) {

@@ -556,6 +556,18 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// time and whenever ChangeWindowAttributes flips CWBackPixel on a
     /// top-level.
     func setTopLevelWindowBackground(id: UInt32, color: RGB16)
+
+    /// Server-global pointer cache. The bridge is a per-process singleton
+    /// shared by every connected session; sessions push the cursor's X-root
+    /// position here on every pointer event for any top-level THAT session
+    /// owns, and read it back when answering `QueryPointer` so a client
+    /// whose own window is not currently under the pointer still gets a
+    /// fresh root_x/root_y. Without this, xeyes (and any other root-poller)
+    /// freezes its pupils whenever the cursor crosses into another
+    /// session's window or our Motif frame chrome — the per-session cache
+    /// only updates from events that target the session's own NSWindows.
+    func updateGlobalPointer(rootX: Int16, rootY: Int16)
+    func queryGlobalPointer() -> (Int16, Int16)?
 }
 
 /// A single window-background paint: an absolute rect in top-level pixel
@@ -617,6 +629,8 @@ public extension WindowBridge {
     func bell() {}
     func startCrossWindowDragTracking() {}
     func stopCrossWindowDragTracking() {}
+    func updateGlobalPointer(rootX: Int16, rootY: Int16) {}
+    func queryGlobalPointer() -> (Int16, Int16)? { nil }
     func clearArea(topLevel: UInt32, rects: [Rectangle], background: RGB16) {}
     func setWindowClipLookup(_ lookup: @escaping @Sendable (UInt32) -> [Rectangle]) {}
     func registerWindowClipLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> [Rectangle]?) {}

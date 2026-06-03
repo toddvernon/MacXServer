@@ -864,6 +864,7 @@ public final class ServerSession: @unchecked Sendable {
         lastPointerTopLevel = topLevel
         lastPointerXY = (x, y)
         let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
+        bridge?.updateGlobalPointer(rootX: rx, rootY: ry)
         let pointerWindow = deepestMappedWindow(topLevel: topLevel, x: x, y: y)
         let from = currentPointerWindow[topLevel]
         if from != pointerWindow {
@@ -1093,9 +1094,23 @@ public final class ServerSession: @unchecked Sendable {
         guard let order = byteOrder else { return }
         guard windows.get(topLevel) != nil else { return }
         currentModifierState = USKeymap.translateModifiers(modifierFlags)
+        let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
+        bridge?.updateGlobalPointer(rootX: rx, rootY: ry)
+        // The Motif frame chrome path delivers events with x,y OUTSIDE the
+        // top-level's X-content bounds (negative or beyond width/height).
+        // We update the bridge's global pointer cache above so xeyes sees
+        // a fresh root position, but skip the deepestMappedWindow walk +
+        // crossing-emit chain — the cursor isn't in any X window,
+        // FlippedXView's mouseExited already cleared currentPointerWindow,
+        // and re-emitting EnterNotify on the top-level here would be
+        // spurious. Local cache (lastPointerXY/TopLevel) stays at the
+        // last in-bounds value so grab-transition crossings still compute
+        // sensible root coords.
+        guard let entry = windows.get(topLevel) else { return }
+        guard x >= 0, y >= 0,
+              x < Int16(entry.width), y < Int16(entry.height) else { return }
         lastPointerTopLevel = topLevel
         lastPointerXY = (x, y)
-        let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
         let target = deepestMappedWindow(topLevel: topLevel, x: x, y: y)
         let from = currentPointerWindow[topLevel]
         if from != target {
@@ -1161,6 +1176,9 @@ public final class ServerSession: @unchecked Sendable {
         // No-op here to avoid emitting a spurious second Enter.
         if currentPointerWindow[topLevel] != nil { return }
         let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
+        bridge?.updateGlobalPointer(rootX: rx, rootY: ry)
+        lastPointerTopLevel = topLevel
+        lastPointerXY = (x, y)
         let target = deepestMappedWindow(topLevel: topLevel, x: x, y: y)
         currentPointerWindow[topLevel] = target
         emitCrossings(topLevel: topLevel, from: nil, to: target, rootX: rx, rootY: ry)
@@ -1185,6 +1203,9 @@ public final class ServerSession: @unchecked Sendable {
         guard let from = currentPointerWindow[topLevel] else { return }
         currentPointerWindow[topLevel] = nil
         let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
+        bridge?.updateGlobalPointer(rootX: rx, rootY: ry)
+        lastPointerTopLevel = topLevel
+        lastPointerXY = (x, y)
         emitCrossings(topLevel: topLevel, from: from, to: nil, rootX: rx, rootY: ry)
     }
 
@@ -5939,8 +5960,12 @@ public final class ServerSession: @unchecked Sendable {
             }
             if let stl = topLevelAncestor(of: r.dstWindow) {
                 let (dx, dy) = absoluteOrigin(of: r.dstWindow, topLevel: stl)
+                let lx = dx &+ r.dstX
+                let ly = dy &+ r.dstY
                 lastPointerTopLevel = stl
-                lastPointerXY = (dx &+ r.dstX, dy &+ r.dstY)
+                lastPointerXY = (lx, ly)
+                let (rx, ry) = rootCoords(topLevel: stl, localX: lx, localY: ly)
+                bridge?.updateGlobalPointer(rootX: rx, rootY: ry)
             }
 
         case .sendEvent(let r):
@@ -6508,27 +6533,49 @@ public final class ServerSession: @unchecked Sendable {
             // window. Per X spec same-screen=true unless the pointer is
             // on a different screen — single-screen for us.
             //
-            // lastPointerXY is stored top-level-local (NSWindow coords);
-            // rootCoords adds the top-level's WM-emulation root offset so
-            // the reply matches the convention every other root_x/root_y
-            // field uses.
-            let (px, py) = lastPointerXY ?? (0, 0)
-            var winX: Int16 = px
-            var winY: Int16 = py
-            var child: UInt32 = 0
-            var rxOut: Int16 = px
-            var ryOut: Int16 = py
-            if let topLevel = lastPointerTopLevel {
-                let (rx, ry) = rootCoords(topLevel: topLevel, localX: px, localY: py)
+            // Prefer the server-global pointer cache (bridge-owned) so
+            // root-pollers like xeyes still get fresh positions when the
+            // cursor is over another session's window or our Motif frame
+            // chrome. Fall back to this session's local cache only if the
+            // global hasn't been written yet.
+            let rxOut: Int16
+            let ryOut: Int16
+            if let g = bridge?.queryGlobalPointer() {
+                rxOut = g.0
+                ryOut = g.1
+            } else if let lpXY = lastPointerXY, let lpTL = lastPointerTopLevel {
+                let (rx, ry) = rootCoords(topLevel: lpTL, localX: lpXY.0, localY: lpXY.1)
                 rxOut = rx
                 ryOut = ry
-                if let stl = topLevelAncestor(of: r.window), stl == topLevel {
-                    let (qx, qy) = absoluteOrigin(of: r.window, topLevel: stl)
-                    winX = px &- qx
-                    winY = py &- qy
+            } else {
+                rxOut = 0
+                ryOut = 0
+            }
+            // winX/winY are relative to the queried window's root origin.
+            // child is the deepest mapped descendant in the queried
+            // window's subtree (on THIS session) that contains the pointer,
+            // or 0 if the pointer is not in this session's tree under
+            // r.window. When the deepest hit is r.window itself, the spec
+            // says child = None.
+            var winX: Int16 = rxOut
+            var winY: Int16 = ryOut
+            var child: UInt32 = 0
+            if let stl = topLevelAncestor(of: r.window), let stlEntry = windows.get(stl) {
+                let (qLocalX, qLocalY) = absoluteOrigin(of: r.window, topLevel: stl)
+                let qRootX = stlEntry.x &+ qLocalX
+                let qRootY = stlEntry.y &+ qLocalY
+                winX = rxOut &- qRootX
+                winY = ryOut &- qRootY
+                // Only attempt child lookup when the pointer is inside the
+                // top-level's bounds — outside that, deepestMappedWindow
+                // would return the top-level itself by default.
+                let localX = rxOut &- stlEntry.x
+                let localY = ryOut &- stlEntry.y
+                if localX >= 0, localY >= 0,
+                   localX < Int16(stlEntry.width), localY < Int16(stlEntry.height) {
+                    let deepest = deepestMappedWindow(topLevel: stl, x: localX, y: localY)
+                    if deepest != r.window { child = deepest }
                 }
-                child = currentPointerWindow[topLevel] ?? 0
-                if child == r.window { child = 0 }
             }
             var mask: UInt16 = currentModifierState
             for b in heldButtons where b >= 1 && b <= 5 {

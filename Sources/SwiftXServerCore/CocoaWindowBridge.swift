@@ -115,6 +115,25 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private let deferredOpsLock = NSLock()
     private var deferredOps: [UInt32: [@Sendable () -> Void]] = [:]
 
+    /// Server-global pointer cache in X-root coords. Written by whichever
+    /// session owns the top-level under the cursor; read by every session
+    /// when answering QueryPointer. See the protocol method's comment for
+    /// the xeyes/root-poller motivation.
+    private let globalPointerLock = NSLock()
+    private var globalPointerRoot: (Int16, Int16)?
+
+    public func updateGlobalPointer(rootX: Int16, rootY: Int16) {
+        globalPointerLock.lock()
+        globalPointerRoot = (rootX, rootY)
+        globalPointerLock.unlock()
+    }
+
+    public func queryGlobalPointer() -> (Int16, Int16)? {
+        globalPointerLock.lock()
+        defer { globalPointerLock.unlock() }
+        return globalPointerRoot
+    }
+
     /// Append a deferred op to a top-level's queue. Internal — used by
     /// every bridge method that previously did its own
     /// `DispatchQueue.main.async`.
@@ -712,6 +731,17 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 let motif = MotifWindow(contentRect: contentRect, clientView: view)
                 motif.buttonStyle = motifButtonStyle
                 motif.windowTitle = pendingTitle
+                // mouseMoved over the frame chrome must keep the bridge's
+                // global pointer cache fresh so root-pollers (xeyes) don't
+                // freeze when the cursor crosses out of the X content rect
+                // into the frame. Route through the same firePointerMoved
+                // fan-out as FlippedXView; coords are clientView-local
+                // (FlippedXView-local), which the session interprets as
+                // top-level-local and converts to root via WM-emulation
+                // origin.
+                motif.frameView.pointerMovedHandler = { [weak self] x, y, mods in
+                    self?.firePointerMoved(id: id, x: x, y: y, mods: mods)
+                }
                 win = motif
             } else {
                 win = NSWindow(contentRect: contentRect, styleMask: style, backing: .buffered, defer: false)
