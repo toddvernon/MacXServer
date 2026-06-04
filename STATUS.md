@@ -1,71 +1,100 @@
-# Status 2026-06-03 (end of day)
+# Status 2026-06-03 (end of day, second update)
 
-The xcalc resize "wonky intermediate state" turned out to be a
-two-day-old paint-region bug in `paintRectsForWindow`, not a dispatch
-coalescing problem. The fix is two lines; the path to finding it
-detoured through almost the entire DISPATCH_COALESCING_REFACTOR.
+Three landings today, all in the "make the server feel right across
+multiple sessions" bucket. The xcalc paint-region investigation from
+earlier this morning is in the previous status snapshot (now in
+git log, commit `168193a`); today's afternoon work is below.
 
 ## What landed
 
-`99c957c` -- paint PW_BORDER over `(borderClip - winSize)`, matches R6
-mi/dix `dix/window.c:1403`. winSize = `clipShape ∩ interiorBox` when a
-clipShape is set, otherwise interiorBox. The earlier 2026-06-02 fix
-that narrowed border paint to `entry.borderClip.rects` was the right
-direction but didn't go far enough -- it still painted border across
-the children's areas for a top-level with children, and the bg paint
-(over `clipList`, which has children's borderClips subtracted) never
-reached those children's areas to overpaint. Result: every time the
-xcalc top-level was painted on resize, all 40 child buttons went solid
-black with the top-level's borderPixel (= 0x1 = black) until each
-button's own paintRectsForWindow repainted it left-to-right
-top-to-bottom.
+### `9e2df18` -- xeyes tracks across sessions + over Motif frame chrome
 
-Same commit also includes the shape-aware winSize, because the first
-pass used `interiorBox` (the rect) for winSize, which left the
-top/bottom of the stadium border un-painted on shaped buttons --
-visible as `( label )` ghost outlines. Athena Command sets both
-bounding and clip shape; using `clipShape ∩ interiorBox` makes the
-border ring trace the stadium curve all the way around.
+Root cause: each `ServerSession` had a per-session `lastPointerXY` that
+only updated from mouseMoved events on that session's own NSWindows.
+xeyes (or any XQueryPointer poller) saw stale coords whenever the cursor
+crossed into a different session's window or our Motif frame chrome.
 
-Validated end-to-end on the Sun: cadence and final pixels match
-Sun-on-Sun visually.
+Fix: server-global pointer cache on `CocoaWindowBridge` (it's already a
+per-process singleton). All sessions push X-root coords to it on every
+pointer-update path; `QueryPointer` reads from it. Added `mouseMoved` +
+an active-always tracking area to `MotifFrameView` so the cursor stays
+tracked while it's over frame chrome on the same NSWindow.
 
-Archived `DISPATCH_COALESCING_REFACTOR.md`. Phase 1 (accumulator
-plumbing, `a4ff45f`) stays on main -- it's functionally a no-op with
-per-call flush in place. Phases 2-5 aren't pursued. Today's
-investigation showed our redraw cadence already matches Sun's once the
-paint regions are right; the bottleneck was visible-pixel correctness,
-not dispatch count.
+Caught a subtle bug while wiring it up: out-of-bounds frame-chrome
+events would have triggered a spurious EnterNotify on the top-level
+(FlippedXView's mouseExited had already cleared `currentPointerWindow`).
+Added a bounds guard in `handlePointerMoved` that runs *after* the
+global-cache update but *before* the deepestMappedWindow walk.
 
-## Test update
+Pre-existing limitation kept: cursor over third-party Mac windows while
+our server is foreground still freezes the cache. That one needs a
+CGEventTap / accessibility hook, out of scope.
 
-`testBorderRingPaintsClippedToBorderClip` had been asserting the
-2026-06-02 behavior (border paints sum to borderClip area). The
-assertion is now `< borderClipArea` plus a specific value for the
-ring area (40px² for the test geometry, two 20×1 strips above and
-below the interior). Updated and passing in the 1262-test sweep.
+### `d246604` -- composite chrome thinning replaces per-dialog enumeration
+
+The seed for `~/.swiftx-resources` used to enumerate ~30 dt-app dialog
+instance names (Dtcalc*rframe*, Dtcalc*frframe*, Dtterm*terminal*,
+Dtpad*Warn*, ...) and set shadowThickness / highlightThickness /
+defaultButtonShadowThickness to 1 on each. Collapsed to 12 global
+`*XmPushButton.shadowThickness: 1`-style rules. Safe against quickplot
+because XtSetArg pins in its own source (about_dialog.c:178,
+legend_dialog.c:483) win over Xrm regardless of rule specificity.
+
+Also added `*XmPushButton.borderWidth: 1` to mirror what quickplot
+does per-button via XtSetArg in dialog.c:738-755, and deliberately
+left `defaultButtonShadowThickness` unset:
+
+  - Quickplot's Form-based dialogs: dbst=0 -> no BulletinBoard machinery
+    fires -> default button has no separate ring, just the bevel.
+  - dt-apps (XmTemplateDialog / XmMessageBox / XmDialog, BulletinBoard
+    derivatives): BulletinBoard auto-sets dbst > 0 via
+    ShowAsDefault(DEFAULT_READY), which triggers AdjustHighLightThickness
+    silently inflating highlight_thickness by Xm3D_ENHANCE_PIXEL (= 2,
+    hardcoded in `reference/motif/lib/Xm/XmP.h:161`). That's the 2-px
+    "trough" we see on dtterm's OK button between the button bevel and
+    the default-button ring. Tried setting dbst=1 in Xrm directly to
+    bypass the auto-inflation (Motif source suggested it would); the
+    inflation didn't budge. Documented as a Motif-level artifact we
+    accept.
+
+Net effect on the seed: ~290 lines of per-dialog enumeration collapse
+to 12 global rules. Tests for the load-bearing fontList rules (Helvetica
+class set, Courier for Dtpad) still pass; 1262 tests green.
+
+### `a0d0612` -- launcher seed docs `$HOME` vs `~` gotcha
+
+Live debugging: u5 launcher for quickplot was failing with
+`~/dev/quickplot/quickplot`. Cause: we force `/bin/sh -c` on the remote
+side, and `/bin/sh` on a vintage Sun is often the original Bourne shell
+which doesn't do tilde expansion (POSIX feature added later). The user's
+interactive csh/ksh login handled `~` fine; `/bin/sh` didn't. Fix in
+the launcher file is `$HOME/dev/quickplot/quickplot` (variable expansion
+works in every shell back to v7). Documented in the seed comment along
+with the single-quote-breaks-the-wrapper warning.
 
 ## Carrying forward
 
 - AllocColor pixel-value drift on cross-session replay (still parked).
 - xmmap blit-on-move (Step F).
-- The Preferences Display Size radio (Auto / Comfortable / Compact)
-  shipped 2026-06-02 -- still wants live Sun-box validation. Today's
-  paint fix doesn't touch it.
-- Resize-time delta cascade and ShapeMask flow: the chain still works
-  correctly but the journey today exposed how interleaved
-  `(ConfigureWindow, ShapeMask Bounding, ShapeMask Clip)` cascades
-  are. Worth re-reading the cascade logic next time we touch shaped
-  widgets -- it's load-bearing and subtle.
+- Preferences Display Size radio (Auto / Comfortable / Compact)
+  shipped 2026-06-02 -- still wants live Sun-box validation.
+- Cursor over third-party Mac windows while server is foreground:
+  needs CGEventTap or accessibility hook. Low priority; the in-session
+  + Motif-frame coverage we shipped today handles every case where
+  it actually matters for X-client tracking.
+- dt-app default-button trough is now documented as a Motif-internal
+  artifact. If we ever want to truly fix it, the answer lives in
+  Motif's AdjustHighLightThickness (PushBG.c:2857); would require
+  patching/replacing Motif's default-button setup machinery, not Xrm.
+- Bigger picture: today validated the silent-lie-audit recipe
+  (memory `feedback_silent_lie_audit_recipe`) -- the server-global
+  pointer cache was a "hidden lie" via stale per-session cache; the
+  user noticed the wrong behavior in xeyes and we traced it cleanly.
 
-## What today's investigation cost
+## What today's afternoon investigation cost
 
-About a session of deep digging into the wrong layer (dispatch
-coalescing, deferred-op accumulator semantics, end-of-batch vs
-per-call flush) before the user's "watch sun-on-sun, the BG isn't
-black" observation refocused the search on the actual bug. The Phase
-2 work was speculative-but-buildable; the fact that it shipped and
-"worked" without immediately revealing this bug is what kept us in
-the wrong layer for so long. Lesson archived: validate against the
-gold standard (Sun-on-Sun) BEFORE building optimization layers on top
-of an assumed-correct paint stage.
+About a session on the Motif default-button ring/trough analysis,
+reading PushBG.c / BBUtil.c / BulletinB.c carefully before realizing
+the trough is a Motif-internal hardcoded constant. The investigation
+was worth the time: now documented in the resources seed so future-me
+doesn't try the same dbst-via-Xrm experiment again.
