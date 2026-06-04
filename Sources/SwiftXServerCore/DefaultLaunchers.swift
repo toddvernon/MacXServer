@@ -34,6 +34,21 @@ public enum DefaultLaunchers {
         # development, but it's plaintext, so don't use it on a shared
         # machine.
         #
+        # `command` is a shell command line, passed verbatim to /bin/sh -c
+        # on the remote host. Spaces are arg separators; double-quotes and
+        # redirections work. Two gotchas worth knowing:
+        #
+        #   - Use $HOME, not ~, for the remote user's home directory. On
+        #     vintage Suns (SunOS 4 / older Solaris) /bin/sh is the original
+        #     Bourne shell, which doesn't do tilde expansion. $HOME works
+        #     in every shell back to v7 sh, so it's the bulletproof form.
+        #     Absolute paths work too, obviously.
+        #   - Single quotes in `command` break the local wrapper, which
+        #     wraps your line in 'DISPLAY=...; nohup <command> ...' to set
+        #     up the X display on the remote side. Use double-quotes or
+        #     the standard '\''-escape idiom if you need a literal single
+        #     quote.
+        #
         # Example:
         #
         # [host:u5]
