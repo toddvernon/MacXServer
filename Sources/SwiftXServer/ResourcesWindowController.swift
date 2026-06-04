@@ -15,7 +15,7 @@ final class ResourcesWindowController: NSWindowController {
         let hostingView = NSHostingView(rootView: ResourcesPanelView(path: path))
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 580),
+            contentRect: NSRect(x: 0, y: 0, width: 1520, height: 1160),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .utilityWindow],
             backing: .buffered,
             defer: false
