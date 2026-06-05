@@ -4624,7 +4624,11 @@ public final class ServerSession: @unchecked Sendable {
                 // "Step F" for prior-attempt history and the bleed regression
                 // that caused the first revert.
                 let isPureMove = posChanged && !sizeChanged
-                let blitPureMoveEnabled = ProcessInfo.processInfo.environment["SWIFTX_BLIT_PURE_MOVE"] == "1"
+                // Default ON as of 2026-06-04 — xmmap + dtfile validated;
+                // set SWIFTX_BLIT_PURE_MOVE=0 to fall back to the over-emit
+                // path if a regression turns up in dtpad/quickplot or any
+                // other cascading-pure-move app. See SHORTCUTS Step F.
+                let blitPureMoveEnabled = ProcessInfo.processInfo.environment["SWIFTX_BLIT_PURE_MOVE"] != "0"
                 var blittedPureMove = false
                 var pureMoveDeviceDx: Int32 = 0
                 var pureMoveDeviceDy: Int32 = 0
