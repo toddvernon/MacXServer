@@ -1,27 +1,24 @@
 # Status 2026-06-04
 
-Two landings today:
+Four landings today:
 
 1. **Resources editor panel doubled** (`a2c358a`). One-line cosmetic
    tweak: initial size 760×580 → 1520×1160. Min size unchanged.
 
-2. **Step F bit-gravity blit revived behind `SWIFTX_BLIT_PURE_MOVE=1`.**
-   The "scrolling regions leave ghost content" bug in xmmap / dtfile
-   tracked down to our `handleConfigureWindow` doing no framebuffer
-   blit on pure-move and instead over-emitting Expose for the full
-   new clipList. xmmap (1000×1000 canvas scrolled in a viewport, with
-   Motif label widget children) shows the symptom most clearly: drag
-   the scrollbar, get cascading ghost trails of every label widget at
-   every prior position. Per SHORTCUTS Step F's documented exit plan,
-   the fix path was (a) opt-in flag, (b) revive `_unused_blitWindowRegion`,
+2. **Step F bit-gravity blit revived** (`aad3689`). The "scrolling
+   regions leave ghost content" bug in xmmap / dtfile tracked down to
+   our `handleConfigureWindow` doing no framebuffer blit on pure-move
+   and instead over-emitting Expose for the full new clipList. xmmap
+   (1000×1000 canvas scrolled in a viewport, with Motif label widget
+   children) shows the symptom most clearly: drag the scrollbar, get
+   cascading ghost trails of every label widget at every prior
+   position. Per SHORTCUTS Step F's documented exit plan, the fix
+   path was (a) opt-in flag, (b) revive `_unused_blitWindowRegion`,
    (c) clip paint-rects strictly to moved widget's clipList, (d) per-
    gravity-class processing, (e) live-Sun validation. Steps a-c shipped
-   today, gated under the env var. xmmap and dtfile both render cleanly
-   with the flag on, including discrete page-downs, thumb drags, and
-   partial-visibility descendants crossing the viewport edge. Default
-   stays OFF until dtpad / quickplot get the same Sun-side validation
-   (those are what the 2026-05-25 attempt regressed). SHORTCUTS Step F
-   entry updated to reflect "shipped opt-in; pending validation."
+   today. xmmap and dtfile both render cleanly with the flag on,
+   including discrete page-downs, thumb drags, and partial-visibility
+   descendants crossing the viewport edge.
 
    Six iterations to land this:
    - initial blit gating + descendant-suppress + Expose-delta path
@@ -43,14 +40,42 @@ Two landings today:
    (pure-move branch in handleConfigureWindow), `SHORTCUTS.md` (Step F
    entry rewritten).
 
+3. **External-facing names swept to macXserver / macxcapture** (`f4a0cb5`).
+   Settled-name consistency pass: `/tmp/swift-x-captures` →
+   `/tmp/macxcapture`, `~/.swiftx-{resources,fonts,launchers}` →
+   `~/.macxserver-{...}`, `[swiftx-config]` block → `[macxserver-config]`,
+   Keychain service `swiftx-launcher` → `macxserver-launcher`, X
+   SetupAccepted vendor string `"swift-x"` → `"macXserver"`, default
+   NSWindow title fallback `"swift-x"` → `"macXserver"`, clipboard
+   staging atom `SWIFTX_CLIP_FROM_X` → `MACXSERVER_CLIP_FROM_X`. Docs
+   and seed-content comments updated to match. Existing dotfiles
+   renamed in place before the commit (no in-binary migration). Tests
+   updated; 1262/0. **Not touched** (deliberate): Swift module names
+   `SwiftX*`, bundle IDs `com.toddvernon.swiftx.*`, package name
+   `swift-x`, source dir `Sources/SwiftX*/`, project codename in
+   CLAUDE.md, DECISIONS.md and historical STATUS.md entries.
+
+4. **Blit default flipped ON** (`989ae68`). Trigger: the user's
+   daily-driver `MacXServer.app` (Xcode-launched) came up without
+   `SWIFTX_BLIT_PURE_MOVE=1` and the ghost-trail symptom returned.
+   Default flipped so the fix takes effect for every launch without
+   per-launch env-var management. Escape hatch preserved:
+   `SWIFTX_BLIT_PURE_MOVE=0` reverts to the over-emit path if a
+   regression surfaces in dtpad / quickplot / another cascading-pure-
+   move app. SHORTCUTS Step F entry updated accordingly.
+
 ## What's next
 
-The blit work is shipped opt-in but the validation gap is real: dtpad
-opens dialogs that cascade pure-move ConfigureWindows across the menu
-bar / work area, and quickplot has the SlateBlue color bleed case from
-the 2026-05-25 revert. Both need a focused session against live u5 with
-the flag flipped on before the default flips. Until then, anyone hitting
-the xmmap / dtfile scroll bug can set the env var manually.
+- **Opportunistic validation against quickplot and dtpad** with the
+  default flipped. Those are the two apps the 2026-05-25 attempt
+  regressed (quickplot SlateBlue bleed, dtpad menu-bar erase on
+  dialog-pop cascade). Both have legitimate cascade-of-pure-moves
+  scenarios this revival hasn't been stress-tested against — if a
+  regression surfaces in normal use, set `SWIFTX_BLIT_PURE_MOVE=0`
+  and reopen SHORTCUTS Step F.
+- **xmmap wire counts** should now be in the ballpark of gold's ~140
+  Expose events per session instead of yesterday's 1842. Worth a
+  capture-diff confirmation when convenient.
 
 ---
 
