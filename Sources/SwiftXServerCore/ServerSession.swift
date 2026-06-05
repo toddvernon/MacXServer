@@ -110,7 +110,7 @@ public final class ServerSession: @unchecked Sendable {
     /// Atom name we ask the selection owner to write the converted text into
     /// on `selectionSinkWindow`. Interned lazily so we know its atom id when
     /// the ChangeProperty arrives.
-    private let selectionSinkPropertyName = "SWIFTX_CLIP_FROM_X"
+    private let selectionSinkPropertyName = "MACXSERVER_CLIP_FROM_X"
 
     /// `WM_CLASS` instance (the first of the two null-terminated strings,
     /// e.g. "xterm" / "xcalc") once the client has set the property. nil
@@ -584,7 +584,7 @@ public final class ServerSession: @unchecked Sendable {
         )
 
         // RESOURCE_MANAGER on root. Content comes from the user-editable
-        // file at `~/.swiftx-resources` (seeded on first run from
+        // file at `~/.macxserver-resources` (seeded on first run from
         // `DefaultThemes.seedContent`, then owned by the user). The
         // file's `[global]` plus `[theme:<active>]` sections concatenate
         // to form the bytes published. See THEMES.md for the format and

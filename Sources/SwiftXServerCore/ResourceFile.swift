@@ -1,9 +1,9 @@
 import Foundation
 
-// User-editable swift-x resources file format. See THEMES.md for the
+// User-editable macXserver resources file format. See THEMES.md for the
 // design. Quick reminder:
 //
-//   [swiftx-config]
+//   [macxserver-config]
 //   theme: quickplot
 //
 //   [global]
@@ -15,7 +15,7 @@ import Foundation
 //   ...
 //
 // One file, multiple themes, one active. Active theme = the `theme:`
-// value in [swiftx-config], default `quickplot` if missing. The bytes
+// value in [macxserver-config], default `quickplot` if missing. The bytes
 // we publish on RESOURCE_MANAGER are `[global]` ∪ `[theme:<active>]`.
 //
 // Parser is one-way (text → struct). We never serialize back to disk;
@@ -26,7 +26,7 @@ public struct ResourceFile {
 
     /// What kind of section header a `[...]` line names.
     public enum SectionKind: Equatable {
-        case config             // [swiftx-config]
+        case config             // [macxserver-config]
         case global             // [global]
         case theme(String)      // [theme:NAME]
         case motifFrame         // [motif-frame]
@@ -44,7 +44,7 @@ public struct ResourceFile {
 
     public let sections: [Section]
 
-    /// Value of `[swiftx-config].theme`. Defaults to `quickplot` when
+    /// Value of `[macxserver-config].theme`. Defaults to `quickplot` when
     /// the file has no config section or the key is missing.
     public var activeTheme: String {
         for section in sections {
@@ -99,7 +99,7 @@ public struct ResourceFile {
     /// property: concatenated body of `[global]` then `[theme:<active>]`,
     /// terminated with LF + NUL (the STRING-property convention u5 Xsun
     /// used). Comments and blank lines from the user's file pass through;
-    /// Xrm ignores them. Unknown sections (`[swiftx-config]`, anything
+    /// Xrm ignores them. Unknown sections (`[macxserver-config]`, anything
     /// else) are NOT published.
     public func resourceManagerBytes() -> [UInt8] {
         var lines: [String] = []
@@ -160,7 +160,7 @@ public struct ResourceFile {
 
     private static func sectionKind(forHeader name: String) -> SectionKind {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
-        if trimmed == "swiftx-config" { return .config }
+        if trimmed == "macxserver-config" { return .config }
         if trimmed == "global" { return .global }
         if trimmed == "motif-frame" { return .motifFrame }
         if trimmed.hasPrefix("theme:") {
@@ -176,11 +176,11 @@ public struct ResourceFile {
 
 public enum ResourceFileLoader {
 
-    /// Standard location for the user's swift-x resources. Dotfile in
+    /// Standard location for the user's macXserver resources. Dotfile in
     /// `$HOME` per THEMES.md decision (own file, not stepping on
     /// `~/.Xresources` which xrdb and other servers consume).
     public static let defaultPath: String = (NSHomeDirectory() as NSString)
-        .appendingPathComponent(".swiftx-resources")
+        .appendingPathComponent(".macxserver-resources")
 
     /// Load the file at `path`. If it doesn't exist, write the seed
     /// content first and then load. Always returns a parsed result;

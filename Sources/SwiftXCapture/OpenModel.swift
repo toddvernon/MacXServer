@@ -52,9 +52,9 @@ final class OpenModel: ObservableObject {
         panel.allowedContentTypes = [
             UTType(filenameExtension: "xtap") ?? .data
         ]
-        // Default to /tmp/swift-x-captures if it exists — that's where
+        // Default to /tmp/macxcapture if it exists — that's where
         // server-side capture lands today.
-        let defaultDir = "/tmp/swift-x-captures"
+        let defaultDir = "/tmp/macxcapture"
         if FileManager.default.fileExists(atPath: defaultDir) {
             panel.directoryURL = URL(fileURLWithPath: defaultDir)
         }

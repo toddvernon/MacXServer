@@ -137,7 +137,7 @@ final class ResourcesPanelModel: ObservableObject {
             // in the dropdown) and by refreshThemeMetadata writing the
             // parsed value back into us. Only rewrite the buffer when
             // the new value really differs from what's already in the
-            // file's [swiftx-config].theme line.
+            // file's [macxserver-config].theme line.
             if syncingFromBuffer { return }
             let newText = ResourcesPanelModel.replaceThemeLine(in: text, with: activeTheme)
             if newText != text {
@@ -229,7 +229,7 @@ final class ResourcesPanelModel: ObservableObject {
     // MARK: - Theme line rewrite
 
     /// Same byte-preserving rewrite the old AppKit controller used:
-    /// find `theme:` inside `[swiftx-config]` and replace its value;
+    /// find `theme:` inside `[macxserver-config]` and replace its value;
     /// if no theme line exists, insert one in the config section;
     /// if no config section, prepend one at the top.
     static func replaceThemeLine(in text: String, with newTheme: String) -> String {
@@ -243,7 +243,7 @@ final class ResourcesPanelModel: ObservableObject {
         for (i, line) in lines.enumerated() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
-                inConfigSection = (trimmed == "[swiftx-config]")
+                inConfigSection = (trimmed == "[macxserver-config]")
                 if inConfigSection { sawConfigSection = true }
                 continue
             }
@@ -266,7 +266,7 @@ final class ResourcesPanelModel: ObservableObject {
             return lines.joined(separator: "\n")
         }
 
-        let prefix = ["[swiftx-config]", "theme: \(newTheme)", ""]
+        let prefix = ["[macxserver-config]", "theme: \(newTheme)", ""]
         return (prefix + lines).joined(separator: "\n")
     }
 }

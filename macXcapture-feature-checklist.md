@@ -471,7 +471,7 @@ For each: requests + replies + events + errors decoded.
       `swift build` on either arch produces a working binary for that arch. No universal binary
       build step; no shipped binaries at all.
 - [x] Runs against macXserver — **Yes**. PROJECT.md context: that's the primary use case
-      (`PRODUCT_1_CAPTURE.md:24-30`). `swiftx-server --capture` does server-side tee via
+      (`PRODUCT_1_CAPTURE.md:24-30`). `macxserver --capture` does server-side tee via
       `SessionCapture`.
 - [x] Runs against XQuartz — **Yes**. XQuartz is a normal X server on TCP/Unix socket; `--forward
       localhost:6000` works against XQuartz the same as anything else. The proxy is byte-faithful.
@@ -492,7 +492,7 @@ For each: requests + replies + events + errors decoded.
       the same binary as the CLI. No separate `.app` artifact, no `.xtap` file association
       registered with Launch Services.
 - [x] CLI-only mode for headless capture (server-side recording) — **Yes**. `macxcapture --no-gui`
-      forces CLI. Also `swiftx-server --capture` records per-client `.xtap` files server-side via
+      forces CLI. Also `macxserver --capture` records per-client `.xtap` files server-side via
       `SessionCapture.swift` (no GUI required) — see `PRODUCT_1_CAPTURE.md:388`.
 
 ## 11. Documentation

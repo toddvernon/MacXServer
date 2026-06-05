@@ -13,7 +13,7 @@ For day-by-day progress see `STATUS.md`. Highlights since 2026-05-09:
 - **Resize architecture landed** (2026-05-25, see DECISIONS) -- minimal-spec position, matching XQuartz's 20-year-old consensus.
 - **Root-window properties moved to ServerCoordinator** (2026-05-27) -- oldest architectural bug, unblocked Motif clipboard cross-session copy/paste.
 - **Remote app launcher** (2026-05-27) -- telnet → vintage Sun → DISPLAY+launch from a Mac menu.
-- **Configurable Motif frame chrome** (2026-05-27) -- `[motif-frame]` section in `~/.swiftx-resources`.
+- **Configurable Motif frame chrome** (2026-05-27) -- `[motif-frame]` section in `~/.macxserver-resources`.
 - **SHAPE extension** (2026-05-28) -- major opcode 128; oclock round + xeyes oval; Motif-frame integration for shaped clients. Bounding-on-top-level visual; clip + descendant shape stored but not yet rendered (SHORTCUTS).
 
 ## Status as of 2026-05-09
@@ -28,7 +28,7 @@ For day-by-day progress see `STATUS.md`. Highlights since 2026-05-09:
 
 **Multi-client server** (2026-05-08). Per-connection read+write thread pair via `Listener.runAccepting`. `ServerCoordinator` owns the cross-session AtomTable + selection-owner table; per-session state (windows/GCs/props/fonts/pixmaps/colors) stays per-session. Bridge's setOnX handlers fan out to every registered session.
 
-**Per-session log files + WM_CLASS** (2026-05-08). One `FileLogSink` per connection writing to `~/Library/Logs/swiftx-server/`, renamed to `<instance>-<timestamp>.log` once WM_CLASS arrives. WM_CLASS instance also prepended to the NSWindow title.
+**Per-session log files + WM_CLASS** (2026-05-08). One `FileLogSink` per connection writing to `~/Library/Logs/macxserver/`, renamed to `<instance>-<timestamp>.log` once WM_CLASS arrives. WM_CLASS instance also prepended to the NSWindow title.
 
 **Phase 1 of `SERVER_RESOLUTION_SCALING_AND_FONTS.md`** (2026-05-07) and the **font-fit fix** (2026-05-09). Display-adaptive integer scaling, scalable Mac font substitution. Final cell-sizing rule per `DECISIONS.md` 2026-05-09: integer pointSize, CTFont-derived metrics, cell follows font (XLFD's named cell becomes a hint). xterm and xcalc render crisply with no "feels bold" residue. See `XTERM_FONT_QUALITY.md` for the empirical alias map.
 
@@ -52,7 +52,7 @@ Server listens on `:6000`. On connect:
 4. Send stub replies for the requests xclock waits on: GetProperty (empty), AllocColor (synthetic pixel), InternAtom (monotonic), QueryFont (minimal valid stub), GetInputFocus.
 5. Track resources internally (windows, GCs, pixmaps, fonts, atoms) but don't render anything.
 
-**Done when** `xclock` running on u5 against `swiftx-server` doesn't disconnect with a protocol error for 60 seconds.
+**Done when** `xclock` running on u5 against `macxserver` doesn't disconnect with a protocol error for 60 seconds.
 
 **What shipped:** `Sources/SwiftXServerCore/ServerSession.swift` is the per-connection state machine. SetupRequest handshake works for both byte orders with partial-buffer tolerance. Per-opcode dispatch covers every request xclock issues. Stub replies for GetProperty, AllocColor, InternAtom, QueryFont, GetInputFocus, QueryExtension. Resource tables for windows, GCs, pixmaps, fonts, atoms, colors, properties (`ResourceTables.swift`, `AtomTable.swift`, `ColorTable.swift`). The `XclockReplayTests` test feeds the captured xclock C2S byte stream through the session and asserts no XErrors and expected resource counts.
 

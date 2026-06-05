@@ -5,11 +5,11 @@ final class ResourceTokenizerTests: XCTestCase {
 
     // MARK: - Section headers
 
-    func testSectionHeaderSwiftxConfig() {
-        let spans = ResourceTokenizer.tokenize("[swiftx-config]")
+    func testSectionHeaderMacxserverConfig() {
+        let spans = ResourceTokenizer.tokenize("[macxserver-config]")
         XCTAssertEqual(spans.count, 1)
         XCTAssertEqual(spans[0].kind, .sectionHeader)
-        XCTAssertEqual(spans[0].range, NSRange(location: 0, length: 15))
+        XCTAssertEqual(spans[0].range, NSRange(location: 0, length: 19))
     }
 
     func testSectionHeaderGlobalWithLeadingWhitespace() {

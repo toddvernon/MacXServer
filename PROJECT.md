@@ -80,7 +80,7 @@ Written in Swift, used by both products.
 A two-phase product. v1 is the CLI proxy tool that produced the framer, the corpus, and the article.
 v2 is the public-release evolution: refactor the format/decode logic into a library, build a SwiftUI
 app over it for hobbyists who want to record / examine / replay captures, and bolt server-side capture
-into `swiftx-server` so users can hit a bug and hand back a `.xtap` without running a separate tool.
+into `macxserver` so users can hit a bug and hand back a `.xtap` without running a separate tool.
 
 Standalone value (v1): lets me trace what real X clients actually do over the wire. Useful for
 documentation, for learning the protocol, and for producing test fixtures.
@@ -99,8 +99,8 @@ Deliverables (v1, done 2026-05-06):
 
 Deliverables (v2, in design 2026-05-23 — full spec at the bottom of `PRODUCT_1_CAPTURE.md`):
 - `SwiftXCaptureCore` as the single source of truth for `.xtap` format and decode
-- `swiftx-server --capture` (and matching Preferences toggle) writing per-client `.xtap` files to
-	`/tmp/swift-x-captures/` with no measurable hot-path latency
+- `macxserver --capture` (and matching Preferences toggle) writing per-client `.xtap` files to
+	`/tmp/macxcapture/` with no measurable hot-path latency
 - New SwiftUI capture app with three modes: Record (proxy), Open (examine), Replay
 - Library + apps stay in lockstep on file format; format is unchanged from v1
 

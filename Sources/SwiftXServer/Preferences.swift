@@ -29,7 +29,7 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
     /// the deliberate choice — it wipes on reboot so captures never
     /// accumulate invisibly, and it's a short path the user can type.
     /// See DECISIONS.md 2026-05-23 for the alternatives.
-    static let defaultCaptureDirectory = "/tmp/swift-x-captures"
+    static let defaultCaptureDirectory = "/tmp/macxcapture"
 
     private let defaults: UserDefaults
 
@@ -82,7 +82,7 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         }
     }
 
-    /// Capture output directory. Default `/tmp/swift-x-captures`. Not
+    /// Capture output directory. Default `/tmp/macxcapture`. Not
     /// surfaced in the Preferences UI today (the path is part of the
     /// "your captures live in /tmp" contract); kept as a UserDefaults
     /// key so power users can override via `defaults write`.

@@ -6,7 +6,7 @@ public enum KeychainError: Error {
 }
 
 public enum KeychainHelper {
-    public static let serviceName = "swiftx-launcher"
+    public static let serviceName = "macxserver-launcher"
 
     public static func store(account: String, password: String) throws {
         guard let data = password.data(using: .utf8) else { return }

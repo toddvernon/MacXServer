@@ -31,10 +31,10 @@ enum DefaultMotifResources {
 
     /// Raw resources text in legacy single-theme form. Kept module-visible
     /// (not private) so `DefaultThemes` can wrap it in the section format
-    /// for the first-run seed of `~/.swiftx-resources` without
+    /// for the first-run seed of `~/.macxserver-resources` without
     /// duplicating content.
     static let text = """
-    ! swift-x Tier 1 Motif widget defaults. See MOTIF_TEXT_QUALITY.md.
+    ! macXserver Tier 1 Motif widget defaults. See MOTIF_TEXT_QUALITY.md.
     !
     ! ---- Color palette ----
     ! Modeled on quickplot's fallback resources (reference/quickplot/app.c

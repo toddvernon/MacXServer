@@ -22,7 +22,7 @@ Two reasons, both worth knowing:
 
 The second reason matters even for users who'd otherwise prefer 3x. On constrained displays (laptops), 2x is the path that makes Sun apps work the way they were designed to.
 
-Concrete example from `/tmp/swift-x-captures/2026-05-30T13-05-57-qp.xtap`: quickplot's command window is `CreateWindow 430x500 at (30,260) WM_NAME="Command Window"` with `USPosition=(30,260) USSize=430x500`. Bottom edge at y=760. Fits in a 900-tall root, doesn't fit in a 648-tall root.
+Concrete example from `/tmp/macxcapture/2026-05-30T13-05-57-qp.xtap`: quickplot's command window is `CreateWindow 430x500 at (30,260) WM_NAME="Command Window"` with `USPosition=(30,260) USSize=430x500`. Bottom edge at y=760. Fits in a 900-tall root, doesn't fit in a 648-tall root.
 
 ## Why no 1x option
 
@@ -45,7 +45,7 @@ MotifTheme.install(theme)
 
 At 2x, the 32pt baseline title bar becomes ~21pt, the 2pt bevel becomes ~1.3pt. All derived dimensions (button size, title font size, menu glyph sizes) follow because they're computed from these three primitives.
 
-`Mwm*titleBarHeight` etc. in `~/.swiftx-resources` still wins. Order of operations: read resource file, apply base theme, then scale. Explicit user overrides override the scaling.
+`Mwm*titleBarHeight` etc. in `~/.macxserver-resources` still wins. Order of operations: read resource file, apply base theme, then scale. Explicit user overrides override the scaling.
 
 Title font size floor remains `max(9, titleBarHeight * 0.55)`, which prevents pathological-tiny text if someone constructs a weird theme.
 

@@ -26,7 +26,7 @@ final class SetupHandshakeTests: XCTestCase {
         XCTAssertEqual(accepted.screens[0].root, ServerConfig.default.rootWindowId)
         XCTAssertEqual(accepted.screens[0].defaultColormap, ServerConfig.default.defaultColormapId)
         XCTAssertEqual(accepted.pixmapFormats.count, 1)
-        XCTAssertEqual(accepted.vendor, Array("swift-x".utf8))
+        XCTAssertEqual(accepted.vendor, Array("macXserver".utf8))
     }
 
     func testAcceptsMSBSetupRequest() throws {

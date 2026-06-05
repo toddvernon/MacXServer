@@ -404,7 +404,7 @@ extension ServerSession {
         // just set, leaving xcalc buttons stuck in the post-Bounding /
         // pre-Clip intermediate visual (small grey region inside the new
         // larger bounding stadium). The wire diff at
-        // /tmp/swift-x-captures/2026-06-03T10-51-17-xcalc.xtap caught this.
+        // /tmp/macxcapture/2026-06-03T10-51-17-xcalc.xtap caught this.
         guard let win = windows.get(windowId) else { return }
         // Bridge-side side effects (NSWindow mask for top-levels; repaint +
         // Expose for descendants) only run when a bridge is attached.

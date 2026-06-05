@@ -35,7 +35,7 @@ final class RecordModel: ObservableObject {
 
     /// Where captures land by default. The wizard names files here
     /// unless the user types an absolute path of their own.
-    static let captureDirectory = "/tmp/swift-x-captures"
+    static let captureDirectory = "/tmp/macxcapture"
 
     // MARK: - User-editable inputs (persisted)
 

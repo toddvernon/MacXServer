@@ -6,7 +6,7 @@ import SwiftXCaptureUI
 // SwiftUI root for the font mappings editor panel. Parallels
 // ResourcesPanelView — same hero-panel layout (SF Symbol + title +
 // caption, dark editor with gutter, action row with default Save) — but
-// for `~/.swiftx-fonts` instead of `~/.swiftx-resources`. See
+// for `~/.macxserver-fonts` instead of `~/.macxserver-resources`. See
 // DefaultFontMappings for the file format.
 
 struct FontMappingsPanelView: View {

@@ -1,6 +1,6 @@
 import Foundation
 
-// Seed content for ~/.swiftx-fonts on first launch. Mirrors the
+// Seed content for ~/.macxserver-fonts on first launch. Mirrors the
 // substitution table in SERVER_RESOLUTION_SCALING_AND_FONTS.md so the
 // default behavior is identical to the previous hardcoded
 // FontResolver.resolveFamily switch.
@@ -12,7 +12,7 @@ import Foundation
 public enum DefaultFontMappings {
 
     public static let seedContent: String = """
-    # swift-x font mappings — controls FontResolver's XLFD family substitution.
+    # macXserver font mappings — controls FontResolver's XLFD family substitution.
     #
     # Format per line:
     #   <xlfd-family>  ->  <mac-font-name>  mono|prop

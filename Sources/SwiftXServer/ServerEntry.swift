@@ -108,7 +108,7 @@ enum ServerEntry {
 
                 --capture / --no-capture override the Preferences toggle for this
                 process. When capture is on, every accepted client writes its own
-                .xtap to /tmp/swift-x-captures/ (configurable in Preferences).
+                .xtap to /tmp/macxcapture/ (configurable in Preferences).
 
                 --scale forces the display scale (2 or 3) for this process,
                 overriding the Preferences > Display setting. Without --scale,
@@ -245,7 +245,7 @@ enum ServerEntry {
             }
         } : nil
 
-        // Font mappings: seed ~/.swiftx-fonts on first run and load into the
+        // Font mappings: seed ~/.macxserver-fonts on first run and load into the
         // FontResolver cache. Subsequent runs read the user's file; the
         // embedded seed only re-seeds via Revert to Defaults in the editor.
         FontResolver.installMappings()

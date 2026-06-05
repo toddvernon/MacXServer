@@ -9,7 +9,7 @@ import Framer
 //
 //   1. ChangeWindowAttributes(window=sink, eventMask=PropertyChangeMask)
 //      — so they can watch us delete the property after reading it
-//   2. ChangeProperty(window=sink, property=SWIFTX_CLIP_FROM_X, ...)
+//   2. ChangeProperty(window=sink, property=MACXSERVER_CLIP_FROM_X, ...)
 //      — the actual converted data
 //   3. SendEvent(dest=sink, ...) SelectionNotify — protocol completion
 //
@@ -20,7 +20,7 @@ import Framer
 final class SelectionSinkWindowTests: XCTestCase {
 
     private let selectionSinkWindow: UInt32 = 0xFFFE_0001
-    private let selectionSinkPropertyName = "SWIFTX_CLIP_FROM_X"
+    private let selectionSinkPropertyName = "MACXSERVER_CLIP_FROM_X"
 
     private final class RecClipboardBridge: WindowBridge, @unchecked Sendable {
         var writtenText: [String] = []

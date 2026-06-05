@@ -563,7 +563,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         if slots[id] != nil {
             slots[id]?.geometry = geometry            // sync to current
         }
-        let pendingTitle = slots[id]?.pendingTitle ?? "swift-x"
+        let pendingTitle = slots[id]?.pendingTitle ?? "macXserver"
         lock.unlock()
 
         // Emit ReparentNotify / ConfigureNotify / MapNotify / Expose

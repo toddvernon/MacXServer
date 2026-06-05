@@ -89,7 +89,7 @@ final class ReplayModel: ObservableObject {
         panel.allowedContentTypes = [
             UTType(filenameExtension: "xtap") ?? .data
         ]
-        let defaultDir = "/tmp/swift-x-captures"
+        let defaultDir = "/tmp/macxcapture"
         if FileManager.default.fileExists(atPath: defaultDir) {
             panel.directoryURL = URL(fileURLWithPath: defaultDir)
         }

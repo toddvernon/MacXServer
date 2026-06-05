@@ -89,7 +89,7 @@ public struct ServerConfig: Sendable {
         rootVisualId: UInt32 = 0x22,
         resourceIdBase: UInt32 = 0x4400000,
         resourceIdMask: UInt32 = 0x1FFFFF,
-        vendor: [UInt8] = Array("swift-x".utf8),
+        vendor: [UInt8] = Array("macXserver".utf8),
         releaseNumber: UInt32 = 1
     ) {
         self.init(

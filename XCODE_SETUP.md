@@ -19,7 +19,7 @@ open MacXserver.xcworkspace    # workspace pulls in both the
                                # xcodeproj and Package.swift
 ```
 
-Pick the scheme (`swiftx-capture` or `MacXServer`) and hit ▶.
+Pick the scheme (`macxcapture` or `MacXServer`) and hit ▶.
 
 ## What's where
 
@@ -52,7 +52,7 @@ Three frameworks + two apps, all wired in `project.yml`:
 | `Framer`            | framework   | `Sources/Framer/`              |
 | `SwiftXCaptureCore` | framework   | `Sources/SwiftXCaptureCore/`   |
 | `SwiftXServerCore`  | framework   | `Sources/SwiftXServerCore/`    |
-| `swiftx-capture`    | application | `Sources/SwiftXCapture/` (minus `main.swift`) + `Xcode/CaptureMain.swift` |
+| `macxcapture`    | application | `Sources/SwiftXCapture/` (minus `main.swift`) + `Xcode/CaptureMain.swift` |
 | `MacXServer`        | application | `Sources/SwiftXServer/` (minus `main.swift`) + `Xcode/ServerMain.swift` |
 
 `main.swift` is excluded from each app because `@main` can't
@@ -65,7 +65,7 @@ shared functions (`SwiftXCaptureApp.main()` and
 ## What stays the same
 
 - `swift build` → the SPM CLI binaries
-  (`.build/release/swiftx-capture`, `.build/release/swiftx-server`).
+  (`.build/release/macxcapture`, `.build/release/macxserver`).
 - `swift test` is unchanged.
 - All `run-*.sh` scripts work as before — they use the SPM
   binaries, not the `.app` bundles.

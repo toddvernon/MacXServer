@@ -75,7 +75,7 @@ xterm -display <mac-ip>:0
 ```
 
 Launches a chooser with three modes (Record / Open / Replay).
-Defaults to opening files from `/tmp/swift-x-captures/` so the
+Defaults to opening files from `/tmp/macxcapture/` so the
 server's auto-captures are the obvious choice.
 
 ### Capture, CLI
@@ -119,14 +119,14 @@ produces" diffing against gold Sun captures.
 ```
 
 Every X client connecting to the server gets its own `.xtap` file
-in `/tmp/swift-x-captures/`, named after the client's `WM_CLASS`
+in `/tmp/macxcapture/`, named after the client's `WM_CLASS`
 once it identifies itself. The toggle is also available in the
 server's Preferences → Capture tab; the CLI flag overrides the
 preference. `/tmp` wipes on reboot, so captures don't accumulate
 forever.
 
 For bug reports: turn capture on, reproduce the issue, drag the
-freshest file out of `/tmp/swift-x-captures/` into an email.
+freshest file out of `/tmp/macxcapture/` into an email.
 
 ## Tests
 

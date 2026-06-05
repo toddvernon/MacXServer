@@ -11,7 +11,7 @@ import Framer
 // and every subsequent ButtonPress reported state=0x4 -- xterm reads that
 // as a Ctrl+click and pops its menu on plain LMB/RMB.
 //
-// Repro captured at /private/tmp/swift-x-captures/2026-05-30T15-41-42-xterm.xtap:
+// Repro captured at /private/tmp/macxcapture/2026-05-30T15-41-42-xterm.xtap:
 //   30752ms  KeyRelease state=0x4   (Ctrl still held)
 //   ...user releases Ctrl physically (no event observed)...
 //   35265ms  ButtonPress state=0x4  ← stuck. Every click from here on.

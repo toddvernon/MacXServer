@@ -143,7 +143,7 @@ public struct LauncherFile: Sendable {
 
 public enum LauncherFileLoader {
     public static let defaultPath: String = {
-        (NSHomeDirectory() as NSString).appendingPathComponent(".swiftx-launchers")
+        (NSHomeDirectory() as NSString).appendingPathComponent(".macxserver-launchers")
     }()
 
     public static func loadOrSeed(

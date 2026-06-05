@@ -21,7 +21,7 @@ Editor window:
 +-------------------------------------------------------------+
 | swift-x Resources                          [Theme: dropdown]|
 |                                                             |
-| 1   [swiftx-config]                                         |
+| 1   [macxserver-config]                                         |
 | 2   theme: quickplot                                        |
 | 3                                                           |
 | 4   [global]                                                |
@@ -37,7 +37,7 @@ Editor window:
 ```
 
 - Monaco 12pt, line numbers down the left.
-- Theme dropdown at top-right is a shortcut for editing `[swiftx-config].theme` (writes back to the file on selection).
+- Theme dropdown at top-right is a shortcut for editing `[macxserver-config].theme` (writes back to the file on selection).
 - Save flushes to disk and triggers reload.
 - Reload re-reads the file from disk (in case I edited externally).
 - Revert to Defaults blows away the file and re-seeds it from the built-in content. Confirmation dialog first.
@@ -47,23 +47,23 @@ On save, a banner near the bottom: "Resources reloaded. Restart Motif apps to se
 
 ## File location
 
-Going with **`~/.swiftx-resources`** (own file, dotfile in home).
+Going with **`~/.macxserver-resources`** (own file, dotfile in home).
 
 Reasoning:
 - Real `~/.Xresources` is consumed by `xrdb` and any other X server I might run; if we add non-standard section syntax we corrupt that file for the rest of the X ecosystem.
 - Owning the file means we can extend the format freely (themes today, conditional blocks tomorrow, whatever).
 - Simple path that's easy to find with `ls ~/.s<tab>`.
 
-Optional fallback (Phase 2): if `~/.swiftx-resources` doesn't exist but `~/.Xresources` does, load the latter as the active theme content (no sections). Lets people start from their existing Xrm setup. Phase 1 just uses our own file.
+Optional fallback (Phase 2): if `~/.macxserver-resources` doesn't exist but `~/.Xresources` does, load the latter as the active theme content (no sections). Lets people start from their existing Xrm setup. Phase 1 just uses our own file.
 
-**First-startup behavior:** if `~/.swiftx-resources` doesn't exist, the server writes a fresh copy seeded from the current `DefaultMotifResources.swift` content (with section headers added wrapping it as `[theme:quickplot]` + the `[global]` parts split out). User has an editable starting point that matches what they've been seeing.
+**First-startup behavior:** if `~/.macxserver-resources` doesn't exist, the server writes a fresh copy seeded from the current `DefaultMotifResources.swift` content (with section headers added wrapping it as `[theme:quickplot]` + the `[global]` parts split out). User has an editable starting point that matches what they've been seeing.
 
 ## File format
 
 INI-style sections. Three section types:
 
 ```
-[swiftx-config]
+[macxserver-config]
 theme: quickplot
 
 [global]
@@ -110,9 +110,9 @@ Parser rules:
 - Whitespace around `:` is flexible.
 - Unknown sections (typo, new in a future version) are read but not used. Warning logged.
 - Duplicate keys within a section: last wins. Matches Xrm precedent.
-- `[swiftx-config].theme` value selects which `[theme:NAME]` block to apply alongside `[global]`.
+- `[macxserver-config].theme` value selects which `[theme:NAME]` block to apply alongside `[global]`.
 
-**Published RESOURCE_MANAGER content:** the concatenation of `[global]` + `[theme:<active>]`. Anything in those two sections only. The `[swiftx-config]` section is internal, never published.
+**Published RESOURCE_MANAGER content:** the concatenation of `[global]` + `[theme:<active>]`. Anything in those two sections only. The `[macxserver-config]` section is internal, never published.
 
 ## Built-in themes (ship with the seed file)
 
@@ -123,7 +123,7 @@ Additional themes (`cde-classic`, `dark`, `mwm-default`) get added later by extr
 ## Hot reload semantics
 
 On save (or Reload menu):
-1. Re-parse `~/.swiftx-resources`.
+1. Re-parse `~/.macxserver-resources`.
 2. If parse fails, show errors inline (line numbers + messages), keep the previous resources active.
 3. If parse succeeds:
    - Replace `DefaultMotifResources.bytes` with the new content (it stops being "default" and becomes "current").
@@ -139,7 +139,7 @@ On save (or Reload menu):
 |---|---|---|
 | File parser (INI sections, key:value, one-way text→model) | `Sources/SwiftXServerCore/ResourceFile.swift` (new) | ~100 |
 | Theme selector + RESOURCE_MANAGER content builder | same file | ~50 |
-| First-run seed (write `~/.swiftx-resources` from `DefaultThemes`) | same file | ~30 |
+| First-run seed (write `~/.macxserver-resources` from `DefaultThemes`) | same file | ~30 |
 | Resource publish hook (used by ServerSession init) | wire into existing `publishResourceManager` | ~20 |
 | Editor window: NSWindowController + NSTextView | `Sources/SwiftXServer/ResourcesWindowController.swift` (new) | ~200 |
 | Dirty tracking + Save / Reload / Revert button wiring | same | ~70 |
@@ -170,19 +170,19 @@ On save (or Reload menu):
 Ships as one PR, one weekend of work.
 
 **Phase 2 (later):**
-- `~/.Xresources` fallback when `~/.swiftx-resources` doesn't exist (one-time import option)
+- `~/.Xresources` fallback when `~/.macxserver-resources` doesn't exist (one-time import option)
 - Theme catalog UI (cards with preview swatches instead of dropdown)
 - Per-app theme overrides (`[theme:quickplot][dtpad]` style nested)
 - Re-style already-connected widgets (low-confidence, may not be feasible)
 
 ## Decisions (locked in 2026-05-23)
 
-1. **File path.** `~/.swiftx-resources`. Confirmed.
-2. **Theme switching shortcut.** No menu-bar keyboard shortcut for cycling. Switch themes via the editor dropdown (or by editing the `[swiftx-config].theme` line directly).
-3. **Seed file is one-time.** Written by the swift-x app at first run when `~/.swiftx-resources` doesn't exist; never overwritten afterward. The file is the user's after that — they may have customized it. New built-in themes ship as snippets in this doc (or in CHANGELOG-equivalent material) and the user copies them in by hand if they want. **Caveat during development:** I (Todd) may have Claude edit either side — the seed content in `DefaultThemes.swift` to refine what new installs get, OR my own `~/.swiftx-resources` to dial in my preferences. Both are fine; they're distinct artifacts after first run.
+1. **File path.** `~/.macxserver-resources`. Confirmed.
+2. **Theme switching shortcut.** No menu-bar keyboard shortcut for cycling. Switch themes via the editor dropdown (or by editing the `[macxserver-config].theme` line directly).
+3. **Seed file is one-time.** Written by the swift-x app at first run when `~/.macxserver-resources` doesn't exist; never overwritten afterward. The file is the user's after that — they may have customized it. New built-in themes ship as snippets in this doc (or in CHANGELOG-equivalent material) and the user copies them in by hand if they want. **Caveat during development:** I (Todd) may have Claude edit either side — the seed content in `DefaultThemes.swift` to refine what new installs get, OR my own `~/.macxserver-resources` to dial in my preferences. Both are fine; they're distinct artifacts after first run.
 4. **Per-session theme overrides.** Deferred to Phase 2. Phase 1 ships with one active theme server-wide.
 5. **Save model: dirty tracking.** The editor holds the file as raw text in an NSTextView. Any change to the buffer (even a single space) sets a `dirty` flag. On Save:
-   - If dirty: write the buffer contents to `~/.swiftx-resources` verbatim, clear dirty, then trigger a reparse for the running server's resource state.
+   - If dirty: write the buffer contents to `~/.macxserver-resources` verbatim, clear dirty, then trigger a reparse for the running server's resource state.
    - If not dirty: no-op (don't touch the file on disk).
    This means the parser is one-way (text → structured representation, used only for active-theme lookup + RESOURCE_MANAGER content). We never serialize back. User's formatting, comments, key ordering, blank lines are preserved exactly because we never rewrite the file unless they actually edited it.
 
@@ -202,7 +202,7 @@ Ships as one PR, one weekend of work.
 
 - **Editor window thread/state coupling.** Cocoa UI on the main thread, X server work on protocolQueue per session. The reload-on-save path crosses threads — needs to dispatch the RESOURCE_MANAGER republish onto each session's queue. Same shape as the existing bridge callbacks.
 - **Parse failures hiding under the UI.** If the user saves a malformed file, we keep the previous content. The error display has to be clear or they'll think their edits worked when they didn't.
-- **First-run seed conflicts with multiple Macs.** Dropbox syncs `~/.swiftx-resources` across my machines. Mac A's seed write races with Mac B reading it for the first time. Solution: write the seed atomically (write to `.swiftx-resources.tmp` then rename), or just live with one Mac winning on first run.
+- **First-run seed conflicts with multiple Macs.** Dropbox syncs `~/.macxserver-resources` across my machines. Mac A's seed write races with Mac B reading it for the first time. Solution: write the seed atomically (write to `.macxserver-resources.tmp` then rename), or just live with one Mac winning on first run.
 
 ## Bottom line
 

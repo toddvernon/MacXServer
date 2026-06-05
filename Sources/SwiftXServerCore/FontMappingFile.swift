@@ -103,7 +103,7 @@ public struct FontMappingFile: Sendable {
     /// the token is informational only. Strip it so it doesn't end up
     /// glued onto the Mac font name (the cause of the test-suite-only
     /// "Monaco mono" failures: FontMappingFileTests was reading the real
-    /// user `~/.swiftx-fonts`, which uses the trailing-token format).
+    /// user `~/.macxserver-fonts`, which uses the trailing-token format).
     private static func parseLine(_ line: String) -> (family: String, macFont: String)? {
         var tokens = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
         guard tokens.count >= 3 else { return nil }   // need at least family, ->, macFont
@@ -140,10 +140,10 @@ public struct FontMappingFile: Sendable {
 
 public enum FontMappingFileLoader {
 
-    /// Standard location for the user's swift-x font mappings. Sibling
-    /// of `~/.swiftx-resources`, same dotfile pattern.
+    /// Standard location for the user's macXserver font mappings. Sibling
+    /// of `~/.macxserver-resources`, same dotfile pattern.
     public static let defaultPath: String = (NSHomeDirectory() as NSString)
-        .appendingPathComponent(".swiftx-fonts")
+        .appendingPathComponent(".macxserver-fonts")
 
     /// Load the file at `path`. If it doesn't exist, write the seed
     /// content first and then load. Always returns a parsed result; on

@@ -169,7 +169,7 @@ final class CapturedAppReplayTests: XCTestCase {
         line: UInt = #line
     ) throws {
         // Captures were replaced wholesale on 2026-05-29 (fresh ss2→ss2 batch
-        // via macXcapture; see captures/ and /tmp/swift-x-captures/notes for
+        // via macXcapture; see captures/ and /tmp/macxcapture/notes for
         // the per-app status). Resource counts in every ReplayBaseline below
         // are pinned to the OLD captures and will drift against the new ones;
         // the dt-* and quickplot captures are missing entirely until the u5

@@ -140,7 +140,7 @@ public enum FontResolver {
 
     // MARK: - Substitution table
 
-    /// Cached `FontMappingFile`, loaded from `~/.swiftx-fonts` (seeded
+    /// Cached `FontMappingFile`, loaded from `~/.macxserver-fonts` (seeded
     /// from `DefaultFontMappings.seedContent` on first run). Initialized
     /// lazily on first access; tests and pre-startup callers see the
     /// in-memory seed if `installMappings` hasn't been called yet.
@@ -165,7 +165,7 @@ public enum FontResolver {
 
     /// In-memory variant — install a pre-parsed mapping file without
     /// touching disk. The integration test uses this so it doesn't pull
-    /// the developer's actual `~/.swiftx-fonts` into a shared static
+    /// the developer's actual `~/.macxserver-fonts` into a shared static
     /// (which leaked across tests before 2026-05-30, causing the
     /// FontResolverTests "Monaco mono" failures in full-suite runs).
     public static func installMappings(file: FontMappingFile) {
@@ -177,7 +177,7 @@ public enum FontResolver {
     /// Maps an XLFD family name (with optional spacing fallback for
     /// wildcards) to a Mac font family name. Per the substitution table
     /// in SERVER_RESOLUTION_SCALING_AND_FONTS.md, which is also the seed
-    /// for `~/.swiftx-fonts`; once the user has the file they own it and
+    /// for `~/.macxserver-fonts`; once the user has the file they own it and
     /// the seed is only consulted on Revert to Defaults.
     ///
     /// `isMonospace` is derived from the resolved Mac font itself via

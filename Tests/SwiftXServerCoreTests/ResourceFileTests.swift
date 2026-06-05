@@ -17,7 +17,7 @@ final class ResourceFileTests: XCTestCase {
 
     func testConfigGlobalAndThemeSectionsParseInOrder() {
         let text = """
-        [swiftx-config]
+        [macxserver-config]
         theme: quickplot
 
         [global]
@@ -102,12 +102,12 @@ final class ResourceFileTests: XCTestCase {
         """
         let file = ResourceFile.parse(text)
         XCTAssertEqual(file.activeTheme, "quickplot",
-            "no [swiftx-config] section → defaults to 'quickplot' even if absent from the file")
+            "no [macxserver-config] section → defaults to 'quickplot' even if absent from the file")
     }
 
     func testThemeKeyWithoutColonIgnored() {
         let text = """
-        [swiftx-config]
+        [macxserver-config]
         theme dark
 
         [theme:dark]
@@ -120,7 +120,7 @@ final class ResourceFileTests: XCTestCase {
 
     func testWhitespaceAroundThemeColonHandled() {
         let text = """
-        [swiftx-config]
+        [macxserver-config]
             theme   :   dark
         """
         let file = ResourceFile.parse(text)
@@ -131,7 +131,7 @@ final class ResourceFileTests: XCTestCase {
 
     func testResourceManagerBytesConcatGlobalAndActiveTheme() {
         let text = """
-        [swiftx-config]
+        [macxserver-config]
         theme: dark
 
         [global]
@@ -157,7 +157,7 @@ final class ResourceFileTests: XCTestCase {
 
     func testResourceManagerBytesIgnoresConfigSection() {
         let text = """
-        [swiftx-config]
+        [macxserver-config]
         theme: quickplot
         other-future-setting: 42
 
@@ -175,7 +175,7 @@ final class ResourceFileTests: XCTestCase {
 
     func testActiveThemeMissingFromFileEmitsEmpty() {
         let text = """
-        [swiftx-config]
+        [macxserver-config]
         theme: nonexistent
 
         [global]

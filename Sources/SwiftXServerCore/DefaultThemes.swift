@@ -1,6 +1,6 @@
-// First-run seed for `~/.swiftx-resources`. The bundled content of the
-// file the user gets the very first time they launch swift-x. After
-// that the file is theirs and we never touch it (per THEMES.md
+// First-run seed for `~/.macxserver-resources`. The bundled content of
+// the file the user gets the very first time they launch macXserver.
+// After that the file is theirs and we never touch it (per THEMES.md
 // decision 3: seed is one-time).
 //
 // Phase 1 ships exactly one theme (`quickplot`) populated from the
@@ -10,7 +10,7 @@
 //
 // Layout:
 //
-//   [swiftx-config]
+//   [macxserver-config]
 //   theme: quickplot
 //
 //   [global]
@@ -21,15 +21,15 @@
 
 public enum DefaultThemes {
 
-    /// The complete seed content to write to `~/.swiftx-resources` on
-    /// first run. Plain UTF-8 text, LF line endings, no trailing NUL —
-    /// that's a wire-protocol convention added by the publish path,
-    /// not a file-on-disk one.
+    /// The complete seed content to write to `~/.macxserver-resources`
+    /// on first run. Plain UTF-8 text, LF line endings, no trailing
+    /// NUL — that's a wire-protocol convention added by the publish
+    /// path, not a file-on-disk one.
     public static var seedContent: String {
         return """
-        ! swift-x user resources. Edit this file to customize the look of
-        ! Motif/CDE apps hosted by swift-x. The active theme is whichever
-        ! `[theme:NAME]` block matches the `theme:` value in [swiftx-config].
+        ! macXserver user resources. Edit this file to customize the look of
+        ! Motif/CDE apps hosted by macXserver. The active theme is whichever
+        ! `[theme:NAME]` block matches the `theme:` value in [macxserver-config].
         ! On save (or via the Preferences > Reload Resources menu), the
         ! server re-reads this file and republishes RESOURCE_MANAGER for
         ! newly-launched clients.
@@ -39,7 +39,7 @@ public enum DefaultThemes {
         !
         ! See THEMES.md in the project tree for the format spec.
 
-        [swiftx-config]
+        [macxserver-config]
         theme: quickplot
 
         [global]

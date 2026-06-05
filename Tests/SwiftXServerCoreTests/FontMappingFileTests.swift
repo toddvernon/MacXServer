@@ -56,7 +56,7 @@ final class FontMappingFileTests: XCTestCase {
     // resolve("fixed") returned "Monaco mono" and CTFont silently fell back
     // to Helvetica; the breakage surfaced as test-suite-only "Monaco mono"
     // failures in FontResolverTests once FontMappingFileTests had loaded
-    // the developer's real ~/.swiftx-fonts.
+    // the developer's real ~/.macxserver-fonts.
     func testTrailingMonoTokenStripped() {
         let file = FontMappingFile.parse("fixed  ->  Monaco  mono")
         XCTAssertEqual(file.mappings.count, 1)
@@ -178,7 +178,7 @@ final class FontMappingFileTests: XCTestCase {
     func testSeedRoundTripsThroughFontResolver() {
         // Sanity-check the integration. After installMappings, FontResolver
         // .resolveFamily should match the seed. Use the in-memory variant
-        // so we don't pull the developer's actual ~/.swiftx-fonts into the
+        // so we don't pull the developer's actual ~/.macxserver-fonts into the
         // shared static (which leaked across tests before 2026-05-30,
         // making FontResolverTests fail in full-suite runs but pass in
         // isolation). tearDown restores the seed for any later test that

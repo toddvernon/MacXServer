@@ -41,7 +41,7 @@ The bar for OSS launch is: a capture from any of those audiences should decode c
 	Status: done 2026-05-06. Content of this doc through the end of "Order of work (as built)"
 	covers v1.
 - **v2** — refactor format/decode into a library, build a SwiftUI capture app over it, add
-	server-side capture to `swiftx-server` for public-release bug reporting. Status: largely landed
+	server-side capture to `macxserver` for public-release bug reporting. Status: largely landed
 	2026-05-29 (library extracted as `SwiftXCaptureUI`, capture app shipped with stacked-wizard
 	Record screen + .xtap viewer windows + Save As / Export as Text, server-side auto-capture
 	working). See the "v2: Public-ready capture" section.
@@ -383,9 +383,9 @@ release. Two complementary capture paths driven by the same library, so
 hobbyists running the server can hand back useful bug reports without
 running a separate tool.
 
-1. **Server-side capture** — `swiftx-server` gains a `--capture` flag (and a
+1. **Server-side capture** — `macxserver` gains a `--capture` flag (and a
    matching "Capture every client" toggle in Preferences). When on, every
-   client that connects writes its own `.xtap` to `/tmp/swift-x-captures/`.
+   client that connects writes its own `.xtap` to `/tmp/macxcapture/`.
    One client = one file. Reboot wipes everything; that's the only privacy
    gate.
 
@@ -422,10 +422,10 @@ Going public means:
 [Sun A: xterm]   [Sun A: xclock]   [Sun A: quickplot]
        │                │                    │
        ▼                ▼                    ▼
-                  [Mac: swiftx-server --capture]
+                  [Mac: macxserver --capture]
                             │
                             ▼
-            /tmp/swift-x-captures/
+            /tmp/macxcapture/
                 2026-05-23T14-32-11-xterm.xtap
                 2026-05-23T14-32-11-xterm.xtap.json
                 2026-05-23T14-37-02-xclock.xtap
@@ -453,7 +453,7 @@ no extra latency in the common case (see "Performance" below).
 ```
 
 Same as today's v1 tool, but:
-- Default listen port is `:6001` so it can run alongside `swiftx-server`
+- Default listen port is `:6001` so it can run alongside `macxserver`
   on `:6000` without a flag dance.
 - Live status: bytes in/out per direction, packet counts, last few
   decoded requests in a window. The user can see something is happening
@@ -463,8 +463,8 @@ Same as today's v1 tool, but:
 
 v2 is "done" when:
 
-- `swiftx-server --capture` writes a per-client `.xtap` to
-  `/tmp/swift-x-captures/` with no measurable latency hit on interactive
+- `macxserver --capture` writes a per-client `.xtap` to
+  `/tmp/macxcapture/` with no measurable latency hit on interactive
   workloads. The Preferences toggle has the same effect.
 - The CLI flag and the Preferences toggle compose with documented
   precedence: CLI when present wins, Preferences applies otherwise.
@@ -519,7 +519,7 @@ public protocol CaptureSink {
 
 What stays library-internal vs binary-side:
 
-| Concern | Library (`SwiftXCaptureCore`) | App (`swiftx-server` or `swiftx-capture`) |
+| Concern | Library (`SwiftXCaptureCore`) | App (`macxserver` or `swiftx-capture`) |
 |---|---|---|
 | `.xtap` file format read/write | yes | no |
 | Sidecar JSON read/write | yes | no |
@@ -559,7 +559,7 @@ persists to Preferences.
 
 1. **On client connect**: `ServerCoordinator` allocates a `Recorder`
    (the library's `CaptureSink` implementation) writing to a temp file
-   `/tmp/swift-x-captures/.in-progress-<sessionId>.xtap`. The temp
+   `/tmp/macxcapture/.in-progress-<sessionId>.xtap`. The temp
    name avoids confusion if the server crashes mid-capture.
 2. **On first SetupRequest decoded**: the session knows the client's
    byte order and, after the connection completes, often a human-readable
@@ -579,7 +579,7 @@ persists to Preferences.
 ### File naming
 
 ```
-/tmp/swift-x-captures/
+/tmp/macxcapture/
     2026-05-23T14-32-11-xterm.xtap
     2026-05-23T14-32-11-xterm.xtap.json
     2026-05-23T14-32-58-xterm.xtap                  # second xterm
@@ -596,7 +596,7 @@ for triage.
 ### Status-menu additions
 
 - **"Capture Sessions" toggle** (mirrors Preferences value).
-- **"Reveal Captures Folder"** (opens `/tmp/swift-x-captures/` in
+- **"Reveal Captures Folder"** (opens `/tmp/macxcapture/` in
   Finder). Important because /tmp is invisible to normal users.
 - **"Discard All Captures"** (rm everything in the folder, confirm
   first). Useful after a multi-app debugging session.
@@ -771,14 +771,14 @@ enough to know if `--headless` is awkward.
 1. **Extract `CaptureSink` protocol** in `SwiftXCaptureCore`. Refactor
    `Recorder` to implement it. Existing CLI continues to work
    unchanged.
-2. **Wire capture into `swiftx-server`** behind `--capture`. Per-
+2. **Wire capture into `macxserver`** behind `--capture`. Per-
    session captureQueue, ring buffer, drain-to-disk. File naming and
    in-progress-then-rename logic.
 3. **Preferences UI for "Capture every client"**. Status-menu indicator
    plus "Reveal Captures Folder" and "Discard All Captures" items.
 4. **Cross-session test**: launch the server with capture on, run the
    captured-app replay tests against it, verify a `.xtap` lands in
-   `/tmp/swift-x-captures/` and round-trips through the framer.
+   `/tmp/macxcapture/` and round-trips through the framer.
 5. **New SwiftUI app skeleton**: mode picker + empty Record / Open /
    Replay windows. Three modes, three SwiftUI scenes.
 6. **Record mode**: bind to existing `Proxy` + `Recorder` in
@@ -813,7 +813,7 @@ enough to know if `--headless` is awkward.
 ## Open questions to settle during build
 
 - **First-launch behavior of the server when `--capture` is on but
-  `/tmp/swift-x-captures/` doesn't exist**: just `mkdir -p`. No prompt.
+  `/tmp/macxcapture/` doesn't exist**: just `mkdir -p`. No prompt.
 - **What "client name" means at rename time**: I'm proposing the first
   of (a) the program-class from `WM_CLASS`, (b) `WM_NAME`, (c) the
   first `CreateWindow`'s window-name property, (d) fallback to
@@ -826,7 +826,7 @@ enough to know if `--headless` is awkward.
   doesn't drive Product 2 testing because resource-id-base differs.
   The capture app's Replay mode inherits the same limitation. Worth
   surfacing in the UI (warning banner when target is `localhost:6000`
-  and the target is detected to be `swiftx-server`).
+  and the target is detected to be `macxserver`).
 
 ## What this doesn't change
 
