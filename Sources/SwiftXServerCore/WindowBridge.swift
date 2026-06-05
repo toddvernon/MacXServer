@@ -474,11 +474,26 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// pixel BEFORE the client draws on top.
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect])
 
-    // (2026-05-25) `blitWindowRegion` for descendant pure-move was tried
-    // and removed. Caused visual bleed of widget bg colors into adjacent
-    // siblings' regions in quickplot. See ServerSession's pure-move
-    // comment for the full trace. May come back once we capture-diff the
-    // bleed source.
+    /// Blit a set of source rects on the top-level's backing to dest positions
+    /// offset by (dx, dy) DEVICE pixels. The bridge snapshots the backing
+    /// once at execution time and draws each rect from the snapshot to its
+    /// shifted position — so overlap between source and dest is safe (the
+    /// snapshot is independent of the live backing).
+    ///
+    /// Used to honor X11's bit_gravity = NorthWest contract on pure-move
+    /// ConfigureWindow: when a window slides within its parent, the pixels
+    /// already in the backing should move with it. Sources are passed in
+    /// DEVICE-pixel coords (matching clipList / borderClip on the entry).
+    ///
+    /// Opt-in: callers must check `SWIFTX_BLIT_PURE_MOVE=1` before invoking.
+    /// Default no-op for mocks (tests don't assert on backing bytes).
+    /// See SHORTCUTS.md "Step F" for history and exit plan.
+    func blitWindowRegion(
+        topLevel: UInt32,
+        srcDeviceRects: [BoxRec],
+        deviceDx: Int32,
+        deviceDy: Int32
+    )
 
     /// Audible alert. Mapped to NSBeep. Called on Bell with positive
     /// percent (per spec, zero/negative percent requests a softer bell;
@@ -632,6 +647,7 @@ public extension WindowBridge {
     func updateGlobalPointer(rootX: Int16, rootY: Int16) {}
     func queryGlobalPointer() -> (Int16, Int16)? { nil }
     func clearArea(topLevel: UInt32, rects: [Rectangle], background: RGB16) {}
+    func blitWindowRegion(topLevel: UInt32, srcDeviceRects: [BoxRec], deviceDx: Int32, deviceDy: Int32) {}
     func setWindowClipLookup(_ lookup: @escaping @Sendable (UInt32) -> [Rectangle]) {}
     func registerWindowClipLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> [Rectangle]?) {}
     func unregisterWindowClipLookup(token: UInt64) {}

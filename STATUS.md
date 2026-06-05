@@ -1,3 +1,59 @@
+# Status 2026-06-04
+
+Two landings today:
+
+1. **Resources editor panel doubled** (`a2c358a`). One-line cosmetic
+   tweak: initial size 760×580 → 1520×1160. Min size unchanged.
+
+2. **Step F bit-gravity blit revived behind `SWIFTX_BLIT_PURE_MOVE=1`.**
+   The "scrolling regions leave ghost content" bug in xmmap / dtfile
+   tracked down to our `handleConfigureWindow` doing no framebuffer
+   blit on pure-move and instead over-emitting Expose for the full
+   new clipList. xmmap (1000×1000 canvas scrolled in a viewport, with
+   Motif label widget children) shows the symptom most clearly: drag
+   the scrollbar, get cascading ghost trails of every label widget at
+   every prior position. Per SHORTCUTS Step F's documented exit plan,
+   the fix path was (a) opt-in flag, (b) revive `_unused_blitWindowRegion`,
+   (c) clip paint-rects strictly to moved widget's clipList, (d) per-
+   gravity-class processing, (e) live-Sun validation. Steps a-c shipped
+   today, gated under the env var. xmmap and dtfile both render cleanly
+   with the flag on, including discrete page-downs, thumb drags, and
+   partial-visibility descendants crossing the viewport edge. Default
+   stays OFF until dtpad / quickplot get the same Sun-side validation
+   (those are what the 2026-05-25 attempt regressed). SHORTCUTS Step F
+   entry updated to reflect "shipped opt-in; pending validation."
+
+   Six iterations to land this:
+   - initial blit gating + descendant-suppress + Expose-delta path
+   - crop-Y must be top-down per `CGImage.cropping(to:)` (the prior
+     `_unused_blitWindowRegion` Cartesian flip was a latent bug); use
+     `drawImageRespectingYFlip` per GRAPHICS_Y_FLIP.md
+   - bg-paint the newly-revealed strip before emitting Expose, else
+     PolyLine clients overdraw on stale pixels
+   - blit src must include each descendant clipList (canvas clipList
+     has holes where opaque child widgets sit; descendants fill them)
+   - blit dst must clip to subtree newUnion, not just r.window's newClip
+     (clipping to just newClip drops label new positions; labels vanish)
+   - descendant Expose-skip needs full-coverage check (partial coverage
+     = thumb-dragged across viewport edge = newly-revealed half blank
+     unless we fall through to the normal redraw path)
+
+   Files: `WindowBridge.swift` (protocol + no-op default), `CocoaWindowBridge.swift`
+   (`blitWindowRegion` impl, deferred-queue ordered), `ServerSession.swift`
+   (pure-move branch in handleConfigureWindow), `SHORTCUTS.md` (Step F
+   entry rewritten).
+
+## What's next
+
+The blit work is shipped opt-in but the validation gap is real: dtpad
+opens dialogs that cascade pure-move ConfigureWindows across the menu
+bar / work area, and quickplot has the SlateBlue color bleed case from
+the 2026-05-25 revert. Both need a focused session against live u5 with
+the flag flipped on before the default flips. Until then, anyone hitting
+the xmmap / dtfile scroll bug can set the env var manually.
+
+---
+
 # Status 2026-06-03 (end of day, second update)
 
 Three landings today, all in the "make the server feel right across

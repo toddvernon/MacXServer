@@ -2362,6 +2362,79 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         flushTopLevel(topLevel)
     }
 
+    /// Revived 2026-06-04 behind `SWIFTX_BLIT_PURE_MOVE=1` for the
+    /// xmmap scrolling-region bug. The dormant predecessor (Step F first
+    /// attempt, 2026-05-25) painted bleed colors into siblings during
+    /// the quickplot resize cascade; this revival is opt-in and the
+    /// caller (ServerSession's ConfigureWindow handler) only invokes
+    /// on pure-move where no sibling clipList changed. Default OFF
+    /// until validated against xmmap + dtpad + quickplot on live Sun.
+    /// See SHORTCUTS.md "Step F" for history.
+    public func blitWindowRegion(
+        topLevel: UInt32,
+        srcDeviceRects: [BoxRec],
+        deviceDx: Int32,
+        deviceDy: Int32
+    ) {
+        guard !srcDeviceRects.isEmpty, deviceDx != 0 || deviceDy != 0 else { return }
+        appendDeferred(topLevel: topLevel) { [weak self] in
+            guard let self = self,
+                  let view = self.slot(topLevel)?.view,
+                  let ctx = view.backing else { return }
+
+            // One snapshot of the backing covers all rects — the snapshot
+            // is copy-on-write off the bitmap storage, so subsequent ctx
+            // writes don't mutate it. Multi-rect blit from the same
+            // snapshot is overlap-safe by construction.
+            guard let snapshot = ctx.makeImage() else { return }
+
+            let bw = view.backingWidth
+            let bh = view.backingHeight
+
+            // Same pattern as blitCroppedImage: top-down Y in crop (CGImage
+            // image-coords are origin-top-left), drawImageRespectingYFlip
+            // on draw. The `srcCGY = bh - …` Cartesian flip in the prior
+            // `_unused_blitWindowRegion` was a latent bug — it would crop
+            // from a vertically-mirrored row range, dragging pixels from
+            // the opposite side of the backing into the blit. xmmap
+            // surfaced this 2026-06-04.
+            ctx.saveGState()
+            let scale = view.scaleFactor
+            for src in srcDeviceRects {
+                let srcDevX = Int(src.x1)
+                let srcDevY = Int(src.y1)
+                let srcDevW = Int(src.x2 - src.x1)
+                let srcDevH = Int(src.y2 - src.y1)
+                guard srcDevW > 0, srcDevH > 0 else { continue }
+                let clampedX = max(0, srcDevX)
+                let clampedY = max(0, srcDevY)
+                let clampedW = min(srcDevW, bw - clampedX)
+                let clampedH = min(srcDevH, bh - clampedY)
+                guard clampedW > 0, clampedH > 0 else { continue }
+                guard let sub = snapshot.cropping(to: CGRect(
+                    x: clampedX, y: clampedY,
+                    width: clampedW, height: clampedH)) else { continue }
+
+                // Destination = source shifted by (deviceDx, deviceDy),
+                // accounting for any clipping we did on the source's
+                // top/left edges. Convert device → logical for ctx.draw
+                // (the helper handles the y-flip).
+                let lostLeftDev = clampedX - srcDevX
+                let lostTopDev = clampedY - srcDevY
+                let dstDevX = srcDevX + Int(deviceDx) + lostLeftDev
+                let dstDevY = srcDevY + Int(deviceDy) + lostTopDev
+                let dstX = CGFloat(dstDevX) / CGFloat(scale)
+                let dstY = CGFloat(dstDevY) / CGFloat(scale)
+                let dstW = CGFloat(clampedW) / CGFloat(scale)
+                let dstH = CGFloat(clampedH) / CGFloat(scale)
+                ctx.drawImageRespectingYFlip(sub, in: CGRect(x: dstX, y: dstY, width: dstW, height: dstH))
+            }
+            ctx.restoreGState()
+            view.setNeedsDisplay(view.bounds)
+        }
+        flushTopLevel(topLevel)
+    }
+
     /// (2026-05-25) Reverted. Caused widget bg colors to bleed into
     /// adjacent siblings' regions in quickplot during resize. The
     /// snapshot/paint/blit logic is plausibly correct on paper but

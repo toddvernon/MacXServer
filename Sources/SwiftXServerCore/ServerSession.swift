@@ -4495,6 +4495,7 @@ public final class ServerSession: @unchecked Sendable {
             // E1.5: capture pre-move state so we can compute the area of
             // parent newly uncovered by this window's move/resize.
             let preMoveBorderClip = windows.get(r.window)?.borderClip ?? .empty
+            let preMoveOwnClipList = windows.get(r.window)?.clipList ?? .empty
             let preMoveParent = windows.get(r.window)?.parent
             // Snapshot pre-move clipLists for every window in this top-level's
             // subtree. The post-recompute delta cascade compares against this
@@ -4512,6 +4513,23 @@ public final class ServerSession: @unchecked Sendable {
                     if otherId == r.window { continue }
                     if let (t, _, _) = topLevelAndOffset(for: otherId), t == topId {
                         preMoveClipLists[otherId] = w.clipList
+                    }
+                }
+            }
+            // Descendant set of r.window for the pure-move blit path: when
+            // the blit fires we suppress E1.4 paint+Expose for these (they
+            // came along with the parent move via the single blit).
+            var preMoveDescendants: Set<UInt32> = []
+            do {
+                var stack: [UInt32] = []
+                if let firstChild = windows.get(r.window)?.firstChild {
+                    stack.append(firstChild)
+                }
+                while let cur = stack.popLast() {
+                    preMoveDescendants.insert(cur)
+                    if let w = windows.get(cur) {
+                        if let fc = w.firstChild { stack.append(fc) }
+                        if let ns = w.nextSib { stack.append(ns) }
                     }
                 }
             }
@@ -4592,6 +4610,77 @@ public final class ServerSession: @unchecked Sendable {
                 // Expose emission below.
                 recomputeClipsForSubtreeContaining(r.window)
 
+                // E1.45 (revived 2026-06-04 behind SWIFTX_BLIT_PURE_MOVE=1):
+                // Bit-gravity NorthWest blit for pure-move ConfigureWindow.
+                // When a child window slides within its parent (xmmap map
+                // scrolling, dtfile list scrolling), the X spec says its
+                // existing pixel content moves with it; the server is
+                // responsible for the framebuffer translation. We blit
+                // preMoveOwnClipList → (translated by move delta in DEVICE
+                // pixels), then suppress the E1.4 paint+Expose for r.window's
+                // descendants (their pixels came along) and the E2 full-
+                // clipList Expose for r.window itself (we only Expose the
+                // strip newly uncovered by the move below). See SHORTCUTS.md
+                // "Step F" for prior-attempt history and the bleed regression
+                // that caused the first revert.
+                let isPureMove = posChanged && !sizeChanged
+                let blitPureMoveEnabled = ProcessInfo.processInfo.environment["SWIFTX_BLIT_PURE_MOVE"] == "1"
+                var blittedPureMove = false
+                var pureMoveDeviceDx: Int32 = 0
+                var pureMoveDeviceDy: Int32 = 0
+                if blitPureMoveEnabled, isPureMove, let topId = moveSubtreeTop {
+                    let s = Int32(config.deviceScale)
+                    pureMoveDeviceDx = (Int32(new.x) - Int32(old.x)) * s
+                    pureMoveDeviceDy = (Int32(new.y) - Int32(old.y)) * s
+                    if pureMoveDeviceDx != 0 || pureMoveDeviceDy != 0 {
+                        // Pre-move preserved region: r.window's own clipList
+                        // plus every descendant's clipList. clipList has
+                        // holes where opaque children sit; descendant rects
+                        // fill those holes. Combined, they cover every pixel
+                        // the subtree visibly owned pre-move — what the blit
+                        // must translate. xmmap's label widgets are children
+                        // of the canvas; including their rects keeps them
+                        // from trailing as ghosts.
+                        var preMoveUnion = preMoveOwnClipList
+                        for descId in preMoveDescendants {
+                            if let descClip = preMoveClipLists[descId] {
+                                preMoveUnion = preMoveUnion.unioned(with: descClip)
+                            }
+                        }
+                        // Post-move visible area = r.window's newClip ∪
+                        // every descendant's newClip. The descendant
+                        // contribution is critical: r.window's clipList
+                        // alone has holes at child widget positions, and
+                        // intersecting blit dst against just newClip would
+                        // exclude the new label positions — labels would
+                        // vanish at the new screen location.
+                        let postEntry = windows.get(r.window) ?? entry
+                        let newClip = postEntry.clipList
+                        var newUnion = newClip
+                        for descId in preMoveDescendants {
+                            if let desc = windows.get(descId) {
+                                newUnion = newUnion.unioned(with: desc.clipList)
+                            }
+                        }
+                        let dstRegion = preMoveUnion
+                            .translated(dx: pureMoveDeviceDx, dy: pureMoveDeviceDy)
+                            .intersected(with: newUnion)
+                        let blitSrcRects = dstRegion
+                            .translated(dx: -pureMoveDeviceDx, dy: -pureMoveDeviceDy)
+                            .rects
+                        if !blitSrcRects.isEmpty {
+                            log?.log("  → blitPureMove 0x\(String(r.window, radix: 16)) dev=(\(pureMoveDeviceDx),\(pureMoveDeviceDy)) srcRects=\(blitSrcRects.count) (incl. \(preMoveDescendants.count) descendants, clipped to subtree newUnion)")
+                            bridge?.blitWindowRegion(
+                                topLevel: topId,
+                                srcDeviceRects: blitSrcRects,
+                                deviceDx: pureMoveDeviceDx,
+                                deviceDy: pureMoveDeviceDy
+                            )
+                            blittedPureMove = true
+                        }
+                    }
+                }
+
                 // E1.4: delta cascade. For every window in the subtree
                 // EXCEPT the moved one, compare its pre-move clipList to
                 // its post-recompute clipList. If the clipList CHANGED
@@ -4623,6 +4712,28 @@ public final class ServerSession: @unchecked Sendable {
                               otherTop == topId else { continue }
                         let newClip = otherEntry.clipList
                         if newClip == oldClip { continue }
+                        // Pure-move blit covers descendants of r.window
+                        // whose pixels were visible pre-move (and thus
+                        // included in the blit source). Skip the over-emit
+                        // paint+Expose ONLY when the blit fully covered
+                        // this descendant's new clipList — i.e. the
+                        // descendant's pre-move clipList, translated by
+                        // the move delta, contains every pixel of its new
+                        // clipList. Partial coverage (descendant was half-
+                        // off-screen pre-move, now fully visible; or thumb-
+                        // dragged across the viewport edge multiple times)
+                        // falls through to the normal paint+Expose so the
+                        // newly-revealed half gets redrawn — without this
+                        // gate, the missing half stays blank or shows
+                        // stale pixels.
+                        if blittedPureMove && preMoveDescendants.contains(otherId) {
+                            let oldTranslated = oldClip.translated(
+                                dx: pureMoveDeviceDx, dy: pureMoveDeviceDy
+                            )
+                            if newClip.subtracting(oldTranslated).rects.isEmpty {
+                                continue
+                            }
+                        }
                         // Paint this window's own bg (with ParentRelative
                         // walk if backPixel is nil) over the FULL new
                         // clipList.
@@ -4775,13 +4886,76 @@ public final class ServerSession: @unchecked Sendable {
                 //   their new positions; Expose is the standard signal.
                 //   Test broadly after building.
                 if (sizeGrew || posChanged) && (entry.eventMask & MockWindowBridge.exposureMask != 0) {
-                    log?.log("  → emit Expose on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height) (sizeGrew=\(sizeGrew) posChanged=\(posChanged))")
-                    let rects = exposeRectsForWindow(r.window)
-                    MockWindowBridge.emitExposesForRects(
-                        window: r.window, rects: rects,
-                        byteOrder: byteOrder, sequence: sequenceNumber,
-                        outbound: outbound
-                    )
+                    if blittedPureMove {
+                        // Newly-visible (for r.window's Expose) = r.window's
+                        // newClip minus blit-preserved-inside-newClip. The
+                        // blit's overall preserved set spans newUnion (incl.
+                        // descendants), but Expose to r.window should only
+                        // cover r.window's own clipList — descendants get
+                        // their own Expose treatment via the E1.4 skip.
+                        let postEntry = windows.get(r.window) ?? entry
+                        let newClip = postEntry.clipList
+                        var preMoveUnion = preMoveOwnClipList
+                        for descId in preMoveDescendants {
+                            if let descClip = preMoveClipLists[descId] {
+                                preMoveUnion = preMoveUnion.unioned(with: descClip)
+                            }
+                        }
+                        let preservedDev = preMoveUnion
+                            .translated(dx: pureMoveDeviceDx, dy: pureMoveDeviceDy)
+                            .intersected(with: newClip)
+                        let newlyVisibleDev = newClip.subtracting(preservedDev)
+                        if !newlyVisibleDev.rects.isEmpty {
+                            // Bg-paint the newly-visible strip BEFORE the
+                            // client redraws on Expose. Without this, xmmap
+                            // / dtfile / other line-draw apps overlay their
+                            // new content on stale pixels (the old window-
+                            // bottom content, including old label-widget
+                            // pixels), producing the "ghost trail" artifact.
+                            // Strictly clipped to newlyVisibleDev — does NOT
+                            // touch the blit'd preserved area — so the
+                            // SHORTCUTS Step F "(c) clip paint-rects strictly
+                            // to the moved widget's clipList" guard holds.
+                            if let topId = moveSubtreeTop {
+                                let bg = effectiveAncestorBg(from: r.window, byteOrder: byteOrder)
+                                let paintRects = newlyVisibleDev.rects.map {
+                                    WindowBackgroundRect(
+                                        x: Int16(clamping: $0.x1), y: Int16(clamping: $0.y1),
+                                        width: UInt16(clamping: $0.x2 - $0.x1),
+                                        height: UInt16(clamping: $0.y2 - $0.y1),
+                                        color: bg
+                                    )
+                                }
+                                bridge?.paintWindowRects(topLevel: topId, rects: paintRects)
+                            }
+                            let s = config.deviceScale
+                            let (_, odx, ody) = topLevelAndOffset(for: r.window) ?? (0, 0, 0)
+                            let odxI = Int32(odx), odyI = Int32(ody)
+                            let localRects = newlyVisibleDev.rects.map { box -> BoxRec in
+                                let logical = box.scaledToLogical(by: s)
+                                return BoxRec(
+                                    x1: logical.x1 - odxI, y1: logical.y1 - odyI,
+                                    x2: logical.x2 - odxI, y2: logical.y2 - odyI
+                                )
+                            }
+                            log?.log("  → paint+Expose on 0x\(String(r.window, radix: 16)) NEWLY-VISIBLE (blittedPureMove) rects=\(localRects.count)")
+                            MockWindowBridge.emitExposesForRects(
+                                window: r.window, rects: localRects,
+                                byteOrder: byteOrder, sequence: sequenceNumber,
+                                outbound: outbound
+                            )
+                        } else {
+                            log?.log("  → suppress Expose on 0x\(String(r.window, radix: 16)) (blittedPureMove, fully preserved)")
+                        }
+                    } else {
+                        log?.log("  → emit Expose on 0x\(String(r.window, radix: 16)) \(new.width)x\(new.height) (sizeGrew=\(sizeGrew) posChanged=\(posChanged))")
+                        let rects = exposeRectsForWindow(r.window)
+                        MockWindowBridge.emitExposesForRects(
+                            window: r.window, rects: rects,
+                            byteOrder: byteOrder, sequence: sequenceNumber,
+                            outbound: outbound
+                        )
+                    }
                 }
             } else if stackChanged, let entry = windows.get(r.window) {
                 // Stack-only change (no geometry mutation). Still need to
