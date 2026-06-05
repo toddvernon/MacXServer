@@ -186,3 +186,20 @@ private final class MotifFrameProviderAdapter: MotifFramePreferencesProvider, @u
         )
     }
 }
+
+/// Pins `enabled` to a CLI-passed value while still reading `buttonStyle`
+/// from live Preferences. Used by `--motif-frame` / `--no-motif-frame` so
+/// two macxserver processes can be running side-by-side with different
+/// chrome (UserDefaults is shared across processes by bundle ID).
+final class MotifFrameCLIOverrideProvider: MotifFramePreferencesProvider, @unchecked Sendable {
+    private let underlying: MotifFramePreferencesProvider
+    private let enabledOverride: Bool
+    init(underlying: MotifFramePreferencesProvider, enabledOverride: Bool) {
+        self.underlying = underlying
+        self.enabledOverride = enabledOverride
+    }
+    var current: MotifFramePreferences {
+        let base = underlying.current
+        return MotifFramePreferences(enabled: enabledOverride, buttonStyle: base.buttonStyle)
+    }
+}

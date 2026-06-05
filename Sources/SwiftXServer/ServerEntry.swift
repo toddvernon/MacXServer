@@ -83,6 +83,10 @@ enum ServerEntry {
         // --scale {2,3} forces a specific scale. Default (nil) lets the picker
         // choose, which prefers 3x. See SCALE_PICKER.md for the design.
         var forcedScale: Double? = nil
+        // --motif-frame / --no-motif-frame override the Preferences toggle
+        // for this process only. Useful for screenshot sessions where you
+        // want two servers side-by-side with different chrome.
+        var motifFrameOverride: Bool? = nil
 
         let args = Array(CommandLine.arguments.dropFirst())
         var i = 0
@@ -100,7 +104,8 @@ enum ServerEntry {
             case "-h", "--help":
                 print("""
                 usage: macxserver [--host HOST] [--port PORT] [--capture | --no-capture]
-                                  [--scale {2,3}] [--verbose]
+                                  [--scale {2,3}] [--motif-frame | --no-motif-frame]
+                                  [--verbose]
 
                 Listens for X client connections on HOST:PORT (default 0.0.0.0:6000
                 which is X DISPLAY :0). Top-level X windows become real NSWindows on
@@ -115,6 +120,10 @@ enum ServerEntry {
                 the Preferences value applies (default: Auto, which prefers 3x).
                 --scale 2 re-picks the logical-root size to the largest preset
                 that fits at 2x. See SCALE_PICKER.md.
+
+                --motif-frame / --no-motif-frame override the Preferences "Use
+                Motif window frame" toggle for this process only. Useful for
+                running two servers side-by-side with different chrome.
 
                 --verbose mirrors per-session and bridge traces to stderr. By default
                 they're disk-only at /tmp/macxserver/<instance>-<timestamp>.log;
@@ -143,6 +152,10 @@ enum ServerEntry {
                     writeStderr("--scale needs 2 or 3\n"); exit(2)
                 }
                 forcedScale = s
+            case "--motif-frame":
+                motifFrameOverride = true
+            case "--no-motif-frame":
+                motifFrameOverride = false
             default:
                 writeStderr("unknown arg: \(args[i])\n")
                 exit(2)
@@ -188,6 +201,13 @@ enum ServerEntry {
         // snapshots `current` at mapTopLevel time, so the live values are
         // always honored for new windows.
         bridge.motifFramePrefs = appDelegate.preferences.motifFrameProvider
+        if let override = motifFrameOverride {
+            bridge.motifFramePrefs = MotifFrameCLIOverrideProvider(
+                underlying: appDelegate.preferences.motifFrameProvider,
+                enabledOverride: override
+            )
+            writeStderr("motif frame: \(override ? "ON" : "OFF") (CLI override)\n")
+        }
         appDelegate.listener = listener
         app.delegate = appDelegate
         // `.regular`: standard Mac app. `.accessory` would hide the Dock icon but
