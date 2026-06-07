@@ -1,181 +1,124 @@
-# Status 2026-06-04
+# Status 2026-06-06
 
-Four landings today:
+Two-session website day. Zero commits to this repo; all work on
+macxserver-hugo (github.com:toddvernon/MacXServerSite). Early session
+built out the Deep dives section. Evening session restructured the
+navigation, wrote and promoted the XQuartz comparison article, and ran
+a content-cleanup pass across every page. The server itself is
+unchanged from 2026-06-04.
 
-1. **Resources editor panel doubled** (`a2c358a`). One-line cosmetic
-   tweak: initial size 760×580 → 1520×1160. Min size unchanged.
+## Early-session work
 
-2. **Step F bit-gravity blit revived** (`aad3689`). The "scrolling
-   regions leave ghost content" bug in xmmap / dtfile tracked down to
-   our `handleConfigureWindow` doing no framebuffer blit on pure-move
-   and instead over-emitting Expose for the full new clipList. xmmap
-   (1000×1000 canvas scrolled in a viewport, with Motif label widget
-   children) shows the symptom most clearly: drag the scrollbar, get
-   cascading ghost trails of every label widget at every prior
-   position. Per SHORTCUTS Step F's documented exit plan, the fix
-   path was (a) opt-in flag, (b) revive `_unused_blitWindowRegion`,
-   (c) clip paint-rects strictly to moved widget's clipList, (d) per-
-   gravity-class processing, (e) live-Sun validation. Steps a-c shipped
-   today. xmmap and dtfile both render cleanly with the flag on,
-   including discrete page-downs, thumb drags, and partial-visibility
-   descendants crossing the viewport edge.
+1. **Deep dives section** (`26da053` on MacXServerSite). New
+   `/deep-dives/` nav with RSS feed at `/deep-dives/index.xml` and feed
+   auto-discovery in `<head>`. Conversational Q&A format: Todd's intro
+   sets up a problem, his question in a blue blockquote, Claude's
+   response in a green-sidebar `claude-response` box via a `{{% claude
+   %}}` Hugo shortcode.
 
-   Six iterations to land this:
-   - initial blit gating + descendant-suppress + Expose-delta path
-   - crop-Y must be top-down per `CGImage.cropping(to:)` (the prior
-     `_unused_blitWindowRegion` Cartesian flip was a latent bug); use
-     `drawImageRespectingYFlip` per GRAPHICS_Y_FLIP.md
-   - bg-paint the newly-revealed strip before emitting Expose, else
-     PolyLine clients overdraw on stale pixels
-   - blit src must include each descendant clipList (canvas clipList
-     has holes where opaque child widgets sit; descendants fill them)
-   - blit dst must clip to subtree newUnion, not just r.window's newClip
-     (clipping to just newClip drops label new positions; labels vanish)
-   - descendant Expose-skip needs full-coverage check (partial coverage
-     = thumb-dragged across viewport edge = newly-revealed half blank
-     unless we fall through to the normal redraw path)
+2. **Four deep-dive posts**: *Cell follows font* (Day 5), *Pixel
+   perfect* (Day 12), *How menus know where they are* (Day 16 ICCCM
+   4.1.5), *Lift, don't intellectualize* (Day 21 miregion port).
 
-   Files: `WindowBridge.swift` (protocol + no-op default), `CocoaWindowBridge.swift`
-   (`blitWindowRegion` impl, deferred-queue ordered), `ServerSession.swift`
-   (pure-move branch in handleConfigureWindow), `SHORTCUTS.md` (Step F
-   entry rewritten).
+3. **Stats strip + ledger label cleanup**. Dropped the "12+ live X
+   clients" cell from the home-page stats strip and renamed "wire
+   interactions" to "opcodes".
 
-3. **External-facing names swept to macXserver / macxcapture** (`f4a0cb5`).
-   Settled-name consistency pass: `/tmp/swift-x-captures` →
-   `/tmp/macxcapture`, `~/.swiftx-{resources,fonts,launchers}` →
-   `~/.macxserver-{...}`, `[swiftx-config]` block → `[macxserver-config]`,
-   Keychain service `swiftx-launcher` → `macxserver-launcher`, X
-   SetupAccepted vendor string `"swift-x"` → `"macXserver"`, default
-   NSWindow title fallback `"swift-x"` → `"macXserver"`, clipboard
-   staging atom `SWIFTX_CLIP_FROM_X` → `MACXSERVER_CLIP_FROM_X`. Docs
-   and seed-content comments updated to match. Existing dotfiles
-   renamed in place before the commit (no in-binary migration). Tests
-   updated; 1262/0. **Not touched** (deliberate): Swift module names
-   `SwiftX*`, bundle IDs `com.toddvernon.swiftx.*`, package name
-   `swift-x`, source dir `Sources/SwiftX*/`, project codename in
-   CLAUDE.md, DECISIONS.md and historical STATUS.md entries.
+4. **All 19 .md files wrapped to 80 cols** for hand-editability. Script
+   at `/tmp/wrap-md.py` (frontmatter-safe, code/HTML/shortcode/
+   table-safe). Saved as memory `feedback_markdown_wrap_80.md`.
 
-4. **Blit default flipped ON** (`989ae68`). Trigger: the user's
-   daily-driver `MacXServer.app` (Xcode-launched) came up without
-   `SWIFTX_BLIT_PURE_MOVE=1` and the ghost-trail symptom returned.
-   Default flipped so the fix takes effect for every launch without
-   per-launch env-var management. Escape hatch preserved:
-   `SWIFTX_BLIT_PURE_MOVE=0` reverts to the over-emit path if a
-   regression surfaces in dtpad / quickplot / another cascading-pure-
-   move app. SHORTCUTS Step F entry updated accordingly.
+5. **Detail-page screenshot frame removed**. Card treatment now scoped
+   to `body.home .hero-image img` only; deep-dive and feature
+   screenshots show bare so their captured native shadows don't get
+   double-stamped.
+
+## Evening-session work
+
+6. **Why not XQuartz? deep dive** (new). At
+   `/deep-dives/why-macxserver-instead-of-xquartz/`. Honest scorecard:
+   parity → wins → losses → not-in-mission tables. Leads with display
+   scaling and display quality as THE #1 motivation (not Mac
+   integration, which is second-tier). Names the 5K Studio Display
+   failure mode on XQuartz and the Linux equivalent (`xrandr --scale`,
+   `Xft.dpi`, `GDK_SCALE`, `QT_SCALE_FACTOR` don't compose into a
+   working solution). Closes with a "look at the screenshots, or just
+   try it, it's free" callout.
+
+7. **Navigation restructure**:
+   - New "The Project" page at `/the-project/` carrying the project
+     intro + "Why" sections that previously lived on About.
+   - "Ledger" menu item renamed to "30-Day Sprint". URL stays
+     `/ledger/` so every `[Day N](/ledger/#day-N)` link still works.
+   - "Why not XQuartz?" promoted to top nav, weight 2.
+   - About page trimmed to just the bio (About me + Around the web +
+     contact pointer), expanded with content pulled from
+     oldsilicon.com/about (NASA X-Planes start, three Boulder
+     companies, VictorOps/Splunk exit, Wrecking Crew Labs framing).
+     Todd's photo added as a right-float.
+   - Final menu order: **The Project · Why not XQuartz? · 30-Day
+     Sprint · Features · Deep dives · About · GitHub**.
+
+8. **Day-N hyperlinks across 19 files**. Mechanical pass: bare "Day N"
+   in body prose became `[Day N](/ledger/#day-N)`; plural ranges
+   "Days 1-2" link to the start day. Script at `/tmp/link_days.py`
+   skipped frontmatter, blockquotes, `<figure>` blocks, and code
+   blocks. Cleanup pass dropped redundant "see the [ledger]" suffixes
+   from feature-page Related sections (they had become double-links
+   after the first pass).
+
+9. **Page-layout fixes**:
+   - Feature single layout switched to `prose-wide` to match deep-dive
+     column width (was using narrower `.prose`).
+   - About / `_default` single layout: removed `container narrow`,
+     gives the wider feature/deep-dive column.
+   - Card images switched from `object-fit: contain` to `object-fit:
+     cover` with `object-position: top left` so off-aspect-ratio cards
+     fill the frame instead of letterboxing.
+   - New `Params.tagline` field on `_default/single.html` takes
+     precedence over `.Description` for the lede. Lets a page have a
+     short visible tagline while keeping a long SEO description.
+
+10. **Content cleanup across feature + deep-dive pages**:
+    - "Why it matters" headers dropped on all 8 feature pages (read as
+      defensive product-pitch language); prose under them folded into
+      "What it does" as continuation paragraphs.
+    - Jargon strip: undefined "gold" and "chrome" (inside-baseball)
+      rewritten as "reference" / "captured originals" / "the Sun" and
+      "frame" / "styling" / "appearance" respectively. Defined "gold"
+      inside `the-corpus-is-the-test-suite` article body kept (it's
+      defined in context); "gold standard" English idiom in
+      cell-follows-font kept; "Chrome browser" proper noun kept.
+
+11. **New screenshots on shaped-windows feature page**: oclock-over-
+    Excel image (Excel toolbar visibly cut behind the round window
+    proves transparency is real), xeyes-over-xterm image (eyes peering
+    at a `ls -l` listing through the SHAPE mask). Old fallbacks at
+    `shaped-windows-card.png` and `shaped-windows-hero.png` left on
+    disk in case of revert.
+
+12. **Mission Control proof image** wired into the first-class-windows
+    feature page after a live test confirmed F3 / Control-F3 / Cmd-Tab
+    all participate correctly with X windows.
+
+13. **macxserver.com still live** at HTTPS. About 20 commits, 20
+    deploys, no infra changes.
 
 ## What's next
 
-- **Opportunistic validation against quickplot and dtpad** with the
-  default flipped. Those are the two apps the 2026-05-25 attempt
-  regressed (quickplot SlateBlue bleed, dtpad menu-bar erase on
-  dialog-pop cascade). Both have legitimate cascade-of-pure-moves
-  scenarios this revival hasn't been stress-tested against — if a
-  regression surfaces in normal use, set `SWIFTX_BLIT_PURE_MOVE=0`
-  and reopen SHORTCUTS Step F.
-- **xmmap wire counts** should now be in the ballpark of gold's ~140
-  Expose events per session instead of yesterday's 1842. Worth a
-  capture-diff confirmation when convenient.
+- Orphan screenshot (`Screenshot 2026-06-06 at 9.27.43 AM.png`) still
+  sitting uncommitted at the top of `~/Dropbox/dev/MacXServer/macxserver-hugo/`.
+  Todd hasn't said what it's for. Ask before next commit.
+- The 1.8 MB `todd-vernon.jpg` on the About page could be downscaled
+  (currently 2500×3333, renders at 220px). Page-weight only; visually
+  fine.
+- URL slug for "How menus know where they are" is still
+  `/deep-dives/the-synthetic-configurenotify/`. No inbound link
+  breakage yet but the slug doesn't match the title.
+- Em-dash sweep across existing site content is overdue (Todd's voice
+  rule bans them; older content still has `&mdash;` everywhere).
+  Tonight's new content avoided them; older content didn't get
+  touched. Not asked for yet; flag if it becomes a topic.
+- Five deep-dive ideas seeded but unwritten from earlier sessions.
 
 ---
-
-# Status 2026-06-03 (end of day, second update)
-
-Three landings today, all in the "make the server feel right across
-multiple sessions" bucket. The xcalc paint-region investigation from
-earlier this morning is in the previous status snapshot (now in
-git log, commit `168193a`); today's afternoon work is below.
-
-## What landed
-
-### `9e2df18` -- xeyes tracks across sessions + over Motif frame chrome
-
-Root cause: each `ServerSession` had a per-session `lastPointerXY` that
-only updated from mouseMoved events on that session's own NSWindows.
-xeyes (or any XQueryPointer poller) saw stale coords whenever the cursor
-crossed into a different session's window or our Motif frame chrome.
-
-Fix: server-global pointer cache on `CocoaWindowBridge` (it's already a
-per-process singleton). All sessions push X-root coords to it on every
-pointer-update path; `QueryPointer` reads from it. Added `mouseMoved` +
-an active-always tracking area to `MotifFrameView` so the cursor stays
-tracked while it's over frame chrome on the same NSWindow.
-
-Caught a subtle bug while wiring it up: out-of-bounds frame-chrome
-events would have triggered a spurious EnterNotify on the top-level
-(FlippedXView's mouseExited had already cleared `currentPointerWindow`).
-Added a bounds guard in `handlePointerMoved` that runs *after* the
-global-cache update but *before* the deepestMappedWindow walk.
-
-Pre-existing limitation kept: cursor over third-party Mac windows while
-our server is foreground still freezes the cache. That one needs a
-CGEventTap / accessibility hook, out of scope.
-
-### `d246604` -- composite chrome thinning replaces per-dialog enumeration
-
-The seed for `~/.swiftx-resources` used to enumerate ~30 dt-app dialog
-instance names (Dtcalc*rframe*, Dtcalc*frframe*, Dtterm*terminal*,
-Dtpad*Warn*, ...) and set shadowThickness / highlightThickness /
-defaultButtonShadowThickness to 1 on each. Collapsed to 12 global
-`*XmPushButton.shadowThickness: 1`-style rules. Safe against quickplot
-because XtSetArg pins in its own source (about_dialog.c:178,
-legend_dialog.c:483) win over Xrm regardless of rule specificity.
-
-Also added `*XmPushButton.borderWidth: 1` to mirror what quickplot
-does per-button via XtSetArg in dialog.c:738-755, and deliberately
-left `defaultButtonShadowThickness` unset:
-
-  - Quickplot's Form-based dialogs: dbst=0 -> no BulletinBoard machinery
-    fires -> default button has no separate ring, just the bevel.
-  - dt-apps (XmTemplateDialog / XmMessageBox / XmDialog, BulletinBoard
-    derivatives): BulletinBoard auto-sets dbst > 0 via
-    ShowAsDefault(DEFAULT_READY), which triggers AdjustHighLightThickness
-    silently inflating highlight_thickness by Xm3D_ENHANCE_PIXEL (= 2,
-    hardcoded in `reference/motif/lib/Xm/XmP.h:161`). That's the 2-px
-    "trough" we see on dtterm's OK button between the button bevel and
-    the default-button ring. Tried setting dbst=1 in Xrm directly to
-    bypass the auto-inflation (Motif source suggested it would); the
-    inflation didn't budge. Documented as a Motif-level artifact we
-    accept.
-
-Net effect on the seed: ~290 lines of per-dialog enumeration collapse
-to 12 global rules. Tests for the load-bearing fontList rules (Helvetica
-class set, Courier for Dtpad) still pass; 1262 tests green.
-
-### `a0d0612` -- launcher seed docs `$HOME` vs `~` gotcha
-
-Live debugging: u5 launcher for quickplot was failing with
-`~/dev/quickplot/quickplot`. Cause: we force `/bin/sh -c` on the remote
-side, and `/bin/sh` on a vintage Sun is often the original Bourne shell
-which doesn't do tilde expansion (POSIX feature added later). The user's
-interactive csh/ksh login handled `~` fine; `/bin/sh` didn't. Fix in
-the launcher file is `$HOME/dev/quickplot/quickplot` (variable expansion
-works in every shell back to v7). Documented in the seed comment along
-with the single-quote-breaks-the-wrapper warning.
-
-## Carrying forward
-
-- AllocColor pixel-value drift on cross-session replay (still parked).
-- xmmap blit-on-move (Step F).
-- Preferences Display Size radio (Auto / Comfortable / Compact)
-  shipped 2026-06-02 -- still wants live Sun-box validation.
-- Cursor over third-party Mac windows while server is foreground:
-  needs CGEventTap or accessibility hook. Low priority; the in-session
-  + Motif-frame coverage we shipped today handles every case where
-  it actually matters for X-client tracking.
-- dt-app default-button trough is now documented as a Motif-internal
-  artifact. If we ever want to truly fix it, the answer lives in
-  Motif's AdjustHighLightThickness (PushBG.c:2857); would require
-  patching/replacing Motif's default-button setup machinery, not Xrm.
-- Bigger picture: today validated the silent-lie-audit recipe
-  (memory `feedback_silent_lie_audit_recipe`) -- the server-global
-  pointer cache was a "hidden lie" via stale per-session cache; the
-  user noticed the wrong behavior in xeyes and we traced it cleanly.
-
-## What today's afternoon investigation cost
-
-About a session on the Motif default-button ring/trough analysis,
-reading PushBG.c / BBUtil.c / BulletinB.c carefully before realizing
-the trough is a Motif-internal hardcoded constant. The investigation
-was worth the time: now documented in the resources seed so future-me
-doesn't try the same dbst-via-Xrm experiment again.
