@@ -10,6 +10,9 @@ connect to as their display, and a capture utility that records X11
 sessions to disk and can replay them. They share a typed Swift wire
 decoder (the framer) and a common `.xtap` file format.
 
+To learn more, with screenshots and the build log, see
+[macxserver.com](https://macxserver.com).
+
 ## What's here
 
 - `Sources/Framer/` — typed Swift decoders for the X11 core protocol.
