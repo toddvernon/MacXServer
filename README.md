@@ -1,5 +1,7 @@
 # MacXServer
 
+[![macXserver running xterm, quickplot, and oclock from a Sun Ultra 5 alongside native Mac apps on a Studio Display](docs/hero.png)](https://macxserver.com)
+
 A modern X11 server in Swift for macOS, plus a capture toolchain for
 recording and inspecting X11 wire traffic. Built so I can display X
 applications from real vintage Sun workstations on my Mac with proper
