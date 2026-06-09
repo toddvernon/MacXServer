@@ -1,0 +1,21 @@
+macXserver
+Copyright 2026 Todd Vernon
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It includes software derived from the X11R6 reference implementation of the
+X Window System. The original X Consortium and Digital Equipment Corporation
+copyright and permission notices are retained in the headers of the derived
+files, as required by the X11 (MIT/X Consortium) license:
+
+  - Sources/SwiftXServerCore/Region/Region.swift
+    Sources/SwiftXServerCore/Region/RegionOp.swift
+    Sources/SwiftXServerCore/Region/RegionExtras.swift
+      Derived from xc/programs/Xserver/mi/miregion.c
+      Copyright (c) 1987, 1988, 1989 X Consortium
+      Copyright 1987, 1988, 1989 Digital Equipment Corporation,
+        Maynard, Massachusetts
+
+  - Sources/SwiftXServerCore/ShapeExtension.swift
+      Derived from xc/programs/Xserver/Xext/shape.c
+      Copyright (c) 1989 X Consortium
