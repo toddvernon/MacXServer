@@ -38,8 +38,8 @@ decoder (the framer) and a common `.xtap` file format.
 - `captures/` — `.xtap` files from real Sun workstations. xterm
   (multiple sessions), xeyes, xclock, xcalc, quickplot, and the
   full CDE dt-app suite.
-- `Tests/` — 749 tests across the framer, capture library, server
-  core, file format, and end-to-end integration paths.
+- `Tests/` — over 1,200 tests across the framer, capture library,
+  server core, file format, and end-to-end integration paths.
 
 ## Quick start
 
@@ -167,3 +167,22 @@ session lands as a `.xtap` for inspection. See
 `PRODUCT_2_SERVER.md` for milestone definitions and
 `OPCODE_STATUS.md` / `SHORTCUTS.md` for what's shipped vs
 stubbed.
+
+## Requirements
+
+macOS 14 or later and a recent Swift toolchain (Xcode 15+). No other
+dependencies.
+
+## Contributing
+
+The most useful contributions are good bug reports with an `.xtap`
+capture attached, and captures from X clients I don't have access to.
+Code contributions are welcome too. See `CONTRIBUTING.md` for the build,
+the capture-a-bug workflow, and the ledger conventions, and
+`CODE_OF_CONDUCT.md` for the ground rules.
+
+## License
+
+Apache-2.0. See `LICENSE`. Portions are derived from the X11R6 reference
+implementation; those files retain the original X Consortium / Digital
+Equipment Corporation notices, summarized in `NOTICE`.

@@ -1,0 +1,21 @@
+name: Feature request
+description: Suggest an opcode, client, or capability to support
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like
+      description: The behavior, opcode, client, or extension you want supported.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: What X client or workflow needs it? A capture of the client running helps a lot.
+  - type: markdown
+    attributes:
+      value: |
+        Check the non-goals in PROJECT.md before filing. Some scope is
+        deliberately out.

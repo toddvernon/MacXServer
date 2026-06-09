@@ -1,0 +1,40 @@
+name: Bug report
+description: Report something the server or capture tool got wrong
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The single most useful thing you can attach is an `.xtap` capture of
+        the misbehaving session. Run `macxserver --capture`, reproduce the
+        bug, and grab the freshest file from `/tmp/macxcapture/`. See
+        CONTRIBUTING.md for details.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: X client and toolkit
+      description: e.g. xterm, dtterm (CDE/Motif), an Xt/Athena app. Note the source machine if it's vintage hardware.
+    validations:
+      required: true
+  - type: textarea
+    id: capture
+    attributes:
+      label: Capture (.xtap)
+      description: Drag the `.xtap` file here to attach it. If you can't share one, say so and describe the session.
+  - type: input
+    id: version
+    attributes:
+      label: macOS version and build
+      description: e.g. macOS 14.5, built from commit abc1234.
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Logs, screenshots, steps to reproduce.
