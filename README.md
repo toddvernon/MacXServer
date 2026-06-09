@@ -26,19 +26,18 @@ To learn more, with screenshots and the build log, see
   Motif graphing app), and CDE's dt-apps (dtcalc, dtterm,
   dthelpview, dtpad, dticon).
 - `Sources/SwiftXCapture/` + `Sources/SwiftXCaptureCore/` +
-  `Sources/SwiftXCaptureUI/` — the capture utility (CLI, core
-  library, and a shared SwiftUI layer). Single binary, two faces:
+  `Sources/SwiftXCaptureUI/` — the capture utility (a SwiftUI app, a
+  core library, and a CLI). Single binary, two faces:
+  - **SwiftUI app** (what most people will use): three modes. Record
+    (proxy a session interactively with live byte counters and a
+    decoded-opcode feed), Open (pick a `.xtap` and browse packet by
+    packet), Replay (pipe a `.xtap` into a target server with progress
+    bar, cancel button, and hold-open).
   - **CLI**: proxy capture, dump, summary, diff, replay
     subcommands. Backwards-compatible with the v1 tool.
-  - **SwiftUI app**: three modes — Record (proxy a session
-    interactively with live byte counters and a decoded-opcode
-    feed), Open (pick a `.xtap` and browse packet by packet),
-    Replay (pipe a `.xtap` into a target server with progress
-    bar, cancel button, and hold-open).
 
   The server can also tee its own sessions to `.xtap` files via
-  `--capture` — useful for "hit a bug and email me the file"
-  workflows.
+  `--capture`, handy for attaching a capture to a bug report.
 - `captures/` — `.xtap` files from real Sun workstations. xterm
   (multiple sessions), xeyes, xclock, xcalc, quickplot, and the
   full CDE dt-app suite.
@@ -47,51 +46,62 @@ To learn more, with screenshots and the build log, see
 
 ## Quick start
 
-Build:
+The server and the capture tool are two Mac apps. Build and run them from
+Xcode (15+, macOS 14+) so you get the real `.app` bundles with their icons
+and menu-bar presence. Open `MacXServer.xcodeproj`; there are two schemes:
 
-```
-swift build -c release
-```
+- **MacXServer** is the X server. Run it (⌘R) and a status item appears in
+  the menu bar with the listen address (port 6000 maps to display `:0`) and
+  a Stop Server item. Preferences (⌘,) cover clipboard bridging, font
+  mappings, and capture.
+- **MacXCapture** is the capture app, covered below.
 
-### Running the server
-
-Start it listening on the default X display port (6000 → display
-`:0`):
-
-```
-.build/release/macxserver
-```
-
-Status menu appears in the menu bar with the listen address and a
-Stop Server item. Preferences (⌘,) covers clipboard bridging, font
-mappings, and the capture toggle.
-
-Point an X client at it from a real Sun (or anywhere on the LAN):
+With the server running, point an X client at it from a real Sun (or
+anywhere on the LAN):
 
 ```
 xterm -display <mac-ip>:0
 ```
 
-### Capture, GUI
+### The capture app
 
-```
-.build/release/macxcapture
-```
+`MacXCapture` is how most people will use the capture tool. Run the
+**MacXCapture** scheme in Xcode. Three modes:
 
-Launches a chooser with three modes (Record / Open / Replay).
-Defaults to opening files from `/tmp/macxcapture/` so the
-server's auto-captures are the obvious choice.
+- **Record**: proxy a live session with byte counters and a decoded-opcode
+  feed.
+- **Open**: pick a `.xtap` file and browse it packet by packet.
+- **Replay**: pipe a `.xtap` into a target server, with a progress bar,
+  cancel, and hold-open.
 
-### Capture, CLI
+It opens files from `/tmp/macxcapture/` by default, so the server's
+auto-captures are one click away.
 
-The v1 CLI behavior is preserved. Any subcommand triggers the
-CLI; no args launches the GUI. `--no-gui` is also recognised as
-an explicit "headless mode" flag for scripts that want CLI
-behaviour even with empty args.
+### Server-side capture
+
+Turn on capture in the server's Preferences, Capture tab (or launch the
+binary with `--capture`). Every X client that connects gets its own `.xtap`
+file in `/tmp/macxcapture/`, named after its `WM_CLASS`. `/tmp` wipes on
+reboot, so captures don't pile up.
+
+For bug reports: turn capture on, reproduce the issue, and attach the
+freshest file from `/tmp/macxcapture/` to a GitHub issue (see
+CONTRIBUTING.md).
+
+### Command-line builds and the CLI
+
+`swift build -c release` builds everything and is what `swift test` uses,
+but it produces bare command-line binaries in `.build/release/` with no
+`.app` bundle, so the server won't get its real menu-bar icon. Use Xcode
+for the polished apps; reach for `swift build` when you want headless or
+scripted runs.
+
+The capture tool also keeps a full CLI (the v1 interface). Any subcommand
+runs the CLI; no args launches the GUI; `--no-gui` forces headless mode for
+scripts.
 
 ```
 # proxy two real X endpoints
-# (./run-capture.sh reads connection.json, see below)
 .build/release/macxcapture \
     --listen :6001 \
     --forward sun-b.lan:6000 \
@@ -108,32 +118,13 @@ behaviour even with empty args.
     --target localhost:6000
 ```
 
-`./run-capture.sh` is a build-and-run wrapper that reads
-`connection.json` (`listen` / `forward` / `output`) for proxy
-mode and passes any other args straight through to `macxcapture`.
-Copy `connection.example.json` to `connection.json` and edit it
-first; the real file is gitignored so your host stays local.
-`./run-server.sh` does the same for the server. `./run-all.sh`
-starts macxserver + a proxy capture forwarding into it — used for
-"capture what swiftx itself produces" diffing against gold Sun
-captures.
-
-### Server-side capture
-
-```
-.build/release/macxserver --capture
-```
-
-Every X client connecting to the server gets its own `.xtap` file
-in `/tmp/macxcapture/`, named after the client's `WM_CLASS`
-once it identifies itself. The toggle is also available in the
-server's Preferences → Capture tab; the CLI flag overrides the
-preference. `/tmp` wipes on reboot, so captures don't accumulate
-forever.
-
-For bug reports: turn capture on, reproduce the issue, and attach
-the freshest file from `/tmp/macxcapture/` to a GitHub issue (see
-CONTRIBUTING.md).
+`./run-capture.sh`, `./run-server.sh`, and `./run-all.sh` are build-and-run
+wrappers around the command-line binaries. `run-capture.sh` reads
+`connection.json` (`listen` / `forward` / `output`) for proxy mode; copy
+`connection.example.json` to `connection.json` and edit it first, since the
+real file is gitignored so your host stays local. `run-all.sh` starts
+macxserver plus a proxy capture forwarding into it, for diffing what swiftx
+produces against gold Sun captures.
 
 ## Tests
 

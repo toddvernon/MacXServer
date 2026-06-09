@@ -16,6 +16,11 @@ swift test
 macOS 14 or later, a recent Swift toolchain (Xcode 15+). No other
 dependencies, no package manager beyond SwiftPM, no build system to learn.
 
+`swift build` and `swift test` are the dev loop. To run the actual apps
+(with their icons and menu-bar presence), open `MacXServer.xcodeproj` and
+run the `MacXServer` or `MacXCapture` scheme. `swift build` produces bare
+command-line binaries without the `.app` bundle.
+
 ## Filing a bug (the good way: attach a capture)
 
 The single most useful thing you can include in a bug report is an `.xtap`
