@@ -35,3 +35,6 @@ capture_screen_ui/
 # Project-personal Claude instructions (two-Mac setup, preflight, bio
 # pointers). Public-safe project guidance lives in CLAUDE.md instead.
 CLAUDE.local.md
+
+# Personal capture connection config (real host). Use connection.example.json as a template.
+connection.json

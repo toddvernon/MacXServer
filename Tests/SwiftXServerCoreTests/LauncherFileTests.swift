@@ -7,7 +7,7 @@ final class LauncherFileTests: XCTestCase {
         let file = LauncherFile.parse("""
         [xterm on u5]
         host = u5.example.com
-        user = todd
+        user = alice
         command = xterm
         password = hunter2
         """)
@@ -19,7 +19,7 @@ final class LauncherFileTests: XCTestCase {
         let file = LauncherFile.parse("""
         [xcalc on ss2]
         host = ss2.example.com
-        user = todd
+        user = alice
         command = xcalc
         """)
         XCTAssertEqual(file.entries.count, 1)
@@ -55,17 +55,17 @@ final class LauncherFileTests: XCTestCase {
         let file = LauncherFile.parse("""
         [xterm on u5]
         host = u5.example.com
-        user = todd
+        user = alice
         command = xterm
 
         [dtpad on u5]
         host = u5.example.com
-        user = todd
+        user = alice
         command = dtpad
 
         [xterm on ss2]
         host = ss2.example.com
-        user = todd
+        user = alice
         command = xterm
         """)
         XCTAssertEqual(file.entries.count, 3)
@@ -84,8 +84,8 @@ final class LauncherFileTests: XCTestCase {
         let file = LauncherFile.parse("""
         [host:u5]
         host = u5.example.com
-        user = tvernon
-        shell_prompt = vernon]
+        user = bob
+        shell_prompt = myhost]
         verbose = true
 
         [u5/xterm cyan]
@@ -102,8 +102,8 @@ final class LauncherFileTests: XCTestCase {
         XCTAssertEqual(file.entries.map(\.name), ["xterm cyan", "xterm yellow", "dtpad"])
         XCTAssertEqual(file.entries.map(\.group), ["u5", "u5", "u5"])
         XCTAssertEqual(file.entries[0].host, "u5.example.com")
-        XCTAssertEqual(file.entries[0].user, "tvernon")
-        XCTAssertEqual(file.entries[0].shellPrompt, "vernon]")
+        XCTAssertEqual(file.entries[0].user, "bob")
+        XCTAssertEqual(file.entries[0].shellPrompt, "myhost]")
         XCTAssertTrue(file.entries[0].verbose, "inherited verbose=true")
         XCTAssertTrue(file.entries[1].verbose, "inherited verbose=true")
         XCTAssertFalse(file.entries[2].verbose, "item override verbose=false")
@@ -117,7 +117,7 @@ final class LauncherFileTests: XCTestCase {
         let file = LauncherFile.parse("""
         [host:u5]
         host = u5.example.com
-        user = todd
+        user = alice
         password = kemosabe
 
         [u5/xterm]
@@ -129,7 +129,7 @@ final class LauncherFileTests: XCTestCase {
 
         [host:ss2]
         host = ss2.example.com
-        user = todd
+        user = alice
 
         [ss2/xterm]
         command = xterm
@@ -147,7 +147,7 @@ final class LauncherFileTests: XCTestCase {
         let file = LauncherFile.parse("""
         [host:u5]
         host = u5.example.com
-        user = todd
+        user = alice
 
         [u5/xterm]
         command = xterm
@@ -165,7 +165,7 @@ final class LauncherFileTests: XCTestCase {
         let file = LauncherFile.parse("""
         [host:u5]
         host = u5.example.com
-        user = todd
+        user = alice
 
         [u5/no-command]
         # nothing here
@@ -178,14 +178,14 @@ final class LauncherFileTests: XCTestCase {
         let file = LauncherFile.parse("""
         [host:u5]
         host = u5.example.com
-        user = todd
+        user = alice
 
         [u5/xterm]
         command = xterm
 
         [host:ss2]
         host = ss2.example.com
-        user = todd
+        user = alice
 
         [ss2/xterm]
         command = xterm
@@ -205,14 +205,14 @@ final class LauncherFileTests: XCTestCase {
         let file = LauncherFile.parse("""
         [host:u5]
         host = u5.example.com
-        user = todd
+        user = alice
 
         [u5/xterm new]
         command = xterm
 
         [legacy entry]
         host = u5.example.com
-        user = todd
+        user = alice
         command = oldthing
         """)
         XCTAssertEqual(file.entries.count, 2)

@@ -53,8 +53,8 @@ public enum DefaultLaunchers {
         #
         # [host:u5]
         # host = u5.example.com
-        # user = todd
-        # shell_prompt = vernon]
+        # user = alice
+        # shell_prompt = myhost]
         #
         # [u5/xterm cyan]
         # command = xterm -bg black -fg cyan -cr yellow
@@ -67,7 +67,7 @@ public enum DefaultLaunchers {
         #
         # [host:ss2]
         # host = ss2.example.com
-        # user = todd
+        # user = alice
         #
         # [ss2/xcalc]
         # command = xcalc -bg gray90

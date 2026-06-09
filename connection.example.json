@@ -1,0 +1,5 @@
+{
+  "listen": ":6000",
+  "forward": "ss2.example.com:6000",
+  "output": "captures/example-session.xtap"
+}

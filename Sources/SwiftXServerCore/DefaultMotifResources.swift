@@ -38,7 +38,7 @@ enum DefaultMotifResources {
     !
     ! ---- Color palette ----
     ! Modeled on quickplot's fallback resources (reference/quickplot/app.c
-    ! lines 178-239; Todd's Motif app, NASA DFRC 1992). With the CDE
+    ! lines 178-239; a vintage 1990s Motif app). With the CDE
     ! customization daemon retired 2026-05-18 (see DECISIONS), Motif's
     ! compiled-in blue takes over any widget that has no resource. These
     ! restore a coherent classic palette: Gray chrome, DarkSeaGreen text

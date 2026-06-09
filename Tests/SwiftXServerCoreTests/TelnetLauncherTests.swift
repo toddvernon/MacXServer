@@ -29,14 +29,14 @@ final class TelnetLauncherTests: XCTestCase {
     }
 
     // The full prompt .cshrc emits once TERM=xterm: two OSC title pushes, a CR,
-    // then the visible "[host:[user]:/cwd] ". The shell_prompt needle "vernon]"
-    // (matching "[tvernon]") must survive stripping.
+    // then the visible "[host:[user]:/cwd] ". The shell_prompt needle "bob]"
+    // (matching "[bob]") must survive stripping.
     func testStripANSIPreservesPromptNeedle() {
-        let prompt = "\u{1B}]2;/home/tvernon\u{07}" +
+        let prompt = "\u{1B}]2;/home/bob\u{07}" +
                      "\u{1B}]1;ss2.example.com\u{07}\r" +
-                     "[ss2.example.com:[tvernon]:/home/tvernon] "
+                     "[ss2.example.com:[bob]:/home/bob] "
         let stripped = TelnetLauncher.stripANSI(prompt)
-        XCTAssertTrue(stripped.contains("vernon]"),
+        XCTAssertTrue(stripped.contains("bob]"),
                       "prompt needle lost after stripping: \(stripped)")
         XCTAssertFalse(stripped.contains("\u{1B}"), "escape survived: \(stripped)")
     }
