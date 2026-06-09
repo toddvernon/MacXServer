@@ -98,7 +98,7 @@ Swift for the Mac-side code. Boring, obvious code over clever code.
 ## Code of conduct
 
 This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). Be
-decent. Report problems to todd@toddexample.com.
+decent. Report problems to todd@example.com.
 
 ## License
 
