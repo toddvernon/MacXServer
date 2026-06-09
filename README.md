@@ -22,8 +22,9 @@ decoder (the framer) and a common `.xtap` file format.
   for. Runs xterm, xcalc, xclock, xeyes, twm/mwm, quickplot (a
   Motif graphing app), and CDE's dt-apps (dtcalc, dtterm,
   dthelpview, dtpad, dticon).
-- `Sources/SwiftXCapture/` + `Sources/SwiftXCaptureCore/` — the
-  capture utility. Single binary, two faces:
+- `Sources/SwiftXCapture/` + `Sources/SwiftXCaptureCore/` +
+  `Sources/SwiftXCaptureUI/` — the capture utility (CLI, core
+  library, and a shared SwiftUI layer). Single binary, two faces:
   - **CLI**: proxy capture, dump, summary, diff, replay
     subcommands. Backwards-compatible with the v1 tool.
   - **SwiftUI app**: three modes — Record (proxy a session
@@ -87,30 +88,32 @@ behaviour even with empty args.
 
 ```
 # proxy two real X endpoints
-# (./run.sh + connection.json also still works)
+# (./run-capture.sh reads connection.json, see below)
 .build/release/macxcapture \
     --listen :6001 \
     --forward sun-b.lan:6000 \
     --output session.xtap
 
 # decoded chronological dump
-.build/release/macxcapture dump captures/xterm_long.xtap
+.build/release/macxcapture dump captures/xterm-running-on-ss2-display-on-ss2.xtap
 
 # aggregate per-opcode summary
-.build/release/macxcapture summary captures/quickplot.xtap
+.build/release/macxcapture summary captures/xcalc-running-on-ss2-display-on-ss2.xtap
 
 # byte-pump replay into a target server
-.build/release/macxcapture replay captures/xterm_long.xtap \
+.build/release/macxcapture replay captures/xclock-running-on-ss2-display-on-ss2.xtap \
     --target localhost:6000
 ```
 
 `./run-capture.sh` is a build-and-run wrapper that reads
 `connection.json` (`listen` / `forward` / `output`) for proxy
-mode and passes any other args straight through to
-`macxcapture`. `./run-server.sh` does the same for the
-server. `./run-all.sh` starts macxserver + a proxy capture
-forwarding into it — used for "capture what swiftx itself
-produces" diffing against gold Sun captures.
+mode and passes any other args straight through to `macxcapture`.
+Copy `connection.example.json` to `connection.json` and edit it
+first; the real file is gitignored so your host stays local.
+`./run-server.sh` does the same for the server. `./run-all.sh`
+starts macxserver + a proxy capture forwarding into it — used for
+"capture what swiftx itself produces" diffing against gold Sun
+captures.
 
 ### Server-side capture
 
@@ -125,8 +128,9 @@ server's Preferences → Capture tab; the CLI flag overrides the
 preference. `/tmp` wipes on reboot, so captures don't accumulate
 forever.
 
-For bug reports: turn capture on, reproduce the issue, drag the
-freshest file out of `/tmp/macxcapture/` into an email.
+For bug reports: turn capture on, reproduce the issue, and attach
+the freshest file from `/tmp/macxcapture/` to a GitHub issue (see
+CONTRIBUTING.md).
 
 ## Tests
 
@@ -154,10 +158,9 @@ The full project context lives in markdown at the repo root:
 
 ## Status
 
-**Capture utility**: v1 (CLI proxy + framer + corpus + article)
-done. v2 (library + SwiftUI app + server-side `--capture`) all
-landed except for screenshots and a blog post. Single binary
-hosts both faces.
+**Capture utility**: v1 (CLI proxy + framer + corpus) done. v2
+(shared library + SwiftUI app + server-side `--capture`) landed.
+Single binary hosts both faces.
 
 **Swift X server**: M1–M3 green. xterm, xcalc, xeyes, xclock,
 twm/mwm, quickplot (Motif), and the CDE dt-apps all run from a
