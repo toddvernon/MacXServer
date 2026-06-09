@@ -1,7 +1,7 @@
 # Security Policy
 
 This is a hobby project, not production infrastructure. If you find a
-security issue, please report it privately to todd@example.com rather
+security issue, please report it privately to todd@toddvernon.com rather
 than opening a public issue. I'll respond as I'm able.
 
 One thing worth knowing: the server listens on a TCP port and speaks the
