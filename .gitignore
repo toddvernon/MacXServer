@@ -25,10 +25,13 @@ reference/
 capture_screen_ui
 capture_screen_ui/
 
-# Cross-machine Claude Code memory now lives IN the git tree as
-# .claude-memory/ — was previously gitignored and Dropbox-synced, which
-# caused sync-delay friction and occasional conflict copies during
-# desktop↔laptop hand-offs. Tracking it in git means a `git pull`
-# brings memory along with code. Each Mac still needs the one-time
-# symlink from ~/.claude/projects/-Users-...-X/memory → .claude-memory/
-# (see "Cross-machine Claude memory" in CLAUDE.md).
+# Cross-machine Claude Code memory lives in ~/Dropbox/dev/X/.claude-memory/
+# (NOT the git tree). It was moved out of the tree for the public release
+# so it never ships. Reached via the per-project memory symlink; see the
+# preflight check in CLAUDE.local.md. Never re-track it here.
+.claude-memory
+.claude-memory/
+
+# Project-personal Claude instructions (two-Mac setup, preflight, bio
+# pointers). Public-safe project guidance lives in CLAUDE.md instead.
+CLAUDE.local.md
