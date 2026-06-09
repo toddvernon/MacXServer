@@ -1,93 +1,147 @@
-# Status 2026-06-08
+# Status 2026-06-09
 
-Strategy day. Zero commits on this repo. The work was scoping the
-macXserver public release, surfacing and addressing a multi-Mac
-Claude Code sync gap, and drafting comment-policy + project-style
-overrides for the post-split CLAUDE.md files. All artifacts live in
-Dropbox at `~/Dropbox/dev/X/` (intentionally outside this git tree)
-since they'll be tested across both Macs before execution.
+Motif move-during-menu corruption bug fixed end to end. The bug had
+two layers — a spec-compliance miss in our grab state machine, and a
+missing rootless-WM emulation of the hardware pointer grab. Both
+landed today, plus the Mac-UX polish so the dismiss-and-drag
+gesture feels atomic.
 
 ## What landed today
 
-1. **Public release plan** at `~/Dropbox/dev/X/PUBLIC-RELEASE-PLAN.md`.
-   Four parallel audit agents surveyed file structure,
-   documentation, source code sensitivity, and public-repo
-   essentials. Synthesized into a phased plan:
-   - **Phase 0 (multi-Mac):** split `CLAUDE.md` and `.claude-memory/`
-     out of the git tree into Dropbox so personal workflow notes
-     stop being committable. Requires both Macs for live testing.
-   - **Phase 1 (single Mac):** license decision (Apache-2.0
-     recommended for patent grant), X11R6 attribution on Region/ +
-     ShapeExtension port files, hostname sweep
-     (`*.example.com` → `*.example.com`) across ~50 hits, public-repo
-     essentials (LICENSE, CONTRIBUTING with the `.xtap`
-     capture-submission flow and Claude Code playbook,
-     CODE_OF_CONDUCT, `.github/` templates), doc-comment pass on
-     Tier 1 core runtime files, history filter via `git filter-repo`,
-     push to public.
-   - **Phase 2 (optional):** documentation coalesce (FONT_RENDERING,
-     RENDERING_INTERNALS, APP_COMPATIBILITY merges).
-   - Strip list validated: `.claude-memory/`, `CLAUDE.md`,
-     `STATUS.md`, `archive/`, `state_of_apps`, empty `swiftpm/`.
-   - Audit surfaced **X11R6 license-attribution gap** on
-     `Sources/SwiftXServerCore/Region/{Region,RegionOp,RegionExtras}.swift`
-     and `Sources/SwiftXServerCore/ShapeExtension.swift` (must-fix).
+### Motif menu position corruption (root cause + UX layer)
 
-2. **Global Claude Code setup plan** at
-   `~/Dropbox/dev/X/fixing_global_claude_setup.md`. The realization
-   driving it: user-level config under `~/.claude/` (CLAUDE.md,
-   settings, skills, agents, commands) doesn't sync between Macs by
-   default. That's the divergence point for any multi-Mac dev. Fix
-   is the same Dropbox-symlink pattern already used for
-   `<project>/.claude/` and `reference/`: canonical files live in
-   `~/Dropbox/dev/claude-shared/`, symlinks point at them from
-   `~/.claude/`. This runs before Phase 0 because the project
-   CLAUDE.md split assumes the user-level slot is in place.
+**Observed**: Open a Motif menubar pulldown (dtcalc, dtpad). Move
+the main window while the menu is up. Every subsequent menu
+invocation from any cascade button pops up at the OLD window
+position, forever. Survives across menu picks until app restart.
 
-3. **Doc-comment policy override drafted** for the post-split CLAUDE
-   files. Surfaced that Claude Code's built-in default "no
-   comments" rule was honored throughout the 30-day build, leaving
-   public API surface mostly undocumented (110 of 244 files have
-   any `///` comments; ~3400 doc-comment lines across ~3900 public
-   declarations). Override drafted: required `///` doc comments on
-   public types and methods, terse style, examples for the X11R6
-   ports and framer stubs. Belongs in the **project** CLAUDE.md so
-   contributors (and their own Claude sessions) get the convention
-   too.
+**Investigation path**:
 
-4. **"Entering a new project" rule drafted** for personal CLAUDE.md.
-   Says: observe the project's existing comment style first, match
-   it instead of importing habits from other projects. Pairs with
-   the doc-comment policy: personal rule says "match what's there",
-   project rule says "here's what's there".
+1. First hypothesis was the synthetic ConfigureNotify (ICCCM 4.1.5)
+   path was broken. It wasn't — we emit the event on every
+   `windowDidMove`, encoded with the `0x80` synthetic bit, with
+   correct root coords. `XtTranslateCoords` would have read the
+   right shell `core.x/core.y`.
+2. Real cause surfaced from a wire capture (`/tmp/macxcapture/`).
+   On a Motif menubar click, the actual grab sequence is:
+   - ButtonPress on menubar → our server installs an **implicit
+     grab** (X11 spec: first ButtonPress with no other grab
+     auto-installs one). Our `implicitGrab=true` flag set.
+   - Motif issues `XGrabKeyboard` then `XGrabPointer` to take
+     over the menu shell. Our `handleGrabPointer` saw
+     `alreadyGrabbed=true` and did the right thing for the
+     cursor/tracker but **did not clear `implicitGrab`**.
+   - User releases the menubar button. Our implicit-grab release
+     branch (`if !isDown && heldButtons.isEmpty && implicitGrab`)
+     fired and tore down `pointerGrab` even though Motif's
+     explicit grab was logically still in force.
+   - With the server-side grab gone, the user could drag the Mac
+     title bar (AppKit owns it; nothing was blocking the move).
+     Each drag emitted synthetic ConfigureNotify — but Motif had
+     other state machinery that snapshotted root coords at
+     post-time and didn't re-key on the events queued during a
+     `XtAppNextEvent` filtered to button/keyboard masks.
 
-5. **Public-repo prep discussion** continued: addressed the
-   "binary-only vs. one-time filter-and-publish vs. dual-repo
-   mirror" question. Working approach: one-time filter via
-   `git filter-repo`, retire the private repo. Two-Mac sync
-   continues via Dropbox for personal artifacts that shouldn't
-   ship.
+   Per X11 spec §11.4: an explicit `XGrabPointer` *replaces* any
+   implicit grab. Release is via `XUngrabPointer` only.
 
-## What's next
+**Fix layer 1 — spec compliance**: in `handleGrabPointer`,
+unconditionally clear `implicitGrab = false` after the grab is
+installed. One line + comment block. Safe regardless of prior
+state (implicit, explicit, or none).
 
-- **Tomorrow morning, first thing:** execute
-  `~/Dropbox/dev/X/fixing_global_claude_setup.md` to wire the
-  user-level Claude Code symlinks. Single-Mac to start; cross-Mac
-  verification needs both eventually.
-- Then **Phase 0** of `PUBLIC-RELEASE-PLAN.md` (multi-Mac CLAUDE
-  split) at first opportunity when both Macs are accessible.
-- Then **Phase 1** (license, sanitization, public-repo essentials,
-  doc-comment pass, history filter, push). Estimated 4-6 hours
-  single-Mac.
-- Confirm captures publication scope: 71 paired `.xtap` files from
-  Sun workstations are intentionally meant to ship per
-  `captures/README.md` framing, but worth explicit owner
-  confirmation. Same for `captures/fixtures/sun_resource_manager.bin`.
-- Outstanding pre-existing items still apply:
-  - Orphan screenshot in macxserver-hugo dir
-  - Photo `todd-vernon.jpg` (1.8 MB) could be downscaled
-  - URL slug for "How menus know where they are" still
-    `/the-synthetic-configurenotify/`
-  - Em-dash sweep across older macxserver-hugo content overdue
+**Fix layer 2 — rootless emulation of the hardware pointer grab**:
+real X11's pointer grab is server-wide and hardware-rooted, so the
+WM's title-bar widget never sees a click while a menu shell holds
+a grab. On our Mac, AppKit owns the title bar independently of
+our X event pipeline; even with the spec-compliance fix, a fast
+user could still drag during the brief grab window. The new
+`WindowBridge.lockNativeWindowDrag(token:)` /
+`unlockNativeWindowDrag(token:)` ref-counted lock blocks native
+drag for the duration of any X-protocol pointer grab — passive
+activation, implicit, or explicit. `CocoaWindowBridge.applyNativeDragLock`
+sets `NSWindow.isMovable=false` on every session window and toggles
+a new `MotifFrameView.isDragLocked` flag that short-circuits the
+chrome's `mouseDown` before `dragOrigin` / `resizeEdge` get seeded.
+On session disconnect, `removeHandlers(token:)` drops the token's
+lock contribution so a mid-grab disconnect can't strand any
+window non-movable.
 
----
+**Layer 3 — Mac UX polish (chrome click dismisses + same gesture
+drags)**: a real X11 user accepts the two-click pattern (first click
+dismisses the menu, second click drags). On Mac the user expects
+the gesture to be atomic. New flow on chrome click during grab:
+- `MotifFrameView.mouseDown` fires `outsideGrabClickHandler` with
+  the click in clientView-local coords (negative — well outside
+  the popup geometry).
+- Bridge synthesizes a ButtonPress + ButtonRelease pair to the X
+  client. Motif's outside-popup detector dismisses regardless of
+  whether it triggers on press or release.
+- Bridge calls `releaseNativeWindowDragImmediate()` — clears the
+  lock map and tears down the cross-window drag tracker on the
+  spot, without waiting for the X client's `XUngrabPointer`
+  round-trip.
+- `MotifFrameView` seeds `dragOrigin` / `dragWindowOrigin` for
+  title-drag clicks (skipped for resize-edge clicks) so the
+  user's continuing `mouseDragged` events flow to the normal
+  drag path. When `XUngrabPointer` eventually arrives, the
+  session's matched `stopCrossWindowDragTracking` /
+  `unlockNativeWindowDrag` calls hit zeroed state and safely
+  no-op.
+
+### Touched / new
+
+- `Sources/SwiftXServerCore/WindowBridge.swift` — protocol gained
+  `lockNativeWindowDrag(token:)` / `unlockNativeWindowDrag(token:)`
+  with default no-op impls so mocks pick them up free.
+- `Sources/SwiftXServerCore/CocoaWindowBridge.swift` — per-token
+  lock map, `applyNativeDragLock`, `releaseNativeWindowDragImmediate`,
+  `outsideGrabClickHandler` wiring on `MotifWindow` creation,
+  lock cleanup in `removeHandlers(token:)`.
+- `Sources/SwiftXServerCore/ServerSession.swift` — `implicitGrab=false`
+  spec fix in `handleGrabPointer`; `lockNativeWindowDrag` /
+  `unlockNativeWindowDrag` calls at every `pointerGrab` transition
+  (passive activation, implicit grab install/release, explicit
+  `XGrabPointer`, `XUngrabPointer`).
+- `Sources/SwiftXServerCore/MotifFrame/MotifFrameView.swift` —
+  `isDragLocked` flag, `outsideGrabClickHandler` callback,
+  mouseDown short-circuit with synth-click + seed-drag-origin
+  for atomic gesture.
+- `.claude-memory/reference_implicit_grab_replaced_by_explicit.md`
+  — saved the spec-semantics gotcha so future grab-lifecycle code
+  doesn't re-learn this the hard way.
+
+### What's working
+
+- Motif menus stay at correct position across window moves
+  (verified live against dtpad).
+- Title-bar click during menu = menu dismisses immediately.
+- Title-bar click-and-drag during menu = menu dismisses AND
+  window moves in the same physical gesture (Mac-native UX).
+- 1262 tests green.
+
+### Known gaps (not blocking)
+
+- Native title-bar windows (Motif Frame OFF) only get the
+  `isMovable=false` layer of the protection — clicks on the
+  native title bar during a grab do nothing (no dismiss). Mac
+  muscle memory wouldn't try this, but it's a behavioral gap
+  vs Motif Frame ON. Closing it needs an `NSEvent` local
+  monitor on `mouseDown` that filters by hit-tested area
+  (chrome vs FlippedXView). Left for a future session.
+- Orphan xterm menu (the second bug reported today) wasn't
+  separately verified. Likely fixed by the same
+  implicit-grab-replaced-by-explicit clear since xterm's
+  right-click menu uses the same `ButtonPress → XGrabPointer`
+  upgrade pattern. Recheck next session.
+
+## What to do next
+
+1. Verify orphan xterm menu is gone (xterm right-click, dismiss,
+   look for stranded popup).
+2. Decide whether the native-title-bar gap is worth closing now
+   or after the public release.
+3. Resume public-release-plan execution (Phase 0 multi-Mac CLAUDE
+   split → Phase 1 license/attribution/hostname sweep). Today's
+   bugfix landed on `main`; nothing about the release path was
+   touched.

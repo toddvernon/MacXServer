@@ -54,6 +54,25 @@ public final class MotifFrameView: NSView {
     /// modifier flags).
     public var pointerMovedHandler: ((Int16, Int16, UInt) -> Void)?
 
+    /// Set by CocoaWindowBridge.applyNativeDragLock when an X pointer grab
+    /// is active on the owning session. While true, mouseDown short-circuits
+    /// before seeding dragOrigin / resizeEdge, so the user can't drag or
+    /// resize the window via the Motif chrome. Real X11 prevents this at
+    /// the hardware-grab layer; see lockNativeWindowDrag on WindowBridge.
+    public var isDragLocked: Bool = false
+
+    /// Fired from mouseDown when isDragLocked is true. The bridge wires this
+    /// to fire a ButtonPress at the click location in clientView-local
+    /// coords; the click lands well outside the popup geometry, so Motif's
+    /// outside-popup detector fires and dismisses the menu. The matching
+    /// ButtonRelease comes naturally through the cross-window drag tracker's
+    /// mouseUp path. Without this, clicking the chrome while a menu is up
+    /// only emits the release on mouseUp — fine for a clean click, but a
+    /// click-and-drag attempt visually "does nothing" until release, and
+    /// Motif's dismiss heuristics treat press as the canonical signal.
+    /// Coords are (x, y, button, modifierFlags) like fireMouse.
+    public var outsideGrabClickHandler: ((Int16, Int16, UInt8, UInt) -> Void)?
+
     public override var isFlipped: Bool { true }
 
     public init(frame frameRect: NSRect, clientView: NSView) {
@@ -363,6 +382,44 @@ public final class MotifFrameView: NSView {
         if menuButtonRect().contains(pt)     { pressedButton = 0; needsDisplay = true; return }
         if restoreButtonRect().contains(pt)  { pressedButton = 1; needsDisplay = true; return }
         if maximizeButtonRect().contains(pt) { pressedButton = 2; needsDisplay = true; return }
+
+        // Native drag/resize is locked while an X pointer grab is active.
+        // The bridge sets isDragLocked so we don't seed dragOrigin /
+        // resizeEdge — mouseDragged then no-ops. Without this, the user
+        // could move the window while a Motif menu was up, corrupting
+        // Motif's per-pulldown coord cache (see lockNativeWindowDrag doc).
+        //
+        // Before short-circuiting, fire the outside-grab click handler so
+        // the bridge synthesizes a ButtonPress at this chrome location on
+        // the underlying X client. The click lands outside the popup
+        // geometry, Motif's outside-popup detector fires, the menu
+        // dismisses, and the client issues XUngrabPointer (which then
+        // releases our lock). Mirrors what a real X11 server would do
+        // automatically: a pointer grab redirects every chrome click to
+        // the grab window with outside-popup coords.
+        if isDragLocked {
+            if let handler = outsideGrabClickHandler {
+                let pointsInClient = clientView.convert(event.locationInWindow, from: nil)
+                let backingScale = window?.backingScaleFactor ?? 2.0
+                let scale = (clientView as? FlippedXView)?.scaleFactor ?? 1.0
+                let lx = Int16(clamping: Int((pointsInClient.x * backingScale / CGFloat(scale)).rounded()))
+                let ly = Int16(clamping: Int((pointsInClient.y * backingScale / CGFloat(scale)).rounded()))
+                handler(lx, ly, 1, event.modifierFlags.rawValue)
+            }
+            // The handler force-released the lock and stopped the cross-
+            // window drag tracker. Seed dragOrigin so the user's continued
+            // mouseDragged in this same gesture moves the window —
+            // matching Mac click-and-drag UX (one gesture: menu dismisses
+            // AND window moves) rather than real-X11's two-click pattern.
+            // Only seed for the title-drag area; if the click is on a
+            // resize edge, fall through to the resize path below so the
+            // gesture continues as a resize instead of a move.
+            if hitTestEdge(at: pt) == .none && titleDragRect.contains(pt) {
+                dragOrigin = NSEvent.mouseLocation
+                dragWindowOrigin = window?.frame.origin
+            }
+            return
+        }
 
         let edge = hitTestEdge(at: pt)
         if edge != .none {

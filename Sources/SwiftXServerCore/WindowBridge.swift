@@ -515,6 +515,28 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// Removes the NSEvent monitor.
     func stopCrossWindowDragTracking()
 
+    /// Called by the session whenever an X pointer grab is installed
+    /// (passive activation, implicit grab on first ButtonPress, or
+    /// XGrabPointer). The bridge blocks native title-bar drag on every
+    /// session NSWindow so the user can't move a window while the X client
+    /// is holding the pointer grab.
+    ///
+    /// Real X11 prevents this at the hardware-grab layer — a server-wide
+    /// pointer grab redirects every ButtonPress to the grab window, so the
+    /// WM's title bar never sees the click. Mac AppKit owns our title bars
+    /// independently of the X event pipeline, so without this hook the user
+    /// can drag the window while a Motif menu is up; Motif's per-pulldown
+    /// menu-position cache gets stuck at the pre-drag root coords and every
+    /// subsequent menu invocation pops up in the wrong place until app
+    /// restart. Ref-counted per session token: nested grabs nest safely
+    /// and a mid-grab disconnect is unwound by removeHandlers(token:).
+    func lockNativeWindowDrag(token: UInt64)
+
+    /// Matched release for lockNativeWindowDrag. Restores NSWindow.isMovable
+    /// and re-enables MotifFrameView drag when the last contributing token
+    /// releases.
+    func unlockNativeWindowDrag(token: UInt64)
+
     /// Called by the session at startup. The bridge stores the closure and
     /// invokes it from withDrawContext when a draw target resolves to a
     /// pixmap, getting the per-pixmap CGBitmapContext that backs the draw.
@@ -644,6 +666,8 @@ public extension WindowBridge {
     func bell() {}
     func startCrossWindowDragTracking() {}
     func stopCrossWindowDragTracking() {}
+    func lockNativeWindowDrag(token: UInt64) {}
+    func unlockNativeWindowDrag(token: UInt64) {}
     func updateGlobalPointer(rootX: Int16, rootY: Int16) {}
     func queryGlobalPointer() -> (Int16, Int16)? { nil }
     func clearArea(topLevel: UInt32, rects: [Rectangle], background: RGB16) {}

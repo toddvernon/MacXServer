@@ -962,6 +962,7 @@ public final class ServerSession: @unchecked Sendable {
             )
             implicitGrab = true
             bridge?.startCrossWindowDragTracking()
+            bridge?.lockNativeWindowDrag(token: bridgeHandlerToken)
             let (gx, gy) = absoluteOrigin(of: grab.grabWindow, topLevel: topLevel)
             resolved = (grab.grabWindow, gx, gy)
             log?.log("  passive grab activated: window=0x\(String(grab.grabWindow, radix: 16)) button=\(button) (natural target was 0x\(String(natural.0, radix: 16)))")
@@ -1052,6 +1053,7 @@ public final class ServerSession: @unchecked Sendable {
             )
             implicitGrab = true
             bridge?.startCrossWindowDragTracking()
+            bridge?.lockNativeWindowDrag(token: bridgeHandlerToken)
             // Crossing chain on implicit grab (mode=Grab). Per R6
             // dix/events.c:1194 ActivateGrab calls DoEnterLeaveEvents
             // even for implicit grabs.
@@ -1070,6 +1072,7 @@ public final class ServerSession: @unchecked Sendable {
             pointerGrab = nil
             implicitGrab = false
             bridge?.stopCrossWindowDragTracking()
+            bridge?.unlockNativeWindowDrag(token: bridgeHandlerToken)
             // Crossing chain on grab release (mode=Ungrab). Per R6
             // dix/events.c:793 DeactivatePointerGrab.
             if let grabWin = grabWin {
@@ -1688,7 +1691,20 @@ public final class ServerSession: @unchecked Sendable {
             ownerEvents: r.ownerEvents,
             cursor: r.cursor
         )
-        if !alreadyGrabbed { bridge?.startCrossWindowDragTracking() }
+        // Per X11 spec, an explicit XGrabPointer *replaces* any implicit
+        // grab (the one auto-installed by ButtonPress). The replacement
+        // grab persists until XUngrabPointer — not until ButtonRelease.
+        // Without this clear, the implicit-grab release logic below
+        // tears down pointerGrab on the next ButtonRelease even though
+        // the client still owns the explicit grab; visible as Motif's
+        // menu stays posted but our native-drag lock releases, and the
+        // user can drag the window while a menu is up. Verified against
+        // dtpad capture 2026-06-08.
+        implicitGrab = false
+        if !alreadyGrabbed {
+            bridge?.startCrossWindowDragTracking()
+            bridge?.lockNativeWindowDrag(token: bridgeHandlerToken)
+        }
         log?.log("  GrabPointer window=0x\(String(r.grabWindow, radix: 16)) mask=0x\(String(r.eventMask, radix: 16)) ownerEvents=\(r.ownerEvents) cursor=0x\(String(r.cursor, radix: 16))")
         // Push the grab cursor immediately; restored on Ungrab via refreshCursor.
         if r.cursor != 0, let topLevel = topLevelAncestor(of: r.grabWindow) {
@@ -1715,6 +1731,7 @@ public final class ServerSession: @unchecked Sendable {
         guard let grab = pointerGrab else { return }
         pointerGrab = nil
         bridge?.stopCrossWindowDragTracking()
+        bridge?.unlockNativeWindowDrag(token: bridgeHandlerToken)
         log?.log("  UngrabPointer (was on 0x\(String(grab.window, radix: 16)))")
         // Restore cursor based on the window currently under the pointer.
         if grab.cursor != 0, let topLevel = topLevelAncestor(of: grab.window) {

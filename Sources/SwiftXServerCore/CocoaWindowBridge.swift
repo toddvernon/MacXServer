@@ -32,6 +32,11 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     var dragMonitor: Any?
     var dragGrabDepth: Int = 0
     var dragLastWindowId: UInt32?
+
+    /// Native title-bar drag lock state, ref-counted per session token. See
+    /// lockNativeWindowDrag for the rationale. Empty map = unlocked. All
+    /// access on main thread.
+    private var nativeDragLockDepthByToken: [UInt64: Int] = [:]
     // Multi-client: every connected session registers its own handlers via
     // setOnX. We store them as lists, not single closures, so a newly
     // accepted xcalc session doesn't replace the already-running xterm
@@ -400,7 +405,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// the session's cleanupOnDisconnect path. Idempotent — second call is
     /// a no-op once the lists no longer contain that token.
     public func removeHandlers(token: UInt64) {
-        handlerLock.lock(); defer { handlerLock.unlock() }
+        handlerLock.lock()
         resizeHandlers.removeAll              { $0.0 == token }
         moveHandlers.removeAll                { $0.0 == token }
         keyHandlers.removeAll                 { $0.0 == token }
@@ -414,6 +419,18 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         pasteHandlers.removeAll               { $0.0 == token }
         copyHandlers.removeAll                { $0.0 == token }
         closeHandlers.removeAll               { $0.0 == token }
+        handlerLock.unlock()
+
+        // If the disconnecting session was holding a native-drag lock,
+        // drop its contribution. Without this, a session that disconnects
+        // mid-grab leaves every NSWindow stuck non-movable forever.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            guard self.nativeDragLockDepthByToken.removeValue(forKey: token) != nil else { return }
+            if self.nativeDragLockDepthByToken.isEmpty {
+                self.applyNativeDragLock(false)
+            }
+        }
     }
 
     /// Total registered handler count across every list. Test affordance.
@@ -741,6 +758,27 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 // origin.
                 motif.frameView.pointerMovedHandler = { [weak self] x, y, mods in
                     self?.firePointerMoved(id: id, x: x, y: y, mods: mods)
+                }
+                // Fired when the user clicks the chrome while an X pointer
+                // grab is active. We:
+                //  1. Synthesize a full ButtonPress + ButtonRelease pair to
+                //     the X client at the click location. Coords land
+                //     outside the popup geometry, so Motif's outside-popup
+                //     detector fires regardless of whether it dismisses on
+                //     press or release.
+                //  2. Immediately tear down the native-drag lock and the
+                //     cross-window drag tracker locally — without waiting
+                //     for the X client's XUngrabPointer to round-trip.
+                //     This lets the user's continuing mouseDragged after
+                //     the chrome click flow to MotifFrameView normally,
+                //     so the same physical gesture both dismisses the
+                //     menu AND drags the window (matching Mac UX, not
+                //     real-X11's two-click pattern).
+                motif.frameView.outsideGrabClickHandler = { [weak self] x, y, button, mods in
+                    guard let self = self else { return }
+                    self.fireMouse(id: id, x: x, y: y, button: button, isDown: true, mods: mods)
+                    self.fireMouse(id: id, x: x, y: y, button: button, isDown: false, mods: mods)
+                    self.releaseNativeWindowDragImmediate()
                 }
                 win = motif
             } else {
@@ -2810,6 +2848,63 @@ extension CocoaWindowBridge {
             }
             self.dragLastWindowId = nil
         }
+    }
+
+    public func lockNativeWindowDrag(token: UInt64) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let wasUnlocked = self.nativeDragLockDepthByToken.isEmpty
+            self.nativeDragLockDepthByToken[token, default: 0] += 1
+            if wasUnlocked { self.applyNativeDragLock(true) }
+        }
+    }
+
+    public func unlockNativeWindowDrag(token: UInt64) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if let depth = self.nativeDragLockDepthByToken[token] {
+                if depth <= 1 {
+                    self.nativeDragLockDepthByToken.removeValue(forKey: token)
+                } else {
+                    self.nativeDragLockDepthByToken[token] = depth - 1
+                }
+            }
+            if self.nativeDragLockDepthByToken.isEmpty {
+                self.applyNativeDragLock(false)
+            }
+        }
+    }
+
+    private func applyNativeDragLock(_ locked: Bool) {
+        self.lock.lock(); let snap = self.slots; self.lock.unlock()
+        for (_, slot) in snap {
+            guard let win = slot.window else { continue }
+            if win is NSPanel { continue }
+            win.isMovable = !locked
+            if let motif = win as? MotifWindow {
+                motif.frameView.isDragLocked = locked
+            }
+        }
+    }
+
+    /// Force-release the native-drag lock and tear down the cross-window
+    /// drag tracker IMMEDIATELY on the main thread, ignoring ref counts.
+    /// Used by the chrome-click-during-grab path so the user's continuing
+    /// mouseDragged after a chrome click can flow to MotifFrameView and
+    /// move the window in the same physical gesture — rather than waiting
+    /// for the X client's XUngrabPointer round-trip after it processes the
+    /// synthesized dismiss click. When that XUngrabPointer eventually does
+    /// arrive, the session's matched stop/unlock calls are safe no-ops
+    /// (ref counts already at zero, map already empty).
+    func releaseNativeWindowDragImmediate() {
+        nativeDragLockDepthByToken.removeAll()
+        applyNativeDragLock(false)
+        dragGrabDepth = 0
+        if let m = dragMonitor {
+            NSEvent.removeMonitor(m)
+            dragMonitor = nil
+        }
+        dragLastWindowId = nil
     }
 
     /// Body of the local monitor: figure out which NSWindow's content

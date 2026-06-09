@@ -669,6 +669,40 @@ The server's live console serves a different purpose: human-narrated running eve
 
 ---
 
+## 2026-06-09 — Emulate hardware pointer grab via NSWindow.isMovable + chrome-click synthesis
+
+Real X11 pointer grabs are server-wide and hardware-rooted: when a Motif menu shell holds a grab, the WM's title-bar widget never receives a click. Our rootless server can't reach that layer — Mac AppKit owns the title bar independently of the X event pipeline — so we have to emulate the property "window is unmovable while an X grab is active" in software.
+
+**Chosen**: A ref-counted lock on `WindowBridge` (`lockNativeWindowDrag(token:)` / `unlockNativeWindowDrag(token:)`) that sets `NSWindow.isMovable=false` on every session window and toggles a `MotifFrameView.isDragLocked` flag that short-circuits the chrome's `mouseDown` before drag state is seeded. Called from every `pointerGrab` transition in `ServerSession` (passive activation, implicit grab install/release, explicit `XGrabPointer`, `XUngrabPointer`). On session disconnect, `removeHandlers(token:)` drops the token's contribution so a mid-grab disconnect doesn't strand any window non-movable.
+
+Layered on top: a chrome click during a grab fires a synthetic ButtonPress + ButtonRelease pair to the X client at clientView-local coords (negative — well outside the popup geometry, so Motif's outside-popup detector dismisses), and `CocoaWindowBridge.releaseNativeWindowDragImmediate()` tears down the lock and the cross-window drag tracker locally without waiting for the client's `XUngrabPointer` round-trip. `MotifFrameView` then seeds `dragOrigin` so the user's continuing `mouseDragged` events in the same physical gesture move the window. Net UX: click-and-drag the title bar with a menu up → menu dismisses AND window moves, atomic.
+
+**Alternatives considered**:
+
+1. **XQuartz's path: kernel-private `xp_*` APIs to intercept pointer events below AppKit.** That's how XQuartz's title bars (drawn by quartz-wm via `xp_frame_*`) flow clicks through the X event pipeline naturally — the grab steals title-bar clicks like it would any other window. We can't use these APIs from a regular Swift AppKit app; they require XQuartz's pre-existing kernel-extension pipeline (see `.claude-memory/reference_xquartz_drag_routing.md`).
+
+2. **Match real X11 exactly: two-click pattern.** First click dismisses, second click drags. Strict spec-faithful, no surprises, smaller code. Rejected because Mac users expect click-and-drag to be a single atomic gesture; the X11 idiom is the wrong cultural default on macOS.
+
+3. **Don't lock; let the user drag and re-emit a catch-up synthetic ConfigureNotify on grab release.** Tried this mentally — relies on the client processing queued events correctly post-grab, which the bug symptoms suggested isn't guaranteed (Motif's per-pulldown coord cache snapshots root coords at popup-post time and re-keys on synthetic ConfigureNotify only at known dispatch points). The lock-the-drag approach prevents the corruption entirely, so we don't need to reason about Motif's internals.
+
+4. **Lock per-session only** (only this session's windows go non-movable when this session grabs). Closer to "session scope" but diverges from real X11's server-wide grab semantics. Bridge-wide lock (all session windows lock when any session has a grab) matches X11 behavior and was no harder to implement.
+
+**Why this won**:
+
+- Prevents the corruption at the trigger layer instead of trying to repair the downstream cache state. No speculation about Motif's internal event-queue dispatch order.
+- Real X11 facsimile is good enough: a user who drags during a menu wouldn't be allowed to in real X11 either, and the synthesized chrome click + drag-origin seed makes the "click to dismiss" half feel atomic on Mac.
+- Falls out cleanly along existing seams: `WindowBridge` protocol extension, per-session token already exists (`bridgeHandlerToken`), `MotifFrameView` already has handler-callback wiring for `pointerMovedHandler`.
+- Companion one-line spec-compliance fix in `handleGrabPointer` (`implicitGrab = false`) was the actual root cause for the original bug; the lock layer is defense-in-depth + UX. Both keep their own correctness story.
+
+**Cost / scope flagged**:
+
+- Native title-bar windows (Motif Frame OFF) only get the `isMovable=false` layer — title-bar clicks during a grab do nothing visible. Closing that gap needs an `NSEvent` local monitor filtering hit-tested areas. Acceptable trade for now since Motif Frame is the dominant path for the apps that exercise menubar grabs.
+- Multi-session lock contributions sum (bridge-wide); single chrome-click `releaseNativeWindowDragImmediate` clears all of them at once. Edge case: if two sessions independently hold grabs and the user dismisses one via chrome click, the other session's lock contribution goes too. Acceptable — when the other session's `XUngrabPointer` arrives, its matched `unlock` call hits empty state and no-ops; if it issues another grab afterward, the lock re-installs normally.
+
+See `.claude-memory/reference_implicit_grab_replaced_by_explicit.md` for the spec-semantics gotcha that made this bug class possible.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
