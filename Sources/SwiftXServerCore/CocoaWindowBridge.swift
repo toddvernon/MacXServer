@@ -13,6 +13,8 @@ import Framer
 // macOS chrome. The X subtree below the top-level is internal; drawing
 // targets the single FlippedXView per top-level.
 
+/// AppKit-backed `WindowBridge`: gives each top-level X window its own
+/// NSWindow + FlippedXView and renders X draw ops into the view's backing.
 public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
     private struct Slot: @unchecked Sendable {
@@ -127,12 +129,16 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private let globalPointerLock = NSLock()
     private var globalPointerRoot: (Int16, Int16)?
 
+    /// Update the server-global pointer cache (X-root coords). Called by the
+    /// session that owns the top-level currently under the cursor.
     public func updateGlobalPointer(rootX: Int16, rootY: Int16) {
         globalPointerLock.lock()
         globalPointerRoot = (rootX, rootY)
         globalPointerLock.unlock()
     }
 
+    /// Read the server-global pointer cache (X-root coords). Used by every
+    /// session answering QueryPointer; nil until first set.
     public func queryGlobalPointer() -> (Int16, Int16)? {
         globalPointerLock.lock()
         defer { globalPointerLock.unlock() }
@@ -179,14 +185,17 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// Register a session's pixmap-id → PixelBuffer lookup under its token.
     public func registerPixmapBufferLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> PixelBuffer?) {
         lookupLock.lock(); defer { lookupLock.unlock() }
         pixmapBufferLookups[token] = lookup
     }
+    /// Drop a session's pixmap-buffer lookup on disconnect.
     public func unregisterPixmapBufferLookup(token: UInt64) {
         lookupLock.lock(); defer { lookupLock.unlock() }
         pixmapBufferLookups.removeValue(forKey: token)
     }
+    /// Legacy single-set entry point; registers the lookup under token 0.
     public func setPixmapBufferLookup(_ lookup: @escaping @Sendable (UInt32) -> PixelBuffer?) {
         registerPixmapBufferLookup(token: 0, lookup)
     }
@@ -200,10 +209,13 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         return nil
     }
 
+    /// Register a session's window-id → clipList lookup under its token.
+    /// nil result = window unknown to this session; empty array = fully obscured.
     public func registerWindowClipLookup(token: UInt64, _ lookup: @escaping @Sendable (UInt32) -> [Framer.Rectangle]?) {
         lookupLock.lock(); defer { lookupLock.unlock() }
         windowClipLookups[token] = lookup
     }
+    /// Drop a session's window-clip lookup on disconnect.
     public func unregisterWindowClipLookup(token: UInt64) {
         lookupLock.lock(); defer { lookupLock.unlock() }
         windowClipLookups.removeValue(forKey: token)
@@ -227,14 +239,18 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         return nil
     }
 
+    /// Register a session's ColorTable lookup under its token. The table is
+    /// server-global, so multi-registration is harmless.
     public func registerColorTableLookup(token: UInt64, _ lookup: @escaping @Sendable () -> ColorTable?) {
         lookupLock.lock(); defer { lookupLock.unlock() }
         colorTableLookups[token] = lookup
     }
+    /// Drop a session's color-table lookup on disconnect.
     public func unregisterColorTableLookup(token: UInt64) {
         lookupLock.lock(); defer { lookupLock.unlock() }
         colorTableLookups.removeValue(forKey: token)
     }
+    /// Legacy single-set entry point; registers the lookup under token 0.
     public func setColorTableLookup(_ lookup: @escaping @Sendable () -> ColorTable?) {
         registerColorTableLookup(token: 0, lookup)
     }
@@ -255,6 +271,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// chrome. Default: native chrome for everyone (nil provider == off).
     public var motifFramePrefs: MotifFramePreferencesProvider?
 
+    /// Build a bridge at the given X-logical-to-device scale, with optional
+    /// log sink and Motif-frame preference provider.
     public init(scaleFactor: Double = 1,
                 log: ServerLogSink? = nil,
                 motifFramePrefs: MotifFramePreferencesProvider? = nil) {
@@ -349,54 +367,67 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// Register a session's top-level-resize handler (id, new width, height).
     public func setOnTopLevelResize(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt16, UInt16) -> Void) {
         handlerLock.lock(); resizeHandlers.append((token, handler)); handlerLock.unlock()
     }
 
+    /// Register a session's top-level-move handler (id, new X-root x, y).
     public func setOnTopLevelMove(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16) -> Void) {
         handlerLock.lock(); moveHandlers.append((token, handler)); handlerLock.unlock()
     }
 
+    /// Register a session's key handler (id, macOS keyCode, modifier flags, isDown).
     public func setOnKey(token: UInt64, _ handler: @escaping @Sendable (UInt32, UInt8, UInt, Bool) -> Void) {
         handlerLock.lock(); keyHandlers.append((token, handler)); handlerLock.unlock()
     }
 
+    /// Register a session's focus handler (id, gained).
     public func setOnFocus(token: UInt64, _ handler: @escaping @Sendable (UInt32, Bool) -> Void) {
         handlerLock.lock(); focusHandlers.append((token, handler)); handlerLock.unlock()
     }
 
+    /// Register a session's button handler (id, x, y, button, isDown, modifiers).
     public func setOnMouse(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, Bool, UInt) -> Void) {
         handlerLock.lock(); mouseHandlers.append((token, handler)); handlerLock.unlock()
     }
 
+    /// Register a session's drag handler (id, x, y, button, modifiers).
     public func setOnMouseDragged(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt8, UInt) -> Void) {
         handlerLock.lock(); mouseDraggedHandlers.append((token, handler)); handlerLock.unlock()
     }
 
+    /// Register a session's pointer-motion handler (id, x, y, modifiers).
     public func setOnPointerMoved(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt) -> Void) {
         handlerLock.lock(); pointerMovedHandlers.append((token, handler)); handlerLock.unlock()
     }
 
+    /// Register a session's pointer-enter handler (id, x, y, modifiers).
     public func setOnPointerEnteredView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt) -> Void) {
         handlerLock.lock(); pointerEnteredViewHandlers.append((token, handler)); handlerLock.unlock()
     }
 
+    /// Register a session's pointer-exit handler (id, x, y, modifiers).
     public func setOnPointerExitedView(token: UInt64, _ handler: @escaping @Sendable (UInt32, Int16, Int16, UInt) -> Void) {
         handlerLock.lock(); pointerExitedViewHandlers.append((token, handler)); handlerLock.unlock()
     }
 
+    /// Register a session's modifier-change handler (modifier flags).
     public func setOnModifiersChanged(token: UInt64, _ handler: @escaping @Sendable (UInt) -> Void) {
         handlerLock.lock(); modifiersChangedHandlers.append((token, handler)); handlerLock.unlock()
     }
 
+    /// Register a session's paste handler (id, pasted text) for macOS-clipboard paste.
     public func setOnPaste(token: UInt64, _ handler: @escaping @Sendable (UInt32, String) -> Void) {
         handlerLock.lock(); pasteHandlers.append((token, handler)); handlerLock.unlock()
     }
 
+    /// Register a session's copy handler (id) for macOS-clipboard copy.
     public func setOnCopy(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void) {
         handlerLock.lock(); copyHandlers.append((token, handler)); handlerLock.unlock()
     }
 
+    /// Register a session's close-request handler (id) for the red button / ⌘W.
     public func setOnCloseRequest(token: UInt64, _ handler: @escaping @Sendable (UInt32) -> Void) {
         handlerLock.lock(); closeHandlers.append((token, handler)); handlerLock.unlock()
     }
@@ -508,6 +539,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         fireCloseRequest(id: id)
     }
 
+    /// Write a string to the macOS general pasteboard (replacing its contents).
     public func writeClipboard(text: String) {
         // Pasteboard writes happen on main; we can be called from the read
         // thread when SelectionNotify lands. Keep it simple and dispatch.
@@ -559,12 +591,17 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
     // MARK: - WindowBridge
 
+    /// Record a top-level's geometry and event mask before it maps. No NSWindow
+    /// is created yet; that happens at mapTopLevel.
     public func registerTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32) {
         lock.lock()
         slots[id] = Slot(geometry: geometry, eventMask: eventMask, pendingTitle: nil, window: nil, view: nil)
         lock.unlock()
     }
 
+    /// Map a top-level: emit the Reparent/Configure/Map/Expose sequence on the
+    /// caller's thread for monotonic wire order, then create and show the
+    /// NSWindow (native, Motif-framed, or borderless popup) on the main thread.
     public func mapTopLevel(
         id: UInt32,
         geometry: TopLevelGeometry,
@@ -831,6 +868,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// Map a non-top-level (descendant) window: just emit MapNotify. The
+    /// descendant draws into its top-level's view; no NSWindow of its own.
     public func mapDescendant(id: UInt32, byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {
         let event = MapNotifyEvent(
             sequenceNumber: sequence, event: id, window: id,
@@ -844,6 +883,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         // Expose-emit (it now follows mapDescendant for non-top-level maps).
     }
 
+    /// Unmap a top-level: emit UnmapNotify synchronously on the caller's thread,
+    /// then orderOut the NSWindow on main.
     public func unmapTopLevel(id: UInt32, byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {
         // Emit UnmapNotify SYNCHRONOUSLY on the caller's (protocol) thread
         // so the event lands in `outbound` with the correct sequence number
@@ -863,6 +904,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// Destroy a top-level: emit DestroyNotify synchronously, drop the slot,
+    /// then orderOut + close the NSWindow on main.
     public func destroyTopLevel(id: UInt32, byteOrder: ByteOrder, sequence: UInt16, outbound: OutboundQueue) {
         // Same pattern as unmapTopLevel: emit DestroyNotify synchronously
         // on the protocol thread for correct wire-order seq stamping.
@@ -887,6 +930,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// Set a top-level's title. Stored as pending if the NSWindow isn't created
+    /// yet; otherwise pushed to the NSWindow (and MotifWindow chrome) on main.
     public func setTopLevelTitle(id: UInt32, title: String) {
         lock.lock()
         let win = slots[id]?.window
@@ -906,6 +951,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// M3 hook for a resized descendant window. Currently a no-op.
     public func descendantResized(id: UInt32, parent: UInt32, geometry: TopLevelGeometry) {
         // M3 hook — mark the NSView's region for that descendant as needing
         // redraw. M2 doesn't do anything visible.
@@ -974,12 +1020,15 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// Return the FlippedXView backing a top-level drawable, or nil if unknown.
     public func drawingTarget(for drawable: UInt32) -> Any? {
         slot(drawable)?.view
     }
 
     // MARK: - Drawing
 
+    /// PolySegment: stroke each independent (x1,y1)-(x2,y2) segment with the
+    /// foreground color, line width, cap style, and optional dash pattern.
     public func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, capStyle: UInt8, segments: [LineSegment], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
         withDrawContext(target, clipRectangles: clipRectangles) { [weak self] ctx in
             applyForeground(ctx, foreground)
@@ -994,6 +1043,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// PolyLine: stroke a connected polyline through `points` with the
+    /// foreground color, line width, cap style, and optional dash pattern.
     public func drawPolyLine(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, capStyle: UInt8, points: [DrawPoint], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
         guard !points.isEmpty else { return }
         withDrawContext(target, clipRectangles: clipRectangles) { [weak self] ctx in
@@ -1185,6 +1236,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// FillPoly: fill the closed polygon through `points` with the foreground
+    /// color, using even-odd or winding (nonzero) fill per `evenOdd`.
     public func drawFillPoly(target: DrawTarget, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Framer.Rectangle]?) {
         guard !points.isEmpty else { return }
         withDrawContext(target, clipRectangles: clipRectangles) { ctx in
@@ -1199,6 +1252,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// ClearArea: fill the given device-coord rects with the window background
+    /// color. Caller has already intersected the request with the clipList.
     public func clearArea(topLevel: UInt32, rects: [Framer.Rectangle], background: RGB16) {
         if rects.isEmpty { return }
         appendDeferred(topLevel: topLevel) { [weak self] in
@@ -1293,6 +1348,9 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         return out
     }
 
+    /// CopyArea: copy a rectangle from `src` to `dst`. Same-NSWindow copies use
+    /// a direct bitmap memmove (no clip); all other cases snapshot the source
+    /// as a CGImage and blit it through the GC clip.
     public func copyArea(
         src: DrawTarget,
         dst: DrawTarget,
@@ -1488,6 +1546,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         flushTopLevel(topLevel)
     }
 
+    /// PolyRectangle: stroke the outline of each rectangle with the foreground
+    /// color, line width, and optional dash pattern.
     public func drawPolyRectangle(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, rectangles: [Framer.Rectangle], clipRectangles: [Framer.Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32) {
         withDrawContext(target, clipRectangles: clipRectangles) { [weak self] ctx in
             applyForeground(ctx, foreground)
@@ -1504,6 +1564,9 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// PolyFillRectangle: fill the rectangles. Handles solid fill plus the
+    /// FillStippled / FillOpaqueStippled, FillTiled-AND-depth1, and GXxor
+    /// pixel-value paths Motif and dtterm depend on.
     public func drawPolyFillRectangle(
         target: DrawTarget,
         foreground: RGB16, background: RGB16,
@@ -1993,6 +2056,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// ImageText8: fill the cell-snapped background rect under the text, then
+    /// draw the Latin-1 glyphs at baseline (x, y) with AA on, smoothing off.
     public func drawImageText8(
         target: DrawTarget,
         foreground: RGB16, background: RGB16,
@@ -2082,6 +2147,9 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// PolyText8: draw TEXTITEM8 runs (no background fill) starting at baseline
+    /// (x, y), advancing the pen by each item's delta plus integer glyph
+    /// advances from FontResolver. Font-shift sentinels are ignored.
     public func drawPolyText8(
         target: DrawTarget,
         foreground: RGB16,
@@ -2184,6 +2252,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// ImageText16: CHAR2B variant of drawImageText8. Fills the cell-snapped
+    /// background, then draws the decoded UniChar glyphs at baseline (x, y).
     public func drawImageText16(
         target: DrawTarget,
         foreground: RGB16, background: RGB16,
@@ -2241,6 +2311,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// PolyText16: CHAR2B variant of drawPolyText8. Draws TEXTITEM16 runs at
+    /// baseline (x, y), advancing by per-item delta plus integer glyph advances.
     public func drawPolyText16(
         target: DrawTarget,
         foreground: RGB16,
@@ -2310,6 +2382,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// Set the top-level's pointer cursor from an X cursor-font glyph index
+    /// (nil = default arrow), mapped to the closest NSCursor.
     public func setCursor(topLevel: UInt32, glyph: UInt16?) {
         appendDeferred(topLevel: topLevel) { [weak self] in
             guard let view = self?.slot(topLevel)?.view else { return }
@@ -2318,6 +2392,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         flushTopLevel(topLevel)
     }
 
+    /// Set the NSWindow background color (and the view's live-resize fill color)
+    /// so newly-uncovered area during a drag shows the right color.
     public func setTopLevelWindowBackground(id: UInt32, color: RGB16) {
         appendDeferred(topLevel: id) { [weak self] in
             guard let self = self, let slot = self.slot(id) else { return }
@@ -2335,6 +2411,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         flushTopLevel(id)
     }
 
+    /// Apply the SHAPE bounding region (device-coord rects) to a top-level's
+    /// view and make the NSWindow transparent outside it; nil clears the shape.
     public func setWindowBoundingShape(topLevel: UInt32, rects: [Framer.Rectangle]?) {
         appendDeferred(topLevel: topLevel) { [weak self] in
             guard let self = self, let slot = self.slot(topLevel) else { return }
@@ -2358,6 +2436,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         flushTopLevel(topLevel)
     }
 
+    /// Read a depth-1 mask pixmap's raw device pixels (BGRA words, row-major)
+    /// plus its device width/height; nil if the pixmap is unknown or empty.
     public func readDepth1MaskDevicePixels(pixmapId: UInt32) -> (pixels: [UInt32], width: Int, height: Int)? {
         guard let buf = lookupPixmapBuffer(pixmapId), let data = buf.context.data else { return nil }
         let w = buf.context.width, h = buf.context.height       // device pixels
@@ -2375,6 +2455,8 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         return (out, w, h)
     }
 
+    /// Paint the server-owned window-background rects (each carrying its own
+    /// color) into the top-level's backing, in device coords.
     public func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {
         appendDeferred(topLevel: topLevel) { [weak self] in
             guard let self = self,
@@ -2794,6 +2876,7 @@ private func applyFill(_ ctx: CGContext, _ rgb: RGB16) {
 }
 
 extension CocoaWindowBridge {
+    /// Ring the bell (Bell request) via the system beep.
     public func bell() {
         DispatchQueue.main.async { NSSound.beep() }
     }
@@ -2837,6 +2920,8 @@ extension CocoaWindowBridge {
         }
     }
 
+    /// Tear down cross-window drag tracking when the X grab ends. Ref-counted;
+    /// the monitor is removed only when the last nested grab releases.
     public func stopCrossWindowDragTracking() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -2850,6 +2935,8 @@ extension CocoaWindowBridge {
         }
     }
 
+    /// Make all native (non-popup) NSWindows non-movable for the duration of an
+    /// X grab. Ref-counted per session token; first lock applies the lock.
     public func lockNativeWindowDrag(token: UInt64) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -2859,6 +2946,8 @@ extension CocoaWindowBridge {
         }
     }
 
+    /// Release this session token's native-drag lock; windows become movable
+    /// again once every token's lock is released.
     public func unlockNativeWindowDrag(token: UInt64) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }

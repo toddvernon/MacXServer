@@ -10,9 +10,12 @@ import SwiftXCaptureUI
 // our X windows becomes key, AppKit shows the main menu (Edit > Copy/Paste,
 // App > Preferences..., Quit) at the top of the screen as usual.
 
+/// NSApplicationDelegate for the server app: owns the status-bar item, the
+/// standard Mac main menu, and the Preferences / Resources / Launchers windows.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
+    /// User-facing settings (capture, display scale, clipboard, Motif frame).
     let preferences: Preferences
 
     private var statusItem: NSStatusItem?
@@ -28,7 +31,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeLauncher: TelnetLauncher?
     private var progressController: LaunchProgressWindowController?
 
+    /// LAN host the launcher hands to remote apps as `DISPLAY`; set by the
+    /// bootstrap once the listener resolves the bind address.
     var advertisedHost: String = "localhost"
+    /// X display number (port minus 6000), used to build the `DISPLAY` string.
     var displayNumber: String = "0"
 
     /// Display string shown in the status-bar menu's first (disabled) row,
@@ -52,15 +58,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// ServerEntry.run and the AppDelegate shouldn't keep it alive.
     weak var listener: Listener?
 
+    /// Builds the delegate and its `Preferences` instance.
     override init() {
         self.preferences = Preferences()
         super.init()
     }
 
+    /// Thread-safe handle to the clipboard preferences for the listener thread.
     nonisolated var sharedPreferences: ClipboardPreferencesProvider { preferences }
 
     // MARK: - NSApplicationDelegate
 
+    /// Installs the status-bar item and main menu, and starts watching the
+    /// launchers file for changes.
     func applicationDidFinishLaunching(_ notification: Notification) {
         installStatusItem()
         installMainMenu()
@@ -70,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    /// Returns false so the status-bar app keeps running with no X windows open.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // Status-bar app — keep running after the last X window closes so
         // we can accept a fresh client connection without relaunching.

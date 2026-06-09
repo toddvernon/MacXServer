@@ -68,6 +68,8 @@ extension Region {
 
     // MARK: - Public entry points
 
+    /// Set intersection of this region and `other`. Drives miRegionOp with
+    /// the intersect overlap (miregion.c `miIntersect`).
     public func intersected(with other: Region) -> Region {
         // Trivial rejects (miregion.c:962-993).
         if isEmpty || other.isEmpty { return .empty }
@@ -95,6 +97,9 @@ extension Region {
         return builder.finish()
     }
 
+    /// Set union of this region and `other`. Drives miRegionOp with the
+    /// union overlap, keeping the non-overlapping bits of both
+    /// (miregion.c `miUnion`).
     public func unioned(with other: Region) -> Region {
         // Trivial cases (miregion.c:1118-1163).
         if isEmpty { return other }
@@ -109,6 +114,9 @@ extension Region {
         return builder.finish()
     }
 
+    /// This region minus `other`. Drives miRegionOp with the subtract
+    /// overlap, keeping only the non-overlapping bits of self
+    /// (miregion.c `miSubtract`).
     public func subtracting(_ other: Region) -> Region {
         // Trivial rejects (miregion.c:1792-1803).
         if isEmpty || other.isEmpty { return self }

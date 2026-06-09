@@ -71,12 +71,20 @@
 // COW handle so copying a Region is cheap and mutation copies the rect
 // list only when needed.
 
+/// Half-open axis-aligned box `[x1, x2) x [y1, y2)`. Mirrors X.org's `BoxRec`
+/// (regionstr.h); the building block for `Region`'s rect list.
 public struct BoxRec: Equatable, Hashable, Sendable {
+    /// Left edge (inclusive).
     public var x1: Int32
+    /// Top edge (inclusive).
     public var y1: Int32
+    /// Right edge (exclusive).
     public var x2: Int32
+    /// Bottom edge (exclusive).
     public var y2: Int32
 
+    /// Build a box from its four edges. No normalization; `x2 < x1` or
+    /// `y2 < y1` makes the box empty.
     public init(x1: Int32, y1: Int32, x2: Int32, y2: Int32) {
         self.x1 = x1
         self.y1 = y1
@@ -84,6 +92,7 @@ public struct BoxRec: Equatable, Hashable, Sendable {
         self.y2 = y2
     }
 
+    /// The zero box `(0, 0, 0, 0)`, which is empty.
     public init() {
         self.init(x1: 0, y1: 0, x2: 0, y2: 0)
     }
@@ -94,8 +103,11 @@ public struct BoxRec: Equatable, Hashable, Sendable {
         BoxRec(x1: x, y1: y, x2: x &+ width, y2: y &+ height)
     }
 
+    /// True iff the box encloses no pixels (`x2 <= x1` or `y2 <= y1`).
     public var isEmpty: Bool { x2 <= x1 || y2 <= y1 }
+    /// Width `x2 - x1`, clamped to 0 for an empty box.
     public var width: Int32 { x2 > x1 ? x2 - x1 : 0 }
+    /// Height `y2 - y1`, clamped to 0 for an empty box.
     public var height: Int32 { y2 > y1 ? y2 - y1 : 0 }
 
     /// Half-open containment: point at (x2, *) or (*, y2) is NOT inside.
@@ -122,6 +134,10 @@ public enum RectIn: Equatable, Sendable {
     case partially   // rect crosses the region boundary
 }
 
+/// A set of disjoint axis-aligned rectangles plus a bounding box, stored in
+/// X.org's y-x banded layout. Value-typed with copy-on-write multi-rect
+/// storage. Ported from mi/miregion.c; the band-walk ops live in
+/// RegionOp.swift and the rest of miregion.c in RegionExtras.swift.
 public struct Region: Equatable, Sendable {
 
     // Internal: bounding box of `rects`. For empty region this is the
@@ -210,6 +226,8 @@ public struct Region: Equatable, Sendable {
         return try body([extents])
     }
 
+    /// True iff the point `(x, y)` lies inside any rect of the region
+    /// (half-open). miregion.c `miPointInRegion`.
     public func contains(x: Int32, y: Int32) -> Bool {
         if isEmpty { return false }
         if !extents.contains(x: x, y: y) { return false }
@@ -284,6 +302,9 @@ public struct Region: Equatable, Sendable {
 
     // MARK: - Equatable
 
+    /// Two regions are equal iff they cover the same point set. Relies on
+    /// the canonical y-x banded form so a rect-list compare suffices.
+    /// miregion.c `miRegionsEqual`.
     public static func == (lhs: Region, rhs: Region) -> Bool {
         if lhs.isEmpty && rhs.isEmpty { return true }
         if lhs.isEmpty != rhs.isEmpty { return false }

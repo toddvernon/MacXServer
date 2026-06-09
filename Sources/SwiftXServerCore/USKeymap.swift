@@ -14,6 +14,8 @@ import Foundation
 //   - macOS virtual keycodes: HIToolbox/Events.h kVK_ANSI_*
 //   - X11 keysyms: keysymdef.h XK_*
 
+/// US-ASCII keyboard map: macOS virtual keyCodes to X11 keysyms/keycodes,
+/// plus the modifier and keymap payloads the keyboard replies need.
 public enum USKeymap {
 
     /// Phase 1 reports 2 keysyms per keycode (unshifted, shifted). Phase 4

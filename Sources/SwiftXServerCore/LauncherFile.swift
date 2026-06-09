@@ -1,5 +1,7 @@
 import Foundation
 
+/// One launchable command parsed from `~/.macxserver-launchers`: a remote
+/// host, the connection details, and the X client command to run there.
 public struct LauncherEntry: Equatable, Sendable {
     /// Submenu label (the part after `/` in `[host-key/item-name]`, or the
     /// whole section name for legacy entries).
@@ -8,13 +10,21 @@ public struct LauncherEntry: Equatable, Sendable {
     /// host key. For legacy `[name]` entries it's the leftmost dotted part of
     /// the entry's `host` field (`u5.example.com` → `u5`).
     public let group: String
+    /// Hostname or address to telnet into.
     public let host: String
+    /// Command line to run on the remote host (sets DISPLAY and launches the X client).
     public let command: String
+    /// Login username for the telnet session.
     public let user: String
+    /// Telnet port. Defaults to 23.
     public let port: UInt16
+    /// Show the per-launch progress window with the telnet transcript.
     public let verbose: Bool
+    /// Substring the telnet flow waits for before sending the username.
     public let loginPrompt: String
+    /// Substring the telnet flow waits for before sending the password.
     public let passwordPrompt: String
+    /// Substring that marks the remote shell is ready for the command.
     public let shellPrompt: String
     /// Optional cleartext password from the launcher file. nil = none given,
     /// so the launch flow falls back to the macOS Keychain (and prompts if
@@ -23,6 +33,7 @@ public struct LauncherEntry: Equatable, Sendable {
     /// not recommended on shared machines.
     public let password: String?
 
+    /// Build an entry. Prompts and port carry the documented defaults when omitted.
     public init(name: String, group: String, host: String, command: String, user: String,
                 port: UInt16 = 23, verbose: Bool = false,
                 loginPrompt: String = "ogin:",
@@ -37,7 +48,10 @@ public struct LauncherEntry: Equatable, Sendable {
     }
 }
 
+/// The parsed contents of `~/.macxserver-launchers`: the flat list of
+/// launcher entries in file order.
 public struct LauncherFile: Sendable {
+    /// Every entry parsed from the file, in file order.
     public let entries: [LauncherEntry]
 
     /// Entries grouped by `group`, preserving first-appearance order of groups
@@ -57,6 +71,9 @@ public struct LauncherFile: Sendable {
         return result
     }
 
+    /// Parse launcher-file text into entries. Honors `[host:X]` default
+    /// blocks merged into `[X/item]` entries plus legacy `[name]` entries;
+    /// skips blank/comment lines and entries missing host/user/command.
     public static func parse(_ text: String) -> LauncherFile {
         var hostBlocks: [String: [String: String]] = [:]
         var pendingItems: [(section: String, pairs: [String: String])] = []
@@ -141,11 +158,15 @@ public struct LauncherFile: Sendable {
     }
 }
 
+/// Loads (and seeds on first run) the launcher file from disk.
 public enum LauncherFileLoader {
+    /// Default file location: `~/.macxserver-launchers`.
     public static let defaultPath: String = {
         (NSHomeDirectory() as NSString).appendingPathComponent(".macxserver-launchers")
     }()
 
+    /// Read and parse the launcher file. If it doesn't exist, write `seed()`
+    /// to disk first, then parse. Falls back to parsing the seed on I/O error.
     public static func loadOrSeed(
         path: String = defaultPath,
         seed: @autoclosure () -> String,

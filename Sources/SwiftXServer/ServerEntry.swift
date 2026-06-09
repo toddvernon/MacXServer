@@ -50,6 +50,8 @@ func primaryLocalIPv4() -> String? {
     return fallback
 }
 
+/// Shared bootstrap for the X server, called by both the SPM `macxserver`
+/// executable and the Xcode `.app` target's `@main` wrapper.
 enum ServerEntry {
 
     /// Drive the whole server. Never returns under normal operation

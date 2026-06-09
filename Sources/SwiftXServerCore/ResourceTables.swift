@@ -4,20 +4,36 @@ import Framer
 // Lightweight resource tables for windows, GCs, pixmaps, fonts, and properties.
 // M1 just records what the client created — nothing rendering-related.
 
+/// One window resource keyed by XID: geometry, class, CW* attributes,
+/// clip/shape regions, and the doubly-linked sibling chain that encodes Z-order.
 public struct WindowEntry: Equatable, Sendable {
+    /// The window's XID.
     public var id: UInt32
+    /// XID of the parent window (root for top-levels).
     public var parent: UInt32
+    /// Bits-per-pixel depth of the window.
     public var depth: UInt8
+    /// X coordinate of the window's origin, relative to its parent.
     public var x: Int16
+    /// Y coordinate of the window's origin, relative to its parent.
     public var y: Int16
+    /// Interior width (excludes border).
     public var width: UInt16
+    /// Interior height (excludes border).
     public var height: UInt16
+    /// Border ring thickness in pixels.
     public var borderWidth: UInt16
+    /// InputOutput / InputOnly / CopyFromParent class.
     public var windowClass: WindowClass
+    /// Visual XID the window was created with.
     public var visual: UInt32
+    /// CreateWindow's raw value mask (which CW* attributes were supplied).
     public var valueMask: UInt32
+    /// CreateWindow's raw value-list bytes, kept as-received.
     public var valueList: [UInt8]
+    /// Whether the window is currently mapped.
     public var mapped: Bool
+    /// Event mask selected for this window (the union the client wants).
     public var eventMask: UInt32
     /// Effective CWBackPixel for the window. nil = no explicit background
     /// (windowBackground() falls back to white). Seeded from CreateWindow's
@@ -127,6 +143,8 @@ public struct WindowEntry: Equatable, Sendable {
     /// Bottommost (back-most, behind everything) child. nil = no children.
     public var lastChild: UInt32?
 
+    /// Builds a window entry; CW* attributes and chain links default to
+    /// their spec defaults / unlinked state when not supplied.
     public init(
         id: UInt32, parent: UInt32, depth: UInt8,
         x: Int16, y: Int16, width: UInt16, height: UInt16,
@@ -184,6 +202,8 @@ public struct WindowEntry: Equatable, Sendable {
     }
 }
 
+/// Thread-safe map of window XID to WindowEntry. The server's authoritative
+/// window registry; mutated from both the read thread and the Cocoa main thread.
 public final class WindowTable: @unchecked Sendable {
     // Thread-safety: read thread and the Cocoa main thread (resize handler)
     // both touch this table. NSLock keeps the underlying dictionary safe.
@@ -192,26 +212,32 @@ public final class WindowTable: @unchecked Sendable {
 
     public init() {}
 
+    /// Snapshot copy of the whole XID-to-entry map.
     public var windows: [UInt32: WindowEntry] {
         lock.lock(); defer { lock.unlock() }
         return _windows
     }
+    /// Number of windows currently tracked.
     public var count: Int {
         lock.lock(); defer { lock.unlock() }
         return _windows.count
     }
 
+    /// Store a window entry, keyed by its id (replaces any existing entry).
     public func insert(_ window: WindowEntry) {
         lock.lock(); _windows[window.id] = window; lock.unlock()
     }
+    /// Drop the window with this XID, if present.
     public func remove(_ id: UInt32) {
         lock.lock(); _windows.removeValue(forKey: id); lock.unlock()
     }
+    /// Look up a window by XID; nil if unknown.
     public func get(_ id: UInt32) -> WindowEntry? {
         lock.lock(); defer { lock.unlock() }
         return _windows[id]
     }
 
+    /// Set the window's mapped flag (no-op if the XID is unknown).
     public func setMapped(_ id: UInt32, _ value: Bool) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -219,6 +245,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's selected event mask (no-op if the XID is unknown).
     public func setEventMask(_ id: UInt32, _ mask: UInt32) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -226,6 +253,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's CWBackPixel background color (nil = no explicit bg).
     public func setBackPixel(_ id: UInt32, _ pixel: UInt32?) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -233,6 +261,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's CWBorderPixel border color (nil = default black).
     public func setBorderPixel(_ id: UInt32, _ pixel: UInt32?) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -240,6 +269,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's CWCursor resource id (nil = inherit from parent).
     public func setCursor(_ id: UInt32, _ cursor: UInt32?) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -249,6 +279,7 @@ public final class WindowTable: @unchecked Sendable {
 
     // MARK: - CW* attribute setters (added 2026-05-15)
 
+    /// Set the window's CWOverrideRedirect bit.
     public func setOverrideRedirect(_ id: UInt32, _ value: Bool) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -256,6 +287,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's CWBitGravity (stored for read-back only).
     public func setBitGravity(_ id: UInt32, _ value: UInt8) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -263,6 +295,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's CWWinGravity (stored for read-back only).
     public func setWinGravity(_ id: UInt32, _ value: UInt8) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -270,6 +303,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's CWBackingStore mode (stored only; not implemented).
     public func setBackingStore(_ id: UInt32, _ value: UInt8) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -277,6 +311,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's CWBackingPlanes (stored for read-back only).
     public func setBackingPlanes(_ id: UInt32, _ value: UInt32) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -284,6 +319,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's CWBackingPixel (stored for read-back only).
     public func setBackingPixel(_ id: UInt32, _ value: UInt32) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -291,6 +327,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's CWSaveUnder flag (stored only; not honored).
     public func setSaveUnder(_ id: UInt32, _ value: Bool) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -298,6 +335,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's CWColormap (nil = inherit from parent).
     public func setColormap(_ id: UInt32, _ value: UInt32?) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -305,6 +343,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's CWDontPropagate event-mask subset.
     public func setDoNotPropagateMask(_ id: UInt32, _ value: UInt16) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -312,6 +351,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's computed interior clip region.
     public func setClipList(_ id: UInt32, _ region: Region) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -319,6 +359,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's computed border-inclusive clip region.
     public func setBorderClip(_ id: UInt32, _ region: Region) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -342,6 +383,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Record the last VisibilityNotify state emitted for this window.
     public func setLastVisibilityState(_ id: UInt32, _ state: UInt8?) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -357,6 +399,7 @@ public final class WindowTable: @unchecked Sendable {
     // chain consistent. Callers that touch these directly must maintain
     // both ends of every link.
 
+    /// Set the window's prevSib chain link (sibling above in Z-order).
     public func setPrevSib(_ id: UInt32, _ value: UInt32?) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -364,6 +407,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set the window's nextSib chain link (sibling below in Z-order).
     public func setNextSib(_ id: UInt32, _ value: UInt32?) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -371,6 +415,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set this window's firstChild link (topmost child in Z-order).
     public func setFirstChild(_ id: UInt32, _ value: UInt32?) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -378,6 +423,7 @@ public final class WindowTable: @unchecked Sendable {
         _windows[id] = w
     }
 
+    /// Set this window's lastChild link (bottommost child in Z-order).
     public func setLastChild(_ id: UInt32, _ value: UInt32?) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
@@ -401,8 +447,12 @@ public final class WindowTable: @unchecked Sendable {
     }
 }
 
+/// One graphics-context resource keyed by XID: parsed GC attribute values
+/// plus clip rectangles and dash pattern.
 public struct GCEntry: Equatable, Sendable {
+    /// The GC's XID.
     public var id: UInt32
+    /// XID of the drawable the GC was created against.
     public var drawable: UInt32
     /// Parsed GC attribute values keyed by bit. Built from CreateGC's
     /// (valueMask, valueList) and updated incrementally on every ChangeGC.
@@ -423,13 +473,17 @@ public struct GCEntry: Equatable, Sendable {
     /// its attribute bit. Per X spec the byte values must all be ≥ 1.
     public var dashes: [UInt8]?
 
+    /// Builds a GC entry; clip rectangles and dashes start unset.
     public init(id: UInt32, drawable: UInt32, values: [UInt32: UInt32] = [:]) {
         self.id = id; self.drawable = drawable
         self.values = values
     }
 }
 
+/// Map of GC XID to GCEntry. Owns CreateGC/ChangeGC/CopyGC parsing and the
+/// clip-rect and dash state for every graphics context.
 public final class GCTable {
+    /// The XID-to-GC map (read-only to callers).
     private(set) public var gcs: [UInt32: GCEntry] = [:]
     public init() {}
 
@@ -441,7 +495,9 @@ public final class GCTable {
         gcs[id] = entry
     }
 
+    /// Drop the GC with this XID (FreeGC).
     public func remove(_ id: UInt32) { gcs.removeValue(forKey: id) }
+    /// Look up a GC by XID; nil if unknown.
     public func get(_ id: UInt32) -> GCEntry? { gcs[id] }
 
     /// Apply a ChangeGC's partial (valueMask, valueList): for each bit set
@@ -515,6 +571,7 @@ public final class GCTable {
         gcs[id] = entry
     }
 
+    /// Number of GCs currently tracked.
     public var count: Int { gcs.count }
 
     /// Walk `mask`'s set bits in ascending order; for each, read the next
@@ -544,20 +601,31 @@ public final class GCTable {
     }
 }
 
+/// One pixmap resource keyed by XID: id, source drawable, and dimensions.
+/// The actual pixel buffer lives alongside in PixmapTable, not here.
 public struct PixmapEntry: Equatable, Sendable {
+    /// The pixmap's XID.
     public var id: UInt32
+    /// XID of the drawable the pixmap was created against.
     public var drawable: UInt32
+    /// Bits-per-pixel depth.
     public var depth: UInt8
+    /// Pixmap width in pixels.
     public var width: UInt16
+    /// Pixmap height in pixels.
     public var height: UInt16
 
+    /// Builds a pixmap entry (metadata only; buffer allocated by PixmapTable).
     public init(id: UInt32, drawable: UInt32, depth: UInt8, width: UInt16, height: UInt16) {
         self.id = id; self.drawable = drawable; self.depth = depth
         self.width = width; self.height = height
     }
 }
 
+/// Map of pixmap XID to PixmapEntry, plus a parallel CGBitmapContext-backed
+/// PixelBuffer per pixmap allocated at device scale.
 public final class PixmapTable: @unchecked Sendable {
+    /// The XID-to-pixmap metadata map (read-only to callers).
     private(set) public var pixmaps: [UInt32: PixmapEntry] = [:]
     /// CGBitmapContext per pixmap, allocated eagerly at `allocate` and
     /// freed at `remove`. Kept off `PixmapEntry` so the entry stays a
@@ -572,6 +640,7 @@ public final class PixmapTable: @unchecked Sendable {
     /// every blink. See PixelBuffer.scaleFactor for the full rationale.
     private let scaleFactor: Double
 
+    /// Creates the table; scaleFactor is applied to every PixelBuffer it allocates.
     public init(scaleFactor: Double = 1) {
         self.scaleFactor = scaleFactor
     }
@@ -583,41 +652,55 @@ public final class PixmapTable: @unchecked Sendable {
         buffers[id] = PixelBuffer(width: Int(width), height: Int(height), scaleFactor: scaleFactor)
     }
 
+    /// Drop the pixmap and free its pixel buffer (FreePixmap).
     public func remove(_ id: UInt32) {
         pixmaps.removeValue(forKey: id)
         buffers.removeValue(forKey: id)
     }
 
+    /// Look up a pixmap's metadata by XID; nil if unknown.
     public func get(_ id: UInt32) -> PixmapEntry? { pixmaps[id] }
 
     /// Pixel buffer for the pixmap, nil if the pixmap doesn't exist or
     /// allocation failed at create time.
     public func buffer(for id: UInt32) -> PixelBuffer? { buffers[id] }
 
+    /// Number of pixmaps currently tracked.
     public var count: Int { pixmaps.count }
 }
 
+/// One font resource keyed by XID: the requested XLFD name and the resolved
+/// Mac font + metrics.
 public struct FontEntry: Equatable, Sendable {
+    /// The font's XID.
     public var id: UInt32
+    /// The XLFD name bytes the client requested via OpenFont.
     public var name: [UInt8]
     /// Resolved Mac font + cell metrics. Populated at OpenFont time so
     /// QueryFont can answer without re-parsing, and the bridge can
     /// instantiate the CTFont without round-tripping back to the session.
     public var resolved: ResolvedFont
 
+    /// Builds a font entry from an XID, requested name, and resolved Mac font.
     public init(id: UInt32, name: [UInt8], resolved: ResolvedFont) {
         self.id = id; self.name = name; self.resolved = resolved
     }
 }
 
+/// Map of font XID to FontEntry (OpenFont creates, CloseFont removes).
 public final class FontTable {
+    /// The XID-to-font map (read-only to callers).
     private(set) public var fonts: [UInt32: FontEntry] = [:]
     public init() {}
 
+    /// Store a font entry, keyed by its id (OpenFont).
     public func insert(_ font: FontEntry) { fonts[font.id] = font }
+    /// Drop the font with this XID (CloseFont).
     public func remove(_ id: UInt32) { fonts.removeValue(forKey: id) }
+    /// Look up a font by XID; nil if unknown.
     public func get(_ id: UInt32) -> FontEntry? { fonts[id] }
 
+    /// Number of fonts currently tracked.
     public var count: Int { fonts.count }
 }
 
@@ -627,38 +710,59 @@ public final class FontTable {
 /// system cursors at render time. The substitution happens on the bridge
 /// side; this table just remembers the glyph for each id.
 public struct CursorEntry: Equatable, Sendable {
+    /// The cursor's XID.
     public var id: UInt32
+    /// Source-glyph index from the X cursor font (e.g. XC_xterm = 152).
     public var sourceGlyph: UInt16
+    /// Builds a cursor entry from an XID and its cursor-font glyph index.
     public init(id: UInt32, sourceGlyph: UInt16) {
         self.id = id; self.sourceGlyph = sourceGlyph
     }
 }
 
+/// Map of cursor XID to CursorEntry, remembering each cursor's source glyph
+/// for later NSCursor substitution.
 public final class CursorTable {
+    /// The XID-to-cursor map (read-only to callers).
     private(set) public var cursors: [UInt32: CursorEntry] = [:]
     public init() {}
 
+    /// Store a cursor entry, keyed by its id.
     public func insert(_ cursor: CursorEntry) { cursors[cursor.id] = cursor }
+    /// Drop the cursor with this XID (FreeCursor).
     public func remove(_ id: UInt32) { cursors.removeValue(forKey: id) }
+    /// Look up a cursor's source glyph by XID; nil if unknown.
     public func glyph(_ id: UInt32) -> UInt16? { cursors[id]?.sourceGlyph }
 
+    /// Number of cursors currently tracked.
     public var count: Int { cursors.count }
 }
 
+/// One window property: the (window, property-atom) it belongs to, its type
+/// atom, format, and raw value bytes.
 public struct PropertyEntry: Equatable, Sendable {
+    /// XID of the window the property is attached to.
     public var window: UInt32
+    /// Property-name atom.
     public var property: UInt32     // ATOM
+    /// Type atom of the stored value.
     public var type: UInt32         // ATOM
+    /// Unit size of the value: 8, 16, or 32 bits.
     public var format: UInt8        // 8/16/32
+    /// Raw property value bytes.
     public var value: [UInt8]
 
+    /// Builds a property entry from its window, atoms, format, and bytes.
     public init(window: UInt32, property: UInt32, type: UInt32, format: UInt8, value: [UInt8]) {
         self.window = window; self.property = property
         self.type = type; self.format = format; self.value = value
     }
 }
 
+/// Per-window property store: window XID to (property-atom to PropertyEntry).
+/// Backs ChangeProperty / GetProperty / DeleteProperty.
 public final class PropertyTable {
+    /// Nested map of window XID to its property-atom-keyed entries (read-only).
     private(set) public var properties: [UInt32: [UInt32: PropertyEntry]] = [:]
     public init() {}
 
@@ -667,10 +771,16 @@ public final class PropertyTable {
     /// entry's (Prepend / Append modes only) and the caller must emit
     /// BadMatch per spec 10.10 — the entry was NOT mutated.
     public enum ChangeResult: Equatable, Sendable {
+        /// The property was stored / mutated successfully.
         case ok
+        /// Type or format mismatch on Prepend/Append; entry left untouched,
+        /// caller must emit BadMatch.
         case mismatch
     }
 
+    /// Store or mutate a property per ChangeProperty's mode (0=Replace,
+    /// 1=Prepend, 2=Append). Returns `.mismatch` without changing anything
+    /// when a Prepend/Append's type or format differs from the existing entry.
     @discardableResult
     public func change(window: UInt32, property: UInt32, type: UInt32, format: UInt8, mode: UInt8, value: [UInt8]) -> ChangeResult {
         var perWindow = properties[window] ?? [:]
@@ -702,18 +812,22 @@ public final class PropertyTable {
         return .ok
     }
 
+    /// Look up one property on a window; nil if the window or property is unset.
     public func get(window: UInt32, property: UInt32) -> PropertyEntry? {
         properties[window]?[property]
     }
 
+    /// Delete one property from a window (DeleteProperty).
     public func delete(window: UInt32, property: UInt32) {
         properties[window]?.removeValue(forKey: property)
     }
 
+    /// Drop all properties for a window (used when the window is destroyed).
     public func deleteAll(window: UInt32) {
         properties.removeValue(forKey: window)
     }
 
+    /// Total property count across every window.
     public var totalCount: Int {
         properties.values.reduce(0) { $0 + $1.count }
     }

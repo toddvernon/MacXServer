@@ -55,6 +55,7 @@ public final class SelectionMediator {
     /// the resourceIdBase is 0x4400000 with mask 0x3FFFFF.
     public static let stubWindowFloor: UInt32 = 0xFFFE_0000
 
+    /// Wire up the mediator with the session's resource tables and config.
     public init(
         atoms: AtomTable,
         coordinator: ServerCoordinator,

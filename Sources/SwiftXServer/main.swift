@@ -3,4 +3,6 @@
 // Keep this file ONLY in the SPM executable target — the Xcode .app
 // excludes it and uses Xcode/ServerMain.swift instead.
 
+/// Process entry point for the SPM `macxserver` executable. Hands off
+/// immediately to the shared bootstrap; never returns under normal operation.
 ServerEntry.run()

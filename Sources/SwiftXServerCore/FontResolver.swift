@@ -23,6 +23,8 @@ import Framer
 //   - whether italic should be synthesised by skew (Monaco / Symbol have no
 //     italic face) or use a real italic Mac font
 
+/// Resolved font ready for the renderer: Mac font name, point size, cell
+/// metrics, and the flags QueryFont / drawing need.
 public struct ResolvedFont: Equatable, Sendable {
     /// Mac font name suitable for `CTFontCreateWithName` (display name; Core
     /// Text accepts both display and PostScript names for system fonts).
@@ -36,7 +38,11 @@ public struct ResolvedFont: Equatable, Sendable {
     public var cellHeight: Int
     public var ascent: Int
     public var descent: Int
+    /// True when the resolved Mac font is monospace (drives the cell-as-advance
+    /// path in `integerAdvances`).
     public var isMonospace: Bool
+    /// Whether bold was requested in the XLFD. May be true even when the Mac
+    /// font has no real bold face (see `hasRealBold`).
     public var bold: Bool
     /// True when italic was requested but the Mac font has no real italic
     /// face — renderer should apply a 12° skew transform.
@@ -51,6 +57,8 @@ public struct ResolvedFont: Equatable, Sendable {
     public var charsetEncoding: String
 }
 
+/// Stateless resolver turning X11 font names / XLFDs into `ResolvedFont`,
+/// backed by the user-editable substitution table.
 public enum FontResolver {
 
     /// Top-level entry: try alias first (e.g., `fixed`, `9x15`), then full
@@ -373,8 +381,12 @@ public enum FontResolver {
     /// Missing-glyph entries (CT returns glyph index 0) are reported as
     /// all-zeros CharInfo per spec convention; `allExist` flips false when
     /// any glyph is missing so the reply's allCharsExist bit reads correctly.
+    /// CHARINFO array plus the allCharsExist bit, ready for a QueryFont reply.
     public struct GlyphMetricsPayload {
+        /// One CharInfo per glyph in the requested range (all-zeros for
+        /// missing glyphs).
         public var infos: [CharInfo]
+        /// False if any glyph in the range was missing.
         public var allExist: Bool
     }
 

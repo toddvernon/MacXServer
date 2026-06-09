@@ -5,12 +5,20 @@ import Framer
 // The session calls these from the read thread; bridges that touch AppKit
 // must dispatch to the main queue internally.
 
+/// A top-level window's geometry in X-root pixel coordinates: position,
+/// size, and border width as carried in CreateWindow / ConfigureWindow.
 public struct TopLevelGeometry: Equatable, Sendable {
+    /// X-root x of the window's origin.
     public var x: Int16
+    /// X-root y of the window's origin.
     public var y: Int16
+    /// Window width in pixels.
     public var width: UInt16
+    /// Window height in pixels.
     public var height: UInt16
+    /// X border width in pixels.
     public var borderWidth: UInt16
+    /// Build a geometry from explicit position, size, and border width.
     public init(x: Int16, y: Int16, width: UInt16, height: UInt16, borderWidth: UInt16) {
         self.x = x; self.y = y; self.width = width; self.height = height; self.borderWidth = borderWidth
     }
@@ -18,10 +26,15 @@ public struct TopLevelGeometry: Equatable, Sendable {
 
 /// One line segment in PolySegment, in top-level pixel coordinates.
 public struct LineSegment: Equatable, Sendable {
+    /// x of the segment's start point.
     public var x1: Int16
+    /// y of the segment's start point.
     public var y1: Int16
+    /// x of the segment's end point.
     public var x2: Int16
+    /// y of the segment's end point.
     public var y2: Int16
+    /// Build a segment from its two endpoints.
     public init(x1: Int16, y1: Int16, x2: Int16, y2: Int16) {
         self.x1 = x1; self.y1 = y1; self.x2 = x2; self.y2 = y2
     }
@@ -29,8 +42,11 @@ public struct LineSegment: Equatable, Sendable {
 
 /// One point in PolyLine / FillPoly, in top-level pixel coordinates.
 public struct DrawPoint: Equatable, Sendable {
+    /// Point x in top-level pixel coordinates.
     public var x: Int16
+    /// Point y in top-level pixel coordinates.
     public var y: Int16
+    /// Build a point from its x/y coordinates.
     public init(x: Int16, y: Int16) { self.x = x; self.y = y }
 }
 
@@ -42,11 +58,18 @@ public struct DrawPoint: Equatable, Sendable {
 /// rect (0, 0, width, height) for a leaf with no obscuring children,
 /// shrinks to zero for fully-covered windows.
 public struct DescendantSnapshot: Equatable, Sendable {
+    /// X window id of the descendant.
     public var id: UInt32
+    /// The descendant's event mask, used to decide whether Expose applies.
     public var eventMask: UInt32
+    /// Descendant width in pixels.
     public var width: UInt16
+    /// Descendant height in pixels.
     public var height: UInt16
+    /// Visible portions of the window in window-local coords (Expose regions).
     public var exposeRects: [BoxRec]
+    /// Build a snapshot from the descendant's id, event mask, size, and
+    /// visible Expose rects.
     public init(id: UInt32, eventMask: UInt32, width: UInt16, height: UInt16,
                 exposeRects: [BoxRec] = []) {
         self.id = id; self.eventMask = eventMask
@@ -55,6 +78,12 @@ public struct DescendantSnapshot: Equatable, Sendable {
     }
 }
 
+/// The windowing-backend abstraction the X server talks to. Implementations
+/// own the on-screen surfaces (NSWindows for Cocoa, nothing for mocks) and
+/// turn X requests into native draw/window operations plus native input
+/// events back into X events. Implemented by `CocoaWindowBridge` (real) and
+/// the test mocks; each protocol requirement below is the contract an
+/// implementation must honor.
 public protocol WindowBridge: AnyObject, Sendable {
     /// Logical-to-device scale of the window backings the bridge owns.
     /// 1 X-logical pixel = `scaleFactor` device pixels. PixmapTable
@@ -289,8 +318,14 @@ public protocol WindowBridge: AnyObject, Sendable {
     // path in pixels. Applied via CGContext.setLineDash inside the clip
     // scope.
 
+    /// PolySegment: stroke each independent line segment with the GC's color,
+    /// line width, cap style, and dash pattern. Segments don't connect.
     func drawPolySegment(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, capStyle: UInt8, segments: [LineSegment], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32)
+    /// PolyLine: stroke a connected polyline through `points` (each point
+    /// joins the next), honoring line width, cap style, and dash pattern.
     func drawPolyLine(target: DrawTarget, foreground: RGB16, lineWidth: UInt32, capStyle: UInt8, points: [DrawPoint], clipRectangles: [Rectangle]?, dashes: [UInt8]?, dashOffset: UInt32)
+    /// FillPoly: fill the closed polygon defined by `points` using `evenOdd`
+    /// (true) or winding (false) fill rule.
     func drawFillPoly(target: DrawTarget, foreground: RGB16, points: [DrawPoint], evenOdd: Bool, clipRectangles: [Rectangle]?)
     /// PolyFillRectangle. `function` is the X GC drawing function — primarily
     /// 3 (GXcopy, overwrite) or 6 (GXxor, toggle). XOR is what Athena/Motif
@@ -610,16 +645,25 @@ public protocol WindowBridge: AnyObject, Sendable {
 /// A single window-background paint: an absolute rect in top-level pixel
 /// coordinates plus the resolved RGB16 to fill it with.
 public struct WindowBackgroundRect: Equatable, Sendable {
+    /// Rect origin x in top-level pixel coordinates.
     public var x: Int16
+    /// Rect origin y in top-level pixel coordinates.
     public var y: Int16
+    /// Rect width in pixels.
     public var width: UInt16
+    /// Rect height in pixels.
     public var height: UInt16
+    /// Resolved fill color for this rect.
     public var color: RGB16
+    /// Build a background paint rect from its position, size, and fill color.
     public init(x: Int16, y: Int16, width: UInt16, height: UInt16, color: RGB16) {
         self.x = x; self.y = y; self.width = width; self.height = height; self.color = color
     }
 }
 
+/// Default no-op implementations so test/mock bridges only have to override
+/// the handful of methods they actually exercise. The real contract for each
+/// method lives on the protocol declaration above.
 public extension WindowBridge {
     /// Default scale factor for bridges that don't override (test mocks,
     /// stubs). Real bridges (`CocoaWindowBridge`) provide a stored value.

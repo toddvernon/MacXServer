@@ -11,6 +11,9 @@ import SwiftXCaptureCore
 // first non-Setup request, per the X11 spec) and stamp it on every reply we
 // emit. SetupAccepted itself doesn't carry a sequence number.
 
+/// Per-connection X11 server state machine. Bytes flow in via `feed(_:)` and
+/// reply/event bytes come back out; it owns this client's resource tables,
+/// grab/focus/pointer state, and the serial `protocolQueue` that guards them.
 public final class ServerSession: @unchecked Sendable {
     private enum Phase {
         case awaitingSetup
@@ -25,6 +28,8 @@ public final class ServerSession: @unchecked Sendable {
     /// emitting BadLength.
     public private(set) var shouldClose: Bool = false
 
+    /// Immutable per-session configuration (resource-id base, root window id,
+    /// screen geometry, scaling presets).
     public let config: ServerConfig
 
     /// Cross-session shared state (atoms, selection ownership, ID ranges).
@@ -63,11 +68,17 @@ public final class ServerSession: @unchecked Sendable {
     /// (SHORTCUTS:32, retired with the coordinator move).
     public var colors: ColorTable { coordinator.colors }
 
+    /// This session's window resource table (id -> WindowEntry).
     public let windows = WindowTable()
+    /// This session's graphics-context table (id -> GCState).
     public let gcs = GCTable()
+    /// This session's pixmap table; buffers allocate at the bridge's device scale.
     public let pixmaps: PixmapTable
+    /// This session's open-font table (id -> loaded font).
     public let fonts = FontTable()
+    /// This session's cursor table (id -> cursor).
     public let cursors = CursorTable()
+    /// Window-property store backing ChangeProperty / GetProperty for this session.
     public let properties = PropertyTable()
 
     /// Selection-conversion policy: routes ConvertSelection to either
@@ -76,7 +87,9 @@ public final class ServerSession: @unchecked Sendable {
     /// Owns the CDE customization daemon impersonation setup.
     public let selectionMediator: SelectionMediator
 
+    /// Queue of reply/event bytes waiting to go to the client; drained by `flushOutbound`.
     public let outbound: OutboundQueue
+    /// AppKit-side window/draw bridge, or nil in headless/test mode (drives bytes only).
     public let bridge: WindowBridge?
 
     /// Serial queue that owns all session-state mutation. AppKit-side
@@ -117,6 +130,8 @@ public final class ServerSession: @unchecked Sendable {
     /// before that arrives. Updated from the changeProperty handler. Used
     /// to rename the per-session log file and to prefix the NSWindow title.
     public private(set) var wmInstance: String?
+    /// `WM_CLASS` class (the second null-terminated string, e.g. "XTerm"), or
+    /// nil before the property arrives.
     public private(set) var wmClass: String?
 
     /// Tracks the strongest identifying signal we've observed so far,
@@ -140,6 +155,8 @@ public final class ServerSession: @unchecked Sendable {
 
     private var phase: Phase = .awaitingSetup
     private var inbound: [UInt8] = []
+    /// Last-stamped request sequence number; incremented per parsed request and
+    /// echoed on every reply/event we emit.
     public private(set) var sequenceNumber: UInt16 = 0
 
     /// WM-emulation placement allocator for regular (non-override-redirect)
@@ -276,9 +293,13 @@ public final class ServerSession: @unchecked Sendable {
     /// own modifier info from the bridge.
     private var currentModifierState: UInt16 = 0
 
+    /// True once the connection handshake (SetupAccepted) has been sent.
     public private(set) var setupAcceptedSent: Bool = false
+    /// Count of requests parsed and dispatched on this session.
     public private(set) var requestsProcessed: Int = 0
+    /// Major opcodes seen that we don't recognize; collected for diagnostics.
     public private(set) var unknownOpcodes: [UInt8] = []
+    /// Count of XErrors emitted on the wire by this session.
     public private(set) var errorsEmitted: Int = 0
 
     /// Windows this client has selected ShapeNotify input on (ShapeSelectInput
@@ -290,8 +311,11 @@ public final class ServerSession: @unchecked Sendable {
     /// the WM, so there's no X WM selecting shape input on our clients.
     var shapeSelectedWindows: Set<UInt32> = []
 
+    /// Sink for human-readable session log lines; weak so the listener owns it.
     public weak var log: ServerLogSink?
 
+    /// Build a session. All dependencies default to standalone single-client
+    /// instances; the multi-client listener passes a shared coordinator/outbound.
     public init(
         config: ServerConfig = .default,
         bridge: WindowBridge? = nil,
@@ -3536,6 +3560,8 @@ public final class ServerSession: @unchecked Sendable {
         }
     }
 
+    /// The client's negotiated byte order once setup completes, or nil while
+    /// still awaiting Setup.
     public var byteOrder: ByteOrder? {
         if case .running(let bo) = phase { return bo }
         return nil
@@ -7010,10 +7036,13 @@ private func opcodeName(_ request: Request) -> String {
 // MARK: - RootPropertyObserver conformance
 
 extension ServerSession: RootPropertyObserver {
+    /// True if this client selected PropertyChangeMask on the root window.
     public var hasPropertyChangeMaskOnRoot: Bool {
         rootEventMask & Self.propertyChangeMask != 0
     }
 
+    /// Emit a PropertyNotify for a root-window property change to this client
+    /// (hops onto `protocolQueue`); called by the coordinator's root-property fan-out.
     public func deliverRootPropertyNotify(atom: UInt32, state: PropertyState) {
         protocolQueue.async { [weak self] in
             guard let self = self, let bo = self.byteOrder else { return }
