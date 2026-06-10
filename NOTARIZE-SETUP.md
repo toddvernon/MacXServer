@@ -70,11 +70,39 @@ If you'll run releases from BOTH the laptop AND the desktop, export the cert
 once and import on the other Mac:
 
 1. In Keychain Access on the Mac that has the cert: find "Developer ID
-   Application: Todd Vernon" under My Certificates, right-click → **Export…**.
-   Choose `.p12` format, set a password you'll remember.
+   Application: CarePenguin, inc (X478U667PR)" under My Certificates,
+   right-click → **Export…**. Choose `.p12` format, set a password you'll
+   remember.
 2. Copy the `.p12` to the other Mac (Dropbox is fine — `.p12` is password-protected).
 3. On the other Mac, double-click the `.p12` to import. Enter the password.
 4. Verify with the same `security find-identity` command above.
+
+If you're importing over SSH / headless (no GUI Keychain Access), do it from
+the command line instead of double-clicking — and you MUST set the key
+partition list afterward, or codesign fails with `errSecInternalComponent`
+the first time it tries to use the key in a non-GUI session:
+
+```sh
+# Unlock the login keychain (its password is your macOS login password)
+security unlock-keychain -p '<login-password>' ~/Library/Keychains/login.keychain-db
+
+# Import cert+key, pre-authorizing codesign
+security import /path/to/DevID.p12 \
+    -k ~/Library/Keychains/login.keychain-db \
+    -P '<p12-export-password>' \
+    -T /usr/bin/codesign
+
+# REQUIRED for imported keys: let apple tools / codesign use the key without a GUI prompt
+security set-key-partition-list \
+    -S apple-tool:,apple:,codesign: -s \
+    -k '<login-password>' \
+    ~/Library/Keychains/login.keychain-db
+```
+
+A key created locally by a CSR (the desktop's original) doesn't need the
+partition-list step — only imported `.p12` keys do. Verify codesign actually
+works (not just that the identity lists) by signing a throwaway Mach-O:
+`cp /usr/bin/true /tmp/t && codesign -s "Developer ID Application: CarePenguin, inc (X478U667PR)" --timestamp -f /tmp/t && codesign -dvv /tmp/t`.
 
 ## Step 2 — Notarization credentials (App Store Connect API key)
 
