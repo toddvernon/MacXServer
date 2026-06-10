@@ -36,5 +36,9 @@ capture_screen_ui/
 # pointers). Public-safe project guidance lives in CLAUDE.md instead.
 CLAUDE.local.md
 
+# Personal release cheat-sheet (signing team, notary IDs, cross-Mac setup).
+# The public-safe version of this is NOTARIZE-SETUP.md.
+RELEASING.local.md
+
 # Personal capture connection config (real host). Use connection.example.json as a template.
 connection.json
