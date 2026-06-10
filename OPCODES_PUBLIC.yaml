@@ -1,0 +1,1214 @@
+# OPCODES_PUBLIC.yaml: public-facing X11 opcode reference, source-of-truth data file.
+#
+# Rendered into macxserver.com's deep-dive page by Hugo at build time.
+# - description fields are immortal (X11 doesn't change). Written once.
+# - coverage fields are derived from OPCODE_STATUS.md. Update both together
+#   when you ship, change, or stub an opcode. See scripts/check-opcode-coverage-drift.sh.
+#
+# This file is owned by the swift-x repo. macxserver-hugo/data/opcodes.yaml
+# is a symlink (or copy) of this file.
+
+core_opcodes:
+  - number: 1
+    name: CreateWindow
+    category: Window
+    usage: mainstream
+    description: |
+      Allocates a new Window as a child of an existing parent, with depth, class (InputOutput / InputOnly / CopyFromParent), visual, and an optional value-mask of CWAttributes (background, border, event-mask, override-redirect, colormap, cursor, and so on). Every toolkit calls this dozens of times per app boot: Xt creates a Shell, then a frame, then each Motif widget as a subwindow, and xterm creates one for the menu pop-ups it hides offscreen. The window is created unmapped; the client follows up with MapWindow once the geometry is settled.
+    coverage: |
+      Implemented; top-level windows route to a backing NSWindow and descendants live in the window table, with CWBackPixel and CWBorderPixel honored on paint.
+  - number: 2
+    name: ChangeWindowAttributes
+    category: Window
+    usage: mainstream
+    description: |
+      Updates one or more of the same CWAttributes that CreateWindow takes (event-mask, background-pixel/pixmap, border, override-redirect, cursor, colormap, do-not-propagate-mask, save-under, backing-store). Toolkits use this constantly: Xt calls it right after CreateWindow to add SubstructureNotify or KeyPress to the event-mask once a widget is realized, and a Motif menu shell flips override-redirect to True so the window manager leaves it alone when it pops up.
+    coverage: |
+      Implemented; all 13 CW attributes are stored and round-tripped, but CWBackPixmap and CWBorderPixmap are silently dropped.
+  - number: 3
+    name: GetWindowAttributes
+    category: Window
+    usage: mainstream
+    description: |
+      Round-trip request that returns the current CWAttributes plus map-state (Unmapped / Unviewable / Viewable), visual, class, and the all-event-masks union across every client selecting on the window. Window managers call it on every top-level they manage to decide whether the window is really viewable, and Xlib's XGetWindowAttributes wraps it for any client that needs to read back what it (or someone else) set.
+    coverage: |
+      Implemented; returns the stored window-entry fields faithfully including event-mask, class, map-state, colormap, and the rest of the CW attributes.
+  - number: 4
+    name: DestroyWindow
+    category: Window
+    usage: mainstream
+    description: |
+      Destroys the window and every inferior under it, generating DestroyNotify events bottom-up, and releases any selections, grabs, or focus the window held. Toolkits call this on widget destruction (XtDestroyWidget walks the widget tree calling DestroyWindow on each realized window), and clients use it on shutdown to tear down their top-levels cleanly before closing the connection. The root window cannot be destroyed.
+    coverage: |
+      Implemented; recursively destroys inferiors in post-order and emits DestroyNotify for each per spec.
+  - number: 5
+    name: DestroySubwindows
+    category: Window
+    usage: mainstream
+    description: |
+      Destroys every child of the given window in bottom-to-top stacking order, exactly as if the client called DestroyWindow on each one, but leaves the parent itself alive. Each child destruction recurses into its own descendants, so the whole subtree under the window gets unmapped and freed in one request. The puzzle demo uses it to wipe its tile grid before rebuilding, and the iman toolkit clears scratch containers the same way.
+    coverage: |
+      Implemented; destroys every descendant of the window and emits DestroyNotify to the parent for each direct child.
+  - number: 6
+    name: ChangeSaveSet
+    category: Window
+    usage: wm-only
+    usage_reason: "Reparenting WMs add their client into the save-set so client survives WM crash; regular Xt apps never call it."
+    description: |
+      Adds or removes a foreign window (one created by some other client) from this client's save-set, with mode Insert or Delete. Window managers are the heavy users: when a WM reparents a client into its decoration frame it inserts that client into its save-set, so if the WM dies the server reparents the client back to a safe ancestor instead of destroying it. A Match error fires if you try to save-set your own window.
+    coverage: Not implemented.
+  - number: 7
+    name: ReparentWindow
+    category: Window
+    usage: wm-only
+    usage_reason: "Reparenting WMs (mwm/twm/dtwm) wrap client windows in decoration frames; toolkits never reparent foreign windows themselves."
+    description: |
+      Detaches the window from its current parent and inserts it as a child of a new parent at the given (x, y), placing it on top of the new parent's stack and emitting ReparentNotify. If the window was mapped, the server does an implicit UnmapWindow before and MapWindow after. This is the request that makes reparenting window managers work: mwm and twm catch MapRequest, create a decoration frame, then ReparentWindow the client into the frame so the title bar and resize handles sit around it.
+    coverage: |
+      Implemented; updates the parent link and emits ReparentNotify plus SubstructureNotify to both old and new parents, but does not move the backing NSWindow and does not emit the Unmap/Map pair on a mapped window.
+  - number: 8
+    name: MapWindow
+    category: Window
+    usage: mainstream
+    description: |
+      Marks the window mappable and, if every ancestor is also mapped, makes it viewable on screen, generating MapNotify and triggering Expose on any newly visible regions. Every X client calls this on its top-level shell after CreateWindow and after setting WM_HINTS / WM_NORMAL_HINTS, which is the moment the window manager (or rootless server like ours) decides where the window goes. If SubstructureRedirect is selected on the parent, the server sends MapRequest to that redirector instead of mapping right away, which is how reparenting WMs intercept the map.
+    coverage: Fully implemented.
+  - number: 9
+    name: MapSubwindows
+    category: Window
+    usage: mainstream
+    description: |
+      Maps every unmapped child of the given window in top-to-bottom stacking order, equivalent to calling MapWindow on each but bundled into one request and with one ordered batch of MapNotify and Expose events. Toolkits realize a composite widget by creating all its children unmapped, configuring them, then issuing one MapSubwindows so the user sees the whole layout appear at once instead of widget-by-widget.
+    coverage: |
+      Implemented; maps each direct child in a two-pass sequence that emits MapNotify, recomputes clipping, and paints backgrounds and Expose where the parent is mapped.
+  - number: 10
+    name: UnmapWindow
+    category: Window
+    usage: mainstream
+    description: |
+      Removes the window from the screen (and its descendants from the viewable set), generates UnmapNotify, and triggers Expose on whatever the window was covering. Clients call this for iconification (after which they typically set WM_STATE to Iconic), for hiding Motif menus and dialogs when dismissed, and the server emits an implicit one as part of ReparentWindow on a mapped window.
+    coverage: |
+      Implemented; tears down the backing NSWindow for top-levels and repaints the parent over the uncovered region for descendants.
+  - number: 11
+    name: UnmapSubwindows
+    category: Window
+    usage: mainstream
+    description: |
+      Unmaps every mapped child of the given window in bottom-to-top stacking order in a single request, generating one UnmapNotify per child and one batch of Expose events on the now-uncovered parent. Useful when a toolkit wants to clear a container's visible contents without destroying the child windows it'll remap later, for instance swapping between notebook tabs in a Motif XmNotebook.
+    coverage: |
+      Implemented; unmaps every direct child and repaints the parent over each child's previously covered region with Expose when ExposureMask is set.
+  - number: 12
+    name: ConfigureWindow
+    category: Window
+    usage: mainstream
+    description: |
+      Changes any combination of x, y, width, height, border-width, sibling, and stack-mode (Above, Below, TopIf, BottomIf, Opposite) via a value-mask, then emits ConfigureNotify if anything actually changed. This is the request behind every move, resize, and raise: Motif drag-resize translates to a stream of ConfigureWindow, XRaiseWindow is just stack-mode Above with no sibling. If the parent has SubstructureRedirect selected and the window isn't override-redirect, the server diverts it to a ConfigureRequest event so the window manager arbitrates.
+    coverage: |
+      Implemented; honors width, height, x, y, CWStackMode and CWSibling, emits ConfigureNotify, and repaints uncovered parent regions, but border-width changes are dropped.
+  - number: 13
+    name: CirculateWindow
+    category: Window
+    usage: obscure
+    usage_reason: "Leftover stacking-cycle op from twm-era; no modern toolkit calls it directly."
+    description: |
+      Restacks the children of a window: RaiseLowest pulls the bottom occluded child to the top, LowerHighest pushes the top child that occludes a sibling to the bottom. If a window manager has selected SubstructureRedirect on the parent, the server sends it a CirculateRequest instead and the WM decides. Almost no modern toolkit calls this directly; it's a leftover from the days of stacking-based window list cycling in twm and friends.
+    coverage: |
+      Implemented; rotates the sibling chain for RaiseLowest and LowerHighest and emits CirculateNotify, with rotation done unconditionally rather than gated on occlusion.
+  - number: 14
+    name: GetGeometry
+    category: Geometry
+    usage: mainstream
+    description: |
+      Returns the root, depth, position, size, and border width of a Drawable in a single round trip. Toolkits hit this on a freshly mapped top-level to learn where the window manager actually placed them (x and y are relative to the parent's origin), and clients also use it to discover the depth of an externally created Pixmap before drawing into it. For Pixmaps, x, y, and border width come back as zero.
+    coverage: |
+      Implemented; returns geometry for windows, pixmaps, and the root from server state.
+  - number: 15
+    name: QueryTree
+    category: Window
+    usage: mainstream
+    description: |
+      Returns the root, parent, and children of a window with children listed in bottom-to-top stacking order. Window managers and Xt walk the tree this way at startup to adopt pre-existing top-levels, and tools like xwininfo and xkill use it to enumerate everything under the root. The stacking-order guarantee is what makes it useful: pair it with GetWindowAttributes to find the topmost mapped child under the pointer.
+    coverage: |
+      Implemented; returns root, parent, and direct children, though the children list is not sorted by stacking order.
+  - number: 16
+    name: InternAtom
+    category: Atoms
+    usage: mainstream
+    description: |
+      Maps a STRING8 name (Latin-1, case-sensitive) to an Atom, allocating one if only-if-exists is False. Every client calls this dozens of times at startup to resolve the well-known names it needs for protocol exchange: WM_PROTOCOLS, WM_DELETE_WINDOW, COMPOUND_TEXT, TARGETS, CLIPBOARD, and friends. Atoms live until server reset, not until the interning client exits, so it's safe to cache the IDs for the lifetime of the connection.
+    coverage: Fully implemented.
+  - number: 17
+    name: GetAtomName
+    category: Atoms
+    usage: mainstream
+    description: |
+      The inverse of InternAtom: hand in an Atom ID, get the STRING8 name back. Clients use this when they receive an Atom they didn't intern themselves, typically a property type or selection target from another client (ClientMessage data, SelectionRequest target field, GetProperty type field) that they need to dispatch on by name. Most real code caches the result rather than re-asking.
+    coverage: |
+      Implemented; looks up the atom name and emits BadAtom on unknown or zero atoms.
+  - number: 18
+    name: ChangeProperty
+    category: Properties
+    usage: mainstream
+    description: |
+      Writes a list of 8, 16, or 32-bit data onto a window under a given (property, type) Atom pair, with mode Replace, Prepend, or Append. The server doesn't interpret type; it just remembers the format for byte-swap correctness. This is how WM hints reach the window manager (WM_NAME, WM_HINTS, WM_PROTOCOLS), how clipboard owners answer SelectionRequest by stuffing the data onto the requestor window, and how anything ICCCM-shaped gets done on the wire. Generates a PropertyNotify.
+    coverage: |
+      Implemented; Replace, Prepend, and Append are all supported with PropertyNotify emission and BadMatch on type or format mismatch.
+  - number: 19
+    name: DeleteProperty
+    category: Properties
+    usage: mainstream
+    description: |
+      Drops a property from a window and generates a PropertyNotify if it existed; silent no-op if it didn't. Selection requestors call this once they've read the converted data the owner wrote onto their window via ChangeProperty, closing the INCR or one-shot handshake. WMs also use it to clear stale hints when a client withdraws a top-level.
+    coverage: |
+      Implemented; removes the property and emits PropertyNotify only when the property actually existed.
+  - number: 20
+    name: GetProperty
+    category: Properties
+    usage: mainstream
+    description: |
+      Reads a window property by Atom with an offset and length in 32-bit units, optionally deleting it on read once fully drained. The reply carries the actual type and format plus a bytes-after counter, so clients loop until bytes-after is zero to handle properties larger than a single reply. WMs use this to fetch WM_NAME and WM_HINTS on MapRequest; selection requestors use it (with delete=True) to pull the data ConvertSelection set up. If the type doesn't match what the caller asked for, the value comes back empty but the type and length still report truthfully.
+    coverage: |
+      Implemented for the common paths; the type-filter on the request and the spec rule that delete only happens when bytes-after equals zero are not yet honored.
+  - number: 21
+    name: ListProperties
+    category: Properties
+    usage: obscure
+    usage_reason: "Introspection-only; xprop uses it but real toolkits know their own properties by name."
+    description: |
+      Returns the Atoms of every property currently defined on a window. Mostly a debugging and introspection tool: xprop with no arguments uses it to enumerate what a window has set, and a few WMs lean on it to audit ICCCM state. Production toolkits almost always know which properties they care about by name and skip this in favor of direct GetProperty calls.
+    coverage: Not implemented.
+  - number: 22
+    name: SetSelectionOwner
+    category: Selections
+    usage: mainstream
+    description: |
+      Claims a selection (PRIMARY, SECONDARY, or CLIPBOARD as an Atom) for a given window at a given timestamp; the old owner gets a SelectionClear event and the new owner is now responsible for answering SelectionRequest events. xterm calls this on every mouse-up that finishes a text selection (PRIMARY), and Motif XmText / GTK / Qt call it on Edit-Copy (CLIPBOARD). The time field must come from a real input event so the server can reject stale claims and resolve races between competing owners.
+    coverage: |
+      Implemented; tracks the per-selection owner and time, kicks off the clipboard mirror on PRIMARY, and emits SelectionClear to the prior owner, but the spec time-comparison gate is not enforced.
+  - number: 23
+    name: GetSelectionOwner
+    category: Selections
+    usage: mainstream
+    description: |
+      Returns the window that currently owns a selection Atom, or None if nobody does. Pasting clients call this before ConvertSelection so they can short-circuit (no owner, nothing to paste) and so the UI can grey out the Paste menu item when the clipboard is empty. Cheap one-shot reply, no events.
+    coverage: |
+      Implemented; returns the tracked owner or zero when the selection is unowned.
+  - number: 24
+    name: ConvertSelection
+    category: Selections
+    usage: mainstream
+    description: |
+      Asks the current selection owner to write the selection's contents onto the requestor window under (property, target) in a format the requestor names, e.g. UTF8_STRING, COMPOUND_TEXT, or TARGETS. The server forwards this as a SelectionRequest to the owner; the owner does the conversion, calls ChangeProperty, and sends a SelectionNotify back. If no owner exists, the server itself synthesizes a SelectionNotify with property=None so the requestor doesn't hang. This is the paste half of every X11 cut-and-paste interaction.
+    coverage: |
+      Implemented; forwards SelectionRequest to a real owner, short-circuits server-internal stub owners, and emits SelectionNotify(property=None) when no owner exists, with the request time field preserved verbatim.
+  - number: 25
+    name: SendEvent
+    category: Events
+    usage: mainstream
+    description: |
+      Synthesizes an event onto the wire and delivers it to clients selecting on a target Window (or PointerWindow / InputFocus). The server doesn't validate the body, just byte-swaps it and sets the SendEvent bit so the receiver knows it's synthetic. Window managers and the ICCCM use this constantly: WM_DELETE_WINDOW ClientMessage to ask a top-level to close, WM_TAKE_FOCUS to hand focus to a client, and selection negotiation between xterm and a clipboard manager all ride SendEvent.
+    coverage: |
+      Implemented for the common paths; propagation up the ancestor chain is not honored and the PointerWindow and InputFocus sentinels are not resolved.
+  - number: 26
+    name: GrabPointer
+    category: Grab
+    usage: mainstream
+    description: |
+      Actively grabs the pointer to one client until UngrabPointer or the grab times out. While the grab is live, all pointer events route to the grabbing client regardless of which window the cursor is over, optionally confined to a Window and showing a chosen Cursor. Motif uses this when you press down on a menu cascade so drag-tracking and the eventual button-release land on the menu code instead of whatever's under the pointer when you release.
+    coverage: |
+      Implemented; installs an active pointer grab, starts cross-NSWindow drag tracking, locks native window drag, and emits the Grab-mode crossing chain per spec.
+  - number: 27
+    name: UngrabPointer
+    category: Grab
+    usage: mainstream
+    description: |
+      Releases an active pointer grab held by this client (whether it came from GrabPointer, an activated GrabButton, or implicit grab on a button press) and flushes any frozen events. Toolkits call this when a menu dismisses or a drag ends so normal Enter/Leave routing resumes. Issuing it without holding the grab is a no-op, which is why clients can call it defensively on cleanup paths.
+    coverage: |
+      Implemented; drops the active grab, releases the drag lock, restores the cursor, and emits the Ungrab crossing chain.
+  - number: 28
+    name: GrabButton
+    category: Grab
+    usage: mainstream
+    description: |
+      Establishes a passive grab that arms a future button-press: when the given button is pressed on grab-window with the specified modifier set, the server promotes it into an active pointer grab automatically (same parameters as GrabPointer). twm and mwm use this for the classic root-window button bindings (button 1 brings up the application menu, button 2 the window list) and Motif uses it for the click-to-focus and meta-drag bindings on frame windows.
+    coverage: |
+      Implemented; passive button-grab entries are matched on ButtonPress with AnyButton and AnyModifier wildcards, and on match an active pointer grab is installed on the grab window.
+  - number: 29
+    name: UngrabButton
+    category: Grab
+    usage: mainstream
+    description: |
+      Removes a passive button grab previously established by GrabButton on the same Window. AnyButton and AnyModifier act as wildcards to tear down a whole family of grabs at once. Window managers call this when rebinding root-window menus or when shutting down so the next WM can install its own bindings cleanly.
+    coverage: |
+      Implemented; removes matching entries from the passive button-grab table with AnyButton and AnyModifier wildcards.
+  - number: 30
+    name: ChangeActivePointerGrab
+    category: Grab
+    usage: mainstream
+    description: |
+      Updates the event-mask and Cursor on a pointer grab the client already holds active, without releasing and re-grabbing (which would race against other clients). Drag-and-drop libraries like Xdnd use this to swap the cursor as the drop target's accept/reject status changes mid-drag. Has no effect on passive grabs sitting in the GrabButton table.
+    coverage: |
+      Implemented; updates the active grab's cursor and event mask without releasing the grab.
+  - number: 31
+    name: GrabKeyboard
+    category: Grab
+    usage: mainstream
+    description: |
+      Actively grabs the keyboard so every KeyPress and KeyRelease routes to the grabbing client until UngrabKeyboard, regardless of focus. Pop-up dialogs that need a modal answer (xterm's secure-keyboard mode, xscreensaver's password prompt, Motif's XmDialogShell when application-modal) use this so keystrokes can't leak to the parent window. The server also fires synthetic FocusIn / FocusOut so the rest of the toolkit notices the focus shift.
+    coverage: |
+      Implemented; installs a keyboard grab and emits the FocusOut/FocusIn pair with mode=Grab.
+  - number: 32
+    name: UngrabKeyboard
+    category: Grab
+    usage: mainstream
+    description: |
+      Releases an active keyboard grab held by this client (from GrabKeyboard or a promoted GrabKey) and thaws any queued events. Modal dialogs call it on dismiss, xscreensaver calls it once the password validates. Like UngrabPointer, calling it without holding the grab is harmless.
+    coverage: |
+      Implemented; clears the keyboard grab and emits the paired FocusOut/FocusIn with mode=Ungrab.
+  - number: 33
+    name: GrabKey
+    category: Grab
+    usage: mainstream
+    description: |
+      Passive grab on a (keycode, modifier-set) pair: when that key is pressed with those modifiers down and the grab-window is on the focus path, the server activates a keyboard grab and delivers the KeyPress to the grabbing client. This is how global hotkeys work: fvwm binding Alt-Tab for window cycling, screenshot tools grabbing PrintScreen, IME switchers grabbing Ctrl-Space. AnyKey and AnyModifier wildcard the same way as GrabButton.
+    coverage: |
+      Implemented; passive key-grab entries are matched on key events with AnyKey and AnyModifier wildcards and routed to the grab window.
+  - number: 34
+    name: UngrabKey
+    category: Grab
+    usage: mainstream
+    description: |
+      Removes a passive key grab installed by GrabKey on the given Window. Used when a hotkey gets rebound at runtime, or when a window manager exits and wants to clear its bindings so the replacement WM can claim them. No effect on a grab that's currently active, only on the passive registration.
+    coverage: |
+      Implemented; removes matching entries from the passive key-grab table with AnyKey and AnyModifier wildcards.
+  - number: 35
+    name: AllowEvents
+    category: Events
+    usage: mainstream
+    description: |
+      Releases events the server is holding because the client took a Synchronous grab and froze the device. The mode picks the policy: AsyncPointer / AsyncKeyboard thaws fully, SyncPointer / SyncKeyboard delivers up to the next button or key event then re-freezes, and ReplayPointer / ReplayKeyboard hands the triggering event back to normal routing so a higher passive grab can take it. Click-to-focus window managers lean on ReplayPointer: grab the click frozen, raise the window, then replay the click so the application underneath sees it.
+    coverage: "Stub: returns enough to keep clients happy without doing the work."
+  - number: 36
+    name: GrabServer
+    category: Grab
+    usage: wm-only
+    usage_reason: "WMs and xdm freeze the server around atomic multi-step reconfigures; toolkit apps never grab the server."
+    description: |
+      Freezes every other client's request stream until this client issues UngrabServer (or disconnects). Window managers use it to make multi-step reparenting atomic from the user's perspective, and xdm uses it during session start so a half-configured root window never flashes. Hold it as briefly as possible: a wedged client that forgot to ungrab locks the whole display.
+    coverage: "Stub: returns enough to keep clients happy without doing the work."
+  - number: 37
+    name: UngrabServer
+    category: Grab
+    usage: wm-only
+    usage_reason: "Pair to GrabServer; only WMs and session managers issue it."
+    description: |
+      Releases the server-wide grab put in place by GrabServer, so other clients' requests start being processed again. Window managers wrap atomic multi-request sequences (reparenting a new top-level, querying tree + properties + geometry without races) in GrabServer/UngrabServer to keep the world frozen while they read state. Leaving the grab held is a classic WM bug where the whole display locks up until the WM dies.
+    coverage: Fully implemented.
+  - number: 38
+    name: QueryPointer
+    category: Pointer
+    usage: mainstream
+    description: |
+      Returns the pointer's current root coordinates, the modifier and button bitmask, and the child of the argument window the pointer is in (if any). xeyes calls this on every timer tick to figure out where to aim the pupils, and Motif uses it during menu posting to decide which entry the pointer is over without waiting for a MotionNotify. Note the spec calls out that the returned state is logical, so it can lag the physical device while events are frozen by a grab.
+    coverage: |
+      Implemented; reads from the server-global pointer cache with a session-local fallback and computes winX, winY, and child, though the modifier and button mask is still session-local.
+  - number: 39
+    name: GetMotionEvents
+    category: Pointer
+    usage: obscure
+    usage_reason: "Motion history ring; clients select MotionNotify live instead of replaying from the buffer."
+    description: |
+      Returns the motion history buffer (a list of TIMECOORD entries) for events that occurred between two timestamps and that fall inside the given window. Rubber-band drawing code in old toolkits and xeyes-style tracking apps use it to replay motion they missed while busy. Most modern clients ignore it because they just select PointerMotion events and process them live.
+    coverage: "Stub: returns enough to keep clients happy without doing the work."
+  - number: 40
+    name: TranslateCoordinates
+    category: Geometry
+    usage: mainstream
+    description: |
+      Takes a point in src-window's coordinate space and returns the equivalent point in dst-window's space, plus the child of dst-window that contains it. Toolkits like Xt and Motif use this to convert a widget-local click to root coordinates (and back) when popping up a menu or transient dialog, since the WM owns the top-level's position. Returns same-screen=False with zero coords if the two windows live on different screens.
+    coverage: |
+      Implemented for the common paths; the destination child field is always zero since hit-testing is not yet done.
+  - number: 41
+    name: WarpPointer
+    category: Pointer
+    usage: mainstream
+    description: |
+      Moves the pointer either by a relative offset (when dst-window is None) or to an absolute point inside dst-window, optionally gated on the pointer currently sitting in a rectangle of src-window so the warp no-ops if the user has already moved away. The server then synthesizes motion events as if the user had instantaneously teleported the mouse, and an active grab's confine-to window clamps the warp to its closest edge. Window managers use it to recenter the pointer on an alt-tab focus target or on the newly-active workspace; toolkits like Motif use it to drop the pointer onto a freshly-popped dialog button.
+    coverage: |
+      Implemented for the common paths; updates the cached pointer position but does not move the actual macOS cursor.
+  - number: 42
+    name: SetInputFocus
+    category: Server
+    usage: mainstream
+    description: |
+      Sets the keyboard focus window and the revert-to fallback used if the focus window later becomes unviewable. Window managers running globally-active or locally-active focus models call this when the user clicks or alt-tabs to a new top-level (see ICCCM 4.1.7), and the server fires FocusIn/FocusOut to notify the affected clients. Requests with stale timestamps are quietly dropped, which is why WMs care about getting the time field right.
+    coverage: |
+      Implemented for the common paths; tracks the focus window for key routing but does not synthesize FocusIn or FocusOut on the X protocol focus chain.
+  - number: 43
+    name: GetInputFocus
+    category: Server
+    usage: mainstream
+    description: |
+      Returns the current focus window (or PointerRoot / None) and its revert-to value. Toolkits use it defensively after a focus-related event to confirm which window the server thinks owns the keyboard, and it doubles as the canonical round-trip request Xlib's XSync uses to flush the output buffer and wait for the server to catch up.
+    coverage: "Stub: returns enough to keep clients happy without doing the work."
+  - number: 44
+    name: QueryKeymap
+    category: Keyboard
+    usage: mainstream
+    description: |
+      Returns a 32-byte bit vector with one bit per keycode indicating which keys are currently held down. Games and screen-saver detectors poll this to read the keyboard without selecting KeyPress events, and key-repeat logic in some toolkits uses it to disambiguate auto-repeat from a real release-press pair. Like QueryPointer, the result is the logical state and can lag while a grab freezes event processing.
+    coverage: "Stub: returns enough to keep clients happy without doing the work."
+  - number: 45
+    name: OpenFont
+    category: Font
+    usage: mainstream
+    description: |
+      Loads the named font (XLFD string, with '?' and '*' wildcards allowed) and binds it to the client-supplied resource ID fid, which can then be stuck into a GContext or passed to QueryFont. Every Xlib client calls this near startup via XLoadFont / XLoadQueryFont, typically for 'fixed' or a specific XLFD like '-adobe-helvetica-bold-r-normal--12-*'. Wildcard matches pick whatever font the server feels like, which is why XLFDs in real code are usually fully specified.
+    coverage: |
+      Implemented; parses the XLFD or alias, resolves a Mac font through the substitution table, and stores cell metrics.
+  - number: 46
+    name: CloseFont
+    category: Font
+    usage: mainstream
+    description: |
+      Drops the client's reference to a font resource ID; the server frees the underlying font once no GContext still holds it. Clients call this from XFreeFont/XUnloadFont when tearing down a widget hierarchy, and well-behaved long-running apps (xterm on font change, editors switching themes) do it to avoid leaking font resources across the session.
+    coverage: |
+      Implemented; removes the font entry and emits BadFont on unknown fonts.
+  - number: 47
+    name: QueryFont
+    category: Font
+    usage: mainstream
+    description: |
+      Returns the full FONTINFO block (ascent, descent, min/max bounds, default-char, FONTPROP list) plus per-character CHARINFO metrics for the given font or the font currently bound to a GContext. Motif and Xt call this once per font at widget-realize time to size labels, buttons, and XmText cells, since the per-character left/right side bearing and character-width drive every text-layout decision the toolkit makes. The reply can be large for big fonts (one CHARINFO per glyph), which is why toolkits cache it aggressively.
+    coverage: |
+      Implemented; returns per-glyph CHARINFO across the font's charset range with six FONTPROPS, though real Sun returns about twenty-one.
+  - number: 48
+    name: QueryTextExtents
+    category: Font
+    usage: mainstream
+    description: |
+      Returns the bounding-box metrics (overall ascent/descent/width plus left and right extent) of a STRING16 rendered in the given font, without actually drawing anything. Toolkits use it when they don't have the CHARINFO table cached locally, or when a 16-bit font would make a QueryFont reply prohibitively large; XmString measurement in Motif and column-width calculation in xterm-class widgets call into this path. For 8-bit ASCII work most clients precompute from QueryFont's CHARINFO array and skip the round trip.
+    coverage: |
+      Implemented; reports widths from the same Core Text advance path used to draw, so reported widths match rendered widths for proportional fonts.
+  - number: 49
+    name: ListFonts
+    category: Font
+    usage: mainstream
+    description: |
+      Returns up to max-names font names matching a wildcard pattern (`?` and `*`) against the server's current font path. xfontsel uses it to populate its XLFD field menus, and toolkits call it at startup to resolve `*-medium-r-normal--*-120-*` style font aliases before opening the one they want with OpenFont. Pattern matching is case-insensitive but returned names come back lowercase.
+    coverage: |
+      Implemented; pattern-matches against a Phase 1 synthesized list of about forty entries covering cell aliases and substitute families.
+  - number: 50
+    name: ListFontsWithInfo
+    category: Font
+    usage: mainstream
+    description: |
+      Same pattern match as ListFonts, but each font comes back with its full FONTINFO (the QueryFont reply minus per-character metrics) and a `replies-hint` of how many more are coming. The server sends one reply per match and terminates with a zero-length name. Font browsers and `xlsfonts -l` use it to avoid a round-trip OpenFont/QueryFont/CloseFont dance for every hit.
+    coverage: |
+      Implemented; same pattern matching as ListFonts plus per-match font-info replies followed by the spec-required terminator.
+  - number: 51
+    name: SetFontPath
+    category: Font
+    usage: xset
+    usage_reason: "Only xset and session-startup scripts mutate the global font path; toolkit clients never call it."
+    description: |
+      Rewrites the server's font search path (one global path, not per-client) to a list of OS-dependent strings, usually directory names or a `tcp/fontserver:7100` entry. `xset fp+ /my/fonts` and X session startup scripts use it to plug in BDF directories or remote font servers. As a side effect the server flushes cached font info for anything not currently held by an open OpenFont resource.
+    coverage: Not implemented.
+  - number: 52
+    name: GetFontPath
+    category: Font
+    usage: xset
+    usage_reason: "Read-back used by xset q and font-path-editing utilities; not a toolkit code path."
+    description: |
+      Reads back the current font search path as a list of STRING8 entries. `xset q` calls it to print the "Font Path" section, and tools that want to splice in a new directory (xset fp+, session managers) call it first so they can hand the merged list to SetFontPath.
+    coverage: Not implemented.
+  - number: 53
+    name: CreatePixmap
+    category: Resource
+    usage: mainstream
+    description: |
+      Allocates an off-screen Drawable of the given width, height, and depth, tied to the root of `drawable` so the server knows which screen's visual to back it with. Contents start undefined. Toolkits use it constantly: Xlib's XCreateBitmapFromData builds 1-bit Pixmaps for cursors and stipple patterns, double-buffered apps render frames into a depth-matching Pixmap and CopyArea them to the window, and XPutImage targets a Pixmap when caching decoded images.
+    coverage: |
+      Implemented; allocates a CGBitmapContext-backed pixel buffer at device scale and registers the pixmap.
+  - number: 54
+    name: FreePixmap
+    category: Resource
+    usage: mainstream
+    description: |
+      Drops the client's reference to a Pixmap. The pixels stick around until nothing else points at them (a GContext tile, a window background-pixmap, a Cursor source), so it's safe to call right after handing the Pixmap to CreateGC or ChangeWindowAttributes. Long-running clients leak fast without it (think xterm's per-glyph cache); xlib's XFreePixmap is the wrapper.
+    coverage: |
+      Implemented; removes the pixmap entry and emits BadPixmap on unknown pixmaps.
+  - number: 55
+    name: CreateGC
+    category: GC
+    usage: mainstream
+    description: |
+      Creates a GContext bound to a Drawable's root and depth, with a value-mask selecting which of the ~23 fields (function, foreground, background, line-width, font, fill-style, clip-mask, subwindow-mode, and the rest) are set explicitly versus left at defaults. Every client makes a fistful at startup: one for foreground text, one for the cursor XOR, one stippled for the selection highlight. The Drawable is just a depth/root template, the GContext itself is reusable against any compatible Drawable.
+    coverage: |
+      Implemented; parses the value mask and value list into a per-bit dictionary on the GC entry.
+  - number: 56
+    name: ChangeGC
+    category: GC
+    usage: mainstream
+    description: |
+      Updates a subset of an existing GContext's components in place, with the same value-mask/value-list shape as CreateGC. Xlib's XSetForeground, XSetFont, XSetLineAttributes all funnel through this, so xterm calls it on every color or attribute change in the SGR stream. Setting clip-mask here wipes any prior SetClipRectangles, and setting dashes wipes any prior SetDashes.
+    coverage: |
+      Implemented; re-parses the partial value list with the change's own mask and merges into the GC's per-bit dictionary.
+  - number: 57
+    name: CopyGC
+    category: GC
+    usage: mainstream
+    description: |
+      Copies the masked components from one GContext to another, provided both have the same root and depth (otherwise Match error). Toolkits use it to clone a base "normal text" GContext into a "highlighted text" variant where only foreground and background differ, which is cheaper than rebuilding the whole thing and ChangeGC-ing every field.
+    coverage: |
+      Implemented; validates source and destination GCs and copies each per-bit value plus the clip-rectangle list when clipMask is in the mask.
+  - number: 58
+    name: SetDashes
+    category: GC
+    usage: mainstream
+    description: |
+      Sets the dash pattern and phase offset on a GContext for `OnOffDash` and `DoubleDash` line styles. Each byte is a run length in pixels, alternating ink and gap, and odd-length lists are auto-doubled so `{4,2,1}` becomes `{4,2,1,4,2,1}`. xeyes uses it for the iris outline pattern, and graph and CAD apps (xfig, xgraph) use it to draw the dashed gridlines and selection marquees you'd otherwise have to build with PolyLine plus a stipple.
+    coverage: |
+      Implemented; dash bytes and offset are stored on the GC and threaded into the stroke ops, with single-byte patterns expanded per spec.
+  - number: 59
+    name: SetClipRectangles
+    category: GC
+    usage: mainstream
+    description: |
+      Replaces a GContext's clip-mask with a list of rectangles plus a clip origin (relative to the destination Drawable). Toolkits use it to clip widget drawing to the dirty region from an Expose event, and Xt's exposure-compression batches multiple Expose rectangles into one SetClipRectangles call before redrawing. An empty list disables all output, which is the opposite of clip-mask `None` in CreateGC; the `ordering` hint (UnSorted/YSorted/YXSorted/YXBanded) lets the server skip a sort if the client already knows the rectangles are in canonical order.
+    coverage: |
+      Implemented; clip rectangles and origins are stored on the GC and applied to poly and text draws, though CopyArea's same-window memmove path does not honor the clip.
+  - number: 60
+    name: FreeGC
+    category: GC
+    usage: mainstream
+    description: |
+      Destroys a GContext and releases its resource ID. Clients call it at widget teardown or on connection close (Xlib's XCloseDisplay walks every resource and frees it). The server also drops any references the GContext held to a Font, tile/stipple Pixmaps, or a clip Pixmap, which is what lets a paired FreePixmap on the tile actually reclaim memory.
+    coverage: |
+      Implemented; removes the GC entry and emits BadGC on unknown GCs.
+  - number: 61
+    name: ClearArea
+    category: Drawing
+    usage: mainstream
+    description: |
+      Clears a rectangle inside a Window back to its background tile (or leaves it alone if the background is None), optionally generating Expose events for the cleared region. xterm uses it to wipe a line before scroll, and any client that needs the server to repaint by faking exposure (after a font change or a panel resize) sends ClearArea with exposures=True instead of redrawing itself. Width or height of zero means "to the right/bottom edge of the window," which the spec spells out and a lot of toolkits rely on.
+    coverage: |
+      Implemented; fills the rect with the window's background pixel, supports the width=0 and height=0 fill-to-edge cases, and emits Expose when exposures is set.
+  - number: 62
+    name: CopyArea
+    category: Image
+    usage: mainstream
+    description: |
+      Blits a rectangle from one Drawable to another using the GContext's function and plane-mask, with src and dst rooted at the same screen and matching depth. This is the workhorse for xterm scroll (copy the visible region up one line), for double-buffered draw (render into a Pixmap, CopyArea to the Window), and for any cached glyph/bitmap rendering. If src bits are obscured the server fires GraphicsExposure (or NoExposure if nothing was lost), which is how clients know to repaint the gaps.
+    coverage: |
+      Implemented; all five spec variants ship and honor the GC clip on every path except the same-window memmove.
+  - number: 63
+    name: CopyPlane
+    category: Image
+    usage: mainstream
+    description: |
+      Takes a single bit-plane out of the source Drawable and stamps it onto the destination using the GC's foreground (where the bit is 1) and background (where it's 0), so a 1-bit Pixmap becomes a 2-color blit at the destination's depth. This is how every X font glyph cached as a depth-1 Pixmap gets to the screen, and how toolkits render checkbox/radio button bitmaps with theme colors instead of black-on-white. Same exposure rules as CopyArea.
+    coverage: |
+      Implemented for the common paths; reverse-maps source pixels through the colormap so anti-aliased edges and unallocated colors degrade to pixel zero.
+  - number: 64
+    name: PolyPoint
+    category: Drawing
+    usage: mainstream
+    description: |
+      Plots individual pixels at each point in the list using the GC's foreground, with coordinates either all relative to the Drawable origin (Origin mode) or chained point-to-point (Previous mode). Real clients reach for it rarely (xlogo-style decoration, scatter plots in xgraph, dotted-pattern stippling), since PolyLine or PolyFillRectangle usually beat it for anything denser than a sparse dot. The dual coordinate-mode is a wire-size optimization for long delta-encoded paths.
+    coverage: |
+      Implemented; synthesizes a list of 1x1 rectangles and routes through PolyFillRectangle, honoring Origin and Previous coordinate modes.
+  - number: 65
+    name: PolyLine
+    category: Drawing
+    usage: mainstream
+    description: |
+      Draws connected line segments through a list of points, with proper joins at every interior vertex and a closing join when the first and last points coincide. Honors line-width, line-style, cap-style, and join-style from the GC, and coordinate-mode picks whether points after the first are absolute or relative to the previous point. Unlike PolySegment, no pixel along a single PolyLine is drawn twice, which matters when the GC function is non-idempotent like GXxor. xgraph traces and xfd's grid lines ride this opcode; thin-line intersections between two separate PolyLines still double-draw, while wide lines fill as a single shape.
+    coverage: |
+      Implemented; strokes a connected line strip with line width and cap style from the GC.
+  - number: 66
+    name: PolySegment
+    category: Drawing
+    usage: mainstream
+    description: |
+      Draws a list of disconnected line segments, each with its own (x1,y1)-(x2,y2) pair, with no joining at coincident endpoints. Motif scrollbar trough separators, Athena's 3D bevel edges, and grid-line passes in spreadsheet-like clients (xspread) all batch their hairline strokes into a single PolySegment to amortize the request overhead. If you want connected lines with proper join styles, use PolyLine instead.
+    coverage: |
+      Implemented; strokes independent line segments with line width and cap style from the GC.
+  - number: 67
+    name: PolyRectangle
+    category: Drawing
+    usage: mainstream
+    description: |
+      Draws the outlines of one or more rectangles, equivalent to a five-point closed PolyLine per rectangle but cheaper on the wire. Motif uses it constantly for widget borders, focus rings, and the dashed selection outlines in xfontsel; window managers reach for it when drawing client-area frames. The fill version is a separate request (PolyFillRectangle); this one only strokes the perimeter.
+    coverage: |
+      Implemented; strokes rectangle outlines with line width and dash state, though line cap and join state are not yet plumbed through.
+  - number: 68
+    name: PolyArc
+    category: Drawing
+    usage: mainstream
+    description: |
+      Strokes one or more circular or elliptical arcs, each given by a bounding rectangle plus start and extent angles in degrees-times-64, with positive angles going counterclockwise from three o'clock. xclock's bezel and oclock's outline both render through PolyArc, as do the rounded corners on certain Motif gadgets. Wide-line arcs honor cap-style and join-style the same way PolyLine does, which is why thick stopwatch hands look right.
+    coverage: |
+      Implemented; strokes elliptical arcs via parametric sampling, with foreground and line width from the GC.
+  - number: 69
+    name: FillPoly
+    category: Drawing
+    usage: mainstream
+    description: |
+      Fills an arbitrary closed polygon with the GC's fill-style (solid foreground, Tiled, Stippled, or OpaqueStippled), auto-closing the path if the last point doesn't meet the first. The shape hint (Complex, Nonconvex, Convex) lets the server pick a faster scan-converter when the client knows the path won't self-intersect, which is why Motif and Xaw pass Convex for arrowheads and triangular indicators. fill-rule on the GC (EvenOdd vs Winding) decides the inside-test for Complex paths.
+    coverage: |
+      Implemented for the common paths; fills with foreground and the GC fill-rule, but the Convex/Nonconvex/Complex shape hint is not specialized.
+  - number: 70
+    name: PolyFillRectangle
+    category: Drawing
+    usage: mainstream
+    description: |
+      Fills one or more axis-aligned rectangles using the GC's fill-style, the bread-and-butter request for widget backgrounds, button faces, menu items, and xterm's per-cell character background. Every Motif XmDrawingArea repaint and every CDE dt-app panel resize generates a flurry of these, which is why a real server hot-paths it. Same geometry as PolyRectangle but solid, not outlined.
+    coverage: |
+      Implemented; honors solid, stippled, opaque-stippled, and a depth-1 GXand tiled case, plus GXcopy and GXxor functions.
+  - number: 71
+    name: PolyFillArc
+    category: Drawing
+    usage: mainstream
+    description: |
+      Fills one or more arcs as either Chord (close with a straight line between endpoints) or PieSlice (close with two segments through the center), controlled by arc-mode on the GC. xclock's filled second hand uses PieSlice; pie-chart clients like xpie use it for each wedge, and oclock's filled face is a single PolyFillArc covering the whole ellipse. Same angle and ellipse semantics as PolyArc.
+    coverage: |
+      Implemented; fills the pie slice via parametric path sampling, though chord arc-mode renders as pie slice instead of chord.
+  - number: 72
+    name: PutImage
+    category: Image
+    usage: mainstream
+    description: |
+      Uploads a client-side image into a rectangle of the Drawable, with the format choosing how to interpret the bytes: Bitmap (depth 1, foreground/background expanded from each bit), XYPixmap (bit-plane-per-scanline at the Drawable's depth), or ZPixmap (packed pixels at the Drawable's depth). This is how xv displays a JPEG, how xeyes uploads its pupil pixmaps, and how every toolkit gets a client-rendered image (font glyph caches, theme bitmaps, screenshots) onto the server. MIT-SHM later layered a shared-memory fast path over the same semantics for clients that can't afford the socket copy.
+    coverage: |
+      Implemented; depth-1 Bitmap, ZPixmap depth-1, and ZPixmap depth-8 all decode through the colormap, while XYPixmap and other ZPixmap depths are silently dropped.
+  - number: 73
+    name: GetImage
+    category: Image
+    usage: mainstream
+    description: |
+      Reads back a rectangle of pixels from a Drawable in XYPixmap or ZPixmap format with a plane-mask filter. The spec is candid that this isn't a general-purpose op (it's for rudimentary hardcopy), but in practice xwd, xmag, screen-grabbers and the X test suite all lean on it; the data comes back inline in the reply, which is why grabbing a big window is expensive.
+    coverage: |
+      Implemented for the common paths; reads ARGB backing through the colormap so anti-aliased edges return pixel zero, and GetImage on root is not supported.
+  - number: 74
+    name: PolyText8
+    category: Text
+    usage: mainstream
+    description: |
+      Draws one or more 8-bit strings along a baseline, where each TEXTITEM can be a (delta, string) pair or a font switch inline. Xlib's XDrawText batches mixed-font runs (one call, multiple fonts on the same line) into a single PolyText8, which is why xfontsel and old text widgets use it instead of repeated ImageText8 calls. Background is not painted; only the foreground glyphs touch the drawable.
+    coverage: |
+      Implemented; walks the TEXTITEM8 stream and draws via Core Text per-glyph advances, with the font-shift sentinel skipped.
+  - number: 75
+    name: PolyText16
+    category: Text
+    usage: mainstream
+    description: |
+      The 2-byte sibling of PolyText8, used for CHAR2B fonts (CJK, ISO10646 subsets, large bitmap fonts). Same TEXTITEM/font-switch wire format, but each string element is STRING16; toolkits drawing wide-character runs through XDrawText16 land here. Bytes are big-endian on the wire regardless of client byte order.
+    coverage: |
+      Implemented; CHAR2B variant of PolyText8 using the same Core Text path with the font-shift sentinel skipped.
+  - number: 76
+    name: ImageText8
+    category: Text
+    usage: mainstream
+    description: |
+      Paints a single 8-bit string and fills the background rectangle behind it in one shot, ignoring the GC's function and fill-style (effectively Copy + Solid). This is the workhorse for terminal output: xterm emits one ImageText8 per run of unchanged-attribute characters, and old Athena XawText widgets use it for the same reason (no flash, no separate FillRectangle). If you only see one text opcode in a capture, it's usually this one.
+    coverage: |
+      Implemented; fills the background rect and renders glyphs at cell-snapped positions via Core Text.
+  - number: 77
+    name: ImageText16
+    category: Text
+    usage: mainstream
+    description: |
+      Same opcode-behavior contract as ImageText8 (paint background, then foreground, in one operation) but with STRING16. CJK terminals (kterm, cxterm) and any Motif widget drawing through XmbDrawImageString with a 16-bit font ride this opcode. CHAR2B bytes are big-endian on the wire.
+    coverage: |
+      Implemented; CHAR2B variant of ImageText8 using the same Core Text path.
+  - number: 78
+    name: CreateColormap
+    category: Color
+    usage: legacy
+    usage_reason: "Private writable colormaps only mattered on PseudoColor/DirectColor hardware; obsolete on TrueColor displays."
+    description: |
+      Allocates a new Colormap of a given visual for the screen of a window, with alloc set to None (client will allocate entries later) or All (server hands the entire writable map to the client). StaticGray, StaticColor and TrueColor visuals must use alloc=None per the spec. The classic caller is an 8-bit image viewer (xv, xli) wanting its own private map so its dithered palette doesn't fight the root colormap.
+    coverage: |
+      Implemented; always emits BadAlloc since only the default colormap is supported.
+  - number: 79
+    name: FreeColormap
+    category: Color
+    usage: legacy
+    usage_reason: "Pairs with CreateColormap; only relevant when clients juggled private 8-bit maps."
+    description: |
+      Drops the server's reference to a Colormap; if it was the installed map for the screen, it gets uninstalled, and any window pointing at it has its cmap attribute snapped to None and gets a ColormapNotify event. No-op on the default colormap. Normally fires at client teardown, or when a viewer rotates through private maps.
+    coverage: |
+      Implemented; emits BadAccess on the default colormap and BadColor on anything else.
+  - number: 80
+    name: CopyColormapAndFree
+    category: Color
+    usage: legacy
+    usage_reason: "8-bit cell-exhaustion escape hatch; meaningless once TrueColor became standard."
+    description: |
+      Creates a new Colormap of the same visual as src-cmap, migrates the client's own allocations into it with values intact, then frees those entries in the source. This is how an 8-bit app survives running out of cells: when AllocColor returns BadAlloc on the shared default map, the client copies its allocations into a private map and goes from there. Read-only vs writable status is preserved across the move.
+    coverage: |
+      Implemented; validates the source colormap and emits BadAlloc since only the default colormap exists.
+  - number: 81
+    name: InstallColormap
+    category: Color
+    usage: legacy
+    usage_reason: "Workstation-era WM-driven colormap juggling on PseudoColor hardware; no-op on TrueColor."
+    description: |
+      Makes the given Colormap an installed map for its screen, so windows using it render with their true colors instead of the wrong-palette flash you'd otherwise see. On real PseudoColor hardware the window manager owns this call (mwm and twm install whichever map the focused window's WM_COLORMAP_WINDOWS points at) and the server may implicitly evict other maps. Generates a ColormapNotify on every window holding the affected map.
+    coverage: |
+      Implemented; silent success for the default colormap and BadColor for anything else, though ColormapNotify is never emitted.
+  - number: 82
+    name: UninstallColormap
+    category: Color
+    usage: legacy
+    usage_reason: "Pair to InstallColormap; only meaningful for PseudoColor hardware."
+    description: |
+      Removes a Colormap from the screen's required list and may cause the server to swap it out of hardware, with ColormapNotify going to every window that was using it. WMs pair this with InstallColormap when focus moves away from a private-colormap client. Default screen colormap is unaffected by direct uninstall but can ride along implicitly.
+    coverage: |
+      Implemented; silent no-op for the default colormap and BadColor for anything else, though ColormapNotify is never emitted.
+  - number: 83
+    name: ListInstalledColormaps
+    category: Color
+    usage: legacy
+    usage_reason: "WM focus-change introspection on PseudoColor hardware; obsolete on TrueColor."
+    description: |
+      Replies with the set of Colormaps currently installed on the screen of the given window, unordered, with no indication of which are in the required list. WMs use it on focus changes to figure out whether they need to install the new client's preferred map; xprop -installed prints exactly this reply.
+    coverage: |
+      Implemented; always returns the single default colormap.
+  - number: 84
+    name: AllocColor
+    category: Color
+    usage: mainstream
+    description: |
+      Asks the server to allocate a read-only Colormap entry closest to the requested (red, green, blue) and returns the chosen pixel plus the RGB the hardware actually rounded to. Multiple clients asking for the same color share one cell, which is the whole point on 8-bit PseudoColor. On TrueColor visuals this just computes the right packed pixel and returns it; the reply's red/green/blue may differ from the request after gamut quantization.
+    coverage: |
+      Implemented; shared read-only cells on the server-global colormap with white and black pinned, though there is no freelist or 256-cell cap.
+  - number: 85
+    name: AllocNamedColor
+    category: Color
+    usage: mainstream
+    description: |
+      Looks up a color by string name (like "red" or "midnightblue" from rgb.txt) against the screen's database, then allocates the closest matching cell in the Colormap and returns the pixel value plus both the exact and visual RGB. Xt's resource converter for the foreground/background color resources is the classic caller, so any Athena or Motif widget that takes a color name on the command line lands here. Saves the client from doing its own LookupColor plus AllocColor handshake.
+    coverage: |
+      Implemented; resolves the name through the embedded X11R6 rgb.txt and hex parsing, falling back to black on unknown names.
+  - number: 86
+    name: AllocColorCells
+    category: Color
+    usage: legacy
+    usage_reason: "Writable PseudoColor cells for palette animation; obsolete on TrueColor hardware."
+    description: |
+      Reserves writable Colormap cells on a PseudoColor or GrayScale visual, returning C pixel values and P plane masks the client can OR together to address C*(2^P) entries. The client then drives the actual colors with StoreColors, which is how plotting tools and image viewers do colormap animation or palette flashing without a per-frame Alloc round trip. Useless on TrueColor visuals (the call works but matters mostly on the 8-bit hardware these tools were written for).
+    coverage: |
+      Implemented; always emits BadAlloc since the Mac backing has no real palette to grant writable cells from.
+  - number: 87
+    name: AllocColorPlanes
+    category: Color
+    usage: legacy
+    usage_reason: "DirectColor per-channel LUT allocation; obsolete on TrueColor hardware."
+    description: |
+      Like AllocColorCells but splits the writable cells into independent red, green, and blue planes, returning a list of pixels plus three masks that decompose pixel values into per-channel indices. Built for DirectColor visuals where the hardware has separate LUTs per channel, so apps like xv or old satellite imagery viewers can twiddle gamma per channel without reallocating. Subsequent StoreColors writes hit the per-channel LUT entry the masks pick out.
+    coverage: |
+      Implemented; always emits BadAlloc since no read-write planes are possible on the Mac backing.
+  - number: 88
+    name: FreeColors
+    category: Color
+    usage: legacy
+    usage_reason: "Mainly releases writable cells; only matters on PseudoColor/DirectColor maps."
+    description: |
+      Releases a list of previously allocated read/write or read-only cells in the Colormap, with a plane-mask that expands the pixel list into all combinations to free at once (the inverse of AllocColorPlanes' compact return). Toolkits call this on widget destroy so reference-counted shared colors don't leak; the server only actually reclaims a cell when every client holding it has freed it. Access errors fire on cells the client doesn't own, so getting the bookkeeping right matters.
+    coverage: |
+      Implemented; silent success on the default colormap and BadColor on anything else, with no per-client pixel ownership tracking.
+  - number: 89
+    name: StoreColors
+    category: Color
+    usage: legacy
+    usage_reason: "Writes writable cells for palette animation; no-op on TrueColor."
+    description: |
+      Writes new RGB values into a list of read/write Colormap cells, with per-entry do-red/do-green/do-blue flags so a client can update one channel without disturbing the others. If the Colormap is currently installed the change is visible on screen immediately, which is the mechanism behind colormap animation in old demos and palette-cycling image viewers. Any writable cell in the colormap is fair game regardless of which client allocated it; targeting an unallocated or read-only cell raises Access.
+    coverage: |
+      Implemented; emits BadAccess on the default colormap and BadColor on anything else since the Mac backing has no LUT to mutate.
+  - number: 90
+    name: StoreNamedColor
+    category: Color
+    usage: legacy
+    usage_reason: "Convenience writable-cell store; obsolete with TrueColor."
+    description: |
+      Resolves a string color name against the screen's database (rgb.txt-style lookup) and writes its RGB into a single writable Colormap cell, with the same do-red/do-green/do-blue gating as StoreColors. Convenience for clients that want to update a cell from a config value ("set highlight to dodgerblue") without doing LookupColor plus StoreColors themselves. Same Access semantics as StoreColors: the cell must be one this client allocated read/write.
+    coverage: |
+      Implemented; emits BadAccess on the default colormap and BadColor on anything else.
+  - number: 91
+    name: QueryColors
+    category: Color
+    usage: mainstream
+    description: |
+      Reads back the current RGB stored in the Colormap for a list of pixel values, returning the hardware values the server actually has, not whatever the client originally asked for. Toolkits use it to derive shadow and highlight colors for 3D bevels from a single base pixel, which is how Motif's XmGetColors decides what a button's top-shadow should look like. Cheap and read-only, so it's safe to call in widget realize paths.
+    coverage: |
+      Implemented; looks up requested pixels in the colormap and resolves unknown pixels to black.
+  - number: 92
+    name: LookupColor
+    category: Color
+    usage: mainstream
+    description: |
+      Resolves a color name against the screen's database and returns two RGB triples (the exact value from the database, and the closest the hardware can actually display) without allocating anything. Clients call it when they want to know whether a name is valid or want the visual value to pass to CreateCursor or RecolorCursor. The query-only sibling to AllocNamedColor.
+    coverage: |
+      Implemented; resolves the color name or hex spec against the embedded rgb.txt without allocating a pixel.
+  - number: 93
+    name: CreateCursor
+    category: Cursor
+    usage: mainstream
+    description: |
+      Builds a Cursor from a depth-1 source Pixmap, an optional same-size depth-1 mask Pixmap, foreground and background RGB (CARD16 per channel), and an (x,y) hotspot inside the source. Source bits pick fg vs bg, mask bits gate which pixels are drawn at all (mask=None means draw every source pixel), and the hotspot is the point on the image that lines up with the pointer's reported position. xsetroot -cursor goes through here, as does any client shipping its own bitmap pointer instead of asking the cursor font via CreateGlyphCursor.
+    coverage: "Stub: returns enough to keep clients happy without doing the work."
+  - number: 94
+    name: CreateGlyphCursor
+    category: Cursor
+    usage: mainstream
+    description: |
+      Same idea as CreateCursor but pulls the source and (optional) mask bitmaps from glyphs in a Font instead of Pixmaps, using one CARD16 character index into each font. The cursor font conventionally lives at FONT "cursor" with paired glyphs at even/odd indices (source/mask), which is how XC_left_ptr, XC_xterm, XC_watch and the rest of <X11/cursorfont.h> get turned into real cursors. Every Xlib XCreateFontCursor call lands here.
+    coverage: |
+      Implemented; records the cursor and source-glyph index for NSCursor substitution at crossing time.
+  - number: 95
+    name: FreeCursor
+    category: Cursor
+    usage: mainstream
+    description: |
+      Drops the client's reference to a Cursor resource. Storage isn't actually reclaimed until nothing else points at it (a window cursor attribute, an active grab), so a client can safely Free the ID right after CreateCursor as long as it stashed it on a window first. Routine cleanup on client exit; not a hot path.
+    coverage: |
+      Implemented; removes the cursor entry and emits BadCursor on unknown cursors.
+  - number: 96
+    name: RecolorCursor
+    category: Cursor
+    usage: mainstream
+    description: |
+      Swaps the foreground and background RGB on an existing Cursor in place, and if the cursor is currently visible (window cursor attribute on the cursor window, or active grab) the change shows up immediately. Cheaper than tearing down and rebuilding when a theme switch or focus change wants to retint the pointer. Doesn't change shape or hotspot, only color.
+    coverage: "Stub: returns enough to keep clients happy without doing the work."
+  - number: 97
+    name: QueryBestSize
+    category: Server
+    usage: obscure
+    usage_reason: "Hardware-tuning hint from fixed-cursor-plane era; modern clients just assume."
+    description: |
+      Asks the server for the closest supported size to the requested width/height for a Cursor, Tile, or Stipple, plus the screen the Drawable lives on. The hardware era this was written for had cursor planes with fixed dimensions and tile/stipple paths that ran fastest at specific sizes, so toolkits called this before allocating a Pixmap to back a tiled GContext or a custom cursor. Rarely seen on modern wire traces, but Xlib's XQueryBestSize, XQueryBestTile, and XQueryBestStipple still issue it.
+    coverage: |
+      Implemented; cursor class returns 16x16 and tile/stipple echoes the requested width and height.
+  - number: 98
+    name: QueryExtension
+    category: Server
+    usage: mainstream
+    description: |
+      Looks up an extension by its ISO Latin-1 name and returns whether it's present, plus its major opcode, first event code, and first error code (or zero for any the extension doesn't define). Every client that uses an extension calls this once at startup: Xt asks for BIG-REQUESTS, GTK asks for XKEYBOARD and XInputExtension, xterm asks for MIT-SHM. The returned major opcode is what the client puts in the first byte of every subsequent extension request.
+    coverage: |
+      Implemented; reports SHAPE as present at major opcode 128 and everything else as not present.
+  - number: 99
+    name: ListExtensions
+    category: Server
+    usage: mainstream
+    description: |
+      Returns the names of every extension the server advertises, as a LISTofSTRING8. xdpyinfo prints these as the "number of extensions" block at the top of its output, and a few clients walk the list to feature-detect rather than calling QueryExtension by name. Doesn't return opcodes; clients still have to follow up with QueryExtension to actually use anything in the list.
+    coverage: |
+      Implemented; returns the single-element list containing SHAPE.
+  - number: 100
+    name: ChangeKeyboardMapping
+    category: Keyboard
+    usage: xset
+    usage_reason: "xmodmap/setxkbmap rewrite keysym tables; toolkit apps consume the table but never write it."
+    description: |
+      Installs new KEYSYMs for a contiguous range of keycodes starting at first-keycode, with keysyms-per-keycode entries per key. Generates a MappingNotify event so every other client can rebuild its keycode-to-keysym cache; this is how xmodmap rewrites your Caps Lock to Control, and how setxkbmap publishes the active layout to legacy clients that don't speak XKB. The server stores the table but doesn't itself interpret it: input events still ship raw keycodes and the client does the lookup.
+    coverage: Not implemented.
+  - number: 101
+    name: GetKeyboardMapping
+    category: Keyboard
+    usage: mainstream
+    description: |
+      Reads back the KEYSYM table for count keycodes starting at first-keycode. Xlib calls this lazily the first time a client needs to translate a KeyPress event into a character (XLookupString and friends), and again on every MappingNotify to refresh its cache. The server picks keysyms-per-keycode large enough to hold the widest row and pads short rows with NoSymbol.
+    coverage: |
+      Implemented; returns a US-ASCII keymap covering letters, digits, punctuation, arrows, and modifiers, with international layouts deferred.
+  - number: 102
+    name: ChangeKeyboardControl
+    category: Keyboard
+    usage: xset
+    usage_reason: "xset r/b/led drives bell, click, repeat, LEDs; toolkits never mutate these."
+    description: |
+      Bitmask-driven knob for bell volume, bell pitch, bell duration, key-click volume, LED state (per-LED or global), global auto-repeat, and per-key auto-repeat. xset is the canonical caller (xset r off, xset b 50, xset led named "Scroll Lock"); login scripts and CDE session managers use it to restore user preferences. The server treats each control as best-effort, so requests for hardware it doesn't have are silently ignored rather than errored.
+    coverage: Not implemented.
+  - number: 103
+    name: GetKeyboardControl
+    category: Keyboard
+    usage: xset
+    usage_reason: "Read-back for xset q and a few bell-default queries; not a normal toolkit path."
+    description: |
+      Reads back everything ChangeKeyboardControl can set: key-click and bell parameters, LED bitmask, global auto-repeat on/off, and a 256-bit vector of per-key auto-repeat flags. xset q dumps the reply verbatim, and Motif's XmDisplay queries it once to seed its bell defaults. The auto-repeats vector is packed little-endian, byte N holds keys 8N through 8N+7.
+    coverage: "Stub: returns enough to keep clients happy without doing the work."
+  - number: 104
+    name: Bell
+    category: Keyboard
+    usage: mainstream
+    description: |
+      Rings the keyboard bell at a volume scaled against the base volume from ChangeKeyboardControl, with percent ranging -100 to +100. xterm calls this on receiving an ASCII BEL (0x07), and Emacs hits it for the "ding" on a failed search; the actual sound is whatever the server maps it to (PC speaker beep, /System/Library/Sounds/Funk.aiff, or silence if the user ran xset b off). Cheap, common, and frequently the first audible sign a long-running client is unhappy.
+    coverage: |
+      Implemented; maps positive percent to NSSound.beep and stays silent on zero or negative percent.
+  - number: 105
+    name: ChangePointerControl
+    category: Pointer
+    usage: xset
+    usage_reason: "xset m and dtsession set pointer acceleration; toolkit apps never call it."
+    description: |
+      Sets pointer acceleration as a numerator/denominator fraction and a threshold in pixels: motion under threshold passes through unscaled, motion beyond it is multiplied by the fraction. xset m 2/1 4 is the standard incantation; window managers like CDE's dtsession restore the user's saved values at login. -1 in any field restores the server default.
+    coverage: Not implemented.
+  - number: 106
+    name: GetPointerControl
+    category: Pointer
+    usage: xset
+    usage_reason: "Read-back for xset q; toolkit clients don't consult acceleration values."
+    description: |
+      Returns the current acceleration numerator, denominator, and threshold. xset q prints these as the "Pointer Control" line, and a handful of toolkits read them once to decide how aggressively to coalesce MotionNotify events. Pure read-back of what ChangePointerControl last set.
+    coverage: Not implemented.
+  - number: 107
+    name: SetScreenSaver
+    category: Server
+    usage: xset
+    usage_reason: "xset s and xdm/dtsession configure the saver; toolkit apps don't mutate it (xscreensaver does, but that's a control-plane utility)."
+    description: |
+      Configures the inactivity timeout (seconds before activation), the change interval (hint for how often the saver should mutate to avoid CRT burn-in), and two tristate flags: prefer-blanking and allow-exposures. Timeout of zero disables the saver, -1 restores the default. xset s 600 600 is the everyday caller; xdm and CDE's dtsession set it at login, and screensavers like xlock often disable the built-in saver before they take over.
+    coverage: "Stub: returns enough to keep clients happy without doing the work."
+  - number: 108
+    name: GetScreenSaver
+    category: Server
+    usage: xset
+    usage_reason: "Read-back for xset q and lock programs snapshotting state; not a toolkit path."
+    description: |
+      Returns the timeout, interval, prefer-blanking, and allow-exposures values currently in effect. xset q reads it for the "Screen Saver" section of its output, and external lock programs (xscreensaver, xlockmore) snapshot it before overriding so they can restore the user's setting on exit. Plain read-back of SetScreenSaver state, no side effects.
+    coverage: "Stub: returns enough to keep clients happy without doing the work."
+  - number: 109
+    name: ChangeHosts
+    category: Server
+    usage: xset
+    usage_reason: "xhost adds/removes ACL entries; toolkits never touch host-based ACLs."
+    description: |
+      Adds or removes a host from the server's connection-time access control list, with mode set to Insert or Delete and an address tagged by family (Internet, InternetV6, ServerInterpreted, etc.). This is what `xhost +localhost` ends up sending; nearly every real deployment treats it as legacy and prefers cookie-based auth (MIT-MAGIC-COOKIE-1) over host-list ACLs.
+    coverage: Not implemented.
+  - number: 110
+    name: ListHosts
+    category: Server
+    usage: xset
+    usage_reason: "Read-back for xhost banner; not a toolkit path."
+    description: |
+      Returns the current connection-time access control list plus a flag saying whether the list is being enforced (Enabled / Disabled). `xhost` with no arguments uses this to print the host list and the "access control enabled, only authorized clients can connect" banner.
+    coverage: Not implemented.
+  - number: 111
+    name: SetAccessControl
+    category: Server
+    usage: xset
+    usage_reason: "xhost +/- enables or disables ACL enforcement; control-plane only."
+    description: |
+      Enables or disables enforcement of the host-based access control list at connection setup, without touching the list contents. `xhost +` (no host) disables enforcement, `xhost -` re-enables it; the request only succeeds for a client that already passed the local-host or server-defined permission check.
+    coverage: Not implemented.
+  - number: 112
+    name: SetCloseDownMode
+    category: Server
+    usage: obscure
+    usage_reason: "Session managers occasionally use RetainPermanent; the SaveSet path is the common one."
+    description: |
+      Sets what happens to this client's resources when its connection closes: Destroy (default), RetainPermanent, or RetainTemporary. Session managers and xsm use RetainPermanent so a window's resources (and Window IDs) survive across a manager restart and can later be reclaimed via KillClient.
+    coverage: "Stub: returns enough to keep clients happy without doing the work."
+  - number: 113
+    name: KillClient
+    category: Resource
+    usage: mainstream
+    description: |
+      Forces the connection that owns a given resource ID to be torn down, destroying all its windows, GContexts, Pixmaps, and Colormaps. `xkill` lets you click a window and uses this to close the client behind it; with AllTemporary, it sweeps up the leftovers from clients that exited under SetCloseDownMode RetainTemporary.
+    coverage: "Stub: returns enough to keep clients happy without doing the work."
+  - number: 114
+    name: RotateProperties
+    category: Properties
+    usage: obscure
+    usage_reason: "Old cut-buffer rotation; no real toolkit uses it in modern selection flows."
+    description: |
+      Rotates the values held under a list of N property Atoms on a window by delta positions, generating a PropertyNotify per property in list order. The Xt Intrinsics' selection-incremental machinery uses it to cycle through a ring of buffer properties; classic `xcutbuffer` style apps shifted CUT_BUFFER0 through CUT_BUFFER7 with one call.
+    coverage: Not implemented.
+  - number: 115
+    name: ForceScreenSaver
+    category: Server
+    usage: xset
+    usage_reason: "xset s activate and media players poking the idle timer; control-plane utility code."
+    description: |
+      Force-activates the screen saver (Activate) or wakes it and resets the idle timer (Reset), bypassing the normal input-driven activation. A media player like `xine` or a presentation tool calls this with Reset every few seconds so the screen doesn't blank during playback; `xset s activate` uses the Activate mode.
+    coverage: "Stub: returns enough to keep clients happy without doing the work."
+  - number: 116
+    name: SetPointerMapping
+    category: Pointer
+    usage: xset
+    usage_reason: "xmodmap remaps mouse buttons; toolkit apps never write the button map."
+    description: |
+      Remaps logical mouse button numbers, so physical button i reports as map[i] (or zero to disable it entirely). Left-handers run `xmodmap -e 'pointer = 3 2 1'` to swap buttons 1 and 3; the request returns Busy if any affected button is currently held down, and a Success emits MappingNotify so toolkits can re-read via GetPointerMapping.
+    coverage: Not implemented.
+  - number: 117
+    name: GetPointerMapping
+    category: Pointer
+    usage: mainstream
+    description: |
+      Returns the server's current pointer button map as a LISTofCARD8 indexed from one, where map[i] is the logical button number reported in events when the user presses the button physically numbered i; the list's length is also how clients learn how many physical buttons the server thinks the pointer has. Xlib caches the result of XGetPointerMapping and re-fetches it after a MappingNotify whose request field is MappingPointer, which is how a left-handed swap done with xmodmap propagates to running Motif and Xt apps without a restart.
+    coverage: |
+      Implemented; returns the fixed three-button mapping [1, 2, 3].
+  - number: 118
+    name: SetModifierMapping
+    category: Keyboard
+    usage: xset
+    usage_reason: "xmodmap rewrites modifier slots; toolkit apps consume the mapping but never set it."
+    description: |
+      Assigns the eight modifier slots (Shift, Lock, Control, Mod1..Mod5) to sets of KeyCodes, with `keycodes-per-modifier` slots per modifier; zero entries disable a slot. `xmodmap -e 'add Mod4 = Super_L'` ends here, returning Busy if any affected key is held down and emitting MappingNotify on Success.
+    coverage: Not implemented.
+  - number: 119
+    name: GetModifierMapping
+    category: Keyboard
+    usage: mainstream
+    description: |
+      Returns the eight KeyCode sets currently assigned to Shift, Lock, Control, and Mod1..Mod5, padded with zeros to a server-chosen `keycodes-per-modifier`. Xlib calls it on connect and after every MappingNotify with request `MappingModifier` so that XLookupString can translate state bits in KeyPress events into Mod4Mask vs Mod1Mask correctly.
+    coverage: |
+      Implemented; returns the real Shift, Lock, Control, Mod1 (Option), and Mod4 (Command) keycode mapping.
+  - number: 127
+    name: NoOperation
+    category: Server
+    usage: mainstream
+    description: |
+      Does nothing on the wire and produces no reply, but its length field can be any multiple of four bytes so the request body acts as variable-length padding. Xlib's `XNoOp` uses it to flush keepalive traffic; some client libraries pad with NoOperation to align the next request on a 64-bit boundary.
+    coverage: Fully implemented.
+
+shape_requests:
+  - minor: 0
+    name: X_ShapeQueryVersion
+    description: |
+      Client asks the server which SHAPE protocol version it speaks. The reply carries a CARD16 majorVersion and minorVersion (1.0 for X11R6). Every SHAPE-using toolkit fires this once at extension init; Xmu's XmuLookupShape and Xt's shape-aware widgets won't issue any other SHAPE request until they've seen the reply.
+    coverage: Fully implemented; replies with version 1.0.
+  - minor: 1
+    name: X_ShapeRectangles
+    description: |
+      Sets, unions, intersects, subtracts, or inverts the destination window's bounding or clip region against a list of xRectangles supplied inline after the request header. The op byte picks the combine mode (ShapeSet/Union/Intersect/Subtract/Invert) and destKind picks ShapeBounding versus ShapeClip. Motif's mwm frame code uses this to punch the title-bar corners into rounded rectangles without ever building a 1-bit Pixmap.
+    coverage: |
+      Fully implemented; builds a region from the rect list with destination-kind, ordering, and length validation.
+  - minor: 2
+    name: X_ShapeMask
+    description: |
+      Combines a 1-bit Pixmap into the destination window's bounding or clip region, with a 2D offset and the same op set as ShapeRectangles. This is the heavy hitter: oclock builds a circular Pixmap mask once and ships it via ShapeMask to make its top-level round, and Xmu's XmuLookupShape (the path xeyes uses) generates the oval mask Pixmap and hands it off this way.
+    coverage: |
+      Fully implemented; depth-1 pixmaps are read back into a region and a None source clears the shape.
+  - minor: 3
+    name: X_ShapeCombine
+    description: |
+      Copies one window's bounding or clip region into another window's bounding or clip region, with an offset and the usual op selector. Window managers reach for this when they want a shaped client's mask to drive the frame's own shape: mwm's SetFrameShape grabs the client's bounding region and ShapeCombines it into the frame so the decorations follow the client's silhouette.
+    coverage: |
+      Fully implemented; combines the source window's bounding or clip shape into the destination with BadWindow on a bad source.
+  - minor: 4
+    name: X_ShapeOffset
+    description: |
+      Translates the destination window's bounding or clip region by (xOff, yOff) without touching its contents. Toolkits use it when a widget's shape is correct but its origin needs to slide, for example a shaped menu shell that scrolls its mask along with the popup, avoiding a full ShapeMask round-trip.
+    coverage: |
+      Fully implemented; translates an existing region and emits ShapeNotify, leaving unshaped windows unshaped.
+  - minor: 5
+    name: X_ShapeQueryExtents
+    description: |
+      Asks the server for the bounding-box extents of a window's bounding and clip regions, plus boolean flags saying whether either region is actually set. The reply hands back (x, y, width, height) for both. mwm calls this after a client maps so it can size the frame to the client's shaped bounding box rather than its raw geometry.
+    coverage: |
+      Fully implemented; returns bounding and clip extents, or the default rect when unshaped.
+  - minor: 6
+    name: X_ShapeSelectInput
+    description: |
+      Tells the server to start (enable=True) or stop (enable=False) delivering ShapeNotify events for the named window. A WM that draws shaped client decorations selects this on every reparented top-level so it gets notified whenever the client retouches its own bounding or clip region, and can rebuild the frame shape in response.
+    coverage: |
+      Implemented; tracks per-session interest, but cross-session ShapeNotify (a separate client watching another's window) is not delivered.
+  - minor: 7
+    name: X_ShapeInputSelected
+    description: |
+      Round-trips to ask whether the calling client currently has ShapeNotify enabled on the given window. The reply's enabled byte echoes the last ShapeSelectInput state. Mostly used by debugging tools and by toolkits that re-attach to a window they didn't originally create, like a session manager rehydrating a frame after a restart.
+    coverage: Implemented; reports this session's interest set.
+  - minor: 8
+    name: X_ShapeGetRectangles
+    description: |
+      Returns the destination window's bounding or clip region as a list of xRectangles plus an ordering hint (UnSorted, YSorted, YXSorted, YXBanded). The reply's nrects field counts them; the rectangles follow the fixed header. Window managers and screenshot tools use this to inspect a shaped client without having to recompute the mask from scratch.
+    coverage: |
+      Fully implemented; returns the region's rectangles in YXBanded order, or the single default rect when unshaped.
+
+extensions:
+  - name: BIG-REQUESTS
+    purpose: |
+      The core X11 protocol caps any single request at 262140 bytes because the length field is a 16-bit count of 4-byte units. That ceiling gets uncomfortable fast for PutImage of a large pixmap, ChangeProperty with a big chunk of selection data, or PolyLine with thousands of points. BIG-REQUESTS adds an escape hatch: after the client calls BigReqEnable once at connection startup, it can prefix oversized requests with a zero length field followed by a real 32-bit length, raising the per-request ceiling to whatever the server advertises (commonly 4MB or 16MB). It shipped with X11R6 in 1994 and Xlib began enabling it automatically, so by the late 90s every non-trivial client got it for free.
+    request_count: 1
+    example_clients: |
+      Pretty much every Xlib-linked program from R6 onward negotiates BIG-REQUESTS at startup whether it needs the headroom or not. The clients that actually exercise the bigger ceiling are image-heavy ones (xv, xli, the Motif image widgets in CDE's dticon and dthelpview) and anything pasting large selections through ChangeProperty.
+    coverage: Decoded by macXcapture; not implemented in the server.
+  - name: MIT-SHM
+    purpose: |
+      MIT-SHM lets a client and the X server share a System V shared memory segment so PutImage and GetImage don't have to copy pixel data through the X socket. The client attaches a shmid with ShmAttach, then issues ShmPutImage, ShmGetImage, or ShmCreatePixmap referencing offsets into that segment, and the server reads or writes the bits directly. On vintage Unix workstations, pushing a 1152x900 frame through a socket was the single biggest bottleneck for anything image-heavy (movie players, frame grabbers, image viewers, double-buffered Motif drawing areas), so MIT-SHM was the standard escape hatch whenever client and server lived on the same host.
+    request_count: 6
+    example_clients: |
+      xv, xanim, xli, and xloadimage all probe for MIT-SHM at startup and use ShmPutImage when the server is local. Motif XmDrawingArea apps like quickplot and Tk's photo widget also route through it transparently when available.
+    coverage: Decoded by macXcapture; not implemented in the server.
+  - name: XKEYBOARD
+    purpose: |
+      XKB replaces the core keyboard model (a flat KeyCode-to-KeySym table plus eight modifier bits) with a real keyboard description: per-key types, multiple groups for layout switching, virtual modifiers, key actions, LED indicators, geometry, and per-key behaviors like autorepeat and locking. It exists because the core protocol's keyboard story is too thin for non-US layouts, dead keys, AltGr, group switching, and the accessibility controls (StickyKeys, SlowKeys, BounceKeys) that shipped with R6.1. By the late 90s every CDE and Motif session on Solaris, HP-UX, and IRIX leaned on XKB, and the server loaded its keymap via xkbcomp instead of the old XModmap text.
+    request_count: 22
+    example_clients: |
+      xkbcomp compiles a keymap and pushes it into the server via SetMap / SetNames / SetGeometry at session start; xset led / xset r and the CDE keyboard control panel toggle indicators and autorepeat through it, and Motif's XmText reads XKB state to handle Mode_switch and group-2 keysyms.
+    coverage: Decoded by macXcapture; not implemented in the server.
+  - name: XInputExtension
+    purpose: |
+      XInput (XI v1) opens the X server's pointer/keyboard model up to physical devices beyond the core pointer and keyboard. Tablets, dial boxes, spaceballs, trackballs, and the oddball CAD peripherals of the late 80s deliver events through one device-aware API instead of every toolkit speaking a private driver protocol. A client calls ListInputDevices, OpenDevice, and SelectExtensionEvent on the device it wants, then receives DeviceMotion / DeviceButton events that carry an arbitrary number of valuator axes (pressure, tilt, twist) instead of just X/Y. In the X11R5/R6 Sun and SGI world this was how a Wacom tablet got into xfig, or a spaceball into a CAD app, without forking the toolkit.
+    request_count: 35
+    example_clients: |
+      xinput (the command-line probe) and xsetwacom are the obvious ones; xfig, idraw, and the SGI-era CAD packages opened tablets through XI to get pressure and tilt valuators the core pointer protocol can't carry.
+    coverage: Decoded by macXcapture; not implemented in the server.
+  - name: RENDER
+    purpose: |
+      RENDER is Keith Packard's late-90s answer to the fact that core X11 drawing is integer-only, aliased, and has no notion of alpha. It defines Picture and PictFormat objects on top of Drawables, a Porter-Duff Composite request, and antialiased Trapezoid, Triangle, and Glyph primitives so the server can do the compositing math instead of the client shipping pre-rendered ARGB pixmaps for every glyph. The glyph-set side is the load-bearing piece: clients upload alpha masks once and then issue CompositeGlyphs to draw runs of antialiased text. By X11R6.6 / XFree86 4.x it became the foundation everything modern depends on for text and shaped drawing.
+    request_count: 35
+    example_clients: |
+      GTK+ 2 (via Cairo's XRender backend) and Qt 3/4 use it for every antialiased glyph and rounded widget; Xft is the client library that turned RENDER glyph sets into the standard way to draw FreeType-rasterized text on X.
+    coverage: Decoded by macXcapture; not implemented in the server.
+  - name: RANDR
+    purpose: |
+      RANDR (Resize and Rotate) lets a client query and change the screen's size, refresh rate, rotation, and (in 1.2 and later) the per-CRTC and per-output configuration of a multi-head setup, without restarting the X server. Before RANDR you edited XF86Config, killed the server, and prayed; after RANDR the desktop environment can offer a "Displays" control panel that actually works at runtime. In the X11R5/R6 era we target the extension didn't exist yet (RANDR 1.0 shipped around 2001 with XFree86 4.3), so the vintage Sun clients we care about never call it. It shows up here because modern toolkits probe for it at startup and a missing RANDR makes them assume a fixed 1-screen world, which is fine for our use case.
+    request_count: 42
+    example_clients: |
+      GNOME and KDE display-settings panels, xrandr(1) on the command line, and any Xinerama-aware multi-monitor manager from the 2000s onward. Vintage CDE and OpenWindows clients from our target era never touch it.
+    coverage: Not implemented.
+  - name: XFIXES
+    purpose: |
+      XFIXES patches over long-standing protocol gaps the core spec never addressed cleanly: server-side Region objects as first-class resources, selection-ownership change notifications, cursor-image fetching, and a way to hide the pointer. Toolkits and clipboard managers call it constantly under the hood (Cairo, GTK, Qt, parcellite) so any modern X program pulls it in during connection setup. It postdates the X11R6 core we target (Keith Packard wrote it around 2003 for the X.org compositing push), so vintage Sun CDE clients never touch it. Returning a clean "not present" reply is the era-correct answer for our late-90s workload.
+    request_count: 28
+    example_clients: |
+      Modern clipboard managers (xclip, parcellite, GNOME's clipboard daemon) use SelectSelectionInput to learn when PRIMARY or CLIPBOARD changes hands without polling, and compositors like Compiz use the Region and Cursor calls for damage tracking and theme-aware cursor rendering.
+    coverage: Not implemented.
+  - name: DAMAGE
+    purpose: |
+      DAMAGE lets a client subscribe to a running tally of which regions of a Drawable have been modified, so it can repaint only what changed instead of redrawing the whole window. The server tracks dirty rectangles per Damage object and notifies the client every time someone draws into the watched Drawable. The big consumer is a compositing manager: it needs to know which pixels of each redirected window actually changed so it can re-blend just those into the screen. DAMAGE doesn't ship with our R5/R6 vintage Sun targets (it lands with Keith Packard's 2003 Composite/XFIXES refresh) and is out of scope for macXserver.
+    request_count: 5
+    example_clients: |
+      A real compositor like xcompmgr or picom is the canonical caller, pairing DAMAGE with Composite and XFIXES to drive per-window repaint. Vintage CDE and Motif clients from our target era never touch it.
+    coverage: Not implemented.
+  - name: COMPOSITE
+    purpose: |
+      COMPOSITE redirects window rendering into off-screen storage so a separate process can grab the contents and assemble them into the final screen image. Instead of clients drawing straight to the framebuffer, the server keeps a pixmap per redirected window and a compositing manager reads those pixmaps, applies transforms (shadows, transparency, scale, animation), and paints the result via RENDER. It's the missing piece that lets the X server stop being the final pixel authority. This is a 2003-era Keith Packard extension (xcompmgr, then Compiz) and falls outside the X11R5/R6 / late-90s vintage Unix era we target, so a vintage Sun client will never ask for it and a rootless Mac server has no use for it (macOS already owns final compositing).
+    request_count: 8
+    example_clients: |
+      Modern Linux desktop compositors like xcompmgr, Compiz, KWin, Mutter, and Xfwm4 with compositing on. No vintage Sun or CDE program touches it; the extension didn't exist yet.
+    coverage: Not implemented.
+  - name: SYNC
+    purpose: |
+      SYNC gives X clients a way to coordinate work against shared, named counter objects on the server, with alarms that fire when a counter crosses a threshold or matches a value. Clients block on counter values using Await, which the server resolves without a round trip per check, so a toolkit waiting on "vertical retrace happened" or "the compositor finished its frame" doesn't have to busy-poll. The motivating case in R6 was multimedia (XIE and the early video work) and tying X drawing to external timing sources so animation didn't tear. In the late-90s vintage era it's mostly latent: present on most servers, exercised by very little outside synchronization-sensitive demos and a few toolkit experiments.
+    request_count: 14
+    example_clients: |
+      In the R5/R6 window almost nothing exercises it day to day, beyond Xlib's own libXext probe and the occasional XIE-adjacent media client. Modern usage (compositor frame sync in GTK3+/Qt5+, _NET_WM_SYNC_REQUEST handshakes) is post-2000 and outside our target era.
+    coverage: Not implemented.
+  - name: XINERAMA
+    purpose: |
+      XINERAMA tells a client how the X screen is actually laid out across multiple physical monitors, so a single root window can span several displays without apps placing menus or dialogs across a bezel. The wire requests are tiny (QueryVersion, GetState, IsActive, QueryScreens and friends) and just return a list of monitor rectangles in root coordinates. It grew out of DEC's PanoramiX work and got folded into XFree86 around 1998, which is exactly when Sun, SGI, and HP workstation users started bolting a second CRT onto the side and expecting the window manager to do something sensible about it. By the late R6 / CDE era, anything that placed transient windows (Motif menus, dtwm, Netscape's plugin popups) wanted to ask Xinerama where the current monitor's edges were.
+    request_count: 6
+    example_clients: |
+      Late-90s window managers like dtwm, fvwm2, and Enlightenment use it to keep menus and maximized windows on one monitor; Motif and GTK 1.x consult it when popping up dialogs so they land on the screen the parent lives on.
+    coverage: Not implemented.
+  - name: MIT-SCREEN-SAVER
+    purpose: |
+      The core protocol has a built-in screen saver (ForceScreenSaver, SetScreenSaver), but it only blanks the screen or runs the server's hardcoded pattern. MIT-SCREEN-SAVER lets a client register itself as the screen saver so it can draw whatever it wants when the user goes idle, and get notified on activation and deactivation via ScreenSaverNotify events. The client also gets a special saver Window owned by the server that sits above everything else and is created and destroyed automatically around the idle transition. This was the hook xscreensaver used to inject its catalog of hacks, and it is why every late-90s Unix desktop could run flying toasters instead of a black rectangle.
+    request_count: 6
+    example_clients: |
+      xscreensaver is the canonical user, registering with SelectInput and SetAttributes so its hack modules can paint into the server-provided saver Window. xlock and the CDE dtsession lock screen used it the same way for the lock-on-idle path.
+    coverage: Not implemented.
+  - name: RECORD
+    purpose: |
+      RECORD lets one client ask the server to copy the wire traffic of other clients (requests, replies, events, errors) back to it as a stream, without those clients knowing. The model is server-mediated taps: you create a record context, register a set of client IDs (or "all future clients"), pick which protocol categories to capture, and the server feeds matching bytes back through EnableContext replies. In the X11R6 / late-90s Unix era this was the supported answer to "how do I build a macro recorder, test harness, or accessibility tool without using LD_PRELOAD or a fake proxy server?" It superseded the older DEC XTrap extension and shipped with X11R6 in 1994.
+    request_count: 8
+    example_clients: |
+      xmacrorec / xmacroplay for input macro capture and replay, GUI test harnesses like Mercury WinRunner's Unix port, and accessibility tooling that needed to observe other clients' event streams.
+    coverage: Not implemented.
+  - name: XTEST
+    purpose: |
+      XTEST lets a client synthesize input events as if they came from the real keyboard or mouse, and ask the server whether a window's current cursor matches a given Cursor. It exists so X test suites and automation tools can drive a session without a human at the controls. In the X11R5/R6 era this was how the X Consortium ran its conformance suite (xtest itself), how interactive recorders like xnee captured and played back sessions, and how accessibility tools synthesized clicks on behalf of users who couldn't use a mouse. The extension also adds a grab-control request so the test client can keep its faked input flowing through active grabs instead of being blocked by them.
+    request_count: 4
+    example_clients: |
+      The X Consortium's xtest conformance suite and recorders like xnee and xmacro use XTestFakeInput to drive sessions; assistive tools like the early Sun accessibility daemon and later xdotool call it to synthesize clicks and keystrokes on behalf of the user.
+    coverage: Not implemented.
+  - name: XVideo
+    purpose: |
+      XVideo (Xv) gives clients a way to push YUV video frames straight at the display hardware's overlay or scaler instead of converting to RGB and shoveling pixels through PutImage. A client opens an adaptor port, picks an image format (typically YUV 4:2:0 or YUY2), and calls XvPutImage or XvShmPutImage to hand a frame to the server, which then routes it to a hardware overlay plane that does colorspace conversion and scaling for free. In the late-90s era this was the only way to get watchable full-motion video on a Sun or SGI workstation: the CPU could not software-convert and scale 30fps NTSC, but the framebuffer's video overlay could. Without Xv, video apps had to fall back on dithered 8-bit pseudo-color hacks or jerky software scaling in shared-memory pixmaps.
+    request_count: 19
+    example_clients: |
+      xawtv and the Brooktree bttv tuner stack on Linux used Xv for live TV capture; the early mpeg_play, mtv, and xanim video players reached for Xv ports when present, and Sun's ShowMe TV on Solaris drove SunVideo overlay hardware through this same protocol.
+    coverage: Not implemented.
+  - name: GLX
+    purpose: |
+      GLX is the binding between OpenGL and the X protocol. It lets a client allocate a GL rendering context tied to an X Drawable, ship GL commands over the X connection (or a side channel), and have the server composite the rendered pixels into a window the X server already manages. In the late-90s vintage Sun/SGI era this is how you got hardware-accelerated 3D into an X window at all, from SGI Indigo/Indy/Onyx demos down to early Solaris and HP-UX CAD seats. The extension also negotiates visuals and framebuffer configs so an OpenGL drawable can share a window hierarchy with regular 2D Xlib content.
+    request_count: 35
+    example_clients: |
+      SGI's IRIX demos (ivview, glxgears, the OpenGL Performer apps), CAD seats like Pro/ENGINEER and SoftImage on Solaris/IRIX, and any Motif app that embedded a GLwMDrawingArea widget for an in-window 3D viewport.
+    coverage: Not implemented.
+  - name: DPMS
+    purpose: |
+      DPMS (Display Power Management Signaling) lets a client query and control the monitor's VESA power state: On, Standby, Suspend, and Off. The wire protocol is small and boring (get/set timeouts in seconds, force a level, ask the capabilities), and the server is supposed to flip the monitor between those states when the idle timer expires. In the late 90s this is how a CDE or Motif session blanks the CRT after fifteen minutes, both to save power on a Sun-attached fixed-frequency monitor and to avoid burn-in from a static dtwm desktop. The extension matters because before DPMS the only blanker was XScreenSaver drawing a black window, which doesn't actually cut the monitor's draw.
+    request_count: 8
+    example_clients: |
+      xset dpms and xset +dpms on the command line, dtsession's screen-lock timer in CDE, and KDE/GNOME power-management daemons once they appeared. The X Consortium sample server and XFree86 both wired DPMS straight to the monitor's hsync/vsync gating.
+    coverage: Not implemented.
+  - name: XFree86-VidModeExtension
+    purpose: |
+      XFree86-VidModeExtension lets clients query and change the video mode (resolution, refresh rate, modeline, viewport, gamma ramps) of the screen the X server is driving. It was XFree86's way of exposing CRT modeline machinery so a program could switch resolutions on the fly, pan the visible viewport inside a virtual desktop, or calibrate gamma per channel. In the late-90s Unix era this was load-bearing for fullscreen games that wanted to drop the desktop to 640x480 for performance, and for tools that interactively nudged horizontal sync until a real CRT stopped wobbling. On a Mac compositor backend the modeline model is meaningless, so a modern server declines it.
+    request_count: 22
+    example_clients: |
+      xvidtune (the canonical XFree86 modeline tweaker) and fullscreen games like Quake/Quake2 and the Loki-ported UT/Heretic II, which called SwitchToMode to drop the desktop to a low resolution at launch. xgamma also exercised the GetGamma/SetGamma path for per-channel monitor calibration.
+    coverage: Not implemented.
+  - name: XFree86-DGA
+    purpose: |
+      XFree86-DGA (Direct Graphics Access) lets a client bypass the X server's drawing pipeline and write straight into the framebuffer, with optional direct access to the input device stream and video-mode switching. It exists because the X protocol's per-request socket round-trip was too slow for full-screen games and video on 90s PC hardware, so XFree86 carved out an escape hatch: grab the screen, take over the framebuffer, render at hardware speed, release. On the wire it's mostly capability negotiation and mode setup; the actual pixel pushing happens via mmap once the client has the grant. In the X11R6 / XFree86 3 era it was the standard answer for Quake, DOOM ports, and MPEG players on Linux/BSD.
+    request_count: 9
+    example_clients: |
+      Quake and the Linux DOOM port used DGA for full-screen software rendering, and mpeg_play / xanim hit it for direct video-frame blits. Anything PC-side that wanted the screen to itself at framerate went through DGA before DRI showed up.
+    coverage: Not implemented.
+  - name: XFree86-Bigfont
+    purpose: |
+      Cuts the cost of QueryFont replies for fonts with thousands of glyphs. A QueryFont reply carries one CHARINFO (12 bytes) per glyph, so an ISO 10646 font covering 40,000+ codepoints turns into a ~500KB-1MB reply that the client then has to read off a Unix socket on every XLoadQueryFont. Bigfont lets the server park the per-character metrics array in a SysV shared memory segment and hand the client just the shmid, so Xlib mmaps it in one syscall instead of draining it through the socket. It became relevant once XFree86 4.0 started shipping in 1999 and Unicode fonts (xterm in UTF-8 mode, GTK 1.2 with iso10646-1 fixed) showed up on Linux desktops where the round-trip cost was actually measurable.
+    request_count: 3
+    example_clients: |
+      Any Xlib client built against XFree86 4.x picks it up implicitly through XLoadQueryFont when it opens a large font like -misc-fixed-medium-r-normal--14-*-iso10646-1, so UTF-8 xterm and GTK 1.x / Motif apps with CJK or Unicode font sets are the typical callers. The client side is entirely inside libX11, so applications never name the extension directly.
+    coverage: Not implemented.
+  - name: DOUBLE-BUFFER
+    purpose: |
+      DBE lets a client draw into an offscreen back buffer associated with a Window, then atomically swap it onto the front in one SwapBuffers request. That kills the tearing and flicker you get if you try to animate by clearing and redrawing the visible window directly, since the user never sees a partial frame. It showed up in X11R6.3 (1996) as the clean successor to the older Multi-Buffering extension, which was bulkier and tied to specific hardware buffer hardware on Sun and SGI workstations. In our era it mostly matters for animated demos, plotting apps, and the early GLX path where a GL context needs a front/back pair to do double-buffered rendering over the wire.
+    request_count: 8
+    example_clients: |
+      GLX-based programs like ico, glxgears, and the Mesa demos hit DBE indirectly through the GL front/back buffer dance. Standalone animation toys (xanim, some xscreensaver hacks) call SwapBuffers directly when DBE is advertised.
+    coverage: Not implemented.
+  - name: Multi-Buffering
+    purpose: |
+      Multi-Buffering (MBX) lets a client associate multiple off-screen buffers with a Window and then swap one onto the visible screen with a single round-trip request, which is the obvious building block for flicker-free animation when you don't have hardware double-buffering wired into the core protocol. It also has a stereo mode (left/right buffer pairs) for the CRT-shutter-glasses workstations that were a real product category in the era. Programs treat the buffers as Drawables, draw with normal core requests, then call DisplayImageBuffers to flip. It mattered on SGI, Sun, and DEC workstations in the early 90s before GLX/DBE/Composite covered the same ground; by R6 it was already understood as the legacy answer, with DBE arriving as the cleaner replacement.
+    request_count: 11
+    example_clients: |
+      Mostly SGI demo and visualization code (IRIS Explorer, early GL-on-X wrappers) and a handful of Motif-based scientific viewers that wanted smooth redraws without GLX. By the late 90s most apps had moved to DBE or direct OpenGL, so live MBX clients on a vintage Sun are rare.
+    coverage: Not implemented.
+  - name: X-Resource
+    purpose: |
+      X-Resource lets a client ask the server how much server-side state another client is holding: how many windows, GContexts, pixmaps, cursors, and colormaps it has allocated, and how many bytes of pixmap storage those resources cost. The protocol gives no other way to attribute server-side memory back to the client that asked for it, so without this extension a leaky toolkit just looks like the X server bloating over time. The extension is a post-R6 X.Org addition (around 2002, expanded in 2013) rather than something a vintage Sun client from the X11R5/R6 era would call, but we list it because modern diagnostic tools on the Mac side reach for it when an X session feels heavy. In our target era this slot mostly stays empty, which is itself useful information for someone reading the reference.
+    request_count: 6
+    example_clients: |
+      The canonical caller is xrestop, the top(1)-style monitor that ranks connected clients by server-side resource cost; gnome-system-monitor and some KDE diagnostics call it for the same reason. Nothing in the CDE / Motif / Xt world we actually target speaks XRes, so on a vintage Sun session this extension stays silent.
+    coverage: Not implemented.
+  - name: SECURITY
+    purpose: |
+      SECURITY splits X clients into trusted and untrusted classes so a connection from across the network can't snoop keystrokes, grab the screen, or steal selections from your local apps. The server hands out per-connection authorization tokens via SecurityGenerateAuthorization that mark the bearer as untrusted, then enforces restrictions on what it can see and do (no input on trusted windows, no GetImage of other clients' pixmaps, no access to trusted properties). It shipped in X11R6.3 (Broadway, 1996), when running xterm over telnet/rsh to a shared Sun was normal and "what if that remote machine is hostile" became a real question. In practice the driver is ssh's X forwarding in untrusted mode (`ssh -X`), which mints a cookie before exec'ing the remote client.
+    request_count: 3
+    example_clients: |
+      OpenSSH's `ssh -X` (untrusted forwarding) is the canonical caller, generating a restricted Xauthority cookie on the local server before forwarding the display. The `xauth generate` command exposes the same mechanism directly for scripts and for testing untrusted-client behavior.
+    coverage: Not implemented.
+  - name: XpExtension
+    purpose: |
+      Xprint (XPRINT, shipped in X11R6.3 in 1996) lets a client render to a printer using the same drawing requests it uses for screens. The client opens a second connection to a print server, gets back a Screen-like printer context whose root window is sized to the page, then issues PolyLine, ImageText8, PutImage, and RENDER glyph requests at it. Job, document, and page boundaries are bracketed by PrintStartJob / PrintStartDoc / PrintStartPage so the server knows when to flush PostScript or PCL to the spooler. It mattered in the late-90s Unix world because it gave toolkits one drawing path for screen and paper, which is why CDE and Motif 2.1 wired into it.
+    request_count: 22
+    example_clients: |
+      Netscape 6 and early Mozilla used Xprint for Print Preview and File > Print, OpenMotif 2.1+ exposed it through the XmPrintShell widget, and late CDE shipped a dedicated Xprt print server that dtmail and dtinfo talked to.
+    coverage: Not implemented.
+  - name: LBX
+    purpose: |
+      LBX (Low Bandwidth X) wraps core X11 in a lossless compression and caching scheme so clients running over a slow link (serial, dialup, transatlantic Internet in 1996) feel less awful. It's a side-car: the client connects to a local `lbxproxy` that speaks normal X11, the proxy speaks LBX to the server, and the opcodes carry compressed deltas, tagged caches for QueryFont / GetProperty / InternAtom replies, and re-encoded shorter forms of chatty rendering requests like PolyLine, PolyText, PutImage, CopyArea. It mattered in the X11R6.3 / R6.4 era when Sun, SGI, and HP shipped lbxproxy with CDE. Dead by the mid-2000s once SSH compression and broadband made it pointless, formally removed from X.Org in 2008.
+    request_count: 35
+    example_clients: |
+      Not called by individual clients. The X11R6.3/R6.4 `lbxproxy` daemon shipped by Sun, SGI, and HP CDE generated all LBX traffic on behalf of normal Xlib clients (xterm, dtterm, Netscape, FrameMaker) connecting from a Sun workstation back to a home X server over a 28.8k modem.
+    coverage: Not implemented.
