@@ -94,6 +94,10 @@ section there will save you from the traps that already ate real debugging
 time (the y-flip convention, the font/scaling rules, the Motif text
 playbook).
 
+`USING_CLAUDE.md` is the fuller walkthrough: how to get started, the
+required-reading map, the ground rules the agent follows, and how to submit
+AI-assisted changes.
+
 ## Style
 
 Documentation and comments: casual, first-person, direct, technical. No

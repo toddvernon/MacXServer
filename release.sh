@@ -76,11 +76,10 @@ esac
 
 # -------- config --------
 
-# Team ID. The Developer ID Application cert was issued under the "CarePenguin,
-# inc" team (X478U667PR) on 2026-06-10 — the personal "Todd Vernon" team
-# (NXNG297DL6) was inaccessible (covey@ Apple ID login blocked), so we signed
-# under CarePenguin instead. The signer string is visible only via
-# `codesign -dvv` / `spctl`; no user-facing Gatekeeper dialog shows it.
+# Team ID for the Developer ID Application signing cert. The signer string is
+# only visible via `codesign -dvv` / `spctl`; no user-facing Gatekeeper dialog
+# shows it. To sign under a different team, change this and re-issue the cert
+# under that team (see NOTARIZE-SETUP.md).
 TEAM_ID="X478U667PR"
 
 # Keychain profile name created via `xcrun notarytool store-credentials`.

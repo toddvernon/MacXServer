@@ -151,6 +151,8 @@ The full project context lives in markdown at the repo root:
 - `SHORTCUTS.md` — known stubs, fakes-on-the-wire, and other
   ledgered tech debt
 - `CLAUDE.md` — instructions for collaborator agents
+- `USING_CLAUDE.md` — how to use Claude Code on this project (the
+  human-facing companion to `CLAUDE.md`)
 
 ## Status
 
