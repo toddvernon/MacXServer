@@ -1,55 +1,79 @@
-# Status 2026-06-09
+# Status 2026-06-10
 
-Two things today: the Motif move-during-menu corruption bug got fixed
-end to end (morning), and the source repo went through full
-open-source-release prep (afternoon). The repo is Apache-2.0 with
-contributor docs and a cleaned history, sitting one step from public.
+Mostly off-repo work today (Claude Code multi-Mac sync, macxcapture.com
+site shipped, contact forms wired on both sites, linode setup for the
+new domain). On this repo specifically, one commit: the
+`release.sh` + `NOTARIZE-SETUP.md` pair that wires up signed +
+notarized macOS releases of both apps.
 
-## Open-source release prep
+## What landed in this repo today
 
-The repo is ready to publish:
+- `release.sh` at the project root — one script handling both apps
+  (MacXServer and MacXCapture, which share this Xcode project). Run
+  `./release.sh <App> <version>` and it does the full loop:
+  preflight → xcodebuild archive (Developer ID, hardened runtime,
+  version passed via MARKETING_VERSION / CURRENT_PROJECT_VERSION
+  build settings, no project.pbxproj edits) → exportArchive with an
+  on-the-fly developer-id export-options plist → ditto-zip for
+  notarytool upload → `notarytool submit --wait` → `stapler staple`
+  → re-zip with the stapled ticket → bump `appVersion` in the
+  corresponding Hugo site's hugo.toml → `gh release create` (tag is
+  `<App>-v<version>`, since both apps live in the same GitHub repo
+  and `/releases/latest/` would be ambiguous) → cd to the Hugo site
+  and `./deploy.sh`.
+- `NOTARIZE-SETUP.md` at the project root — one-time per-Mac setup:
+  generate a CSR in Keychain Access, request a **Developer ID
+  Application** cert on developer.apple.com (separate from the
+  existing Apple Development certs), download + install, then create
+  an App Store Connect API key (.p8 / Key ID / Issuer ID) and run
+  `xcrun notarytool store-credentials notary --key ... --key-id ...
+  --issuer ...` once. Also covers exporting the cert as .p12 for the
+  other Mac.
 
-- Apache-2.0 `LICENSE` + `NOTICE`, with the X Consortium / Digital
-  Equipment notices retained on the four files ported from X11R6
-  (mi/miregion.c, Xext/shape.c).
-- `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, GitHub issue/PR templates,
-  CODEOWNERS, SECURITY.
-- `///` doc comments across the Tier 1 public API (ServerSession, the
-  WindowBridge protocol + CocoaWindowBridge, ResourceTables,
-  FontResolver, USKeymap, SelectionMediator, LauncherFile, the
-  Region/Shape ports, the app entry points).
-- README refreshed: a clickable hero linking to macxserver.com, and
-  build/run instructions that lead with Xcode + the GUI (swift build
-  makes bare binaries with no app icon; it is the test/headless path).
-- History cleaned, fixtures and config sanitized, test suite green
-  (1262 tests) throughout.
+## What this unblocks
 
-## Motif menu position corruption (fixed)
+A first signed + notarized release of either app, on demand. Apple's
+$99/year Developer Program enrollment is already in place; the
+Developer ID Application cert and the notarytool keychain profile
+are the two pieces the script's preflight currently checks for and
+that I haven't created yet (those are user-only steps).
 
-Opening a Motif pulldown and moving the window left every later menu
-popping up at the old position. Two root layers: a grab-state spec
-miss (an explicit XGrabPointer must replace the implicit grab; we were
-not clearing `implicitGrab`) and a missing rootless emulation of the
-server-wide hardware pointer grab (AppKit owned the title bar
-independently). Fixed both, plus Mac-UX polish so a title-bar click
-during a menu both dismisses the menu and starts the drag in one
-gesture. Verified live against dtpad. Details in git history and the
-implicit-grab memory.
+## Off-repo today (context, not in this repo's git log)
 
-## What works
-
-- Server M1-M3 green; xterm, xcalc, xeyes, xclock, twm/mwm, quickplot,
-  and the CDE dt-apps run from a real Sun against the Mac.
-- Motif menus hold position across window moves.
-- Capture tool (GUI + CLI + server-side `--capture`) working.
-- 1262 tests green.
+- macxcapture.com site shipped and live (Hugo sources at
+  `~/Dropbox/dev/MacXServer/macxcapture-hugo/`, mirrored to
+  github.com/toddvernon/MacXCaptureSite, deployed to the linode at
+  /var/www/macxcapture.com/, Let's Encrypt cert via `certbot
+  --nginx`). Pattern matches macxserver.com end to end.
+- `/about/` page on both sites with Formspree contact forms (separate
+  endpoints per site: `xykapqlg` for macxcapture, `xqeolvgv` for
+  macxserver). Lightbox click-to-zoom on macxcapture's hero +
+  screenshot cards.
+- `/download/` page on both sites with a download CTA button that
+  currently shows the "first build pending" placeholder. Flips to a
+  real link to `releases/download/<App>-v<Version>/<App>.zip` once
+  `release.sh` ships the first version and bumps the `appVersion`
+  param.
+- Global Claude Code config (`~/.claude/CLAUDE.md`,
+  `settings.json`, `skills/`, `agents/`, `commands/`, `hooks/`) now
+  syncs across both Macs via Dropbox symlinks to
+  `~/Dropbox/dev/claude-shared/`. Bidirectional sync verified.
+  Pattern documented in
+  `.claude-memory/reference_multi_mac_project_sync_pattern.md`.
 
 ## What's next
 
-1. Final review of the repo on GitHub, then publish it.
-2. Verify the orphan xterm right-click menu is gone (the same grab fix
-   should cover it; recheck: xterm right-click, dismiss, look for a
-   stranded popup).
-3. Decide whether to close the native-title-bar drag-lock gap (Motif
-   Frame OFF windows only get the isMovable=false layer, no
-   click-dismiss) now or later.
+1. Run through `NOTARIZE-SETUP.md`'s three steps (Developer ID cert,
+   API key, `notarytool store-credentials`). ~15 minutes of clicking
+   through developer.apple.com.
+2. Smoke-test: `./release.sh MacXCapture 0.1.0`. Watch the preflight
+   pass, archive succeed, notarization come back clean, release land
+   on GitHub, macxcapture.com's download button flip live.
+3. If that works, ship `MacXServer 0.1.0` the same way.
+4. Verify the orphan xterm right-click menu is gone (carryover from
+   yesterday's Motif grab fix — same root cause, should be covered,
+   just hasn't been re-tested).
+5. Decide whether to close the native-title-bar drag-lock gap (Motif
+   Frame OFF windows only get the `isMovable=false` layer of the
+   yesterday's two-layer fix; the chrome-click dismiss path is
+   Motif-Frame-only) now or after the first public release.
