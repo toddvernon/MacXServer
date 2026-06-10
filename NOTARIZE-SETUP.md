@@ -35,8 +35,8 @@ builds.
 2. Menu: **Keychain Access → Certificate Assistant → Request a Certificate From
    a Certificate Authority…**
 3. Fill in:
-   - User Email Address: `todd@toddvernon.com`
-   - Common Name: `Todd Vernon`
+   - User Email Address: your Apple ID email
+   - Common Name: your name
    - CA Email Address: leave blank
    - Request is: **Saved to disk**
 4. Save the `.certSigningRequest` file somewhere temporary.
@@ -59,7 +59,7 @@ security find-identity -v -p codesigning | grep "Developer ID Application"
 You should see one line like:
 
 ```
-1) <40-char hash> "Developer ID Application: Todd Vernon (NXNG297DL6)"
+1) <40-char hash> "Developer ID Application: Your Name (TEAMID)"
 ```
 
 If you see that, signing is set up.
@@ -69,10 +69,9 @@ If you see that, signing is set up.
 If you'll run releases from BOTH the laptop AND the desktop, export the cert
 once and import on the other Mac:
 
-1. In Keychain Access on the Mac that has the cert: find "Developer ID
-   Application: CarePenguin, inc (X478U667PR)" under My Certificates,
-   right-click → **Export…**. Choose `.p12` format, set a password you'll
-   remember.
+1. In Keychain Access on the Mac that has the cert: find your "Developer ID
+   Application: …" certificate under My Certificates, right-click →
+   **Export…**. Choose `.p12` format, set a password you'll remember.
 2. Copy the `.p12` to the other Mac (Dropbox is fine — `.p12` is password-protected).
 3. On the other Mac, double-click the `.p12` to import. Enter the password.
 4. Verify with the same `security find-identity` command above.
@@ -99,10 +98,10 @@ security set-key-partition-list \
     ~/Library/Keychains/login.keychain-db
 ```
 
-A key created locally by a CSR (the desktop's original) doesn't need the
-partition-list step — only imported `.p12` keys do. Verify codesign actually
-works (not just that the identity lists) by signing a throwaway Mach-O:
-`cp /usr/bin/true /tmp/t && codesign -s "Developer ID Application: CarePenguin, inc (X478U667PR)" --timestamp -f /tmp/t && codesign -dvv /tmp/t`.
+A key created locally by a CSR doesn't need the partition-list step — only
+imported `.p12` keys do. Verify codesign actually works (not just that the
+identity lists) by signing a throwaway Mach-O:
+`cp /usr/bin/true /tmp/t && codesign -s "Developer ID Application: <your identity>" --timestamp -f /tmp/t && codesign -dvv /tmp/t`.
 
 ## Step 2 — Notarization credentials (App Store Connect API key)
 
