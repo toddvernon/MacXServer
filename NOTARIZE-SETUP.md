@@ -131,11 +131,13 @@ are needed to re-run `store-credentials` on another Mac.
 
 ## Step 3 — Verify everything works
 
-Smoke test by running a release with a low-stakes version number:
+Smoke test by running a release with a low-stakes version number. The version
+must be strict semver `X.Y.Z` — no `-suffix` (the script's regex rejects it), so
+use something like `0.0.1`:
 
 ```sh
 cd ~/dev/X
-./release.sh MacXCapture 0.1.0-test
+./release.sh MacXCapture 0.0.1
 ```
 
 The script will sanity-check:

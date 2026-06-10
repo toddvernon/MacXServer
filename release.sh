@@ -76,10 +76,12 @@ esac
 
 # -------- config --------
 
-# Team ID. The Apple Development cert on this Mac is issued under "Todd Vernon
-# (NXNG297DL6)" — Developer ID Application certs created under the same
-# enrollment will use the same team identifier.
-TEAM_ID="NXNG297DL6"
+# Team ID. The Developer ID Application cert was issued under the "CarePenguin,
+# inc" team (X478U667PR) on 2026-06-10 — the personal "Todd Vernon" team
+# (NXNG297DL6) was inaccessible (covey@ Apple ID login blocked), so we signed
+# under CarePenguin instead. The signer string is visible only via
+# `codesign -dvv` / `spctl`; no user-facing Gatekeeper dialog shows it.
+TEAM_ID="X478U667PR"
 
 # Keychain profile name created via `xcrun notarytool store-credentials`.
 # Stays consistent across releases of both apps.
