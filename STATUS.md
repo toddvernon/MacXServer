@@ -103,9 +103,18 @@ not exercised by the mock-bridge unit suite.
 
 ## What's next / open
 
-1. **Friend's Gatekeeper report**: get his macOS version + the
-   `spctl -a -vvv` / `stapler validate` output to confirm stale-copy vs
-   transient; no code change expected.
+1. **Friend's Gatekeeper report** (now its own doc:
+   `GATEKEEPER_FIRST_LAUNCH.md`): escalated from "probably the expected
+   gate" to "something real to diagnose." He reproduces the block on two
+   Macs (one macOS 26, one macOS 25; exact versions still TBC via `sw_vers`)
+   and crucially gets **no "Open Anyway" button**, which is not the normal
+   notarized first-launch flow. He preserved the scene (ran no workarounds).
+   Two live hypotheses: a damaged/broken-signature copy (unzip stripped
+   xattrs) or a managed/non-admin Mac suppressing the override. Blocked on
+   the exact dialog wording + `codesign --verify` / `spctl` / `xattr -l`
+   output from his copy; the `xattr -dr com.apple.quarantine` test then
+   splits gate-vs-damaged-bundle. Our published pipeline is verified good,
+   so no build change is expected.
 2. **Latent server gaps** (carryover, untouched): pixmap clip_mask is
    honored for CopyArea only, not other output ops (no client needs it yet);
    native-title-bar drag-lock gap on Motif-Frame-OFF windows; same-window
