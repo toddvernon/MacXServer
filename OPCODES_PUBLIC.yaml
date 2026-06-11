@@ -501,7 +501,7 @@ core_opcodes:
     description: |
       Blits a rectangle from one Drawable to another using the GContext's function and plane-mask, with src and dst rooted at the same screen and matching depth. This is the workhorse for xterm scroll (copy the visible region up one line), for double-buffered draw (render into a Pixmap, CopyArea to the Window), and for any cached glyph/bitmap rendering. If src bits are obscured the server fires GraphicsExposure (or NoExposure if nothing was lost), which is how clients know to repaint the gaps.
     coverage: |
-      Implemented; all five spec variants ship and honor the GC clip on every path except the same-window memmove.
+      Implemented; all five spec variants ship and honor the GC clip-rectangle list on every path except the same-window memmove. The GC pixmap clip-mask is honored too (transparent-icon blits): only set mask bits are copied, positioned by the clip origin.
   - number: 63
     name: CopyPlane
     category: Image

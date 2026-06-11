@@ -1357,17 +1357,22 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         srcX: Int16, srcY: Int16,
         dstX: Int16, dstY: Int16,
         width: UInt16, height: UInt16,
-        clipRectangles: [Framer.Rectangle]?
+        clipRectangles: [Framer.Rectangle]?,
+        clipMaskPixmap: UInt32 = 0,
+        clipMaskOriginX: Int16 = 0,
+        clipMaskOriginY: Int16 = 0
     ) {
         // Same-NSWindow fast path: bitmap memmove. xterm scroll lives here;
         // skipping the CGImage snapshot+blit keeps the hot path tight.
         // Clip is NOT honored on this path — the memmove can't easily
         // scissor — but the only client that exercises same-window CopyArea
         // (xterm) doesn't set clip. Logged when it does so future divergence
-        // is visible.
+        // is visible. A pixmap clip-mask forces the slow image path (it CAN
+        // scissor); same-window + clip-mask isn't a hot path.
         if case .window(_, let srcTop, _, _) = src,
            case .window(_, let dstTop, _, _) = dst,
-           srcTop == dstTop {
+           srcTop == dstTop,
+           clipMaskPixmap == 0 {
             if let rects = clipRectangles, !rects.isEmpty {
                 log?.log("  CopyArea: ignoring \(rects.count) clip rect(s) — bitmap memmove path doesn't honor clip")
             }
@@ -1402,7 +1407,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 srcX: srcX, srcY: srcY, dst: dst,
                 dstX: dstX, dstY: dstY,
                 width: width, height: height,
-                clipRectangles: clipRectangles
+                clipRectangles: clipRectangles,
+                clipMaskPixmap: clipMaskPixmap,
+                clipMaskOriginX: clipMaskOriginX,
+                clipMaskOriginY: clipMaskOriginY
             )
         case .window(_, let srcTopLevel, _, _):
             // SYNCHRONOUS to main: window→pixmap CopyArea is Motif's
@@ -1435,7 +1443,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                     srcX: srcX, srcY: srcY, dst: dst,
                     dstX: dstX, dstY: dstY,
                     width: width, height: height,
-                    clipRectangles: clipRectangles
+                    clipRectangles: clipRectangles,
+                    clipMaskPixmap: clipMaskPixmap,
+                    clipMaskOriginX: clipMaskOriginX,
+                    clipMaskOriginY: clipMaskOriginY
                 )
             }
         }
@@ -1454,7 +1465,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         dst: DrawTarget,
         dstX: Int16, dstY: Int16,
         width: UInt16, height: UInt16,
-        clipRectangles: [Framer.Rectangle]?
+        clipRectangles: [Framer.Rectangle]?,
+        clipMaskPixmap: UInt32 = 0,
+        clipMaskOriginX: Int16 = 0,
+        clipMaskOriginY: Int16 = 0
     ) {
         let cropRect = CGRect(
             x: CGFloat(Double(srcX) * srcImageScale),
@@ -1467,11 +1481,73 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             x: CGFloat(dstX), y: CGFloat(dstY),
             width: CGFloat(width), height: CGFloat(height)
         )
+        // GC pixmap clip-mask (dtfile transparent icons): only mask bits = 1
+        // (opaque) are drawn. We read the depth-1 mask via StippleBitGrid
+        // (same bit polarity: black/value-1 = set = opaque) and convert the
+        // opaque bits to horizontal run rectangles, positioned at the clip
+        // origin in the SAME (top-level for window dst) coord space as
+        // dstRect. Rect clipping — not an image-mask — deliberately: per
+        // GRAPHICS_Y_FLIP.md the y-flip gotcha only bites image-source draws,
+        // so clipping to rects avoids a second orientation hazard for the
+        // mask while the icon still draws through the one safe helper.
+        let maskRects: [CGRect]? = { () -> [CGRect]? in
+            guard clipMaskPixmap != 0 else { return nil }
+            guard let maskBuf = lookupPixmapBuffer(clipMaskPixmap),
+                  let grid = StippleBitGrid(buffer: maskBuf) else {
+                log?.log("  CopyArea: clip-mask 0x\(String(clipMaskPixmap, radix: 16)) unreadable — drawing unmasked")
+                return nil
+            }
+            return clipMaskOpaqueRects(
+                grid: grid,
+                originX: CGFloat(clipMaskOriginX),
+                originY: CGFloat(clipMaskOriginY),
+                clampTo: dstRect
+            )
+        }()
         withDrawContext(dst, clipRectangles: clipRectangles) { ctx in
+            if let mr = maskRects {
+                // Empty → every pixel of the copy is masked out; draw nothing.
+                guard !mr.isEmpty else { return }
+                ctx.clip(to: mr)
+            }
             // See GRAPHICS_Y_FLIP.md. The helper compensates for the
             // y-flipped backing CTM so image rows land top-down in memory.
             ctx.drawImageRespectingYFlip(subImage, in: dstRect)
         }
+    }
+
+    /// Convert a depth-1 clip-mask's opaque bits (value 1 = set, per
+    /// `StippleBitGrid`) into horizontal run rectangles in destination
+    /// coordinates, with the mask's top-left at `(originX, originY)`. Runs
+    /// are clamped to `clampTo` (the copy rect) so a mask larger than the
+    /// copy doesn't widen the clip, and bits outside `clampTo` are dropped —
+    /// matching the X spec where destination pixels outside the mask's
+    /// covered, set region are not drawn. Coalescing per row keeps the rect
+    /// count small (a 32×32 icon is a few runs per row, not 1024 pixels).
+    private func clipMaskOpaqueRects(
+        grid: StippleBitGrid,
+        originX: CGFloat, originY: CGFloat,
+        clampTo: CGRect
+    ) -> [CGRect] {
+        var rects: [CGRect] = []
+        for y in 0..<grid.height {
+            let rowY = originY + CGFloat(y)
+            if rowY + 1 <= clampTo.minY || rowY >= clampTo.maxY { continue }
+            var runStart = -1
+            for x in 0...grid.width {
+                let set = x < grid.width && grid.bits[y * grid.width + x]
+                if set && runStart < 0 {
+                    runStart = x
+                } else if !set && runStart >= 0 {
+                    let rx = originX + CGFloat(runStart)
+                    let rw = CGFloat(x - runStart)
+                    let r = CGRect(x: rx, y: rowY, width: rw, height: 1).intersection(clampTo)
+                    if !r.isNull, r.width > 0, r.height > 0 { rects.append(r) }
+                    runStart = -1
+                }
+            }
+        }
+        return rects
     }
 
     /// Same-NSWindow CopyArea: copies pixels in the bitmap directly via

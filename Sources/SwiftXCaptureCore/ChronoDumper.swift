@@ -1617,6 +1617,9 @@ func decodeGCFgBg(mask: UInt32, values: [UInt8], byteOrder: ByteOrder) -> String
         }()
         if bitMask == 0x4 { pieces.append("fg=0x\(String(v, radix: 16))") }
         else if bitMask == 0x8 { pieces.append("bg=0x\(String(v, radix: 16))") }
+        else if bitMask == 0x20000 { pieces.append("clipXOrigin=\(Int16(bitPattern: UInt16(truncatingIfNeeded: v)))") }
+        else if bitMask == 0x40000 { pieces.append("clipYOrigin=\(Int16(bitPattern: UInt16(truncatingIfNeeded: v)))") }
+        else if bitMask == 0x80000 { pieces.append(v == 0 ? "clipMask=None" : "clipMask=0x\(String(v, radix: 16))") }
         offset += 4
     }
     return pieces.isEmpty ? "" : " [\(pieces.joined(separator: " "))]"

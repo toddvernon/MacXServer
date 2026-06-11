@@ -401,7 +401,10 @@ public protocol WindowBridge: AnyObject, Sendable {
         srcX: Int16, srcY: Int16,
         dstX: Int16, dstY: Int16,
         width: UInt16, height: UInt16,
-        clipRectangles: [Rectangle]?
+        clipRectangles: [Rectangle]?,
+        clipMaskPixmap: UInt32,
+        clipMaskOriginX: Int16,
+        clipMaskOriginY: Int16
     )
 
     /// PutImage: blit a bitmap into the target drawable at `(dstX, dstY)`.
@@ -725,7 +728,10 @@ public extension WindowBridge {
         srcX: Int16, srcY: Int16,
         dstX: Int16, dstY: Int16,
         width: UInt16, height: UInt16,
-        clipRectangles: [Rectangle]?
+        clipRectangles: [Rectangle]?,
+        clipMaskPixmap: UInt32,
+        clipMaskOriginX: Int16,
+        clipMaskOriginY: Int16
     ) {}
     func drawPutImage(
         target: DrawTarget,

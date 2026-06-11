@@ -182,6 +182,124 @@ final class YFlipOrientationTests: XCTestCase {
         }
     }
 
+    /// CopyArea honoring a GC pixmap clip-mask (dtfile transparent icons).
+    /// Asymmetric source (top red / bottom blue) AND asymmetric mask (top
+    /// half opaque / bottom half transparent). Verifies three things at once:
+    /// polarity (mask bit 1 = drawn), the masked-out region is left UNTOUCHED
+    /// (not painted with anything), and orientation (mask row 0 aligns with
+    /// source row 0 — a flipped mask would punch the wrong half).
+    func testCopyAreaClipMaskPolarityAndOrientation() throws {
+        let bridge = CocoaWindowBridge()
+        let pixmaps = PixmapTable()
+        bridge.setPixmapBufferLookup { id in pixmaps.buffer(for: id) }
+        let w = 8, h = 8
+
+        // Source: top half red, bottom half blue (top-down via FillRect).
+        let srcId: UInt32 = 0x330
+        pixmaps.allocate(id: srcId, drawable: 0x28, depth: 24, width: UInt16(w), height: UInt16(h))
+        let srcBuf = try XCTUnwrap(pixmaps.buffer(for: srcId))
+        srcBuf.context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        srcBuf.context.fill(CGRect(x: 0, y: 0, width: w, height: 4))
+        srcBuf.context.setFillColor(CGColor(red: 0, green: 0, blue: 1, alpha: 1))
+        srcBuf.context.fill(CGRect(x: 0, y: 4, width: w, height: 4))
+
+        // Mask: depth-1, top half opaque (black = value 1 = set per
+        // StippleBitGrid), bottom half transparent (white = value 0).
+        let maskId: UInt32 = 0x331
+        pixmaps.allocate(id: maskId, drawable: 0x28, depth: 1, width: UInt16(w), height: UInt16(h))
+        let maskBuf = try XCTUnwrap(pixmaps.buffer(for: maskId))
+        maskBuf.context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        maskBuf.context.fill(CGRect(x: 0, y: 0, width: w, height: h))          // all transparent
+        maskBuf.context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        maskBuf.context.fill(CGRect(x: 0, y: 0, width: w, height: 4))          // top half opaque
+
+        // Dst pre-filled solid green so untouched pixels are detectable.
+        let dstId: UInt32 = 0x332
+        pixmaps.allocate(id: dstId, drawable: 0x28, depth: 24, width: UInt16(w), height: UInt16(h))
+        let dstBuf = try XCTUnwrap(pixmaps.buffer(for: dstId))
+        dstBuf.context.setFillColor(CGColor(red: 0, green: 1, blue: 0, alpha: 1))
+        dstBuf.context.fill(CGRect(x: 0, y: 0, width: w, height: h))
+
+        bridge.copyArea(
+            src: .pixmap(id: srcId, depth: 24),
+            dst: .pixmap(id: dstId, depth: 24),
+            srcX: 0, srcY: 0, dstX: 0, dstY: 0,
+            width: UInt16(w), height: UInt16(h),
+            clipRectangles: nil,
+            clipMaskPixmap: maskId, clipMaskOriginX: 0, clipMaskOriginY: 0
+        )
+
+        let px = readARGBPixels(from: dstBuf)
+        // Top half: mask opaque → source row 0 (red) drawn here. Red beats
+        // both blue (would mean flipped/wrong source row) and green (= the
+        // dst bg, would mean the mask clipped this away).
+        for col in 0..<w {
+            XCTAssertGreaterThan(px[col].r, px[col].b, "top row should be source red")
+            XCTAssertGreaterThan(px[col].r, px[col].g, "top row should be drawn, not untouched green")
+        }
+        // Bottom half: mask transparent → dst left untouched = green. (If the
+        // mask were flipped, this would be blue from the source instead.)
+        for row in 4..<h {
+            for col in 0..<w {
+                let p = px[row * w + col]
+                XCTAssertGreaterThan(p.g, p.r, "bottom row \(row) should stay green (masked out)")
+                XCTAssertGreaterThan(p.g, p.b, "bottom row \(row) should stay green (masked out)")
+            }
+        }
+    }
+
+    /// Clip-mask with a non-zero clip origin and a mask SMALLER than the copy.
+    /// The X spec clips destination pixels outside the mask's set region, so
+    /// only the 4×4 mask area (placed at origin (2,2)) gets the source; the
+    /// rest of the destination stays untouched.
+    func testCopyAreaClipMaskOriginAndOutOfBounds() throws {
+        let bridge = CocoaWindowBridge()
+        let pixmaps = PixmapTable()
+        bridge.setPixmapBufferLookup { id in pixmaps.buffer(for: id) }
+        let w = 8, h = 8
+
+        let srcId: UInt32 = 0x340
+        pixmaps.allocate(id: srcId, drawable: 0x28, depth: 24, width: UInt16(w), height: UInt16(h))
+        let srcBuf = try XCTUnwrap(pixmaps.buffer(for: srcId))
+        srcBuf.context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        srcBuf.context.fill(CGRect(x: 0, y: 0, width: w, height: h))           // all red
+
+        // 4×4 fully-opaque mask.
+        let maskId: UInt32 = 0x341
+        pixmaps.allocate(id: maskId, drawable: 0x28, depth: 1, width: 4, height: 4)
+        let maskBuf = try XCTUnwrap(pixmaps.buffer(for: maskId))
+        maskBuf.context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        maskBuf.context.fill(CGRect(x: 0, y: 0, width: 4, height: 4))          // all opaque
+
+        let dstId: UInt32 = 0x342
+        pixmaps.allocate(id: dstId, drawable: 0x28, depth: 24, width: UInt16(w), height: UInt16(h))
+        let dstBuf = try XCTUnwrap(pixmaps.buffer(for: dstId))
+        dstBuf.context.setFillColor(CGColor(red: 0, green: 1, blue: 0, alpha: 1))
+        dstBuf.context.fill(CGRect(x: 0, y: 0, width: w, height: h))           // all green
+
+        bridge.copyArea(
+            src: .pixmap(id: srcId, depth: 24),
+            dst: .pixmap(id: dstId, depth: 24),
+            srcX: 0, srcY: 0, dstX: 0, dstY: 0,
+            width: UInt16(w), height: UInt16(h),
+            clipRectangles: nil,
+            clipMaskPixmap: maskId, clipMaskOriginX: 2, clipMaskOriginY: 2
+        )
+
+        let px = readARGBPixels(from: dstBuf)
+        for row in 0..<h {
+            for col in 0..<w {
+                let p = px[row * w + col]
+                let inMask = (2..<6).contains(row) && (2..<6).contains(col)
+                if inMask {
+                    XCTAssertGreaterThan(p.r, p.g, "(\(col),\(row)) inside mask should be source red")
+                } else {
+                    XCTAssertGreaterThan(p.g, p.r, "(\(col),\(row)) outside mask should stay green")
+                }
+            }
+        }
+    }
+
     // MARK: - Helpers
 
     private struct ARGB {

@@ -560,6 +560,13 @@ public final class GCTable {
         entry.clipRectangles = rectangles
         entry.values[GCBits.clipXOrigin] = UInt32(UInt16(bitPattern: xOrigin))
         entry.values[GCBits.clipYOrigin] = UInt32(UInt16(bitPattern: yOrigin))
+        // SetClipRectangles and a pixmap clip-mask are two faces of the same
+        // GC component; setting the rect list overrides any prior pixmap mask.
+        // `change` already does the reverse (clears clipRectangles when the
+        // clipMask bit is set); clear the pixmap side here for symmetry so a
+        // GC that went pixmap-mask → SetClipRectangles doesn't carry a stale
+        // mask id into GCState.materialise.
+        entry.values.removeValue(forKey: GCBits.clipMask)
         gcs[id] = entry
     }
 

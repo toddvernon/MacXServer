@@ -63,6 +63,19 @@ public struct GCState: Equatable, Sendable {
     /// top-level coords for window targets (using the target's windowOffset);
     /// pixmap targets use them as-is. nil = no clip; empty = clip-everything.
     public var clipRectangles: [Rectangle]?
+    /// Pixmap clip-mask (CWClipMask = a depth-1 pixmap id). 0 = None (no
+    /// pixmap clip). Mutually exclusive with `clipRectangles` — the GCTable
+    /// clears one when the other is set, so this is only non-zero when no
+    /// rect list is present. Honored by CopyArea (dtfile's transparent-icon
+    /// blit): only mask bits = 1 (opaque) are drawn, positioned by the clip
+    /// origin below. Unlike `clipRectangles`, the origin is NOT folded in
+    /// here — the mask path needs the raw origin to align the bitmap.
+    public var clipMaskPixmap: UInt32 = 0
+    /// Clip origin (CWClipXOrigin / CWClipYOrigin), drawable-local. Positions
+    /// both the clip-rectangle list (folded into `clipRectangles` above) and
+    /// the pixmap clip-mask's top-left relative to the destination drawable.
+    public var clipXOrigin: Int16 = 0
+    public var clipYOrigin: Int16 = 0
     /// Dash on/off lengths (first byte = on). nil = solid line.
     public var dashes: [UInt8]?
     /// Dash phase offset, in pen-distance units along the path.
@@ -119,12 +132,16 @@ public struct GCState: Equatable, Sendable {
         if let v = entry.values[GCBits.tileStippleYOrigin] {
             state.tileStippleYOrigin = Int16(bitPattern: UInt16(truncatingIfNeeded: v))
         }
+        state.clipXOrigin = Int16(bitPattern: UInt16(truncatingIfNeeded: entry.values[GCBits.clipXOrigin] ?? 0))
+        state.clipYOrigin = Int16(bitPattern: UInt16(truncatingIfNeeded: entry.values[GCBits.clipYOrigin] ?? 0))
         if let rects = entry.clipRectangles {
-            let cox = Int16(bitPattern: UInt16(truncatingIfNeeded: entry.values[GCBits.clipXOrigin] ?? 0))
-            let coy = Int16(bitPattern: UInt16(truncatingIfNeeded: entry.values[GCBits.clipYOrigin] ?? 0))
             state.clipRectangles = rects.map {
-                Rectangle(x: $0.x &+ cox, y: $0.y &+ coy, width: $0.width, height: $0.height)
+                Rectangle(x: $0.x &+ state.clipXOrigin, y: $0.y &+ state.clipYOrigin,
+                          width: $0.width, height: $0.height)
             }
+        } else if let m = entry.values[GCBits.clipMask] {
+            // No rect list → a pixmap clip-mask (or None=0) is in effect.
+            state.clipMaskPixmap = m
         }
         let lineStyle = entry.values[GCBits.lineStyle] ?? 0
         if lineStyle != 0 {

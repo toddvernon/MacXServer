@@ -3329,13 +3329,40 @@ public final class ServerSession: @unchecked Sendable {
         let (dstDX, dstDY) = dstTarget.windowOffset
         log?.log("  CopyArea src=\(srcTarget) dst=\(dstTarget) srcXY=(\(r.srcX),\(r.srcY)) dstXY=(\(r.dstX),\(r.dstY)) \(r.width)x\(r.height)")
         let state = gcState(r.gc, byteOrder: byteOrder)
+
+        // GC pixmap clip-mask (dtfile draws transparent icons via XCopyArea
+        // with clip_mask = the icon's 1-bit mask + clip origin = the dst
+        // position). Honor it: only mask bits = 1 get blitted. The mask must
+        // be a depth-1 pixmap (X spec § CreateGC clip-mask → Match error
+        // otherwise). We don't validate clip-mask at ChangeGC time, so a
+        // freed/missing mask here degrades to an unmasked blit (logged)
+        // rather than a spurious BadMatch the client wouldn't expect on a
+        // CopyArea it considers valid. Origin is dst-drawable-local; add the
+        // dst window offset so it lands in the same top-level coord space as
+        // dstX/dstY (which already include dstDX/dstDY).
+        var clipMaskPixmap: UInt32 = 0
+        var clipMaskOriginX: Int16 = 0
+        var clipMaskOriginY: Int16 = 0
+        if state.clipMaskPixmap != 0 {
+            if let maskPix = pixmaps.get(state.clipMaskPixmap), maskPix.depth == 1 {
+                clipMaskPixmap = state.clipMaskPixmap
+                clipMaskOriginX = state.clipXOrigin &+ dstDX
+                clipMaskOriginY = state.clipYOrigin &+ dstDY
+            } else {
+                log?.log("  CopyArea: clip-mask 0x\(String(state.clipMaskPixmap, radix: 16)) missing or not depth-1 — drawing unmasked")
+            }
+        }
+
         bridge.copyArea(
             src: srcTarget,
             dst: dstTarget,
             srcX: r.srcX &+ srcDX, srcY: r.srcY &+ srcDY,
             dstX: r.dstX &+ dstDX, dstY: r.dstY &+ dstDY,
             width: r.width, height: r.height,
-            clipRectangles: state.clipRectangles
+            clipRectangles: state.clipRectangles,
+            clipMaskPixmap: clipMaskPixmap,
+            clipMaskOriginX: clipMaskOriginX,
+            clipMaskOriginY: clipMaskOriginY
         )
         // X11 spec: when GC has graphics-exposures=True, CopyArea must be
         // followed by GraphicsExpose events (one per obscured source
