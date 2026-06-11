@@ -350,14 +350,14 @@ core_opcodes:
     usage: mainstream
     description: |
       Returns the current focus window (or PointerRoot / None) and its revert-to value. Toolkits use it defensively after a focus-related event to confirm which window the server thinks owns the keyboard, and it doubles as the canonical round-trip request Xlib's XSync uses to flush the output buffer and wait for the server to catch up.
-    coverage: "Stub: returns enough to keep clients happy without doing the work."
+    coverage: "Implemented as a synthetic reply: always reports focus=None, revertTo=None. Enough for the XSync round-trip; we don't yet track a real focus window here."
   - number: 44
     name: QueryKeymap
     category: Keyboard
     usage: mainstream
     description: |
       Returns a 32-byte bit vector with one bit per keycode indicating which keys are currently held down. Games and screen-saver detectors poll this to read the keyboard without selecting KeyPress events, and key-repeat logic in some toolkits uses it to disambiguate auto-repeat from a real release-press pair. Like QueryPointer, the result is the logical state and can lag while a grab freezes event processing.
-    coverage: "Stub: returns enough to keep clients happy without doing the work."
+    coverage: "Implemented as a synthetic reply: returns an all-zero keymap (no keys held). Defensible best-effort; we don't yet track held keycodes on KeyPress/KeyRelease."
   - number: 45
     name: OpenFont
     category: Font
