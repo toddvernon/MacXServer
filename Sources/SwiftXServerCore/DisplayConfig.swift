@@ -60,9 +60,12 @@ public struct DisplayConfig: Equatable, Sendable {
 
     /// Candidate (logicalWidth, logicalHeight) pairs in preference order.
     /// Matches the preset table in `SERVER_RESOLUTION_SCALING_AND_FONTS.md`.
-    /// 1280×900 is the "ideal" — Sun-authentic vertical, room for two 80-col
-    /// terminals side by side; 1280×720 used when 16:9 height is what fits;
-    /// progressively smaller for compact Retina laptops; 960×540 for 1080p.
+    /// As of 2026-06-11 these no longer become the advertised root size — they
+    /// only GATE the scale choice (the highest scale at which the largest of
+    /// these fits the display wins). The actual logical root is derived from
+    /// the display (`native ÷ scale`). The sizes still encode the "what counts
+    /// as a usable logical screen" yardstick: 1280×900 is the Sun-authentic
+    /// ideal, down to 960×540 so a 1080p panel still qualifies for 2x.
     private static let logicalCandidates: [(width: Int, height: Int)] = [
         (1280, 900),
         (1280, 720),
@@ -79,9 +82,24 @@ public struct DisplayConfig: Equatable, Sendable {
     private static let scaleCandidates: [Double] = [3, 2]
 
     /// Pick the best (logical, scale) for a display of `nativeWidth × nativeHeight`
-    /// pixels. First (scale, logical) combination whose device dimensions
-    /// don't exceed the native pixel dimensions wins. Falls back to scale=1
-    /// at native dimensions if no preset fits (very small or unusual displays).
+    /// pixels. The preset table only GATES the scale choice: we pick the highest
+    /// integer scale at which at least one preset fits the display. The logical
+    /// root is then derived to span the WHOLE display at that scale
+    /// (`native ÷ scale`), not pinned to the gating preset. Falls back to
+    /// scale=1 at native dimensions if no preset fits (very small or unusual
+    /// displays).
+    ///
+    /// Why screen-derived instead of the preset size (changed 2026-06-11):
+    /// the X root has to cover the entire area a window can be dragged into.
+    /// In rootless mode the conversion from NSWindow points to X-root coords
+    /// is `points × backingScale ÷ scale`, so the full panel spans
+    /// `native ÷ scale` X-root units. Advertising the smaller preset size
+    /// (e.g. 1280×900 on a 5K) left a dead strip on the right/bottom: a window
+    /// dragged there got an X-root x past the advertised width, and clients
+    /// clamped popup menus to the smaller "screen," so xterm/Motif menus
+    /// drifted off their windows the further you moved them. Deriving the
+    /// logical root from the display closes that gap. The scale the picker
+    /// chooses is unchanged — only the logical canvas size is.
     ///
     /// `forcedScale` (if set) restricts the search to that scale only. See
     /// `SCALE_PICKER.md` for the design rationale. Used by `--scale 2`.
@@ -93,9 +111,14 @@ public struct DisplayConfig: Equatable, Sendable {
                 let dw = Int((Double(c.width) * scale).rounded())
                 let dh = Int((Double(c.height) * scale).rounded())
                 if dw <= nativeWidth && dh <= nativeHeight {
+                    // Scale gated in. Logical root spans the whole display at
+                    // this scale. Floor (not round) so logical×scale never
+                    // exceeds native — keeps the device canvas inside the panel.
+                    let logW = Int((Double(nativeWidth) / scale).rounded(.down))
+                    let logH = Int((Double(nativeHeight) / scale).rounded(.down))
                     return DisplayConfig(
-                        logicalWidth: c.width,
-                        logicalHeight: c.height,
+                        logicalWidth: logW,
+                        logicalHeight: logH,
                         scale: scale,
                         nativePixelWidth: nativeWidth,
                         nativePixelHeight: nativeHeight

@@ -703,6 +703,22 @@ See `.claude-memory/reference_implicit_grab_replaced_by_explicit.md` for the spe
 
 ---
 
+## 2026-06-11 — Logical root size is screen-derived, not the gate preset
+
+The display picker (`DisplayConfig.pick`) used to return both the integer scale AND a fixed logical-root size from a preset table (1280×900 on a 5K, etc.). That size became the screen the X clients see. **Chosen instead**: keep using the preset table only to *gate* which integer scale we pick, then derive the logical root from the actual panel as `floor(native ÷ scale)`. Touches the preset-table contract in `SERVER_RESOLUTION_SCALING_AND_FONTS.md`, so taken as an explicit decision.
+
+**Why**: macXserver is rootless — each X window is its own NSWindow, and a window's X-root position is computed `NSWindowPoints × backingScale ÷ scale`, so the *whole* panel spans `native ÷ scale` X-root units. Advertising the smaller preset size left an L-shaped dead strip on the right/bottom of the display (a 1280×900 root on a 5K covers only ~1920×1350 of the 2560×1440-point screen). A window dragged into that strip reported an X-root x past the advertised screen width; clients that clamp popup menus to the screen edge (xterm's Ctrl-button menus, Motif pulldowns) then pinned the menu to the *advertised* right edge while the window sat physically further out. Net symptom: menus drift off their window, worse the further you drag — diagnosed from an in-process-tee capture where the post-move ButtonPress `root=(1558,511)` was correct but xterm placed the menu at `1141 ≈ 1280−137(menuWidth)`, i.e. clamped to the 1280 root. The same mismatch would mis-feed root `GetGeometry`, maximize math, and pointer queries.
+
+**Alternatives considered**:
+
+1. **Keep 1280×900, clamp windows to the X-root rectangle.** Smaller change, preserves the Sun-authentic literal screen size. Rejected as a partial fix: a wide window straddling the edge can still put the *pointer* past the advertised width (the click lands in the dead strip), so menus still clamp. The only fully consistent options are "root covers the panel" or "confine the pointer to a sub-rect," and we can't confine the macOS cursor without fighting other Mac apps.
+
+2. **Per-axis (non-uniform) scale to map the panel onto exactly 1280×900.** Rejected outright — non-uniform scaling distorts pixels (circles → ellipses), unacceptable for a graphics server.
+
+**Why this won**: the advertised screen and the draggable area become the same rectangle, so every screen-size-dependent client behavior lines up. The integer scale the picker chooses is **unchanged** for every display (verified: same scale outputs in `DisplayConfigTests`), so font cell-sizing — which keys off scale + pointSize, not the root's total dimensions — is untouched. The "Sun-authentic small screen" goal is preserved by the scale gate (it keeps the derived logical screen in ~1000–1700-wide territory rather than Retina-dense pixel counts), just not as a hardcoded literal. Cost: the app-facing screen is now an odd size like 1706×960 instead of a round 1280×900; acceptable, X clients don't care about round numbers.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

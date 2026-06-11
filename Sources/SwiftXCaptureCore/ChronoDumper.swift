@@ -1237,7 +1237,7 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
                 }
                 detail = " window=\(windowDisplay(i.event)) at \(pt(i.eventX, i.eventY)) \(keyLabel) state=\(modifierMaskString(i.state))"
             case .buttonPress(let i), .buttonRelease(let i), .motionNotify(let i):
-                detail = " window=\(windowDisplay(i.event)) at \(pt(i.eventX, i.eventY)) button=\(i.detail) state=\(modifierMaskString(i.state))"
+                detail = " window=\(windowDisplay(i.event)) at \(pt(i.eventX, i.eventY)) root=\(pt(i.rootX, i.rootY)) button=\(i.detail) state=\(modifierMaskString(i.state))"
             case .enterNotify(let c), .leaveNotify(let c):
                 detail = " window=\(windowDisplay(c.event)) at \(pt(c.eventX, c.eventY)) mode=\(c.mode)"
             case .focusIn(let f), .focusOut(let f):

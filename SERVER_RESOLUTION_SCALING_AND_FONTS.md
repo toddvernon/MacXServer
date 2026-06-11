@@ -17,7 +17,7 @@ Every trade-off in this doc gets evaluated against that bar.
 ## Headline decisions
 
 1. **Selectable scale factor**, with integer-first rollout and fractional support added in a later phase.
-2. **Default configuration is display-adaptive at startup.** The server inspects the connected display and picks the highest integer scale and matching logical-root size that fits cleanly. Studio Display defaults to 1280×900 @ 3x; 4K external to 1280×720 @ 3x; MacBook Pro 14" to 1008×648 @ 3x; etc. Reported physical mm and DPI are derived from the chosen combination to keep ~90 DPI for Sun-era Xt/Motif font auto-sizing.
+2. **Default configuration is display-adaptive at startup.** The server inspects the connected display, picks the highest integer scale at which a usable logical screen fits, then derives a logical root that spans the whole panel (`native ÷ scale`). Studio Display lands on ~1706×960 @ 3x; 4K external on 1280×720 @ 3x; MacBook Pro 14" on ~1008×654 @ 3x; etc. (the scale is the gated choice; the size follows the panel). Reported physical mm and DPI are derived from the chosen combination to keep ~90 DPI for Sun-era Xt/Motif font auto-sizing.
 3. **All fonts are scalable substitutes** — no bitmap fonts shipped or rendered.
 4. **Default monospace: Monaco. Default proportional: Helvetica Neue.** Both overridable via configuration once the substitution table is wired up.
 5. **Cell-snapping strategy:** font cells report integer logical metrics, glyphs render at exact device-pixel positions, no subpixel positioning.
@@ -28,25 +28,29 @@ Every trade-off in this doc gets evaluated against that bar.
 
 ### Logical root and scale: display-adaptive
 
-The server picks logical-root size and integer scale from the connected display at startup. Goal: highest integer scale that fits, with a logical root in the 960–1280 range so you can host a couple of 80-column terminals side by side. No fractional scales in Phase 1 — fractional is Phase 3.
+The server picks an integer scale at startup, then derives a logical root that spans the whole display at that scale. Goal: highest integer scale that still leaves a usable logical screen. No fractional scales in Phase 1 — fractional is Phase 3.
 
-| Display | Native pixels | Logical | Scale | Device | Notes |
-|---|---|---|---|---|---|
-| Pro Display XDR 6K | 6016×3384 | 1280×900 | 4x | 5120×3600 | room to spare |
-| Studio Display 27" 5K | 5120×2880 | 1280×900 | 3x | 3840×2700 | comfortable |
-| iMac 5K 27" | 5120×2880 | 1280×900 | 3x | 3840×2700 | comfortable |
-| 4K external (typical) | 3840×2160 | 1280×720 | 3x | 3840×2160 | fills exactly |
-| MacBook Pro 16" Retina | 3456×2234 | 1152×720 | 3x | 3456×2160 | comfortable |
-| MacBook Pro 14" Retina | 3024×1964 | 1008×648 | 3x | 3024×1944 | tight, fits |
-| 1080p external | 1920×1080 | 960×540 | 2x | 1920×1080 | fills exactly |
+**Two-step, changed 2026-06-11.** The preset sizes below used to *be* the advertised root. They no longer are — they only gate the scale. The logical root is now `native ÷ scale`, so the X screen covers the entire panel. See "Why screen-derived" below.
 
-**Picking algorithm:** try scales 4, 3, 2 in order. For each scale, try logical widths 1280, 1152, 1008, 960. First combination whose device dimensions don't exceed the display's native pixel dimensions wins. Logical heights derived from the same width-to-height ratio used in the table (roughly 16:11 for the larger logical sizes, 16:9 for the smaller ones to fit 4K and 1080p exactly).
+| Display | Native pixels | Scale (gated by) | Logical root (`native÷scale`) | Device |
+|---|---|---|---|---|
+| Pro Display XDR 6K | 6016×3384 | 3x (1280×900 fits) | 2005×1128 | 6015×3384 |
+| Studio Display 27" 5K | 5120×2880 | 3x (1280×900 fits) | 1706×960 | 5118×2880 |
+| iMac 5K 27" | 5120×2880 | 3x (1280×900 fits) | 1706×960 | 5118×2880 |
+| 4K external (typical) | 3840×2160 | 3x (1280×720 fits) | 1280×720 | 3840×2160 |
+| MacBook Pro 16" Retina | 3456×2234 | 3x (1152×720 fits) | 1152×744 | 3456×2232 |
+| MacBook Pro 14" Retina | 3024×1964 | 3x (1008×648 fits) | 1008×654 | 3024×1962 |
+| 1080p external | 1920×1080 | 2x (960×540 fits) | 960×540 | 1920×1080 |
+
+**Picking algorithm:** try scales 3, 2 in order (4x is reserved for a Phase 2 override). For each scale, check the gate presets 1280×900, 1280×720, 1152×720, 1008×648, 960×540 — the first scale at which any preset's device size fits the native panel wins. Then the logical root is `floor(native ÷ scale)` on each axis (floor so `logical × scale` never exceeds the panel). The device canvas therefore covers the display to within one logical pixel.
+
+**Why screen-derived, not the gate preset (2026-06-11).** macXserver is rootless: each X window is its own NSWindow, and a window's X-root position is `NSWindowPoints × backingScale ÷ scale`, so the full panel spans `native ÷ scale` X-root units. When we advertised the smaller *preset* size (e.g. 1280×900 on a 5K, whose 16:10-ish aspect doesn't match the panel), the right/bottom of the display was a "dead strip" outside the advertised root. A window dragged there reported an X-root x past the advertised width; clients that clamp popup menus to the screen edge (xterm, Motif) then placed menus at the *advertised* edge while the window sat further out — so menus drifted off their windows, worse the further you dragged. Deriving the root from the panel closes the gap: the advertised screen and the draggable area are the same rectangle. The scale the picker chooses is unchanged, so font cell-sizing (which keys off scale + pointSize, not the root's total dimensions) is unaffected.
 
 Why integer-only in Phase 1: every logical pixel maps to a clean N×N device pixel block. No fractional alignment weirdness, no glyph drift across cells, no antialiasing on hairline borders. Phase 3 adds fractional scales for displays that don't fit a clean integer (rare among Retina-class displays but possible on unusual external monitors).
 
 Why ~90 DPI reported regardless of physical scale: Sun-era Xt and Motif clients use the screen's reported DPI to auto-size fonts. Reporting the actual macOS display DPI (218 for Studio, 264 for MacBook Retina, etc.) would make every Sun-era app pick gigantic fonts. Reported physical mm and DPI are computed as `(deviceWidth / scale) × (25.4 / 72)` so the *logical* dimensions look like a 90 DPI display to the X client even though the underlying pixels are Retina-dense.
 
-Sun-authentic vertical (avoiding 1024 which doesn't fit at 3x on most displays) is preserved by the picking algorithm — it picks 720 or 648 instead of trying to land on 1024.
+Sun-authentic feel comes from the *scale* gate, not a fixed logical size: the gate presets keep the chosen scale high enough that the derived logical screen lands in Sun-workstation territory (roughly 1000–1700 wide, 650–1000 tall) rather than a Retina-dense pixel count that would make Sun-era apps draw tiny. The exact logical dimensions now follow the panel so the root covers the whole display (see "Why screen-derived" above).
 
 ### No bitmap fonts
 
@@ -303,7 +307,7 @@ These are the residual disappointment areas. Strategies:
 
 ### Phase 1: Display-adaptive integer scale + Monaco substitution (do this first)
 
-Detect the main display on startup; pick logical root + integer scale from the preset table above. Hardcode that combination for the rest of the session — `scaleFactor` and logical-root size are constants once chosen, no live changes. Single integer scale used throughout the codebase.
+Detect the main display on startup; gate the integer scale on the preset table above, then derive the logical root as `native ÷ scale`. Hardcode that combination for the rest of the session — `scaleFactor` and logical-root size are constants once chosen, no live changes. Single integer scale used throughout the codebase.
 
 Get xterm working against the chosen configuration and confirm:
 
