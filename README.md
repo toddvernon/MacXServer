@@ -120,13 +120,11 @@ scripts.
     --target localhost:6000
 ```
 
-`./run-capture.sh`, `./run-server.sh`, and `./run-all.sh` are build-and-run
-wrappers around the command-line binaries. `run-capture.sh` reads
-`connection.json` (`listen` / `forward` / `output`) for proxy mode; copy
-`connection.example.json` to `connection.json` and edit it first, since the
-real file is gitignored so your host stays local. `run-all.sh` starts
-macxserver plus a proxy capture forwarding into it, for diffing what swiftx
-produces against gold Sun captures.
+For interactive proxy capture, use the **MacXCapture** app's Record mode
+(see "The capture app" above). It sets up the listen/forward/output for you
+and gives you live byte counters and a decoded-opcode feed. The CLI
+`--listen`/`--forward`/`--output` invocation above is still there for
+headless or scripted runs.
 
 ## Tests
 

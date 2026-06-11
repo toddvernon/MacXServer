@@ -40,5 +40,5 @@ CLAUDE.local.md
 # The public-safe version of this is NOTARIZE-SETUP.md.
 RELEASING.local.md
 
-# Personal capture connection config (real host). Use connection.example.json as a template.
+# Personal capture connection config (real host), if you use the CLI proxy mode.
 connection.json
