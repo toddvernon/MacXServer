@@ -34,6 +34,15 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     var dragMonitor: Any?
     var dragGrabDepth: Int = 0
     var dragLastWindowId: UInt32?
+    /// Last managed top-level the pointer was over during the current grab,
+    /// retained even after the pointer leaves every NSWindow (unlike
+    /// dragLastWindowId, which is nilled the moment we go outside so the
+    /// enter/exit bookkeeping stays correct). Used to route a ButtonRelease
+    /// that lands outside all windows back to the grabbing client — that
+    /// release is the dismiss signal for an xterm/Motif popup menu, and
+    /// dropping it orphaned the menu on screen. Reset when drag tracking
+    /// starts/stops.
+    var dragAnchorWindowId: UInt32?
 
     /// Native title-bar drag lock state, ref-counted per session token. See
     /// lockNativeWindowDrag for the rationale. Empty map = unlocked. All
@@ -2985,6 +2994,7 @@ extension CocoaWindowBridge {
             guard let self = self else { return }
             self.dragGrabDepth += 1
             guard self.dragGrabDepth == 1 else { return }
+            self.dragAnchorWindowId = nil
             let mask: NSEvent.EventTypeMask = [
                 .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
                 .leftMouseUp, .rightMouseUp, .otherMouseUp
@@ -3008,6 +3018,7 @@ extension CocoaWindowBridge {
                 self.dragMonitor = nil
             }
             self.dragLastWindowId = nil
+            self.dragAnchorWindowId = nil
         }
     }
 
@@ -3070,6 +3081,32 @@ extension CocoaWindowBridge {
             dragMonitor = nil
         }
         dragLastWindowId = nil
+        dragAnchorWindowId = nil
+    }
+
+    /// Hard sweep: close and forget EVERY managed NSWindow, regardless of
+    /// which session owns it or how the X window tree is shaped. The
+    /// per-session `cleanupOnDisconnect` path only reaps windows still
+    /// linked to that session's window table, so an override-redirect popup
+    /// whose slot has drifted from the table (an orphaned menu) can survive
+    /// it. "Drop All Clients" is a user-initiated nuke and calls this
+    /// afterward to guarantee the screen is clear. Also drops any lingering
+    /// grab tracking / native-drag lock so the next client starts clean.
+    /// Safe to call from any thread; the AppKit work hops to main.
+    public func closeAllWindows() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.releaseNativeWindowDragImmediate()
+            self.lock.lock()
+            let snapshot = self.slots
+            self.slots.removeAll()
+            self.lock.unlock()
+            self.log?.log("closeAllWindows: sweeping \(snapshot.count) managed NSWindow(s)")
+            for (_, slot) in snapshot {
+                slot.window?.orderOut(nil)
+                slot.window?.close()
+            }
+        }
     }
 
     /// Body of the local monitor: figure out which NSWindow's content
@@ -3150,6 +3187,7 @@ extension CocoaWindowBridge {
                 firePointerEnteredView(id: xid, x: logicalX, y: logicalY, mods: mods)
             }
             dragLastWindowId = xid
+            dragAnchorWindowId = xid
 
             if isUp {
                 // Button-up always fires regardless of crossing (the press
@@ -3169,10 +3207,42 @@ extension CocoaWindowBridge {
             }
         } else {
             // Pointer outside all managed NSWindows. The previous window's
-            // ExitView already fired above; just clear the tracker. Don't
-            // route the X event anywhere — equivalent to "drag continues
-            // off-screen" in real X (no grabbed-client gets motion events
-            // outside the screen anyway in our rootless model).
+            // ExitView already fired above.
+            //
+            // A button RELEASE here still has to reach the grabbing client.
+            // For an xterm/Motif popup menu the release-outside IS the
+            // dismiss signal: xterm does an active pointer grab when it
+            // posts the Ctrl+button menu, and on ButtonRelease anywhere
+            // outside a menu item it unmaps the popup. The old code dropped
+            // this event, so a release over empty desktop (outside every
+            // NSWindow) never reached xterm and the menu was orphaned on
+            // screen. Route it to the last top-level the pointer was over
+            // during this grab (dragAnchorWindowId), with coords measured
+            // relative to that window. The point lands outside the window's
+            // bounds, which is exactly how real X reports a release outside
+            // the event window (the eventX/eventY go negative or overflow,
+            // that's legal). The session's grab redirect re-targets the
+            // event to the actual grab window for ownerEvents=false grabs;
+            // for the common gesture (drag out of the popup, release on the
+            // desktop) the anchor IS the popup, so ownerEvents=true lands
+            // correctly too. Motion outside all windows is still dropped —
+            // no grabbed client gets motion off every window in our rootless
+            // model, and a stream of off-window Motion events would just be
+            // noise.
+            if isUp, let anchorId = dragAnchorWindowId,
+               let anchorView = slot(anchorId)?.view,
+               let anchorWin = anchorView.window {
+                let bs = NSScreen.main?.backingScaleFactor ?? 2.0
+                let windowPt = NSPoint(
+                    x: screenPt.x - anchorWin.frame.origin.x,
+                    y: screenPt.y - anchorWin.frame.origin.y
+                )
+                let viewPt = anchorView.convert(windowPt, from: nil)
+                let logicalX = Int16(clamping: Int((viewPt.x * bs / CGFloat(scaleFactor)).rounded()))
+                let logicalY = Int16(clamping: Int((viewPt.y * bs / CGFloat(scaleFactor)).rounded()))
+                fireMouse(id: anchorId, x: logicalX, y: logicalY,
+                          button: button, isDown: false, mods: mods)
+            }
             dragLastWindowId = nil
         }
     }

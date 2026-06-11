@@ -58,6 +58,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// ServerEntry.run and the AppDelegate shouldn't keep it alive.
     weak var listener: Listener?
 
+    /// Window bridge handle so "Drop All Clients" can hard-sweep every
+    /// managed NSWindow after the sessions are cancelled, catching any
+    /// orphaned popup whose slot has drifted from a session's window
+    /// table. Weak: ServerEntry.run owns the bridge for the listener's
+    /// lifetime.
+    weak var bridge: CocoaWindowBridge?
+
     /// Builds the delegate and its `Preferences` instance.
     override init() {
         self.preferences = Preferences()
@@ -359,6 +366,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func dropAllClients(_ sender: Any?) {
         listener?.dropAllClients()
+        // Cancelling the sessions runs each one's cleanupOnDisconnect, which
+        // only destroys windows still linked to that session's window table.
+        // An orphaned popup (slot drifted from the table) would survive that.
+        // This is a user-initiated nuke, so follow up with a bridge-level
+        // sweep that closes every managed NSWindow unconditionally — nothing
+        // should be left on screen.
+        bridge?.closeAllWindows()
     }
 
     // MARK: - Launchers

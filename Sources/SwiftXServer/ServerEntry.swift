@@ -211,6 +211,7 @@ enum ServerEntry {
             writeStderr("motif frame: \(override ? "ON" : "OFF") (CLI override)\n")
         }
         appDelegate.listener = listener
+        appDelegate.bridge = bridge
         app.delegate = appDelegate
         // `.regular`: standard Mac app. `.accessory` would hide the Dock icon but
         // per Apple's docs also hides the menu bar entirely, which is wrong here —
