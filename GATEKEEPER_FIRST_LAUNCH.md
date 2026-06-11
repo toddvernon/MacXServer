@@ -105,6 +105,63 @@ button.**
      and a standard non-admin user cannot complete it. If either Mac is
      company-managed, that alone explains a missing button.
 
+## Test procedure (for Todd, when a test machine is available)
+
+This is the exact thing to run. It is in two stages: Stage 1 confirms or
+kills the leading "it's just the expected gate" theory; Stage 2 only runs if
+Stage 1 says the override is genuinely missing.
+
+**Make the test valid first:**
+
+- Use a Mac that has **never approved or run MacXServer** before (otherwise
+  Gatekeeper won't prompt at all). A fresh machine, or a fresh user account,
+  works. Ideally on macOS 26 or 27 to match the reporter.
+- **Download the published v0.9.0 zip fresh, via a browser** from the live
+  macxserver.com download button (or the GitHub release). Do NOT use a copy
+  you built locally or copied over with scp/AirDrop, those may not carry the
+  quarantine bit and would make the gate not fire, defeating the test.
+- Unzip by double-clicking in Finder (default Archive Utility).
+
+**Stage 1, the pivotal check:**
+
+1. Double-click `MacXServer.app`. Expect the dialog in the screenshot
+   ("...could not verify ... is free of malware", Move to Trash / Done).
+2. Click **Done** (NOT Move to Trash).
+3. Open **System Settings > Privacy & Security**, scroll to the bottom of the
+   Security section.
+4. Look for a line like "MacXServer was blocked to protect your Mac" with an
+   **Open Anyway** button.
+   - **Button present:** click it, authenticate, double-click the app again,
+     click **Open** on the final confirm. If it launches, the test is done
+     and the verdict is: **expected first-launch gate, app + pipeline are
+     fine.** This is almost certainly the answer for the reporter too, he
+     just needs steps 2-4. Record the result here and close the item.
+   - **Button genuinely absent** (after the step-1 launch attempt logged it):
+     go to Stage 2.
+
+**Stage 2, only if Open Anyway is truly missing:**
+
+Run against the actual downloaded app and record the output in this doc:
+
+```sh
+APP="/path/to/MacXServer.app"
+sw_vers                                          # exact macOS version
+codesign --verify --deep --strict -vvv "$APP"    # does the copy still validate?
+spctl -a -vvv -t exec "$APP"                      # Gatekeeper's verdict
+xattr -l "$APP"                                   # quarantined? odd attrs?
+```
+
+Also note: is this Mac company/school **managed** (MDM), and is the account
+an **admin**? Then the decisive test:
+
+```sh
+xattr -dr com.apple.quarantine "$APP"
+```
+
+Launch again. **Runs** -> it was the quarantine gate / a suppressed override
+(managed or non-admin), bytes are fine. **Still won't run** -> the copy's
+signature is broken (download/unzip damage), re-download clean or ship a pkg.
+
 ## Data to collect from the reporter (do this before any workaround)
 
 Send back, for each affected Mac:
