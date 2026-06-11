@@ -23,6 +23,16 @@ After the steps below, the Mac running `release.sh` will have:
 End user experience: download → unzip → double-click → app opens. No Gatekeeper
 warning, no "unidentified developer" dialog.
 
+**Important: only `release.sh` produces a notarized build.** The Xcode project
+signs ad-hoc (`CODE_SIGN_IDENTITY = "-"`, `DEVELOPMENT_TEAM = ""`,
+`CODE_SIGN_STYLE = Automatic`) so anyone can clone and run locally without a
+Developer ID. That means a build you make in Xcode — Run *or* Archive — is NOT
+notarized and will trigger Gatekeeper's "could not verify … free of malware"
+dialog if you hand it to someone else. Developer ID + hardened runtime +
+notarization are injected only by `release.sh` via xcodebuild flags. Never
+distribute an Xcode-built `.app`; ship the GitHub-release artifact `release.sh`
+produces.
+
 ## Step 1 — Developer ID Application certificate
 
 The Apple Developer portal needs to issue you a Developer ID Application cert.
