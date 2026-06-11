@@ -1,10 +1,11 @@
 # Status 2026-06-11
 
-Launch day plus three bug fixes. The repo went **public**, v0.9.0 of both
-apps shipped (signed + notarized), and I closed three issues: a friend's
-Gatekeeper scare (turned out to be docs, not a signing problem), the xterm
-menu-drift bug, and the dtfile transparent-icon bug. All pushed to
-`origin/main`; working tree clean.
+Launch day plus four bug fixes. The repo went **public**, v0.9.0 of both
+apps shipped (signed + notarized), and I closed: a friend's Gatekeeper
+scare (turned out to be docs, not a signing problem), the xterm
+menu-drift bug, the dtfile transparent-icon bug, and the orphaned-xterm-menu
+bug (a popup left stranded on screen). All pushed to `origin/main`; working
+tree clean.
 
 ## Release / launch
 
@@ -57,6 +58,34 @@ Two asymmetric orientation/polarity tests added per GRAPHICS_Y_FLIP.md.
 Verified visually on real dtfile. OPCODE_STATUS/SHORTCUTS/OPCODES_PUBLIC
 updated.
 
+## Bug fix 3 — orphaned xterm menu (commit `bfdadde`)
+
+A Ctrl+button xterm popup menu could be left stranded on screen as a black
+window. Root cause was the mouse-up, not the Ctrl key (Todd's hunch about
+Ctrl was a red herring): xterm grabs the pointer when it posts the menu and
+dismisses on ButtonRelease outside a menu item, so the dismiss depends on
+getting that release. Our cross-NSWindow drag monitor
+(`dispatchCrossWindowDrag`) dropped any event whose cursor was over no
+managed window — fine for motion, fatal for the release. So a release over
+empty desktop never reached xterm and the menu hung around. Fix: route the
+off-window release to the grab anchor instead of dropping it. New
+`dragAnchorWindowId` remembers the last top-level the pointer was over
+during the grab (survives going off-window, unlike `dragLastWindowId` which
+nils for enter/exit bookkeeping); the release is reported relative to it
+with out-of-bounds coords, which is how real X reports a release outside the
+event window. The session's grab redirect re-targets to the actual grab
+window. Verified live (drag menu onto desktop, release → dismisses).
+
+Belt-and-suspenders in the same commit: **"Drop All Clients" is now a true
+nuke.** After cancelling the sessions it calls
+`CocoaWindowBridge.closeAllWindows()`, which closes and forgets every
+managed NSWindow regardless of hierarchy or session ownership, and clears
+any lingering grab tracking / native-drag lock. `cleanupOnDisconnect` only
+reaps windows still linked to a session's window table, so an orphan whose
+slot drifted from the table could survive it; this guarantees the screen is
+clear. Wired via a weak bridge ref on the AppDelegate. AppKit-side code, so
+not exercised by the mock-bridge unit suite.
+
 ## Housekeeping
 
 - Reconciled GetInputFocus/QueryKeymap public coverage (synthetic-reply
@@ -69,7 +98,8 @@ updated.
 ## What's working
 
 - 1265 tests green. Both apps build + ship signed/notarized. Live xterm,
-  dtfile icons now correct, menus track their windows across the display.
+  dtfile icons now correct, menus track their windows across the display and
+  no longer orphan when dismissed off-window.
 
 ## What's next / open
 
@@ -79,7 +109,8 @@ updated.
 2. **Latent server gaps** (carryover, untouched): pixmap clip_mask is
    honored for CopyArea only, not other output ops (no client needs it yet);
    native-title-bar drag-lock gap on Motif-Frame-OFF windows; same-window
-   memmove CopyArea still ignores the rect-list clip.
+   memmove CopyArea still ignores the rect-list clip. The orphan-xterm-menu
+   carryover (was on the 06-10 list) is now closed — see Bug fix 3.
 3. Key-material housekeeping (from 06-10): move `Certificates.p12` out of
    plain Dropbox to 1Password if desired.
 4. No other known bugs as of end of day (Todd: "that's all the bugs I know
