@@ -1,10 +1,13 @@
 # Gatekeeper first-launch investigation
 
-Status: **OPEN**, blocked on diagnostic data from the reporter. Opened
-2026-06-11. Do NOT touch the binary or the signing pipeline until the data
-below comes back: our published artifacts are already proven healthy (see
-"What's verified good"), so any real fault is on the download/transfer or
-the reporter's machine, not the build.
+Status: **OPEN but likely benign**, blocked on one check from the reporter.
+Opened 2026-06-11. The exact dialog he hit (see "Exact dialog") turns out to
+be the standard macOS Sequoia/26 quarantine block, which a correctly
+notarized app also shows, so the leading explanation is now "expected
+first-launch gate, he just has not done the System Settings > Open Anyway
+step." Do NOT touch the binary or the signing pipeline: our published
+artifacts are proven healthy (see "What's verified good"), so any real fault
+is on the download/transfer or the reporter's machine, not the build.
 
 ## The report
 
@@ -20,14 +23,53 @@ touched anything:
 - He believes he has the correct binary, but that has NOT been verified on
   his machine yet (right file is not the same as intact signature after his
   unzip/transfer).
-- **He does NOT get an "Open Anyway" button** in System Settings > Privacy &
-  Security after the block. This is the most important detail. The normal
-  notarized-app first-launch gate DOES offer that button; its absence means
-  Gatekeeper is not offering a user override.
+- He reports **no "Open Anyway" button**, but see the dialog analysis below:
+  that button is never in this dialog, it lives in System Settings, and it is
+  not yet confirmed whether he actually checked there.
 - **He deliberately did nothing else.** No `xattr`, no re-download, no
   right-click-Open, no moving the app. The download is sitting in its
   as-received state on purpose, to preserve the scene for diagnosis. Keep it
   that way until we've captured the commands below against it.
+
+## Exact dialog (captured 2026-06-11)
+
+Screenshot: `gatekeeper-dialog-2026-06-11.png`. Verbatim:
+
+> **"MacXServer" Not Opened**
+>
+> Apple could not verify "MacXServer" is free of malware that may harm your
+> Mac or compromise your privacy.
+>
+> [ Move to Trash ]   [ Done ]
+
+What this tells us, and it changes the read:
+
+- This is the **standard macOS Sequoia (15) / macOS 26 quarantine block** for
+  any app downloaded from the internet that has not yet been user-approved.
+  Apple's wording is deliberately alarming and does NOT distinguish a
+  properly notarized app from a non-notarized one; a correctly
+  notarized + stapled app, freshly downloaded, shows this exact dialog on
+  first launch on these OS versions. So the dialog by itself is NOT evidence
+  of a bad binary.
+- It is **not** the "...is damaged and can't be opened" dialog, which would
+  point at a broken signature. So the damaged-bundle hypothesis is weaker
+  than it was, though not yet ruled out (a verify on his copy still settles
+  it).
+- Crucially, **"Open Anyway" was never going to be in this dialog.** Since
+  Sequoia, Apple removed the in-dialog / Control-click bypass. The only two
+  buttons here are "Move to Trash" and "Done", by design. The override now
+  lives in **System Settings > Privacy & Security**, and it appears there
+  only AFTER you click "Done" on this dialog and the OS logs the blocked
+  app. So "he doesn't get the Open Anyway button" is ambiguous: it may simply
+  mean he stopped at this dialog (consistent with preserving the scene) and
+  never opened Settings.
+
+Revised most-likely read: this is probably the **expected first-launch gate**
+and the resolution is the Settings > Privacy & Security > Open Anyway step he
+has not taken yet. The one thing that would make it a real problem is if he
+clicks Done, goes to System Settings > Privacy & Security, and the Open
+Anyway button genuinely is NOT there. That specific check is now the pivotal
+open question (see below).
 
 ## What's verified good (don't re-litigate the pipeline)
 
@@ -41,29 +83,36 @@ So the published bytes are genuinely signed, notarized, and stapled, and the
 release pipeline is healthy. Whatever the friend is hitting is downstream of
 that.
 
-## Why "no Open Anyway button" matters
+## The pivotal question: is Open Anyway in Settings or not?
 
-A missing override button (after a real launch attempt) is not the expected
-one-time gate. It points at one of two situations:
+Given the dialog is the standard quarantine block, the whole investigation
+now hinges on one check he has not done yet: **click "Done", open System
+Settings > Privacy & Security, scroll to the bottom of the Security section,
+and look for a "MacXServer was blocked..." line with an "Open Anyway"
+button.**
 
-1. **Damaged / broken-signature path.** If the dialog actually reads "...is
-   damaged and can't be opened, move it to the Trash" rather than the
-   developer-trust wording, the embedded signature is failing validation and
-   macOS deliberately offers no override. Usual cause: the right file
-   downloaded, but his unzip tool or transfer method stripped extended
-   attributes / resource forks and invalidated the signature. Our server
-   copy validates clean; his on-disk copy may not.
-2. **Managed Mac or non-admin account.** An MDM / configuration profile
-   (work or school laptop) can suppress the Open Anyway override entirely,
-   and a standard non-admin user cannot complete it. If either Mac is
-   company-managed, that alone explains the missing button.
+- **Button is there** -> this was the expected gate all along. Click Open
+  Anyway, authenticate, relaunch, confirm. Nothing wrong with the app or the
+  pipeline; the friction is just Sequoia/26 being aggressive. Done.
+- **Button is genuinely NOT there** (after the launch attempt logged it) ->
+  now it is real, and it points at one of:
+  1. **Damaged / broken-signature copy.** His unzip tool or transfer method
+     stripped extended attributes / resource forks and invalidated the
+     signature. Our server copy validates clean; his on-disk copy may not. A
+     `codesign --verify` on his copy settles this.
+  2. **Managed Mac or non-admin account.** An MDM / configuration profile
+     (work or school laptop) can suppress the Open Anyway override entirely,
+     and a standard non-admin user cannot complete it. If either Mac is
+     company-managed, that alone explains a missing button.
 
 ## Data to collect from the reporter (do this before any workaround)
 
 Send back, for each affected Mac:
 
-- The **exact dialog wording, word for word** (developer-trust vs "damaged"
-  decides hypothesis 1 vs not).
+- **First and most important:** after clicking "Done" on the dialog, does
+  System Settings > Privacy & Security show an "Open Anyway" button for
+  MacXServer? (This is the pivotal check above; it likely resolves the whole
+  thing.)
 - `sw_vers` (pins the real macOS version).
 - Whether the Mac is **company/school managed** and whether his account is
   an **admin** (decides hypothesis 2).

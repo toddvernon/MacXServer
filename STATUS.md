@@ -104,17 +104,18 @@ not exercised by the mock-bridge unit suite.
 ## What's next / open
 
 1. **Friend's Gatekeeper report** (now its own doc:
-   `GATEKEEPER_FIRST_LAUNCH.md`): escalated from "probably the expected
-   gate" to "something real to diagnose." He reproduces the block on two
-   Macs (one macOS 26, one macOS 25; exact versions still TBC via `sw_vers`)
-   and crucially gets **no "Open Anyway" button**, which is not the normal
-   notarized first-launch flow. He preserved the scene (ran no workarounds).
-   Two live hypotheses: a damaged/broken-signature copy (unzip stripped
-   xattrs) or a managed/non-admin Mac suppressing the override. Blocked on
-   the exact dialog wording + `codesign --verify` / `spctl` / `xattr -l`
-   output from his copy; the `xattr -dr com.apple.quarantine` test then
-   splits gate-vs-damaged-bundle. Our published pipeline is verified good,
-   so no build change is expected.
+   `GATEKEEPER_FIRST_LAUNCH.md`): he sent the actual dialog screenshot, and
+   it's the **standard Sequoia/26 quarantine block** ("Apple could not verify
+   ... is free of malware", Move to Trash / Done), which a correctly
+   notarized app also shows. That de-escalates it: "Open Anyway" is never in
+   that dialog (it moved to System Settings > Privacy & Security since
+   Sequoia), so his "no Open Anyway" likely just means he stopped at the
+   dialog and never opened Settings. Pivotal open question: after clicking
+   Done, does Settings > Privacy & Security show an Open Anyway button? If
+   yes, it's the expected gate (done). If genuinely absent, fall back to
+   damaged-copy (unzip stripped xattrs) or managed/non-admin Mac. Repro'd on
+   two Macs (macOS 26 + 25, exact versions TBC via `sw_vers`); scene
+   preserved. Pipeline verified good, no build change expected.
 2. **Latent server gaps** (carryover, untouched): pixmap clip_mask is
    honored for CopyArea only, not other output ops (no client needs it yet);
    native-title-bar drag-lock gap on Motif-Frame-OFF windows; same-window
