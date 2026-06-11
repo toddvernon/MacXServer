@@ -156,3 +156,19 @@ captures from the macXserver side where the connection's `WM_CLASS` didn't
 resolve to a known app. They're kept as-is; figure out which app each one
 is when chasing the bug it documents (or just recapture with a known
 client).
+
+## Other observations (pre-sweep, unverified)
+
+Informal notes from manual testing before the 2026-05-29 batch. Lower
+confidence than the table above (no capture pair pinned to them); fold into
+the table proper once re-verified.
+
+- **oclock** — resize-to-oval renders wrong on macXserver. The clock draws
+  fine at its default shape, but resizing it to an oval stops displaying
+  correctly (on ss2 the oval resize works). Smells like we apply the SHAPE
+  bounding region at map time but don't re-derive it when the client
+  re-issues ShapeMask on resize. No swiftx capture in the batch (oclock has
+  only a gold trace here).
+- **maze** — runs fine, but the app doesn't exit when the window manager
+  closes its window (it should). WM_DELETE_WINDOW / close-to-terminate path,
+  not a render issue.
