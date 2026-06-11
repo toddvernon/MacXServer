@@ -1,3 +1,23 @@
+# Status 2026-06-11
+
+Public-repo cleanup pass. Removed the pre-GUI CLI capture workflow now that
+MacXCapture's Record mode covers interactive proxy capture, and swept out a
+few stray artifacts.
+
+- Deleted `run-all.sh`, `run-capture.sh`, `run-server.sh`, and the
+  `connection.example.json` template. Todd doesn't run the CLI proxy by hand
+  anymore and Claude drives `macxcapture` subcommands / the binary directly,
+  not these wrappers. CLI proxy mode still exists on the binary
+  (`--listen`/`--forward`/`--output`); it's just no longer scripted.
+- Deleted stray files: `state_of_apps` (7-byte scratch file containing
+  "xeyes"), `xterm.xtap`, `xterm.xtap.json` (leftover capture droppings in the
+  repo root; nothing referenced them).
+- README capture section rewritten to point at the GUI Record mode;
+  `.gitignore` comment for `connection.json` updated to match.
+- Pulled `OPCODES_PUBLIC.yaml` + `scripts/check-opcode-coverage-drift.sh` from
+  the other Mac (committed there 06-10) via fast-forward.
+- Commit: `1d31ebf`. Branch is 1 ahead of origin, unpushed.
+
 # Status 2026-06-10
 
 Two big threads today: finished the code-signing + notarization setup (both
