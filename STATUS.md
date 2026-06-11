@@ -1,22 +1,89 @@
 # Status 2026-06-11
 
-Public-repo cleanup pass. Removed the pre-GUI CLI capture workflow now that
-MacXCapture's Record mode covers interactive proxy capture, and swept out a
-few stray artifacts.
+Launch day plus three bug fixes. The repo went **public**, v0.9.0 of both
+apps shipped (signed + notarized), and I closed three issues: a friend's
+Gatekeeper scare (turned out to be docs, not a signing problem), the xterm
+menu-drift bug, and the dtfile transparent-icon bug. All pushed to
+`origin/main`; working tree clean.
 
-- Deleted `run-all.sh`, `run-capture.sh`, `run-server.sh`, and the
-  `connection.example.json` template. Todd doesn't run the CLI proxy by hand
-  anymore and Claude drives `macxcapture` subcommands / the binary directly,
-  not these wrappers. CLI proxy mode still exists on the binary
-  (`--listen`/`--forward`/`--output`); it's just no longer scripted.
-- Deleted stray files: `state_of_apps` (7-byte scratch file containing
-  "xeyes"), `xterm.xtap`, `xterm.xtap.json` (leftover capture droppings in the
-  repo root; nothing referenced them).
-- README capture section rewritten to point at the GUI Record mode;
-  `.gitignore` comment for `connection.json` updated to match.
-- Pulled `OPCODES_PUBLIC.yaml` + `scripts/check-opcode-coverage-drift.sh` from
-  the other Mac (committed there 06-10) via fast-forward.
-- Commit: `1d31ebf`. Branch is 1 ahead of origin, unpushed.
+## Release / launch
+
+- Repo `toddvernon/MacXServer` is public. **MacXServer v0.9.0** and
+  **MacXCapture v0.9.0** are shipped as GitHub releases, signed +
+  notarized + stapled (verified the live download zips: `spctl` →
+  "accepted, Notarized Developer ID"; `stapler validate` passes). Both
+  Hugo sites' download buttons point at the v0.9.0 artifacts.
+- Earlier today's cleanup pass (commit `1d31ebf`): dropped the pre-GUI CLI
+  capture wrappers (`run-*.sh`, `connection.example.json`) and stray repo
+  droppings; README capture section now points at the GUI Record mode.
+
+## Gatekeeper "could not verify" report (resolved — was not a bug)
+
+A friend got the macOS "Apple could not verify MacXServer is free of
+malware" dialog. Downloaded the exact live zips and proved our artifacts
+ARE notarized + stapled + Gatekeeper-accepted, so the pipeline is healthy.
+The dialog is the quarantined-first-launch path (stale copy or a transient
+online check). Added a **"First launch on macOS"** section to both
+download pages explaining the System Settings → Privacy & Security →
+"Open Anyway" step, and softened the over-promising "first launch is
+clean" line. Deployed to macxserver.com + macxcapture.com, verified live.
+Still waiting on the friend's macOS version + `spctl`/`stapler` output to
+confirm it was a stale copy vs a transient check.
+
+## Bug fix 1 — xterm menu drift (commit `f3bfcdf`)
+
+Ctrl-click menus drifted off the window the further it was dragged toward
+the screen's right/bottom. Root cause: the advertised X root (1280×900 on
+the 5K) was smaller than the area windows can be dragged into; a window
+dragged past the advertised width reported an X-root x the client clamped
+its popup against. Fix: `DisplayConfig.pick()` now uses the preset table
+only to gate the integer scale, then derives the logical root as
+`floor(native ÷ scale)` so the X screen covers the whole panel. Scale
+chosen per display is unchanged (font sizing unaffected). Touched the
+preset contract in SERVER_RESOLUTION_SCALING_AND_FONTS.md (Todd approved);
+DECISIONS.md entry added. Tests updated + `testLogicalRootSpansWholeDisplay`.
+
+## Bug fix 2 — dtfile transparent icons (commit `ceef64e`)
+
+Folder/document icons drew with a gray box and a white strip (the
+transparent regions weren't clipped). Wire-confirmed from an in-process-tee
+capture: dtfile sets a depth-1 `clip_mask` pixmap on the GC + clip origin
+per icon, then CopyArea. We honored the clip-rectangle list but dropped the
+pixmap clip_mask entirely. Fix: thread clip_mask + origin from GCState →
+handleCopyArea → bridge; read the mask via the existing `StippleBitGrid`,
+convert opaque bits to horizontal run-rects at the clip origin, clip the
+blit to them (rect-clip, not a CG image-mask, to dodge the y-flip hazard).
+Two asymmetric orientation/polarity tests added per GRAPHICS_Y_FLIP.md.
+Verified visually on real dtfile. OPCODE_STATUS/SHORTCUTS/OPCODES_PUBLIC
+updated.
+
+## Housekeeping
+
+- Reconciled GetInputFocus/QueryKeymap public coverage (synthetic-reply
+  wording) so `check-opcode-coverage-drift.sh` is clean (commit `2af23c8`,
+  site deployed).
+- Two diagnostic improvements are now permanent in the capture dumper and
+  earned their keep today: `root=(x,y)` printed on pointer events, and
+  `clipMask`/`clipXOrigin`/`clipYOrigin` decoded on GC ops.
+
+## What's working
+
+- 1265 tests green. Both apps build + ship signed/notarized. Live xterm,
+  dtfile icons now correct, menus track their windows across the display.
+
+## What's next / open
+
+1. **Friend's Gatekeeper report**: get his macOS version + the
+   `spctl -a -vvv` / `stapler validate` output to confirm stale-copy vs
+   transient; no code change expected.
+2. **Latent server gaps** (carryover, untouched): pixmap clip_mask is
+   honored for CopyArea only, not other output ops (no client needs it yet);
+   native-title-bar drag-lock gap on Motif-Frame-OFF windows; same-window
+   memmove CopyArea still ignores the rect-list clip.
+3. Key-material housekeeping (from 06-10): move `Certificates.p12` out of
+   plain Dropbox to 1Password if desired.
+4. No other known bugs as of end of day (Todd: "that's all the bugs I know
+   of right now").
 
 # Status 2026-06-10
 
