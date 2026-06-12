@@ -165,6 +165,7 @@
 		972F3EE258AC442075DFB6FE /* XkbMapPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 280F23AE470D6D904408207B /* XkbMapPayload.swift */; };
 		97505EDAD43827D812042553 /* ServerMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = C692A58FDDA47F11AD813822 /* ServerMain.swift */; };
 		98DD525D2E56702953EF468B /* GCState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1117A789AFF21E2BF317C431 /* GCState.swift */; };
+		9B523B1A46A96772F571953E /* RemoteLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = C62F63EBF845EE60FC8C7221 /* RemoteLauncher.swift */; };
 		9BB7D3307B03A8B3CB750ECA /* DisplayConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49986E08BB1ACA19E7567D27 /* DisplayConfig.swift */; };
 		9BE4F2635B2BBF5821B8FF87 /* LauncherSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90F7590AE2D5541F11DA187C /* LauncherSyntaxHighlighter.swift */; };
 		9D5D0B344AAC33D2645233DC /* SwiftXCaptureCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DCC618596FA8C20C15E6B2E9 /* SwiftXCaptureCore.framework */; };
@@ -251,6 +252,7 @@
 		EA435212200EF1E33E1FA9A2 /* AdditionalOpcodes.swift in Sources */ = {isa = PBXBuildFile; fileRef = B346BF76D4A6D677D3D59128 /* AdditionalOpcodes.swift */; };
 		EA6EB878BF4A54DF680AA6A6 /* RecordView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FC5075EA0046A1E7C2B91E4 /* RecordView.swift */; };
 		EA94F23455BA42EBBBE93E3D /* ImageText8.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9636060671824233822A91EA /* ImageText8.swift */; };
+		EE40413BEC897412367B8EF0 /* SSHLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08CB18B437E54871E3E40C4C /* SSHLauncher.swift */; };
 		EE7B3C333E2ABE2F1ACB1D60 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EB66806B2129177D93B7DB53 /* Assets.xcassets */; };
 		EEDCA9526628FC5E5FBF85CE /* RenderDumper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 354798A85C6A4F490DF63864 /* RenderDumper.swift */; };
 		EF378037B61BA968E84608F0 /* Keysyms.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = C699A39EBC7E23302EB6F085 /* Keysyms.generated.swift */; };
@@ -403,6 +405,7 @@
 		072EDFD88FD7352A9CADA562 /* Padding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Padding.swift; sourceTree = "<group>"; };
 		0757BE18DD417740468C179C /* SelectionEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionEvents.swift; sourceTree = "<group>"; };
 		080AB3E9063C40E4DA6EEA54 /* QueryTreeReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryTreeReply.swift; sourceTree = "<group>"; };
+		08CB18B437E54871E3E40C4C /* SSHLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHLauncher.swift; sourceTree = "<group>"; };
 		08FC1E8C330E95BC28022D41 /* SwiftXCaptureUI.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = SwiftXCaptureUI.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		090699003899263A648E455B /* XkbEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XkbEvents.swift; sourceTree = "<group>"; };
 		094C02A823F59A170DC8EBB9 /* OpenFont.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenFont.swift; sourceTree = "<group>"; };
@@ -592,6 +595,7 @@
 		C454C4D8B6F5C18502884BF2 /* XInputEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XInputEvents.swift; sourceTree = "<group>"; };
 		C46AAD7BCDE790C11DD4C3A9 /* CaptureAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = CaptureAssets.xcassets; sourceTree = "<group>"; };
 		C4A99D791F23241E9A33233F /* CreateGC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGC.swift; sourceTree = "<group>"; };
+		C62F63EBF845EE60FC8C7221 /* RemoteLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLauncher.swift; sourceTree = "<group>"; };
 		C692A58FDDA47F11AD813822 /* ServerMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerMain.swift; sourceTree = "<group>"; };
 		C699A39EBC7E23302EB6F085 /* Keysyms.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keysyms.generated.swift; sourceTree = "<group>"; };
 		C70C3DA8E41534095FECC93F /* DeleteProperty.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeleteProperty.swift; sourceTree = "<group>"; };
@@ -726,6 +730,7 @@
 				C3648F99980A96688B37AF56 /* MockWindowBridge.swift */,
 				68F90F4DA66B7E9194001904 /* OutboundQueue.swift */,
 				FEAAC6D6AB02404456535F45 /* PixelBuffer.swift */,
+				C62F63EBF845EE60FC8C7221 /* RemoteLauncher.swift */,
 				3786DF66F0E0DC6F2B22D543 /* ResourceFile.swift */,
 				B1E38DA72875F2CB1EE5A11B /* ResourceTables.swift */,
 				3CCC075B9924815E3DCE9E28 /* ResourceTokenizer.swift */,
@@ -736,6 +741,7 @@
 				397C1DB799237FC342A95BB7 /* ServerSession.swift */,
 				47DE8FD81191EC2F95EAEE34 /* ShapeExtension.swift */,
 				9DF3816F21F8223631A5A34F /* SiblingChain.swift */,
+				08CB18B437E54871E3E40C4C /* SSHLauncher.swift */,
 				B3CBEEBE7AF2170953119CAE /* SynthesizedFonts.swift */,
 				149BF1A018D63F3CDF368D84 /* TelnetLauncher.swift */,
 				18BB04B0B20E574B91DE7719 /* USKeymap.swift */,
@@ -1348,9 +1354,11 @@
 				49D5735C4F198471DDF8CA3B /* RegionDebug.swift in Sources */,
 				94179B158905B30F50AAB39D /* RegionExtras.swift in Sources */,
 				6E61174D7B5199937EDA7642 /* RegionOp.swift in Sources */,
+				9B523B1A46A96772F571953E /* RemoteLauncher.swift in Sources */,
 				6344EC3F7D1B8EB999A4E520 /* ResourceFile.swift in Sources */,
 				E20C921F03E5395B6A7D1364 /* ResourceTables.swift in Sources */,
 				A66844BB25F9C25212498A01 /* ResourceTokenizer.swift in Sources */,
+				EE40413BEC897412367B8EF0 /* SSHLauncher.swift in Sources */,
 				8416682E2222FED362A4EE6C /* SelectionMediator.swift in Sources */,
 				CFE0016C68607BC9BB9273E2 /* ServerConfig.swift in Sources */,
 				F31D8534313763FE1C2B0B2E /* ServerCoordinator.swift in Sources */,

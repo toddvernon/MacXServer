@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var captureViewers: [CaptureViewerWindowController] = []
     private var currentLauncherFile: LauncherFile?
     private var launchersMenu: NSMenu?
-    private var activeLauncher: TelnetLauncher?
+    private var activeLauncher: RemoteLauncher?
     private var progressController: LaunchProgressWindowController?
 
     /// LAN host the launcher hands to remote apps as `DISPLAY`; set by the
@@ -431,9 +431,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let key = sender.representedObject as? String,
               let entry = currentLauncherFile?.entries.first(where: { "\($0.group)/\($0.name)" == key })
         else { return }
-        // An explicit password in the launcher file wins (dev convenience —
-        // skips the prompt every launch). Otherwise fall back to the Keychain,
-        // prompting and storing on first use.
+        // ssh path is keys-only: no password prompt, no Keychain lookup.
+        // The launcher's password field (if set) is ignored for ssh entries.
+        if entry.transport == .ssh {
+            executeLaunch(entry: entry, password: "")
+            return
+        }
+        // Telnet path: explicit password in the launcher file wins (dev
+        // convenience — skips the prompt every launch). Otherwise fall back
+        // to the Keychain, prompting and storing on first use.
         if let pw = entry.password, !pw.isEmpty {
             executeLaunch(entry: entry, password: pw)
             return
@@ -465,7 +471,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func executeLaunch(entry: LauncherEntry, password: String) {
         let display = "\(advertisedHost):\(displayNumber)"
-        let launcher = TelnetLauncher(entry: entry, password: password, displayString: display)
+        let launcher: RemoteLauncher
+        switch entry.transport {
+        case .telnet:
+            launcher = TelnetLauncher(entry: entry, password: password, displayString: display)
+        case .ssh:
+            launcher = SSHLauncher(entry: entry, displayString: display)
+        }
         activeLauncher = launcher
 
         if entry.verbose {

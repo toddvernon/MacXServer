@@ -199,6 +199,103 @@ final class LauncherFileTests: XCTestCase {
         XCTAssertEqual(groups[1].entries.map(\.name), ["xterm", "xcalc"])
     }
 
+    // Default transport is telnet; explicit ssh is parsed; default port
+    // shifts from 23 to 22 for ssh; explicit port wins over the default.
+    func testTransportParsing() {
+        let file = LauncherFile.parse("""
+        [host:u5]
+        host = u5.example.com
+        user = alice
+
+        [u5/xterm]
+        command = xterm
+
+        [host:linux]
+        host = linuxbox.local
+        user = todd
+        transport = ssh
+
+        [linux/firefox]
+        command = firefox
+
+        [host:linux-alt]
+        host = other.local
+        user = todd
+        transport = ssh
+        port = 2222
+
+        [linux-alt/xterm]
+        command = xterm
+        """)
+        let byKey = Dictionary(uniqueKeysWithValues: file.entries.map {
+            ("\($0.group)/\($0.name)", $0)
+        })
+        XCTAssertEqual(byKey["u5/xterm"]?.transport, .telnet)
+        XCTAssertEqual(byKey["u5/xterm"]?.port, 23)
+        XCTAssertEqual(byKey["linux/firefox"]?.transport, .ssh)
+        XCTAssertEqual(byKey["linux/firefox"]?.port, 22, "ssh default port is 22")
+        XCTAssertEqual(byKey["linux-alt/xterm"]?.transport, .ssh)
+        XCTAssertEqual(byKey["linux-alt/xterm"]?.port, 2222, "explicit port wins")
+    }
+
+    // Mixing transport=ssh with a password set is a config mistake (ssh is
+    // keys-only, so the password gets ignored). Surface a parse warning so
+    // the loader can log it; entry still parses, password field passes through.
+    func testSSHWithPasswordWarns() {
+        let file = LauncherFile.parse("""
+        [host:linux]
+        host = linuxbox.local
+        user = todd
+        transport = ssh
+        password = irrelevant
+
+        [linux/xterm]
+        command = xterm
+        """)
+        XCTAssertEqual(file.entries.count, 1)
+        XCTAssertEqual(file.entries[0].transport, .ssh)
+        XCTAssertEqual(file.entries[0].password, "irrelevant",
+                       "password field still parses; warning is the only side effect")
+        XCTAssertEqual(file.warnings.count, 1)
+        XCTAssertTrue(file.warnings[0].contains("linux/xterm"))
+        XCTAssertTrue(file.warnings[0].contains("transport=ssh"))
+
+        // Telnet entry with a password is fine — no warning.
+        let clean = LauncherFile.parse("""
+        [host:u5]
+        host = u5.example.com
+        user = alice
+        password = ok
+
+        [u5/xterm]
+        command = xterm
+        """)
+        XCTAssertTrue(clean.warnings.isEmpty)
+    }
+
+    // An item can override its host-block's transport (rare, but the merge
+    // table allows it for any field).
+    func testTransportItemOverride() {
+        let file = LauncherFile.parse("""
+        [host:mixed]
+        host = mixed.local
+        user = alice
+        transport = telnet
+
+        [mixed/legacy]
+        command = xterm
+
+        [mixed/modern]
+        command = firefox
+        transport = ssh
+        """)
+        let byKey = Dictionary(uniqueKeysWithValues: file.entries.map {
+            ("\($0.group)/\($0.name)", $0.transport)
+        })
+        XCTAssertEqual(byKey["mixed/legacy"], .telnet)
+        XCTAssertEqual(byKey["mixed/modern"], .ssh)
+    }
+
     // Mixing legacy entries with new host-block entries works -- both end up
     // in the same group when the host short-name matches the host-block key.
     func testLegacyAndHostBlockEntriesShareGroup() {

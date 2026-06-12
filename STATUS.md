@@ -1,11 +1,52 @@
-# Status 2026-06-11
+# Status 2026-06-12
 
-Launch day plus four bug fixes. The repo went **public**, v0.9.0 of both
-apps shipped (signed + notarized), and I closed: a friend's Gatekeeper
-scare (turned out to be docs, not a signing problem), the xterm
-menu-drift bug, the dtfile transparent-icon bug, and the orphaned-xterm-menu
-bug (a popup left stranded on screen). All pushed to `origin/main`; working
-tree clean.
+SSH launcher landed today. The Launchers menu now supports modern
+Linux/BSD/Solaris boxes alongside the telnet path for vintage Sun
+workstations: new `transport = ssh` key on the host block, spawns
+`/usr/bin/ssh` with `BatchMode=yes` (keys-only, no password injection),
+direct-DISPLAY back to our server on 6000 (no `-X` X11 forwarding).
+Decisions and trade-offs logged in DECISIONS.md (2026-06-12 entry).
+
+Yesterday's launch-day notes — public-release flip, v0.9.0 shipping, and
+the four bug fixes (Gatekeeper docs, xterm menu drift, dtfile transparent
+icons, orphaned xterm menu) — moved to the body below for the record.
+
+## SSH launcher (today)
+
+- New transport `transport = ssh` on the launcher-file host block. Default
+  remains `telnet` so every existing `~/.macxserver-launchers` keeps
+  working byte-for-byte. Default port shifts to 22 when transport is ssh.
+- New `SSHLauncher` in `Sources/SwiftXServerCore/`. Spawns
+  `/usr/bin/ssh -T -o BatchMode=yes -o StrictHostKeyChecking=accept-new
+  -o ConnectTimeout=15 -p PORT user@host '…remote command…'`. Stdout +
+  stderr stream into the existing progress window.
+- Remote command shape is identical to the telnet path: `/bin/sh -c
+  'DISPLAY=…; export DISPLAY; nohup CMD </dev/null >/dev/null 2>&1 &'`.
+  The `/bin/sh -c` wrap is mandatory — accounts whose login shell is
+  csh/tcsh (caught while setting up Todd's nuc: `2: Command not found.`
+  was csh choking on `2>&1`) reject Bourne syntax outright. X traffic
+  goes direct to our server on 6000; we do NOT use ssh's `-X`/`-Y` X11
+  forwarding (no remote-sshd config required, no xauth cookie on our side).
+- Auth is keys-only. `BatchMode=yes` makes ssh fail fast instead of hanging
+  if keys aren't set up. AppDelegate's ssh dispatch skips the password
+  prompt and Keychain entirely. A `password = …` field on an ssh entry is
+  parsed but ignored, with a load-time warning emitted via the log sink.
+- New `RemoteLauncher` protocol so `AppDelegate.activeLauncher` can hold
+  either type. TelnetLauncher and SSHLauncher both conform.
+- Tests: `LauncherFileTests` gained `testTransportParsing`,
+  `testTransportItemOverride`, `testSSHWithPasswordWarns`.
+  `SSHLauncherTests` pins the exact argv shape and the auth-failure-text
+  detector. All 21 launcher tests green, build clean.
+- Seed comment in `DefaultLaunchers.swift` documents `transport`, the
+  per-transport default port, and the keys-only constraint. Existing
+  installed launcher files are not migrated automatically (the seed only
+  writes on first run when the file is missing); the format is
+  forward-compatible so this is a no-op for current users.
+- macxserver.com launcher feature page lives outside this repo and is
+  unchanged for now — flag for a separate update next time the website is
+  open.
+
+## 2026-06-11 — Launch day + four bug fixes (preserved for the record)
 
 ## Release / launch
 

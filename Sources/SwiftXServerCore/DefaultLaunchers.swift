@@ -18,21 +18,36 @@ public enum DefaultLaunchers {
         # what it needs (almost always just `command`).
         #
         # Fields:
-        #   host    = hostname or IP             (required on the host block)
-        #   user    = login username             (required on the host block)
-        #   command = X app to launch            (required on the item)
-        #   port    = telnet port                (optional, default 23)
-        #   verbose = true/false                 (optional, default false)
-        #   login_prompt    = substring          (default: ogin:)
-        #   password_prompt = substring          (default: assword:)
-        #   shell_prompt    = substring          (default: "$ ")
-        #   password = login password            (optional, see below)
+        #   host      = hostname or IP           (required on the host block)
+        #   user      = login username           (required on the host block)
+        #   command   = X app to launch          (required on the item)
+        #   transport = telnet | ssh             (optional, default telnet)
+        #   port      = remote port              (optional, default 23 for
+        #                                        telnet, 22 for ssh)
+        #   verbose   = true/false               (optional, default false)
+        #   login_prompt    = substring          (default: ogin:, telnet only)
+        #   password_prompt = substring          (default: assword:, telnet only)
+        #   shell_prompt    = substring          (default: "$ ", telnet only)
+        #   password  = login password           (optional, telnet only;
+        #                                         see below)
         #
-        # If you omit `password`, it's read from the macOS Keychain; on first
-        # use you're prompted once and it's stored there. Setting `password`
-        # in this file skips that prompt every launch -- handy during
-        # development, but it's plaintext, so don't use it on a shared
-        # machine.
+        # Transports:
+        #   - telnet (default): the original path for vintage Unix boxes
+        #     (SunOS 4, old Solaris, etc) that don't have sshd. Drives the
+        #     login/password state machine; password comes from the
+        #     `password` field, the macOS Keychain, or a first-launch prompt.
+        #   - ssh: for modern Linux/BSD/Solaris boxes. Spawns /usr/bin/ssh
+        #     with BatchMode=yes, so you MUST have ssh keys set up to the
+        #     remote host first (no password injection, no Keychain prompt).
+        #     We do NOT use ssh's X11 forwarding -- the X traffic still goes
+        #     direct to our server, same as telnet, so the remote sshd
+        #     doesn't need `X11Forwarding yes`.
+        #
+        # If you omit `password` on a telnet entry, it's read from the macOS
+        # Keychain; on first use you're prompted once and it's stored there.
+        # Setting `password` in this file skips that prompt every launch --
+        # handy during development, but it's plaintext, so don't use it on a
+        # shared machine.
         #
         # `command` is a shell command line, passed verbatim to /bin/sh -c
         # on the remote host. Spaces are arg separators; double-quotes and

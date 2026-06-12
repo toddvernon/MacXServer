@@ -1,5 +1,13 @@
 import Foundation
 
+/// Which remote-shell protocol the launcher drives. Telnet (the original
+/// path) runs the IAC negotiation + login/password state machine in
+/// TelnetLauncher; SSH (added 2026-06-12 for modern Linux/BSD boxes) just
+/// spawns `/usr/bin/ssh` and lets it handle the protocol, key auth only.
+public enum LauncherTransport: String, Equatable, Sendable {
+    case telnet, ssh
+}
+
 /// One launchable command parsed from `~/.macxserver-launchers`: a remote
 /// host, the connection details, and the X client command to run there.
 public struct LauncherEntry: Equatable, Sendable {
@@ -10,28 +18,33 @@ public struct LauncherEntry: Equatable, Sendable {
     /// host key. For legacy `[name]` entries it's the leftmost dotted part of
     /// the entry's `host` field (`u5.example.com` → `u5`).
     public let group: String
-    /// Hostname or address to telnet into.
+    /// Hostname or address to connect to.
     public let host: String
     /// Command line to run on the remote host (sets DISPLAY and launches the X client).
     public let command: String
-    /// Login username for the telnet session.
+    /// Login username for the remote session.
     public let user: String
-    /// Telnet port. Defaults to 23.
+    /// Remote port. Default 23 for telnet, 22 for ssh.
     public let port: UInt16
-    /// Show the per-launch progress window with the telnet transcript.
+    /// Show the per-launch progress window with the session transcript.
     public let verbose: Bool
-    /// Substring the telnet flow waits for before sending the username.
+    /// Substring the telnet flow waits for before sending the username. (Unused for ssh.)
     public let loginPrompt: String
-    /// Substring the telnet flow waits for before sending the password.
+    /// Substring the telnet flow waits for before sending the password. (Unused for ssh.)
     public let passwordPrompt: String
-    /// Substring that marks the remote shell is ready for the command.
+    /// Substring that marks the remote shell is ready for the command. (Unused for ssh.)
     public let shellPrompt: String
     /// Optional cleartext password from the launcher file. nil = none given,
     /// so the launch flow falls back to the macOS Keychain (and prompts if
     /// absent). Putting a password here is a development convenience to avoid
     /// re-typing it every launch; it lives in a plaintext dotfile, so it's
-    /// not recommended on shared machines.
+    /// not recommended on shared machines. Ignored when `transport = ssh`:
+    /// ssh is keys-only (BatchMode), so we never prompt or read Keychain.
     public let password: String?
+    /// Remote-shell protocol. Default `.telnet` keeps the original behavior
+    /// for every existing launcher; set `transport = ssh` on a host block to
+    /// use ssh (key-based auth, no password injection).
+    public let transport: LauncherTransport
 
     /// Build an entry. Prompts and port carry the documented defaults when omitted.
     public init(name: String, group: String, host: String, command: String, user: String,
@@ -39,12 +52,14 @@ public struct LauncherEntry: Equatable, Sendable {
                 loginPrompt: String = "ogin:",
                 passwordPrompt: String = "assword:",
                 shellPrompt: String = "$ ",
-                password: String? = nil) {
+                password: String? = nil,
+                transport: LauncherTransport = .telnet) {
         self.name = name; self.group = group
         self.host = host; self.command = command
         self.user = user; self.port = port; self.verbose = verbose
         self.loginPrompt = loginPrompt; self.passwordPrompt = passwordPrompt
         self.shellPrompt = shellPrompt; self.password = password
+        self.transport = transport
     }
 }
 
@@ -53,6 +68,10 @@ public struct LauncherEntry: Equatable, Sendable {
 public struct LauncherFile: Sendable {
     /// Every entry parsed from the file, in file order.
     public let entries: [LauncherEntry]
+    /// Non-fatal issues the parser noticed (e.g. ssh entry with a password
+    /// set, since ssh is keys-only). LauncherFileLoader emits these to the
+    /// log sink so they're visible without forcing a parse error.
+    public let warnings: [String]
 
     /// Entries grouped by `group`, preserving first-appearance order of groups
     /// and the file order of entries within each group. The menu builder uses
@@ -79,6 +98,7 @@ public struct LauncherFile: Sendable {
         var pendingItems: [(section: String, pairs: [String: String])] = []
         var currentSection: String?
         var pairs: [String: String] = [:]
+        var warnings: [String] = []
 
         func flush() {
             guard let section = currentSection else { return }
@@ -141,8 +161,15 @@ public struct LauncherFile: Sendable {
                   let user = merged["user"],
                   let command = merged["command"] else { continue }
 
-            let port = merged["port"].flatMap { UInt16($0) } ?? 23
+            let transport = LauncherTransport(rawValue: merged["transport"]?.lowercased() ?? "")
+                ?? .telnet
+            let port = merged["port"].flatMap { UInt16($0) }
+                ?? (transport == .ssh ? 22 : 23)
             let verbose = ["true", "yes", "1"].contains(merged["verbose"]?.lowercased() ?? "")
+            if transport == .ssh, let pw = merged["password"], !pw.isEmpty {
+                warnings.append("'\(group)/\(name)' has transport=ssh and a "
+                    + "password set; ssh is keys-only here, password ignored")
+            }
             entries.append(LauncherEntry(
                 name: name, group: group,
                 host: host, command: command, user: user,
@@ -150,11 +177,12 @@ public struct LauncherFile: Sendable {
                 loginPrompt: merged["login_prompt"] ?? "ogin:",
                 passwordPrompt: merged["password_prompt"] ?? "assword:",
                 shellPrompt: merged["shell_prompt"] ?? "$ ",
-                password: merged["password"]
+                password: merged["password"],
+                transport: transport
             ))
         }
 
-        return LauncherFile(entries: entries)
+        return LauncherFile(entries: entries, warnings: warnings)
     }
 }
 
@@ -185,7 +213,9 @@ public enum LauncherFileLoader {
         }
         do {
             let text = try String(contentsOfFile: path, encoding: .utf8)
-            return LauncherFile.parse(text)
+            let parsed = LauncherFile.parse(text)
+            for w in parsed.warnings { log?.log("launchers: \(w)") }
+            return parsed
         } catch {
             log?.log("launchers: read failed: \(error)")
             return LauncherFile.parse(seed())

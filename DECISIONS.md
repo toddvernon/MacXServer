@@ -719,6 +719,29 @@ The display picker (`DisplayConfig.pick`) used to return both the integer scale 
 
 ---
 
+## 2026-06-12 — SSH launcher: no X11 forwarding, keys-only auth
+
+The telnet launcher (shipped 2026-05-27) covers vintage Sun boxes that don't have sshd. To extend the menu to modern Linux/BSD/Solaris hosts, added a second transport `transport = ssh` on the launcher-file host block. Two design choices worth pinning so we don't relitigate.
+
+**Chosen**: spawn `/usr/bin/ssh` with `-T -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15`, pass a wrapped remote command that sets `DISPLAY=mac.local:0; nohup CMD &` (same shape as the telnet path), and let the X client open a direct TCP connection back to our server on 6000. No `-X`/`-Y` X11 forwarding. Keys-only — no password injection, no Keychain prompt; a password field on an ssh entry is parsed but ignored with a load-time warning.
+
+**Alternatives considered**:
+
+1. **`ssh -X` (X11 forwarding) instead of direct-DISPLAY.** Encrypted X traffic, automatic xauth cookie, sets `DISPLAY=localhost:10.0` on the remote. Rejected: requires `X11Forwarding yes` in remote sshd (often firewalled by default on minimal Linux installs), adds an xauth wrinkle on the Mac side (we currently don't publish a cookie, so ssh would warn or need a stub `xauth add`), and the encryption gain is irrelevant on the LAN this is used on. The direct-DISPLAY path reuses every piece of plumbing the telnet flow already has — the only diff is which binary we spawn.
+
+2. **Password injection via `sshpass` or a PTY-driven expect loop.** Would give parity with the telnet password/Keychain UX. Rejected as scope creep: keys are the normal Linux convention, `sshpass` is a separate Homebrew dep we'd have to detect or bundle, and the PTY path duplicates most of TelnetLauncher's state-machine complexity for marginal gain. `BatchMode=yes` makes ssh fail fast instead of hanging if keys aren't set up, so the failure mode is clean.
+
+3. **One launcher type with a per-block `auth = keys|password` knob.** Rejected: muddles the two transports' very different auth stories. `transport = ssh` already implies keys (BatchMode is on); `transport = telnet` already implies the password flow.
+
+**Why this won**: zero new user-side state (no xauth, no remote sshd config, no extra deps), small code surface (one new `SSHLauncher` plus a `RemoteLauncher` protocol shared with `TelnetLauncher`), and the X11 wire path is identical to telnet — so any visual bug reproducible over ssh is also reproducible over telnet, no new debug axis.
+
+**Cost / scope flagged**:
+
+- Remote sshd must allow the wrapped command's outbound TCP to our 6000. On a tightly firewalled host this fails silently from the client's perspective (ssh exits 0, app never appears). Acceptable: same failure mode as telnet, and the verbose progress window shows what we ran.
+- If a user really does want encrypted X traffic, the answer is to add an `X11Forwarding=yes` option later, not to flip the default — keep the simple direct-DISPLAY path as the documented baseline.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
