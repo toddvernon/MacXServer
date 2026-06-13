@@ -760,6 +760,44 @@ When WM_NORMAL_HINTS arrived for server-side application (2026-06-13), the quest
 
 ---
 
+## 2026-06-13 — Switch advertised visual from PseudoColor 8-bit to TrueColor 24-bit (supersedes 2026-05-05)
+
+The 2026-05-05 entry chose PseudoColor 8-bit "for Sun-era authenticity." On 2026-06-13 we revisited the question after the WM-proxy contract pass surfaced (a) the "wacky colors on capture replay" pain Todd had been seeing, and (b) the realization that the SSH launcher (2026-06-12) opens a real path for modern Linux X clients that explicitly require TrueColor at window create.
+
+**Chosen**: advertise a single TrueColor 24-bit visual (RGB888, masks `red=0x00FF0000 / green=0x0000FF00 / blue=0x000000FF`), drop PseudoColor entirely. `whitePixel=0x00FFFFFF`, `blackPixel=0x00000000` (the canonical Linux values).
+
+**Why this won — the costs of keeping PseudoColor**:
+
+1. **Replay-color fidelity.** Captured Sun sessions reference 8-bit pixel cookies from the original server's colormap. On replay, our PseudoColor allocator returned different cell numbers for the same RGBs, so subsequent captured `CreateGC(foreground=N)` references resolved to whatever some *other* client's earlier AllocColor happened to put at cell N. The "wacky colors" symptom. Fixing this in PseudoColor needs a per-replay pixel-remap table; TrueColor sidesteps it (pixel value IS the RGB).
+
+2. **GetImage fidelity.** Our PseudoColor GetImage reverse-mapped 32-bit ARGB backing back to 8-bit pixel via `ColorTable.pixel(for:)`. AA glyph edges and any RGB not in the table returned pixel 0. xwd / xmag / screen-capture clients saw text with white-fringed edges. TrueColor: lossless direct pack.
+
+3. **AllocColor ceiling / leak.** PseudoColor has a 256-cell limit. We were running with no cell cap (SHORTCUTS open item) so long-running sessions leaked. Fixing the cap would have meant cells-exhausted failures we don't currently hit. TrueColor: degenerate alloc, no ceiling, FreeColors becomes legitimately no-op.
+
+4. **Modern Linux apps via SSH launcher.** Firefox / GTK / Qt all explicitly request TrueColor at `CreateWindow`. Under our PseudoColor visual they'd either fail with "no matching visual," downgrade to PseudoColor mode and render badly, or refuse to map. With the SSH launcher we shipped 2026-06-12, the door is open for these clients; the visual needed to follow.
+
+5. **InstallColormap / UninstallColormap / ListInstalledColormaps** were on the "we should eventually implement" list under PseudoColor (color-flash territory). Under TrueColor they're effectively no-ops forever — one less open area to keep on the list.
+
+**Cost paid**:
+
+- Color-cycling apps (xcolorize, xmorph, screensaver hack collection) require PseudoColor's writable cells + StoreColors. They no longer work. None are in the charter daily-flow corpus. If one ever surfaces, we could add a PseudoColor compatibility visual back — but YAGNI today.
+- Some real X servers offered BOTH visuals (PseudoColor for legacy apps, TrueColor as default). We chose single-visual for simplicity; the diff is "one drawing path instead of two" everywhere.
+- Existing capture corpus was thought to need re-recording. Todd's audit corrected that — `CapturedAppReplayTests` only verifies dispatch + resource counts (not rendered output), so the captures stayed valid and all 1284 tests pass post-switch with zero corpus changes.
+
+**Vintage Sun apps in the daily charter flow** (xterm, xcalc, xclock, xeyes, oclock, quickplot, dtcalc, dtterm, dthelpview, dtpad, dticon, the Athena/Motif/Xt widget set generally) use `DefaultVisual` and `AllocColor`. They render identically on TrueColor — the API is the same, the pixel value is opaque to them, the resulting RGB at draw time matches. Verified by `swift test` (1284 green, 27 skipped) and to be verified by live smoke test after the switch ships.
+
+**Alternatives considered**:
+
+1. **Dual-visual (PseudoColor + TrueColor, default = TrueColor).** Defers the cleanup; doubles the maintenance burden (two drawing paths, two GetImage / PutImage layouts). The vintage-app compat case for PseudoColor turned out empty — nothing in the corpus required it. Rejected.
+
+2. **TrueColor with a PseudoColor compatibility shim accessed via explicit `XMatchVisualInfo(... 8 PseudoColor ...)`.** Same maintenance cost as dual-visual for a zero-app benefit. Rejected.
+
+3. **Keep PseudoColor, add per-replay pixel-remap table.** Solves the replay-color pain but leaves the GetImage fidelity issue, the AllocColor ceiling question, and the modern-Linux-app blocker. Bigger maintenance burden for a smaller win. Rejected.
+
+The 2026-05-05 "Sun-era authenticity" argument doesn't survive scrutiny — vintage apps don't *require* PseudoColor, they just got it because that's what the hardware supported. Authenticity at the cost of functionality is the wrong trade for a charter that's about running those apps comfortably on a Mac.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

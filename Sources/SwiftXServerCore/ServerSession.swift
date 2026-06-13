@@ -5883,18 +5883,19 @@ public final class ServerSession: @unchecked Sendable {
             // ZPixmap path is implemented for both windows and pixmaps.
             // XYPixmap returns the same content reorganized as bitmap planes.
             //
-            // Wire-format invariants for our PseudoColor 8-bit server:
-            // depth=8, bits-per-pixel=8, scanline-pad=32. Reply data is 1 byte
-            // per pixel for ZPixmap; for XYPixmap, one bit plane per set bit
-            // in planeMask (8 planes max at depth 8), packed MSB-first, each
-            // scanline padded to 32 bits.
+            // Wire-format invariants for our TrueColor 24-bit server
+            // (since 2026-06-13): depth=24, bits-per-pixel=32 (X.org
+            // convention pads 24-bit pixels to 32-bit alignment),
+            // scanline-pad=32. Reply data is 4 bytes per pixel for
+            // ZPixmap, laid out per imageByteOrder=msbFirst:
+            // [pad(0), red, green, blue]. The pixel value IS the RGB —
+            // no ColorTable lookup needed, no AA-edge fidelity loss.
             //
-            // Backing format mismatch: the Mac CGBitmapContext stores 32-bit
-            // ARGB premultiplied-first. We reverse-map each ARGB to an X
-            // pixel value via ColorTable. Anti-aliased edges produce ARGB
-            // values that aren't in the table → pixel 0 (white). For
-            // x11perf the actual pixel values don't matter; what matters is
-            // that the reply is well-formed at the right byte count.
+            // The Mac CGBitmapContext backing stores 32-bit ARGB
+            // premultiplied-first. byteOrder32Little + premultipliedFirst
+            // = BGRA in memory; reading as UInt32 little-endian yields
+            // 0xAARRGGBB. We extract R/G/B directly and emit them
+            // in the wire's msbFirst byte order.
             //
             // Spec validations:
             //   - drawable must exist (BadDrawable)
@@ -5942,42 +5943,31 @@ public final class ServerSession: @unchecked Sendable {
                 width: rw, height: rh
             ) ?? [UInt32](repeating: 0, count: rw * rh)
 
-            // Reverse-map BGRA → 8-bit X pixel index. The memory layout of
-            // a single UInt32 read from a byteOrder32Little + premultipliedFirst
-            // bitmap is, in low→high byte order: B, G, R, A. On a
-            // little-endian host (Apple Silicon, x86_64) reading it as a
-            // UInt32 yields 0xAARRGGBB.
-            let colorTable = self.colors
-            var pixelBytes = [UInt8](repeating: 0, count: rw * rh)
-            for i in 0..<(rw * rh) {
-                let argb = bgra[i]
-                let r8 = UInt8((argb >> 16) & 0xFF)
-                let g8 = UInt8((argb >>  8) & 0xFF)
-                let b8 = UInt8( argb        & 0xFF)
-                // Expand each 8-bit channel to 16-bit by byte-replication so
-                // the ColorTable key matches what AllocColor stored.
-                let rgb16 = RGB16(
-                    red:   UInt16(r8) << 8 | UInt16(r8),
-                    green: UInt16(g8) << 8 | UInt16(g8),
-                    blue:  UInt16(b8) << 8 | UInt16(b8)
-                )
-                let px = colorTable.pixel(for: rgb16) ?? 0
-                let masked = px & r.planeMask
-                pixelBytes[i] = UInt8(masked & 0xFF)
-            }
-
-            // Build the image-data buffer per format.
+            // Build the image-data buffer per format. For depth-24
+            // ZPixmap we go straight from backing BGRA to wire-format
+            // [pad, R, G, B] per pixel — no colormap lookup, no
+            // AA-edge fidelity loss. XYPixmap is now an 8-channel
+            // plane decomposition over the 24-bit pixel (any plane
+            // bit in r.planeMask can fire; redMask covers bits 16-23,
+            // greenMask 8-15, blueMask 0-7).
             let imageData: [UInt8]
             switch r.format {
             case .zPixmap:
-                // 1 byte per pixel, scanline padded to 4 bytes.
-                let rowStride = (rw + 3) & ~3
+                // 4 bytes per pixel for depth 24 (bitsPerPixel=32),
+                // scanline already 32-bit-aligned (4 bytes per pixel
+                // × any width is a multiple of 4). MSB-first wire byte
+                // order: [pad, red, green, blue].
+                let rowStride = rw * 4
                 var buf = [UInt8](repeating: 0, count: rowStride * rh)
                 for y in 0..<rh {
                     let srcRow = y * rw
                     let dstRow = y * rowStride
                     for x in 0..<rw {
-                        buf[dstRow + x] = pixelBytes[srcRow + x]
+                        let argb = bgra[srcRow + x] & r.planeMask
+                        buf[dstRow + x * 4 + 0] = 0
+                        buf[dstRow + x * 4 + 1] = UInt8((argb >> 16) & 0xFF)
+                        buf[dstRow + x * 4 + 2] = UInt8((argb >>  8) & 0xFF)
+                        buf[dstRow + x * 4 + 3] = UInt8( argb        & 0xFF)
                     }
                 }
                 imageData = buf
@@ -5985,10 +5975,10 @@ public final class ServerSession: @unchecked Sendable {
                 // One bitmap plane per set bit in planeMask, ordered most
                 // significant plane first per X11 spec. Each plane: 1 bit
                 // per pixel, packed MSB-first within bytes, scanline padded
-                // to bitmap-scanline-pad (32 bits = 4 bytes).
+                // to bitmap-scanline-pad (32 bits = 4 bytes). At depth 24,
+                // valid plane bits are 0..23 — typically used for R/G/B
+                // channel extraction by colour-separation clients.
                 let bytesPerScanline = ((rw + 31) / 32) * 4
-                // Find which planes (bit indices) are selected, MSB first.
-                // For our depth 8, valid plane bits are 0..7.
                 var planes = [Int]()
                 for bit in (0..<Int(drawableDepth)).reversed() {
                     if (r.planeMask >> bit) & 1 == 1 {
@@ -6002,9 +5992,11 @@ public final class ServerSession: @unchecked Sendable {
                         let dstRow = planeStart + y * bytesPerScanline
                         let srcRow = y * rw
                         for x in 0..<rw {
-                            let v = pixelBytes[srcRow + x]
+                            // bgra[srcRow + x] is the full 32-bit ARGB.
+                            // Extract bit `bit` of the lower 24 bits (the
+                            // RGB888-packed pixel value).
+                            let v = bgra[srcRow + x] & 0x00FFFFFF
                             if (v >> bit) & 1 == 1 {
-                                // MSB-first: pixel 0 → bit 7 of byte 0.
                                 let byteOff = x / 8
                                 let bitOff = 7 - (x % 8)
                                 buf[dstRow + byteOff] |= UInt8(1 << bitOff)

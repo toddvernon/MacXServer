@@ -1,7 +1,82 @@
 # Status 2026-06-13
 
-WM-proxy contract pass: closed two real charter gaps that we'd been
-silently ignoring for top-level Motif windows. WM_DELETE_WINDOW now
+Big day. Morning landed the WM-proxy contract pass (WM_DELETE_WINDOW
+gating + WM_NORMAL_HINTS / _MOTIF_WM_HINTS). Afternoon flipped the
+advertised visual from PseudoColor 8-bit to TrueColor 24-bit (DECISIONS
+2026-06-13 supersedes 2026-05-05). Both shipped clean: 1284 tests green
+across the suite, working-tree clean, all pushed to origin.
+
+## TrueColor 24-bit visual switch (afternoon)
+
+Discussion that drove the change started from Todd's "wacky colors in
+capture replay" symptom. Tracing back: vintage clients reference
+captured pixel cookies that meant something on Sun's PseudoColor
+colormap; on replay against our PseudoColor server they collide with
+whatever some *other* client's earlier AllocColor put at the same cell
+index. Pixel-translation fix would have addressed that one symptom; a
+broader visual-class re-think solved it plus a stack of unrelated
+pains (GetImage AA-edge fidelity loss, AllocColor 256-cell ceiling we
+weren't enforcing, modern Linux apps via the SSH launcher blocked from
+mapping windows, eternal InstallColormap/UninstallColormap maintenance
+debt). DECISIONS.md 2026-06-13 has the full reasoning + alternatives.
+
+Code changes:
+- `ServerConfig.makeSetupAccepted`: TrueColor 24-bit visual, RGB888
+  masks, rootDepth=24, pixmapFormat depth-24 bitsPerPixel-32 scanlinePad-32.
+  `whitePixel=0x00FFFFFF`, `blackPixel=0x00000000` (canonical Linux).
+- `ColorTable`: degenerate pack/unpack. `allocate()` bit-packs RGB,
+  `rgb(for:)` bit-unpacks, no state needed for the mapping. `count`
+  still tracks distinct allocations for CapturedAppReplayTests
+  baselines. No pinned cells, no shared-cell match, no 256-cell ceiling.
+- `GCState` defaults flipped: fg=blackPixel (0), bg=whitePixel (0xFFFFFF).
+- `GetImage` on a window: now reports depth=24 and emits 4 bytes per
+  pixel `[pad, red, green, blue]` extracted directly from BGRA backing.
+  AA-edge fidelity preserved by construction; no reverse-map step.
+
+Tests:
+- `ColorTableTests` rewritten for TrueColor pack/unpack (8 cases).
+- 6 other test files updated to use TrueColor-packed pixel values
+  where they previously hardcoded PseudoColor pin assumptions
+  (DrawingDispatch / FontDispatch / PutImageDispatch / ShapeExtension /
+  ShapeOnDescendant / StartupReplies).
+- `CapturedAppReplayTests`: untouched, still pass. Todd's intuition
+  was right — the captures stayed valid because those tests verify
+  dispatch + resource counts, not rendered output.
+- Full suite: **1284 tests, 0 failures**, 27 skipped (unchanged baseline).
+
+What's deferred (open, follow-on):
+- **PutImage depth-24 ZPixmap**: currently silent-dropped. Modern
+  Linux clients sending PutImage depth-24 image data won't render.
+  Tracked in SHORTCUTS. Add when an actual client surfaces.
+- **PixelBuffer depth-24 support**: CreatePixmap(depth: 24) needs a
+  PixelBuffer that stores 32-bit pixels. Not blocking today; will
+  surface when something actually exercises it.
+- **Colormap ops (AllocColorCells / StoreColors / etc.)**: should
+  emit BadMatch per TrueColor spec semantics. Today they no-op or
+  emit BadAlloc per the PseudoColor-era OPCODE_STATUS notes. Cleanup,
+  not blocking.
+
+Smoke test pending: Todd to run xterm / xcalc / dtpad / quickplot
+post-switch and confirm visuals are unchanged for vintage apps. Per
+DECISIONS reasoning they should render identically since the API is
+the same and vintage apps use DefaultVisual without caring about its
+class.
+
+SHORTCUTS closed today (PseudoColor-era items):
+- "AllocColor has no freelist and no cell cap" — TrueColor alloc is
+  degenerate, no state to leak.
+- "Color resolution falls back to black for unknown pixels" — every
+  24-bit value is a valid RGB now.
+- "GetImage reverse-maps ARGB → 8-bit pixel via ColorTable" — direct
+  ARGB extraction; AA edges lossless.
+
+OPCODE_STATUS rows updated for AllocColor / QueryColors / GetImage
+to reflect the TrueColor semantics; dated 2026-06-13.
+
+## WM-proxy contract pass (morning)
+
+Closed two real charter gaps that we'd been silently ignoring for
+top-level Motif windows. WM_DELETE_WINDOW now
 respects WM_PROTOCOLS membership (no more sending the polite message to
 clients that never claimed it), and the NSWindow no longer closes
 underneath a "save unsaved changes?" dialog before the client can react.
