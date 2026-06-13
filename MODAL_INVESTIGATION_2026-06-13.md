@@ -1,4 +1,32 @@
-# Modal-dialog behavior investigation — open (2026-06-13)
+# Modal-dialog behavior investigation — RESOLVED (2026-06-13)
+
+**Closed by commit `7d95474`** ("WM_TRANSIENT_FOR: attach transient
+dialogs as NSWindow child windows"). Quick summary of what we found:
+
+- The dialogs in quickplot's repro are **explicitly NOT modal** —
+  `XtVaCreatePopupShell` in `reference/quickplot/dialog.c:465` doesn't
+  set `XmNdialogStyle`, defaulting to `XmDIALOG_MODELESS`. Real Sun
+  mwm also lets the user click outside the dialog.
+- The "both dismiss when Cancel clicked" symptom is **identical on
+  real Sun** — Todd confirmed by running quickplot on u5. It's
+  quickplot's intentional callback chain, not a bug.
+- The actual missing behavior was **WM_TRANSIENT_FOR layering**:
+  on Sun the dialog stays visually above its parent regardless of
+  focus; on Mac our dialog dropped behind when the parent gained
+  focus. Now fixed via `NSWindow.addChildWindow(_:ordered:.above)`.
+- The Motif `_MOTIF_WM_HINTS.inputMode` field is NOT how Motif
+  signals modality; modality flows through `XtAddGrab`'s
+  client-side grab list which dispatches via Xt's event loop. We
+  never see it on the wire. Real X grabs that DO appear on the wire
+  (XGrabKeyboard/XGrabPointer) come from Motif menu posting
+  (`reference/motif/lib/Xm/TearOff.c`) and drag-and-drop
+  (`reference/motif/lib/Xm/DragC.c`), not from modal dialogs.
+
+Notes below preserved for the audit trail.
+
+---
+
+## Original notes — open (pre-fix)
 
 Symptom Todd observed: quickplot opened a file-picker dialog (modal),
 then he clicked the command window and opened a second dialog. When
