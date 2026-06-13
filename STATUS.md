@@ -1,12 +1,142 @@
 # Status 2026-06-13
 
-Big day. Morning landed the WM-proxy contract pass (WM_DELETE_WINDOW
-gating + WM_NORMAL_HINTS / _MOTIF_WM_HINTS). Afternoon flipped the
-advertised visual from PseudoColor 8-bit to TrueColor 24-bit (DECISIONS
-2026-06-13 supersedes 2026-05-05). Both shipped clean: 1284 tests green
-across the suite, working-tree clean, all pushed to origin.
+Big day, **MacXServer v0.9.3 shipped** (signed/notarized/stapled, on
+macxserver.com). Three substantive chunks landed:
 
-## TrueColor 24-bit visual switch (afternoon)
+1. **Morning — WM-proxy contract pass.** WM_DELETE_WINDOW gating on
+   WM_PROTOCOLS, NSWindow close deferred until the client responds (fixes
+   dtpad "save unsaved changes?" orphan), WM_NORMAL_HINTS plumbed to
+   `NSWindow.contentMin/MaxSize` / `contentResizeIncrements` /
+   `contentAspectRatio` (quickplot's plot-window aspect ratio now honored
+   during user resize; xterm character-cell resize snap works),
+   _MOTIF_WM_HINTS decoration bits applied per-window on top of the
+   static `[motif-frame]` config.
+
+2. **Afternoon — TrueColor 24-bit visual switch.** Supersedes the
+   2026-05-05 PseudoColor 8-bit choice (DECISIONS 2026-06-13 for the
+   full reasoning). Driven by Todd's "wacky colors in capture replay"
+   symptom, which traced to PseudoColor cell-collision; the broader
+   re-think solved that plus the GetImage AA-edge fidelity loss, the
+   AllocColor 256-cell ceiling, and the modern-Linux-app blocker that
+   the 2026-06-12 SSH launcher exposed.
+
+3. **End-of-afternoon — depth-1 paper/ink fix.** Todd's smoke test
+   caught the Motif XmText caret rendering as a solid black block
+   instead of a blinking I-beam. Root cause: depth-1 pixmaps follow
+   X's paper/ink convention (pixel & 1 = paper(0)/ink(1)) independent
+   of visual class; the convention was implicit under PseudoColor's
+   pinned cells. TrueColor moved blackPixel to 0, silently inverting
+   the depth-1 meaning. Fix: target-aware `resolveColor` that
+   special-cases depth-1 to honor paper/ink, falls through to TrueColor
+   unpack otherwise.
+
+Working-tree clean across both repos, all pushed to origin. 1284 tests
+green, 27 skipped (unchanged baseline). Live download artifact verified
+clean (`spctl` accepted, `stapler validate` passes).
+
+## Release: MacXServer v0.9.3 (today)
+
+- Tag: `MacXServer-v0.9.3`. GitHub release at
+  `releases/tag/MacXServer-v0.9.3`. Hugo `appVersion` bumped to 0.9.3
+  (Hugo `54f1ff0`); website download button live and validated.
+- Built, signed (Developer ID Application), notarized (notarytool
+  --wait), stapled, republished via `./release.sh MacXServer 0.9.3`.
+  Live download spot-checked via `ditto -x -k` + `spctl` + `stapler`
+  end-to-end.
+- Whatever shows up vs v0.9.2: SSH launcher (which actually shipped in
+  0.9.2), WM_DELETE_WINDOW gating + NSWindow close defer,
+  WM_NORMAL_HINTS / _MOTIF_WM_HINTS server-side application, TrueColor
+  visual flip, depth-1 paper/ink fix.
+
+## Today's commits (X repo)
+
+- `b5df2e0` — WM-proxy contract pass (WM_DELETE_WINDOW + WM_NORMAL_HINTS
+  + _MOTIF_WM_HINTS + tests)
+- `25a9814` — STATUS: roll in Gatekeeper docs + launcher feature page
+- `6f7bba6` — release.sh: comment the unzip canary
+- `f74b7fb` — STATUS: end-of-day roll for 2026-06-12, v0.9.2 shipped
+- `6431316` — Gatekeeper investigation/findings/probe-script tracked
+- `ed5355a` — Switch advertised visual from PseudoColor 8-bit to TrueColor 24-bit
+- `2f517ed` — TrueColor follow-ups: GetImage depth-24 output, docs, SHORTCUTS cleanup
+- `f151feb` — TrueColor: honor depth-1 paper/ink convention in pixel resolution
+- (`8b…` or similar) — release.sh bump for v0.9.3
+
+(Hugo: `6bb1270` appVersion bump to 0.9.2 drift fix; `54f1ff0` appVersion
+bump to 0.9.3 for today's release.)
+
+## Charter status check
+
+The 2026-06-13 work closes most of the WM-proxy / charter-fidelity gaps
+that Todd's "what should we attack next" punch list flagged:
+
+- **#4 WM_DELETE_WINDOW gating** — done (Bug A + Bug B both closed)
+- **#6 WM_NORMAL_HINTS / _MOTIF_WM_HINTS honoring** — done (both
+  properties decoded + applied end-to-end, with the slot-pending
+  timing fix + the depth-1 paper/ink fix to keep Motif caret rendering)
+- **#9 AllocColor pain (capture-replay colors)** — closed by the
+  TrueColor switch. New captures don't have the pixel-translation
+  problem at all (pixel values ARE the RGB). Existing PseudoColor gold
+  captures replay against TrueColor as muted near-black-blue shades
+  rather than the previous "wacky color collision" symptom — visually
+  wrong but no longer corrupted by collision (per DECISIONS analysis).
+
+Still open from that punch list:
+- **#12 SetSelectionOwner time-comparison gate** — ~5 lines, deferred
+- **#7 CWBackPixmap ParentRelative descendant case** — verify-then-fix
+- **#8 GetProperty type filter** — latent INCR dep
+- **#10/11/12** lower-priority items per Todd's gut sort
+
+## What's open in the TrueColor cleanup follow-on
+
+(Logged in SHORTCUTS, deferred from 0.9.3 cut)
+
+- **PutImage ZPixmap depth-24**: silent-drops today. Modern Linux clients
+  doing `XPutImage` with depth-24 data won't render. Fix is ~30 lines
+  (new arm in the format/depth switch, BGRA byte-swap for the bridge).
+  Likely the first thing to surface when running a real Linux app via
+  the SSH launcher.
+- **PixelBuffer depth-24 support**: `CreatePixmap(depth: 24, ...)`
+  creates a depth-8-shaped PixelBuffer. GTK/Qt widgets that cache
+  rendered content in offscreen depth-24 pixmaps would hit this. ~40-60
+  lines plus per-op verification.
+- **Colormap ops BadMatch**: AllocColorCells / AllocColorPlanes /
+  StoreColors / StoreNamedColor should emit `BadMatch` per X spec on
+  TrueColor visuals (we emit `BadAlloc` today, which Xt's color
+  converter accepts as a fallback trigger but is technically
+  spec-wrong). ~5-line fix per handler.
+- **CopyPlane reverse-map cleanup**: OPCODE_STATUS row 132 still
+  describes the PseudoColor reverse-map path; needs the same
+  direct-BGRA-extraction treatment GetImage got. Probably already works
+  for the common plane bits but worth verifying.
+- **Depth-8 ZPixmap semantics**: today accepts depth-8 ZPixmap PutImage
+  and renders each byte as a near-black shade of blue (TrueColor unpack
+  of an 8-bit value). Should either emit BadMatch (depth-doesn't-match
+  the advertised visual) or silent-drop with a clearer log. Either way,
+  not visually meaningful as it stands.
+
+None blocking; each surfaces when a specific client exercises it.
+
+## SHORTCUTS items closed today
+
+- AllocColor freelist / cell cap (replaced by TrueColor degenerate alloc)
+- Color resolution falls back to black for unknown pixels (every 24-bit
+  value is now a valid RGB)
+- GetImage reverse-maps ARGB → 8-bit pixel via ColorTable (direct ARGB
+  extraction now)
+- New: WM-proxy contract section added (WM_DELETE_WINDOW force-close
+  skips inferior teardown; hung-client polite close has no timeout
+  fallback; _MOTIF_WM_HINTS on native-chrome NSWindows silently dropped)
+
+## What's next / open
+
+- v0.9.3 in the wild — watch for in-the-field reports
+- macXcapture still at v0.9.1. No capture-side code moved this session;
+  no reason to cut a new capture release.
+- TrueColor cleanup follow-on items above, picked off as real clients
+  surface them
+- The other punch-list items (#7, #8, #12) when convenient
+
+## TrueColor 24-bit visual switch — detailed write-up
 
 Discussion that drove the change started from Todd's "wacky colors in
 capture replay" symptom. Tracing back: vintage clients reference
