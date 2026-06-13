@@ -87,6 +87,20 @@ public enum DefaultLaunchers {
         # [ss2/xcalc]
         # command = xcalc -bg gray90
         #
+        # # Modern Linux host over ssh. Set up keys first (ssh-copy-id).
+        # # Linux xterm's default `fixed` font cell is small (7x13); pass
+        # # -fn 10x20 or similar to get a Sun-comfortable size.
+        # [host:nuc]
+        # host = nuc.example.com
+        # user = alice
+        # transport = ssh
+        #
+        # [nuc/xterm]
+        # command = xterm -fn 10x20 -bg black -fg green
+        #
+        # [nuc/firefox]
+        # command = firefox
+        #
         # Legacy flat sections (no `host:` prefix, no `/` in the name) still
         # parse: they're grouped automatically under the short form of their
         # `host` field (e.g. host = u5.example.com -> "u5" submenu). Migrate
