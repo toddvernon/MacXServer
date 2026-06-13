@@ -1,11 +1,15 @@
 # Status 2026-06-12
 
-SSH launcher landed today. The Launchers menu now supports modern
-Linux/BSD/Solaris boxes alongside the telnet path for vintage Sun
-workstations: new `transport = ssh` key on the host block, spawns
-`/usr/bin/ssh` with `BatchMode=yes` (keys-only, no password injection),
-direct-DISPLAY back to our server on 6000 (no `-X` X11 forwarding).
-Decisions and trade-offs logged in DECISIONS.md (2026-06-12 entry).
+Three things landed today: SSH launcher, macxserver.com page documenting
+it, and the Gatekeeper browser-dependence investigation docs from
+yesterday's research finally committed to the tree. The Launchers menu
+now supports modern Linux/BSD/Solaris boxes alongside the telnet path for
+vintage Sun workstations: new `transport = ssh` key on the host block,
+spawns `/usr/bin/ssh` with `BatchMode=yes` (keys-only, no password
+injection), direct-DISPLAY back to our server on 6000 (no `-X` X11
+forwarding). Decisions and trade-offs logged in DECISIONS.md
+(2026-06-12 entry). Website launcher feature page updated and deployed
+twice — once for the SSH framing, once for the bold "keys only" call-out.
 
 Yesterday's launch-day notes — public-release flip, v0.9.0 shipping, and
 the four bug fixes (Gatekeeper docs, xterm menu drift, dtfile transparent
@@ -42,9 +46,43 @@ icons, orphaned xterm menu) — moved to the body below for the record.
   installed launcher files are not migrated automatically (the seed only
   writes on first run when the file is missing); the format is
   forward-compatible so this is a no-op for current users.
-- macxserver.com launcher feature page lives outside this repo and is
-  unchanged for now — flag for a separate update next time the website is
-  open.
+- macxserver.com launcher feature page shipped same day: "Two transports"
+  paragraph documenting both telnet and ssh, a `[host:nuc]` config example
+  with the `-fn 10x20` font tip that came out of debugging Todd's NUC,
+  bold "Password auth isn't supported on the SSH path. Keys only." line
+  to make the keys-only constraint unmissable. Comparison-table row in
+  `why-macxserver-instead-of-xquartz.md` rewritten from "Sun" to
+  "Sun/Linux". Two deploys via `deploy.sh` (rsync to linode); production
+  verified live both times. Homepage framing ("modern attaches to the
+  Swift foundation, not to what the server runs") deliberately left
+  untouched — feature page describes capability, homepage holds the line
+  on positioning.
+
+## Gatekeeper browser-dependence docs (today, work from 2026-06-11)
+
+Three artifacts from the June 11 investigation finally tracked in git
+(they'd been sitting untracked in the working tree). Continues the
+Gatekeeper thread from commits `4fbeeea` / `9b5d45e` / `8b47cd1`:
+
+- `GATEKEEPER_BROWSER_INVESTIGATION.md` — the dossier, written for a
+  fresh-eyes analyst with no project context and no preferred answer.
+  Documents the reproducible Safari-vs-Chrome difference on first launch,
+  what we've verified is healthy (signing, notarization, stapling),
+  competing explanations, and what we'd still want to confirm.
+- `GATEKEEPER_BROWSER_FINDINGS.md` — that analyst's report back, plus
+  Todd's reader's-note that the analyst's "Safari working is luck"
+  framing oversteps the empirical observation (the same mechanism the
+  analyst proposed — translocation + `LSQuarantineType` + Sequoia
+  launch-responsibility — *predicts* the reproducible asymmetry, so the
+  difference is real even though the folk-LLM allowlist story isn't).
+- `scripts/gatekeeper-probe.sh` — diagnostic script that captures
+  quarantine xattr / spctl / stapler / translocation state side by side
+  for the two browser download paths, ready to run on a fresh Mac when
+  one's available.
+
+Live status of the original report is unchanged from yesterday: pipeline
+is healthy, dialog is the standard Sequoia first-launch path,
+download-page docs already updated.
 
 ## 2026-06-11 — Launch day + four bug fixes (preserved for the record)
 
