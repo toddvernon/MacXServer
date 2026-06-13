@@ -5257,6 +5257,11 @@ public final class ServerSession: @unchecked Sendable {
                (r.property == mwmAtom || r.property == mwmAliasAtom) {
                 let bytes = properties.get(window: r.window, property: r.property)?.value ?? r.data
                 let hints = MotifWMHints.decode(bytes, byteOrder: byteOrder)
+                if let h = hints {
+                    log?.log("  → _MOTIF_WM_HINTS win=0x\(String(r.window, radix: 16)) flags=0x\(String(h.flags.rawValue, radix: 16)) functions=0x\(String(h.functions, radix: 16)) decorations=0x\(String(h.decorations.rawValue, radix: 16)) inputMode=\(h.inputMode) status=0x\(String(h.status, radix: 16)) hasExplicitDecorations=\(h.hasExplicitDecorations)")
+                } else {
+                    log?.log("  → _MOTIF_WM_HINTS win=0x\(String(r.window, radix: 16)) DECODE FAILED (\(bytes.count) bytes)")
+                }
                 bridge?.applyMotifDecorations(id: r.window, hints: hints)
             }
 

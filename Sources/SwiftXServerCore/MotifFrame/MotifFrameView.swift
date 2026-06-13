@@ -157,9 +157,33 @@ public final class MotifFrameView: NSView {
         let mx = maximizeButtonRect()
         return NSRect(x: mx.minX - bs, y: titleRowY, width: bs, height: bs)
     }
-    private func titleBarRect() -> NSRect {
-        let left = menuButtonRect().maxX
-        let right = restoreButtonRect().minX
+    /// Extent of the title bar text band. When a corner button is hidden
+    /// via `_MOTIF_WM_HINTS` decoration bits (Motif convention: the .menu
+    /// bit governs the left button, .minimize and .maximize govern the
+    /// right pair), the title bar extends into the freed-up corner so
+    /// the title text band runs frame-to-frame instead of leaving an
+    /// empty chrome carve-out. Matches real Sun mwm rendering on
+    /// minimal-decoration dialogs (quickplot About / Quit, every
+    /// XmMessageBox / XmFormDialog that requests `decorations =
+    /// BORDER | RESIZEH | TITLE`). Verified against u5 2026-06-13.
+    /// Marked `internal` (not `private`) so MotifFrameViewGeometryTests
+    /// can pin the four cases without going through a real draw cycle.
+    func titleBarRect() -> NSRect {
+        let left: CGFloat = decorationShown(.menu)
+            ? menuButtonRect().maxX
+            : (band + bi)
+        let right: CGFloat
+        if decorationShown(.minimize) {
+            // Inner-right button visible: title ends at its left edge.
+            right = restoreButtonRect().minX
+        } else if decorationShown(.maximize) {
+            // Inner-right hidden but outer-right (maximize) visible:
+            // title ends at maximize's left edge.
+            right = maximizeButtonRect().minX
+        } else {
+            // Both right buttons hidden: title extends to the frame.
+            right = bounds.width - band - bi
+        }
         return NSRect(x: left, y: titleRowY, width: max(0, right - left), height: bs)
     }
 
@@ -350,9 +374,17 @@ public final class MotifFrameView: NSView {
 
     private func raisedTileCentered(_ ctx: CGContext, in outer: CGRect,
                                     width: CGFloat, height: CGFloat) {
+        // floor() the offsets so the icon always lands on integer-pixel
+        // boundaries. Without this, parity mismatches between the button
+        // size and `round(titleBarHeight * 0.64)` etc. produce half-
+        // pixel offsets that AppKit rasterises blurry. Example: at
+        // titleBarHeight=24, menuDashW=round(15.36)=15 and (24-15)/2
+        // gives 4.5. The asymmetry bias (toward top-left) is invisible
+        // at the rendering resolutions we use; the half-pixel shimmer
+        // is very visible.
         let r = CGRect(
-            x: outer.minX + (outer.width  - width)  / 2,
-            y: outer.minY + (outer.height - height) / 2,
+            x: floor(outer.minX + (outer.width  - width)  / 2),
+            y: floor(outer.minY + (outer.height - height) / 2),
             width: width, height: height
         )
         raisedTile(ctx, r)
