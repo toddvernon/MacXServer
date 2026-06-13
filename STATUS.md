@@ -1,19 +1,53 @@
 # Status 2026-06-12
 
-Three things landed today: SSH launcher, macxserver.com page documenting
-it, and the Gatekeeper browser-dependence investigation docs from
-yesterday's research finally committed to the tree. The Launchers menu
-now supports modern Linux/BSD/Solaris boxes alongside the telnet path for
-vintage Sun workstations: new `transport = ssh` key on the host block,
-spawns `/usr/bin/ssh` with `BatchMode=yes` (keys-only, no password
-injection), direct-DISPLAY back to our server on 6000 (no `-X` X11
-forwarding). Decisions and trade-offs logged in DECISIONS.md
-(2026-06-12 entry). Website launcher feature page updated and deployed
-twice — once for the SSH framing, once for the bold "keys only" call-out.
+Feature day: SSH launcher, macxserver.com page documenting it,
+**MacXServer v0.9.2 shipped** (signed/notarized/stapled, on the website),
+and the Gatekeeper browser-dependence investigation docs from yesterday's
+research finally committed to the tree. The Launchers menu now supports
+modern Linux/BSD/Solaris boxes alongside the telnet path for vintage Sun
+workstations: new `transport = ssh` key on the host block, spawns
+`/usr/bin/ssh` with `BatchMode=yes` (keys-only, no password injection),
+direct-DISPLAY back to our server on 6000 (no `-X` X11 forwarding).
+Decisions and trade-offs logged in DECISIONS.md (2026-06-12 entry).
+Website launcher feature page updated and deployed twice — once for the
+SSH framing, once for the bold "keys only" call-out.
+
+**Working tree clean. Both repos pushed.** Tests green
+(21 launcher + full suite). Live downloads on macxserver.com pull v0.9.2.
 
 Yesterday's launch-day notes — public-release flip, v0.9.0 shipping, and
 the four bug fixes (Gatekeeper docs, xterm menu drift, dtfile transparent
 icons, orphaned xterm menu) — moved to the body below for the record.
+
+## Release: MacXServer v0.9.2 (today)
+
+- Tag: `MacXServer-v0.9.2`. GitHub release at
+  `releases/tag/MacXServer-v0.9.2`. Hugo `appVersion` bumped to 0.9.2;
+  website download button verified live and pointing at the new artifact.
+- Built, signed (Developer ID Application), notarized (notarytool
+  --wait), stapled, and republished via `./release.sh MacXServer 0.9.2`.
+  Validated end-to-end against the live download: `spctl -a` accepts
+  "Notarized Developer ID"; `xcrun stapler validate` passes.
+- MacXCapture untouched this session — still at v0.9.1; no rebuild
+  needed.
+- Gotcha worth not unlearning: the test-download hint that release.sh
+  prints at the end deliberately uses `unzip` (which strips the
+  codesign-friendly metadata `ditto` packed in, so `spctl` fails on the
+  result). That false alarm was the only thing that prompted validating
+  the 0.9.2 publish from the right tool (`ditto -x -k`) and confirming
+  the actual artifact is healthy. Comment in release.sh now documents
+  the trap so it stays a canary, not a bug.
+
+## What's next / open
+
+- No new open bugs from today. SSH launcher works on Todd's nuc; xterm
+  font sized via `-fn 10x20` in the launcher entry.
+- macXcapture still at v0.9.1. If a capture-side feature lands, cut
+  v0.9.2 there too; otherwise no need.
+- The Gatekeeper investigation has a probe script ready to run on a
+  fresh Mac. Live status remains "pipeline healthy, dialog is the
+  standard Sequoia first-launch path"; no action item until the next
+  in-the-wild report.
 
 ## SSH launcher (today)
 
