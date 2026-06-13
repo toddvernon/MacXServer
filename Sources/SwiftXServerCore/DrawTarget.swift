@@ -37,4 +37,15 @@ public enum DrawTarget: Equatable, Sendable {
         if case .window(_, _, let dx, let dy) = self { return (dx, dy) }
         return (0, 0)
     }
+
+    /// True when this drawable is a depth-1 bitmap. Triggers the
+    /// "paper/ink" pixel-resolution path: foreground pixel & 1 selects
+    /// black ("ink", set bit) vs white ("paper", clear bit) instead of
+    /// the regular TrueColor RGB unpack. Bitmap convention is
+    /// independent of the visual class — Motif's caret stipple, GC
+    /// clip masks, cursor source/mask all live here.
+    public var isDepth1: Bool {
+        if case .pixmap(_, let depth) = self { return depth == 1 }
+        return false
+    }
 }

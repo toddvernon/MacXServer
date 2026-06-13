@@ -2492,10 +2492,33 @@ public final class ServerSession: @unchecked Sendable {
         }
     }
 
-    /// Resolve a foreground/background pixel value to RGB16. Falls back to
-    /// black for unknown pixels — better than crashing on a stray reference.
+    /// Resolve a foreground/background pixel value to RGB16. For TrueColor
+    /// (since 2026-06-13) this is a bit unpack; never fails. The black
+    /// fallback is residual from the PseudoColor era — kept defensive but
+    /// shouldn't fire.
     private func resolveColor(_ pixel: UInt32) -> RGB16 {
         colors.rgb(for: pixel) ?? RGB16(red: 0, green: 0, blue: 0)
+    }
+
+    /// Target-aware color resolution. For depth-1 pixmaps (bitmap targets),
+    /// the X spec masks the foreground to the drawable's depth — pixel & 1
+    /// determines whether the bit is "paper" (0 → white) or "ink" (1 →
+    /// black). This convention is independent of the visual class and was
+    /// implicit under PseudoColor where pixel 0 happened to be pinned to
+    /// whitePixel and pixel 1 to blackPixel; under TrueColor the pixel
+    /// value IS the RGB, so we'd paint depth-1 pixmaps in arbitrary colors
+    /// without this special case. Motif's text caret stipple, GC clip
+    /// masks, and cursor source/mask all build depth-1 pixmaps using the
+    /// default GC fg (= screen.blackPixel = 0 = "clear bit" under
+    /// PseudoColor's old convention) — for the stipple to read back
+    /// correctly, depth-1 drawing must honor the paper/ink convention.
+    private func resolveColor(_ pixel: UInt32, target: DrawTarget) -> RGB16 {
+        if target.isDepth1 {
+            return (pixel & 1) == 1
+                ? RGB16(red: 0, green: 0, blue: 0)
+                : RGB16(red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF)
+        }
+        return resolveColor(pixel)
     }
 
     /// Expand a ZPixmap depth=1 source (bpp=1, MSB-first within byte,
@@ -3028,7 +3051,7 @@ public final class ServerSession: @unchecked Sendable {
         }
         bridge.drawPolySegment(
             target: target,
-            foreground: resolveColor(state.foreground),
+            foreground: resolveColor(state.foreground, target: target),
             lineWidth: state.lineWidth,
             capStyle: state.capStyle,
             segments: translated,
@@ -3069,8 +3092,8 @@ public final class ServerSession: @unchecked Sendable {
         }
         bridge.drawPolyFillRectangle(
             target: target,
-            foreground: resolveColor(state.foreground),
-            background: resolveColor(state.background),
+            foreground: resolveColor(state.foreground, target: target),
+            background: resolveColor(state.background, target: target),
             function: state.function,
             fillStyle: state.fillStyle,
             stipple: state.stipple, tile: state.tile,
@@ -3106,7 +3129,7 @@ public final class ServerSession: @unchecked Sendable {
         }
         bridge.drawPolyLine(
             target: target,
-            foreground: resolveColor(state.foreground),
+            foreground: resolveColor(state.foreground, target: target),
             lineWidth: state.lineWidth,
             capStyle: state.capStyle,
             points: points,
@@ -3141,7 +3164,7 @@ public final class ServerSession: @unchecked Sendable {
         // Complex it also uses fill-rule. We just pass the GC state's fill-rule.
         bridge.drawFillPoly(
             target: target,
-            foreground: resolveColor(state.foreground),
+            foreground: resolveColor(state.foreground, target: target),
             points: points,
             evenOdd: state.fillRuleEvenOdd,
             clipRectangles: state.clipRectangles
@@ -3162,8 +3185,8 @@ public final class ServerSession: @unchecked Sendable {
         }
         bridge.drawPolyFillRectangle(
             target: target,
-            foreground: resolveColor(state.foreground),
-            background: resolveColor(state.background),
+            foreground: resolveColor(state.foreground, target: target),
+            background: resolveColor(state.background, target: target),
             function: state.function,
             fillStyle: state.fillStyle,
             stipple: state.stipple, tile: state.tile,
@@ -3195,7 +3218,7 @@ public final class ServerSession: @unchecked Sendable {
         }
         bridge.drawPolyRectangle(
             target: target,
-            foreground: resolveColor(state.foreground),
+            foreground: resolveColor(state.foreground, target: target),
             lineWidth: state.lineWidth,
             rectangles: translated,
             clipRectangles: state.clipRectangles,
@@ -3219,7 +3242,7 @@ public final class ServerSession: @unchecked Sendable {
         }
         bridge.drawPolyArc(
             target: target,
-            foreground: resolveColor(state.foreground),
+            foreground: resolveColor(state.foreground, target: target),
             lineWidth: state.lineWidth,
             arcs: translated,
             clipRectangles: state.clipRectangles,
@@ -3243,7 +3266,7 @@ public final class ServerSession: @unchecked Sendable {
         }
         bridge.drawPolyFillArc(
             target: target,
-            foreground: resolveColor(state.foreground),
+            foreground: resolveColor(state.foreground, target: target),
             arcs: translated,
             clipRectangles: state.clipRectangles
         )
@@ -3264,8 +3287,8 @@ public final class ServerSession: @unchecked Sendable {
         }
         bridge.drawImageText8(
             target: target,
-            foreground: resolveColor(state.foreground),
-            background: resolveColor(state.background),
+            foreground: resolveColor(state.foreground, target: target),
+            background: resolveColor(state.background, target: target),
             font: resolvedFont,
             x: r.x &+ dx, y: r.y &+ dy,
             string: r.string,
@@ -3287,7 +3310,7 @@ public final class ServerSession: @unchecked Sendable {
         }
         bridge.drawPolyText8(
             target: target,
-            foreground: resolveColor(state.foreground),
+            foreground: resolveColor(state.foreground, target: target),
             font: resolvedFont,
             x: r.x &+ dx, y: r.y &+ dy,
             items: r.items,
@@ -3309,8 +3332,8 @@ public final class ServerSession: @unchecked Sendable {
         }
         bridge.drawImageText16(
             target: target,
-            foreground: resolveColor(state.foreground),
-            background: resolveColor(state.background),
+            foreground: resolveColor(state.foreground, target: target),
+            background: resolveColor(state.background, target: target),
             font: resolvedFont,
             x: r.x &+ dx, y: r.y &+ dy,
             characters: r.characters,
@@ -3332,7 +3355,7 @@ public final class ServerSession: @unchecked Sendable {
         }
         bridge.drawPolyText16(
             target: target,
-            foreground: resolveColor(state.foreground),
+            foreground: resolveColor(state.foreground, target: target),
             font: resolvedFont,
             x: r.x &+ dx, y: r.y &+ dy,
             items: r.items,
@@ -3555,8 +3578,8 @@ public final class ServerSession: @unchecked Sendable {
             sourceWidth: r.width, sourceHeight: r.height,
             dstX: r.dstX &+ dstDX, dstY: r.dstY &+ dstDY,
             leftPad: 0,
-            foreground: resolveColor(state.foreground),
-            background: resolveColor(state.background),
+            foreground: resolveColor(state.foreground, target: dstTarget),
+            background: resolveColor(state.background, target: dstTarget),
             clipRectangles: state.clipRectangles
         )
 
@@ -5827,8 +5850,8 @@ public final class ServerSession: @unchecked Sendable {
             let state = gcState(r.gc, byteOrder: byteOrder)
             switch (r.format, r.depth) {
             case (.bitmap, 1):
-                let fg = resolveColor(state.foreground)
-                let bg = resolveColor(state.background)
+                let fg = resolveColor(state.foreground, target: target)
+                let bg = resolveColor(state.background, target: target)
                 log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) gc=0x\(String(r.gc, radix: 16)) bitmap \(r.width)x\(r.height) at (\(r.dstX),\(r.dstY)) leftPad=\(r.leftPad)")
                 bridge?.drawPutImage(
                     target: target,
@@ -5845,8 +5868,12 @@ public final class ServerSession: @unchecked Sendable {
                 // black. ColorTable pins these at init (see ColorTable.swift
                 // / OPCODE_STATUS opcode 84). Pre-resolving once outside
                 // the inner loop keeps the per-pixel cost flat.
-                let c0 = resolveColor(0)
-                let c1 = resolveColor(1)
+                // ZPixmap depth-1: each bit is a literal pixel value (0
+                // or 1) for the depth-1 visual. Use target-aware resolve
+                // so it follows the paper/ink convention regardless of
+                // the host visual class.
+                let c0 = resolveColor(0, target: target)
+                let c1 = resolveColor(1, target: target)
                 log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) zPixmap-d1 \(r.width)x\(r.height) at (\(r.dstX),\(r.dstY))")
                 if let argb = expandZPixmapDepth1(data: r.data,
                                                    width: Int(r.width), height: Int(r.height),

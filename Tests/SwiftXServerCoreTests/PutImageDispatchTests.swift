@@ -166,15 +166,12 @@ final class PutImageDispatchTests: XCTestCase {
         XCTAssertEqual(Array(call.argb[16...19]), [0, 0, 0, 255])
     }
 
-    /// ZPixmap depth=1 (viewres/xgas/xgc's button-glyph path): packed 1bpp
-    /// source. Each bit is a pixel value (0 or 1) resolved through
-    /// ColorTable. Under TrueColor (since 2026-06-13): pixel 0 unpacks
-    /// to RGB(0,0,0) = black; pixel 1 unpacks to RGB(0,0,257) = barely-
-    /// visible blue (just the LSB of the blue channel set). Pre-switch
-    /// under PseudoColor, pixel 0 was pinned to white and pixel 1 to
-    /// black — different visual outcome. Like depth-8 ZPixmap this isn't
-    /// a semantically meaningful path under TrueColor; should likely
-    /// emit BadMatch.
+    /// ZPixmap depth=1 (viewres/xgas/xgc's button-glyph path): packed
+    /// 1bpp source. Each bit is a pixel value (0 or 1) interpreted
+    /// per the X depth-1 "paper/ink" convention via the target-aware
+    /// resolveColor — bit 0 paints white (paper), bit 1 paints black
+    /// (ink). This convention is independent of the visual class, so
+    /// the behavior is the same on PseudoColor and TrueColor.
     func testZPixmapDepth1DispatchesToBridge() throws {
         let bridge = RecPutImageBridge()
         let session = ServerSession(bridge: bridge)
@@ -205,15 +202,15 @@ final class PutImageDispatchTests: XCTestCase {
         let call = bridge.argbCalls[0]
         XCTAssertEqual(call.width, 6); XCTAssertEqual(call.height, 3)
         XCTAssertEqual(call.argb.count, 6 * 3 * 4)
-        // Under TrueColor: bit=1 → pixel 1 → RGB(0,0,257) → BGRA [1,0,0,255].
-        XCTAssertEqual(Array(call.argb.prefix(4)), [1, 0, 0, 255])
-        // bit=0 → pixel 0 → RGB(0,0,0) → BGRA [0,0,0,255].
+        // bit=1 → ink → black → BGRA [0,0,0,255]
+        XCTAssertEqual(Array(call.argb.prefix(4)), [0, 0, 0, 255])
+        // bit=0 → paper → white → BGRA [255,255,255,255]
         let row1Start = 6 * 4
-        XCTAssertEqual(Array(call.argb[row1Start..<row1Start + 4]), [0, 0, 0, 255])
-        // Row 2 alternating bits: pixel 1 then pixel 0 then pixel 1 …
+        XCTAssertEqual(Array(call.argb[row1Start..<row1Start + 4]), [255, 255, 255, 255])
+        // Row 2 alternating bits: ink, paper, ink, paper …
         let row2Start = 12 * 4
-        XCTAssertEqual(Array(call.argb[row2Start..<row2Start + 4]), [1, 0, 0, 255])
-        XCTAssertEqual(Array(call.argb[row2Start + 4..<row2Start + 8]), [0, 0, 0, 255])
+        XCTAssertEqual(Array(call.argb[row2Start..<row2Start + 4]), [0, 0, 0, 255])
+        XCTAssertEqual(Array(call.argb[row2Start + 4..<row2Start + 8]), [255, 255, 255, 255])
     }
 
     /// XYPixmap and other depth combinations stay silent-dropped — see

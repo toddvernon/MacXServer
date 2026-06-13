@@ -355,17 +355,19 @@ final class ShapeExtensionTests: XCTestCase {
                                       windowClass: .inputOutput, visual: 0,
                                       valueMask: 0, valueList: []).encode(byteOrder: .lsbFirst))
         _ = session.feed(CreatePixmap(depth: 1, pid: pix, drawable: win, width: 64, height: 64).encode(byteOrder: .lsbFirst))
-        // Default GC under TrueColor: fg=blackPixel (0), bg=whitePixel
-        // (0xFFFFFF). To paint a CLEAR bitmap background we need white,
-        // so override fg to whitePixel first.
+        // Depth-1 pixmap drawing uses bit-value semantics per X spec
+        // (independent of visual class — see ServerSession's target-aware
+        // resolveColor): pixel & 1 == 0 → CLEAR ("paper", white), pixel
+        // & 1 == 1 → SET ("ink", black). So fg=0 fills with white
+        // (clear bits), fg=1 draws the I-beam with black (set bits).
         _ = session.feed(CreateGC(cid: gc, drawable: pix,
                                   valueMask: GCBits.foreground,
-                                  valueList: u32le(0x00FFFFFF)).encode(byteOrder: .lsbFirst))
-        // Clear the whole pixmap (fg=white → CLEAR bits in StippleBitGrid).
+                                  valueList: u32le(0)).encode(byteOrder: .lsbFirst))
+        // Clear the whole pixmap (fg=0 → CLEAR bits).
         _ = session.feed(PolyFillRectangle(drawable: pix, gc: gc,
                                            rectangles: [Rectangle(x: 0, y: 0, width: 64, height: 64)]).encode(byteOrder: .lsbFirst))
-        // Switch foreground to blackPixel (0 → SET bits = the shape).
-        _ = session.feed(ChangeGC(gc: gc, valueMask: GCBits.foreground, valueList: u32le(0)).encode(byteOrder: .lsbFirst))
+        // Switch foreground to 1 (SET bits = the shape).
+        _ = session.feed(ChangeGC(gc: gc, valueMask: GCBits.foreground, valueList: u32le(1)).encode(byteOrder: .lsbFirst))
         // Draw the shape: a 20x20 black square at (10,10).
         _ = session.feed(PolyFillRectangle(drawable: pix, gc: gc,
                                            rectangles: [Rectangle(x: 10, y: 10, width: 20, height: 20)]).encode(byteOrder: .lsbFirst))
