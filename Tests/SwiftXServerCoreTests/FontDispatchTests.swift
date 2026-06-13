@@ -307,13 +307,14 @@ final class FontDispatchTests: XCTestCase {
         _ = session.feed(OpenFont(fid: 0x4400005, name: Array("9x15".utf8))
             .encode(byteOrder: .lsbFirst))
 
-        // Allocate red so AllocColor returns pixel=16 with R=0xFFFF
+        // Allocate red. Under TrueColor (since 2026-06-13), AllocColor
+        // packs RGB into a 24-bit pixel: red 0xFFFF → pixel 0x00FF0000.
+        // Background = whitePixel = 0x00FFFFFF.
         _ = session.feed(AllocColor(cmap: 0x21, red: 0xFFFF, green: 0, blue: 0)
             .encode(byteOrder: .lsbFirst))
 
-        // CreateGC with foreground=16 + font=0x4400005
-        let foregroundBytes = encodeUInt32(16, byteOrder: .lsbFirst)
-        let backgroundBytes = encodeUInt32(0xFFFFFF, byteOrder: .lsbFirst)
+        let foregroundBytes = encodeUInt32(0x00FF0000, byteOrder: .lsbFirst)
+        let backgroundBytes = encodeUInt32(0x00FFFFFF, byteOrder: .lsbFirst)
         let fontBytes = encodeUInt32(0x4400005, byteOrder: .lsbFirst)
         let valueMask = GCBits.foreground | GCBits.background | GCBits.font
         // Bits in ascending order: foreground (1<<2), background (1<<3), font (1<<14)

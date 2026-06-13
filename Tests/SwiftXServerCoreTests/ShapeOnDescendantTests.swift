@@ -177,8 +177,8 @@ final class ShapeOnDescendantTests: XCTestCase {
             [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)]
         }
         var values: [UInt8] = []
-        values.append(contentsOf: u32le(0xFFFFFF))  // backPixel
-        values.append(contentsOf: u32le(1))         // borderPixel = blackPixel
+        values.append(contentsOf: u32le(0xFFFFFF))  // backPixel = whitePixel (TrueColor)
+        values.append(contentsOf: u32le(0))         // borderPixel = blackPixel (TrueColor)
         _ = session.feed(CreateWindow(
             depth: 0, wid: child, parent: parent,
             x: 10, y: 10, width: 40, height: 20, borderWidth: 1,

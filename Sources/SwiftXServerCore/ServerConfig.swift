@@ -109,33 +109,39 @@ public struct ServerConfig: Sendable {
     }
 
     public func makeSetupAccepted() -> SetupAccepted {
-        let pseudoColor8 = VisualType(
+        // TrueColor 24-bit, RGB888. Pixel value IS the RGB (no colormap
+        // lookup needed): bits 16..23 = red, 8..15 = green, 0..7 = blue.
+        // Switched from PseudoColor-depth-8 on 2026-06-13 — see DECISIONS
+        // for the reasoning. The 8-bit PseudoColor choice from 2026-05-05
+        // was era-authentic to Sun frame buffers but imposed real costs
+        // (replay color-translation problem, GetImage reverse-map fidelity
+        // loss, AllocColor 256-cell ceiling, blocker for modern Linux apps
+        // hitting us via the SSH launcher). Vintage Motif/Athena/Xt apps
+        // use DefaultVisual and don't notice the switch; the small slice
+        // of palette-cycling apps that DO require PseudoColor (xcolorize,
+        // xmorph, screensaver demos) don't appear in the charter corpus.
+        let trueColor24 = VisualType(
             visualId: rootVisualId,
-            visualClass: .pseudoColor,
+            visualClass: .trueColor,
             bitsPerRgbValue: 8,
+            // For TrueColor, colormapEntries advertises the per-channel
+            // colormap size (RGB lookup tables, used for gamma) — 256 is
+            // conventional for 8-bit-per-channel.
             colormapEntries: 256,
-            redMask: 0,
-            greenMask: 0,
-            blueMask: 0
+            redMask:   0x00FF0000,
+            greenMask: 0x0000FF00,
+            blueMask:  0x000000FF
         )
-        let depth8 = Depth(depth: 8, visuals: [pseudoColor8])
+        let depth24 = Depth(depth: 24, visuals: [trueColor24])
 
         let screen = Screen(
             root: rootWindowId,
             defaultColormap: defaultColormapId,
-            // Match real u5 Xsun: whitePixel=0, blackPixel=1. Both
-            // in-range valid cells for the 256-entry PseudoColor colormap.
-            // Verified 2026-05-14 against four captures (dtcalc-sun,
-            // quickplot-sun, dtterm-sun, xeyes-sun). Pre-2026-05-14 we
-            // advertised 0xFFFFFF, which is out-of-range for a depth-8
-            // visual; clients reading screen.whitePixel and using it as a
-            // foreground value got our pinned-to-white-by-accident slot,
-            // but the captured corpus (which used gold-server pixel 0 =
-            // white) silently inverted white/black against our server
-            // because we'd pinned pixel 0 to black to match the old
-            // 0xFFFFFF advertise.
-            whitePixel: 0x00000000,
-            blackPixel: 0x00000001,
+            // TrueColor: pixel value IS the RGB. blackPixel = 0x000000,
+            // whitePixel = 0xFFFFFF. These match how every Linux X server
+            // since the mid-90s advertises depth-24 TrueColor.
+            whitePixel: 0x00FFFFFF,
+            blackPixel: 0x00000000,
             currentInputMasks: 0,
             widthInPixels: widthInPixels,
             heightInPixels: heightInPixels,
@@ -146,11 +152,15 @@ public struct ServerConfig: Sendable {
             rootVisual: rootVisualId,
             backingStores: .never,
             saveUnders: false,
-            rootDepth: 8,
-            allowedDepths: [depth8]
+            rootDepth: 24,
+            allowedDepths: [depth24]
         )
 
-        let pixmapFormat = PixmapFormat(depth: 8, bitsPerPixel: 8, scanlinePad: 32)
+        // Depth-24 visuals pad pixel storage to 32 bits (X.org convention)
+        // — one byte unused per pixel for word alignment. PutImage/GetImage
+        // wire data is 32 bits per pixel even though only 24 are
+        // meaningful. scanlinePad stays at 32 (one pixel per 32-bit word).
+        let pixmapFormat = PixmapFormat(depth: 24, bitsPerPixel: 32, scanlinePad: 32)
 
         return SetupAccepted(
             protocolMajor: 11,

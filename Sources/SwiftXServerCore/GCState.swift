@@ -30,16 +30,16 @@ public enum GCBits {
 // Materialised GC state. Per RENDERING_DESIGN.md item 4: each drawing request
 // applies fresh — we don't try to hold "current" state on the CGContext.
 public struct GCState: Equatable, Sendable {
-    // X11 protocol-spec GC defaults: foreground=0, background=1 (both pixel
-    // values, interpreted via the screen's whitePixel/blackPixel mapping
-    // advertised in SetupAccepted). Our server pins whitePixel=0 and
-    // blackPixel=1 so the defaults resolve as fg=white, bg=black. Clients
-    // that only set foreground (xterm -fg cyan with default bg) rely on
-    // bg defaulting to blackPixel; the prior 0xFFFFFF default resolved to
-    // whitePixel after the 2026-05-19 ColorTable canonicalization, breaking
-    // ImageText8 cell-fill for any GC that didn't override bg.
-    public var foreground: UInt32 = 0       // pixel value (= whitePixel)
-    public var background: UInt32 = 1       // pixel value (= blackPixel)
+    // X11 protocol-spec GC defaults: foreground=blackPixel, background=
+    // whitePixel of the screen's root visual. Under our TrueColor 24-bit
+    // visual (since 2026-06-13) those are 0x00000000 (black) and 0x00FFFFFF
+    // (white) respectively — the pixel value IS the packed RGB888.
+    // Pre-2026-06-13 we ran PseudoColor with whitePixel=0 and blackPixel=1,
+    // so the defaults were fg=0/bg=1; flipping to TrueColor changed
+    // whitePixel/blackPixel to the canonical Linux values and the GC
+    // defaults followed.
+    public var foreground: UInt32 = 0x00000000   // pixel value (= blackPixel)
+    public var background: UInt32 = 0x00FFFFFF   // pixel value (= whitePixel)
     public var lineWidth: UInt32 = 0        // 0 = 1px thin line per X11 spec
     /// X11 cap-style: 0 NotLast, 1 Butt (default), 2 Round, 3 Projecting.
     /// Athena's `XmuShapeOval` (xcalc buttons) draws the bounding-shape

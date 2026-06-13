@@ -67,12 +67,12 @@ final class DrawingDispatchTests: XCTestCase {
         sendCreate(session, wid: 0xA0002, parent: 0xA0001, x: 10, y: 20, w: 100, h: 100)
 
         // Allocate a red color so we have a known pixel for the GC.
+        // Under TrueColor (since 2026-06-13), AllocColor packs RGB into
+        // a 24-bit pixel directly: red 0xFFFF → pixel 0x00FF0000.
         let alloc = AllocColor(cmap: 0x21, red: 0xFFFF, green: 0, blue: 0)
         _ = session.feed(alloc.encode(byteOrder: .lsbFirst))
 
-        // The first AllocColor returns pixel = 16 (ColorTable.nextPixel start).
-        // Build a CreateGC with foreground=16.
-        let foregroundBytes = encodeUInt32(16, byteOrder: .lsbFirst)
+        let foregroundBytes = encodeUInt32(0x00FF0000, byteOrder: .lsbFirst)
         let createGC = CreateGC(cid: 0xB0001, drawable: 0xA0002,
                                 valueMask: GCBits.foreground,
                                 valueList: foregroundBytes)
@@ -161,11 +161,13 @@ final class DrawingDispatchTests: XCTestCase {
         _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
         let root = ServerConfig.default.rootWindowId
 
-        // Allocate color (0x8000, 0x4000, 0x2000) — pixel = 16.
+        // Allocate color (0x8000, 0x4000, 0x2000). TrueColor packs the
+        // high byte of each channel: pixel = 0x80<<16 | 0x40<<8 | 0x20
+        // = 0x00804020. The round-trip RGB is the high byte broadcast
+        // back: (0x8080, 0x4040, 0x2020) — see assertion below.
         _ = session.feed(AllocColor(cmap: 0x21, red: 0x8000, green: 0x4000, blue: 0x2000).encode(byteOrder: .lsbFirst))
 
-        // CreateWindow with CWBackPixel = 16
-        let backPixel = encodeUInt32(16, byteOrder: .lsbFirst)
+        let backPixel = encodeUInt32(0x00804020, byteOrder: .lsbFirst)
         let createWin = CreateWindow(
             depth: 0, wid: 0xA0001, parent: root,
             x: 0, y: 0, width: 200, height: 200, borderWidth: 0,
@@ -184,7 +186,8 @@ final class DrawingDispatchTests: XCTestCase {
         XCTAssertEqual(bridge.clearAreas.count, 1)
         let call = bridge.clearAreas[0]
         XCTAssertEqual(call.topLevel, 0xA0001)
-        XCTAssertEqual(call.background, RGB16(red: 0x8000, green: 0x4000, blue: 0x2000))
+        XCTAssertEqual(call.background, RGB16(red: 0x8080, green: 0x4040, blue: 0x2020),
+                       "TrueColor unpack: high byte broadcast back to 16 bits")
         // Single rect; window is unobscured so clipList ∩ request = request.
         // Request is (5,5,50,50) in window-local coords; window is the
         // top-level so window-local == top-level coords.

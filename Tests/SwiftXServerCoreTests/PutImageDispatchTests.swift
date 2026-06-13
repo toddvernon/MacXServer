@@ -89,10 +89,11 @@ final class PutImageDispatchTests: XCTestCase {
             cid: gcId, drawable: pixmapId,
             valueMask: 0x4 | 0x8,   // foreground + background
             valueList: [
-                // CreateGC value-list: each value is a 32-bit word. fg=1
-                // (blackPixel), bg=0 (whitePixel) per our ServerConfig pins.
-                0x01, 0x00, 0x00, 0x00,
+                // CreateGC value-list: each value is a 32-bit word.
+                // Under TrueColor: fg=0x000000 (blackPixel), bg=0xFFFFFF
+                // (whitePixel). Pixel value IS the packed RGB888.
                 0x00, 0x00, 0x00, 0x00,
+                0xFF, 0xFF, 0xFF, 0x00,
             ]
         ).encode(byteOrder: .lsbFirst))
 
@@ -122,10 +123,15 @@ final class PutImageDispatchTests: XCTestCase {
         XCTAssertEqual(call.background, RGB16(red: 65535, green: 65535, blue: 65535))
     }
 
-    /// ZPixmap depth=8 (motifbur's menu-icon path): one byte per pixel,
-    /// each byte a colormap index. Session walks the bytes through ColorTable
-    /// and hands the bridge a row-major BGRA buffer. Pre-2026-06-01 this
-    /// was silent-dropped.
+    /// ZPixmap depth=8 (vintage capture-replay path): one byte per pixel.
+    /// Under TrueColor (since 2026-06-13) we don't advertise a depth-8
+    /// visual, but the PutImage handler still resolves each byte through
+    /// ColorTable for backwards compatibility with captured PseudoColor
+    /// sessions being replayed. Each byte unpacks via TrueColor packing:
+    /// the byte value populates only the blue channel of the resulting
+    /// 24-bit pixel (since the byte fits into the low 8 bits). Not a
+    /// semantically meaningful path under TrueColor — depth-8 should
+    /// really emit BadMatch — but kept for replay compatibility.
     func testZPixmapDepth8DispatchesToBridge() throws {
         let bridge = RecPutImageBridge()
         let session = ServerSession(bridge: bridge)
@@ -138,11 +144,9 @@ final class PutImageDispatchTests: XCTestCase {
         _ = session.feed(CreateGC(cid: gcId, drawable: pixmapId,
                                    valueMask: 0, valueList: []).encode(byteOrder: .lsbFirst))
 
-        // 4x2 ZPixmap depth=8: bpp=8, scanline-pad=32 → 4 bytes per row
-        // (width=4 already on the 32-bit boundary). Row 0: 1,1,1,1 (black);
-        // row 1: 0,0,0,0 (white). ColorTable pins pixel 0=white, pixel 1=black.
+        // Row 0: byte 0xFF; row 1: byte 0x00.
         let data: [UInt8] = [
-            0x01, 0x01, 0x01, 0x01,
+            0xFF, 0xFF, 0xFF, 0xFF,
             0x00, 0x00, 0x00, 0x00,
         ]
         _ = session.feed(PutImage(
@@ -156,15 +160,21 @@ final class PutImageDispatchTests: XCTestCase {
         let call = bridge.argbCalls[0]
         XCTAssertEqual(call.width, 4); XCTAssertEqual(call.height, 2)
         XCTAssertEqual(call.argb.count, 4 * 2 * 4, "ARGB buffer must be width*height*4")
-        // Row 0 (black=pixel 1): B,G,R,A = 0,0,0,255
-        XCTAssertEqual(Array(call.argb.prefix(4)), [0, 0, 0, 255])
-        // Row 1 first pixel (white=pixel 0): B,G,R,A = 255,255,255,255
-        XCTAssertEqual(Array(call.argb[16...19]), [255, 255, 255, 255])
+        // Row 0 byte 0xFF → TrueColor unpack: R=0, G=0, B=0xFF. BGRA [0xFF,0,0,255].
+        XCTAssertEqual(Array(call.argb.prefix(4)), [0xFF, 0, 0, 255])
+        // Row 1 byte 0x00 → RGB(0,0,0). BGRA [0,0,0,255].
+        XCTAssertEqual(Array(call.argb[16...19]), [0, 0, 0, 255])
     }
 
     /// ZPixmap depth=1 (viewres/xgas/xgc's button-glyph path): packed 1bpp
-    /// source, pixel 0→ColorTable[0]=white, pixel 1→ColorTable[1]=black.
-    /// Same scanline-pad=32 packing as Bitmap, different color resolution.
+    /// source. Each bit is a pixel value (0 or 1) resolved through
+    /// ColorTable. Under TrueColor (since 2026-06-13): pixel 0 unpacks
+    /// to RGB(0,0,0) = black; pixel 1 unpacks to RGB(0,0,257) = barely-
+    /// visible blue (just the LSB of the blue channel set). Pre-switch
+    /// under PseudoColor, pixel 0 was pinned to white and pixel 1 to
+    /// black — different visual outcome. Like depth-8 ZPixmap this isn't
+    /// a semantically meaningful path under TrueColor; should likely
+    /// emit BadMatch.
     func testZPixmapDepth1DispatchesToBridge() throws {
         let bridge = RecPutImageBridge()
         let session = ServerSession(bridge: bridge)
@@ -195,15 +205,15 @@ final class PutImageDispatchTests: XCTestCase {
         let call = bridge.argbCalls[0]
         XCTAssertEqual(call.width, 6); XCTAssertEqual(call.height, 3)
         XCTAssertEqual(call.argb.count, 6 * 3 * 4)
-        // Row 0 pixel 0 (bit=1 → black): B,G,R,A = 0,0,0,255
-        XCTAssertEqual(Array(call.argb.prefix(4)), [0, 0, 0, 255])
-        // Row 1 pixel 0 (bit=0 → white): B,G,R,A = 255,255,255,255
+        // Under TrueColor: bit=1 → pixel 1 → RGB(0,0,257) → BGRA [1,0,0,255].
+        XCTAssertEqual(Array(call.argb.prefix(4)), [1, 0, 0, 255])
+        // bit=0 → pixel 0 → RGB(0,0,0) → BGRA [0,0,0,255].
         let row1Start = 6 * 4
-        XCTAssertEqual(Array(call.argb[row1Start..<row1Start + 4]), [255, 255, 255, 255])
-        // Row 2: alternating black, white, black, white, black, white
+        XCTAssertEqual(Array(call.argb[row1Start..<row1Start + 4]), [0, 0, 0, 255])
+        // Row 2 alternating bits: pixel 1 then pixel 0 then pixel 1 …
         let row2Start = 12 * 4
-        XCTAssertEqual(Array(call.argb[row2Start..<row2Start + 4]), [0, 0, 0, 255])
-        XCTAssertEqual(Array(call.argb[row2Start + 4..<row2Start + 8]), [255, 255, 255, 255])
+        XCTAssertEqual(Array(call.argb[row2Start..<row2Start + 4]), [1, 0, 0, 255])
+        XCTAssertEqual(Array(call.argb[row2Start + 4..<row2Start + 8]), [0, 0, 0, 255])
     }
 
     /// XYPixmap and other depth combinations stay silent-dropped — see

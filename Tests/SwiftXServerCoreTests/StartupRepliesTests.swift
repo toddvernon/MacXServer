@@ -136,25 +136,34 @@ final class StartupRepliesTests: XCTestCase {
     func testQueryColorsLooksUpAllocatedPixels() throws {
         let session = ServerSession()
         _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
-        // Allocate two colors so we have something to query.
+        // Allocate two colors. Under TrueColor (since 2026-06-13) AllocColor
+        // packs RGB into a 24-bit pixel directly; the "allocation" is
+        // degenerate. red 0xFFFF → pixel 0x00FF0000; green 0xAAAA → pixel
+        // 0x0000AA00.
         _ = session.feed(AllocColor(cmap: 0x21, red: 0xFFFF, green: 0, blue: 0)
             .encode(byteOrder: .lsbFirst))
         _ = session.feed(AllocColor(cmap: 0x21, red: 0, green: 0xAAAA, blue: 0)
             .encode(byteOrder: .lsbFirst))
         _ = session.outbound.drain()
 
-        // First allocation gets pixel=16, second gets pixel=17.
-        let req = QueryColors(cmap: 0x21, pixels: [16, 17, 9999])
+        // QueryColors with the packed pixel values, plus a third arbitrary
+        // pixel (0x123456) — under TrueColor every 24-bit pixel value is
+        // valid and unpacks to RGB. No "unknown pixel → black" fallback.
+        let req = QueryColors(cmap: 0x21, pixels: [0x00FF0000, 0x0000AA00, 0x00123456])
         let bytes = session.feed(req.encode(byteOrder: .lsbFirst))
 
         let reply = try QueryColorsReply.decode(from: bytes, byteOrder: .lsbFirst)
         XCTAssertEqual(reply.colors.count, 3)
+        // Red allocation: unpack 0xFF<<16 → R=0xFFFF (high byte 0xFF
+        // broadcast to 16 bits via *257), G=0, B=0.
         XCTAssertEqual(reply.colors[0].red, 0xFFFF)
         XCTAssertEqual(reply.colors[0].green, 0)
+        // Green allocation: 0xAA in green channel → 0xAA*257 = 0xAAAA.
         XCTAssertEqual(reply.colors[1].green, 0xAAAA)
-        // Unknown pixel (9999) resolves to black.
-        XCTAssertEqual(reply.colors[2].red, 0)
-        XCTAssertEqual(reply.colors[2].green, 0)
-        XCTAssertEqual(reply.colors[2].blue, 0)
+        // Arbitrary pixel 0x123456 unpacks losslessly: R=0x12*257=0x1212,
+        // G=0x34*257=0x3434, B=0x56*257=0x5656.
+        XCTAssertEqual(reply.colors[2].red,   0x1212)
+        XCTAssertEqual(reply.colors[2].green, 0x3434)
+        XCTAssertEqual(reply.colors[2].blue,  0x5656)
     }
 }

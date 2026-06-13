@@ -2015,15 +2015,18 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             let bytes = raw.assumingMemoryBound(to: UInt8.self)
             var bits = [Bool](repeating: false, count: w * h)
             // ARGB premultipliedFirst + byteOrder32Little = BGRA in
-            // memory. For a depth-1 stipple, a SET bit (pixel value 1)
-            // = blackPixel = RGB(0,0,0) in our 32-bit storage; a CLEAR
-            // bit (pixel value 0) = whitePixel = RGB(255,255,255). This
-            // is the X11 paper/ink convention also reflected in our
-            // ServerConfig (whitePixel=0, blackPixel=1, matching real
-            // u5 Xsun). Motif builds caret stipples by filling white
-            // (= clear) and then drawing the I-beam with PolySegment in
-            // black (= set), so the carved line shape is what gets
-            // painted by FillStippled.
+            // memory. Depth-1 pixmap convention is X11's paper/ink: a
+            // SET bit (=1) maps to RGB(0,0,0) (black, the "ink"), a
+            // CLEAR bit (=0) maps to RGB(255,255,255) (white, the
+            // "paper"). Whatever the screen's whitePixel/blackPixel
+            // resolve to at the time of painting doesn't matter for
+            // this read-back: a depth-1 pixmap painted with default GC
+            // colors lands as black ink on white paper in our 32-bit
+            // storage, and that's what we sample here. Motif builds
+            // caret stipples by filling white (= clear) and then
+            // drawing the I-beam with PolySegment in black (= set), so
+            // the carved line shape is what gets painted by
+            // FillStippled.
             //
             // Pixmaps store at the bridge's device scale (see
             // PixelBuffer.scaleFactor), so each logical pixel covers a

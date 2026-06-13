@@ -5914,9 +5914,10 @@ public final class ServerSession: @unchecked Sendable {
                     return (Int(pix.width), Int(pix.height), depth, 0)
                 case .window:
                     guard let entry = windows.get(r.drawable) else { return nil }
-                    // Root depth = 8 per ServerConfig.makeSetupAccepted
-                    // (single PseudoColor 8-bit visual).
-                    return (Int(entry.width), Int(entry.height), 8, config.rootVisualId)
+                    // Root depth = 24 per ServerConfig.makeSetupAccepted
+                    // (single TrueColor 24-bit visual, switched from
+                    // PseudoColor 8-bit on 2026-06-13).
+                    return (Int(entry.width), Int(entry.height), 24, config.rootVisualId)
                 }
             }()
             guard let (drawableW, drawableH, drawableDepth, replyVisual) = extents else {
