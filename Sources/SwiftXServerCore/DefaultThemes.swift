@@ -61,9 +61,9 @@ public enum DefaultThemes {
         Mwm*topShadowColor:     #ECECEE
         Mwm*bottomShadowColor:  #46474C
         Mwm*title*foreground:   #101010
-        Mwm*frameBorderWidth:   2
-        Mwm*resizeBorderWidth:  2
-        Mwm*titleBarHeight:     32
+        Mwm*frameBorderWidth:   3
+        Mwm*resizeBorderWidth:  1
+        Mwm*titleBarHeight:     26
         Mwm*buttonStyle:        motif
         """
     }
@@ -78,9 +78,9 @@ public enum DefaultThemes {
         Mwm*topShadowColor:     #ECECEE
         Mwm*bottomShadowColor:  #46474C
         Mwm*title*foreground:   #101010
-        Mwm*frameBorderWidth:   2
-        Mwm*resizeBorderWidth:  2
-        Mwm*titleBarHeight:     32
+        Mwm*frameBorderWidth:   3
+        Mwm*resizeBorderWidth:  1
+        Mwm*titleBarHeight:     26
         Mwm*buttonStyle:        motif
         """
 }
