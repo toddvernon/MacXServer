@@ -163,6 +163,17 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// bar): ignored, see SHORTCUTS — no styleMask mutation post-create.
     func applyMotifDecorations(id: UInt32, hints: MotifWMHints?)
 
+    /// WM_TRANSIENT_FOR changed; attach the child NSWindow as a child
+    /// of the parent NSWindow (`NSWindow.addChildWindow(_:ordered:)`)
+    /// so the child stays above its parent regardless of focus, follows
+    /// the parent through Spaces, minimizes with it, etc. Matches Sun
+    /// mwm's behavior for transient dialogs (Motif XmDialogShell). nil
+    /// `parent` removes any existing child relationship. If either
+    /// window isn't created yet (property arrives between CreateWindow
+    /// and MapWindow) the relationship is cached on the slot and
+    /// applied when mapTopLevel completes.
+    func applyTransientFor(child: UInt32, parent: UInt32?)
+
     /// User clicked the red close button (or ⌘W / Window > Close).
     /// Polite path: session sends WM_DELETE_WINDOW ClientMessage and
     /// does NOTHING else — the NSWindow stays open until the X client
@@ -815,6 +826,7 @@ public extension WindowBridge {
     func reconfigureTopLevel(id: UInt32, geometry: TopLevelGeometry) {}
     func applySizeHints(id: UInt32, hints: WMSizeHints?) {}
     func applyMotifDecorations(id: UInt32, hints: MotifWMHints?) {}
+    func applyTransientFor(child: UInt32, parent: UInt32?) {}
     func forceCloseTopLevel(id: UInt32) {}
     func flushTopLevel(_ topLevel: UInt32) {}
     func flushAllDeferred() {}

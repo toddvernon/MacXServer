@@ -5248,6 +5248,26 @@ public final class ServerSession: @unchecked Sendable {
                 }
                 bridge?.applySizeHints(id: r.window, hints: hints)
             }
+            // WM_TRANSIENT_FOR (atom 68, predefined) -> push the parent
+            // relationship to the bridge so the child NSWindow attaches
+            // as an AppKit child window of the parent (stays above,
+            // follows through Spaces, etc.). Property data is a single
+            // 32-bit window id (4 bytes). Mode=Replace clobbers; nil-
+            // parent on a 0 value detaches.
+            if r.property == 68 {
+                let bytes = properties.get(window: r.window, property: r.property)?.value ?? r.data
+                guard bytes.count >= 4 else { break }
+                let b0 = UInt32(bytes[0])
+                let b1 = UInt32(bytes[1])
+                let b2 = UInt32(bytes[2])
+                let b3 = UInt32(bytes[3])
+                let parentRaw: UInt32 = byteOrder == .lsbFirst
+                    ? (b0 | b1 << 8 | b2 << 16 | b3 << 24)
+                    : (b3 | b2 << 8 | b1 << 16 | b0 << 24)
+                let parent: UInt32? = parentRaw == 0 ? nil : parentRaw
+                log?.log("  → WM_TRANSIENT_FOR win=0x\(String(r.window, radix: 16)) parent=\(parent.map { "0x\(String($0, radix: 16))" } ?? "nil")")
+                bridge?.applyTransientFor(child: r.window, parent: parent)
+            }
             // _MOTIF_WM_HINTS (or the alias _MWM_HINTS) -> push decoration
             // bits to the matching MotifFrameView. Same merge handling as
             // WM_NORMAL_HINTS above.

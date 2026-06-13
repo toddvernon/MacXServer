@@ -28,6 +28,11 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         // creating the NSWindow and applies them.
         var sizeHints: WMSizeHints?
         var motifHints: MotifWMHints?
+        /// X id of the parent window this transient is attached to (from
+        /// WM_TRANSIENT_FOR). Cached on the slot so the relationship
+        /// can be re-applied if the transient is remapped or if the
+        /// property arrived before the parent NSWindow existed.
+        var transientForParent: UInt32?
         var window: NSWindow?
         var view: FlippedXView?
         var delegate: XWindowDelegate?
@@ -612,7 +617,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     public func registerTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32) {
         lock.lock()
         slots[id] = Slot(geometry: geometry, eventMask: eventMask, pendingTitle: nil,
-                         sizeHints: nil, motifHints: nil,
+                         sizeHints: nil, motifHints: nil, transientForParent: nil,
                          window: nil, view: nil)
         lock.unlock()
     }
@@ -857,6 +862,18 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             self.slots[id]?.delegate = delegate
             let pendingSize = self.slots[id]?.sizeHints
             let pendingMotif = self.slots[id]?.motifHints
+            let pendingTransientParent = self.slots[id]?.transientForParent
+            // Also find any *other* window that's waiting for THIS
+            // window to become its parent — when an XmDialogShell sets
+            // WM_TRANSIENT_FOR pointing at a parent that's mapped
+            // later, the dialog will already have transientForParent
+            // cached and is waiting for us to come up. Scan once
+            // under the lock; we'll re-apply the relationship below.
+            var childrenWaitingOnUs: [(child: UInt32, childWin: NSWindow?)] = []
+            for (otherId, slot) in self.slots where slot.transientForParent == id {
+                childrenWaitingOnUs.append((otherId, slot.window))
+            }
+            let parentWinForUs = pendingTransientParent.flatMap { self.slots[$0]?.window }
             self.lock.unlock()
 
             // WM_NORMAL_HINTS / _MOTIF_WM_HINTS commonly arrive between
@@ -870,6 +887,18 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             }
             if let motif = win as? MotifWindow, pendingMotif != nil {
                 motif.frameView.applyMotifHints(pendingMotif)
+            }
+            // WM_TRANSIENT_FOR replay — two directions:
+            // 1. We're the child, our cached parent may now have an NSWindow.
+            if let parent = pendingTransientParent {
+                self.applyTransientForOnMain(child: id, childWin: win,
+                                             parent: parent, parentWin: parentWinForUs)
+            }
+            // 2. We're the parent of some other transient that came up
+            //    earlier and was deferred waiting for us.
+            for waiter in childrenWaitingOnUs {
+                self.applyTransientForOnMain(child: waiter.child, childWin: waiter.childWin,
+                                             parent: id, parentWin: win)
             }
 
             // Map-sequence events were already emitted synchronously above
@@ -1082,6 +1111,67 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             guard let motif = win as? MotifWindow else { return }
             motif.frameView.applyMotifHints(hints)
         }
+    }
+
+    /// WM_TRANSIENT_FOR arrived (ChangeProperty) for a top-level. Attach
+    /// the child NSWindow to the parent NSWindow via
+    /// `NSWindow.addChildWindow(_:ordered:.above)` so the child stays
+    /// visually above its parent regardless of focus, follows the parent
+    /// through Spaces, minimizes with it, and (per AppKit semantics)
+    /// closes with it. Matches Sun mwm's behavior for Motif transient
+    /// dialogs (XmDialogShell). nil parent removes any existing
+    /// child-window relationship.
+    ///
+    /// Both windows might not exist at NSWindow level when the property
+    /// arrives — XmDialogShell typically sets WM_TRANSIENT_FOR before
+    /// mapping the dialog, and the parent main window is usually
+    /// already mapped, but the order isn't guaranteed. The child's
+    /// `transientForParent` is cached on the slot so mapTopLevel can
+    /// re-apply the relationship when both NSWindows exist.
+    public func applyTransientFor(child: UInt32, parent: UInt32?) {
+        lock.lock()
+        slots[child]?.transientForParent = parent
+        let childWin = slots[child]?.window
+        let parentWin = parent.flatMap { slots[$0]?.window }
+        lock.unlock()
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.applyTransientForOnMain(child: child, childWin: childWin, parent: parent, parentWin: parentWin)
+        }
+    }
+
+    /// Main-thread apply step. Extracted so mapTopLevel can call the
+    /// same path when a transient's NSWindow is finally created and the
+    /// relationship needs to be re-attempted.
+    fileprivate func applyTransientForOnMain(child: UInt32, childWin: NSWindow?,
+                                             parent: UInt32?, parentWin: NSWindow?) {
+        guard let childWin = childWin else { return }
+        // Detach from any prior parent first so we don't accumulate
+        // dangling child relationships on rebind.
+        if let priorParent = childWin.parent {
+            priorParent.removeChildWindow(childWin)
+        }
+        guard let parent = parent else {
+            // nil → just detach. Already done above.
+            log?.log("  bridge: WM_TRANSIENT_FOR 0x\(String(child, radix: 16)) → detached")
+            return
+        }
+        guard let parentWin = parentWin else {
+            // Parent NSWindow doesn't exist yet. Slot already cached
+            // the relationship; mapTopLevel will replay this when the
+            // parent's NSWindow is created.
+            log?.log("  bridge: WM_TRANSIENT_FOR 0x\(String(child, radix: 16)) → parent 0x\(String(parent, radix: 16)) deferred (parent NSWindow not yet created)")
+            return
+        }
+        // AppKit refuses self-parent and would silently break the
+        // ordering invariants if you try to make a window its own
+        // parent's parent (cycle). Guard both.
+        guard childWin !== parentWin else {
+            log?.log("  bridge: WM_TRANSIENT_FOR 0x\(String(child, radix: 16)) → self, ignored")
+            return
+        }
+        parentWin.addChildWindow(childWin, ordered: .above)
+        log?.log("  bridge: WM_TRANSIENT_FOR 0x\(String(child, radix: 16)) → parent 0x\(String(parent, radix: 16)) attached")
     }
 
     /// The session learned the X client doesn't support WM_DELETE_WINDOW
