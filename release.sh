@@ -300,6 +300,13 @@ echo "    Release: https://github.com/$REPO/releases/tag/$TAG"
 echo "    Download: $DOWNLOAD_URL"
 echo "    Site updated: $(grep -oE 'baseURL = "[^"]*"' "$HUGO_DIR/hugo.toml" | sed 's|baseURL = ||; s|"||g')"
 echo
+# `unzip` here is deliberate: it loses ditto's codesign-friendly metadata,
+# so a `spctl -a` on the result fails with "sealed resource missing or
+# invalid". That's the canary -- if you ever run this snippet and the app
+# DOES open clean, something has changed about how the zip was built and
+# you should re-validate the release with `ditto -x -k` + `spctl`. End
+# users get the app via Finder / Archive Utility (ditto-equivalent), so
+# they're fine; this hint is for the release operator only.
 echo "Test the download:"
 echo "    curl -L -o /tmp/test.zip \"$DOWNLOAD_URL\" && \\"
 echo "    unzip /tmp/test.zip -d /tmp/test && \\"
