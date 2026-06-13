@@ -21,6 +21,13 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         var geometry: TopLevelGeometry
         var eventMask: UInt32
         var pendingTitle: String?
+        // Latest hint values seen for this top-level. Cached here because
+        // WM_NORMAL_HINTS / _MOTIF_WM_HINTS routinely arrive between
+        // CreateWindow and MapWindow — that is, after the slot exists but
+        // before the NSWindow is created. mapTopLevel reads these after
+        // creating the NSWindow and applies them.
+        var sizeHints: WMSizeHints?
+        var motifHints: MotifWMHints?
         var window: NSWindow?
         var view: FlippedXView?
         var delegate: XWindowDelegate?
@@ -604,7 +611,9 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// is created yet; that happens at mapTopLevel.
     public func registerTopLevel(id: UInt32, geometry: TopLevelGeometry, eventMask: UInt32) {
         lock.lock()
-        slots[id] = Slot(geometry: geometry, eventMask: eventMask, pendingTitle: nil, window: nil, view: nil)
+        slots[id] = Slot(geometry: geometry, eventMask: eventMask, pendingTitle: nil,
+                         sizeHints: nil, motifHints: nil,
+                         window: nil, view: nil)
         lock.unlock()
     }
 
@@ -846,7 +855,22 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             self.slots[id]?.window = win
             self.slots[id]?.view = view
             self.slots[id]?.delegate = delegate
+            let pendingSize = self.slots[id]?.sizeHints
+            let pendingMotif = self.slots[id]?.motifHints
             self.lock.unlock()
+
+            // WM_NORMAL_HINTS / _MOTIF_WM_HINTS commonly arrive between
+            // CreateWindow and MapWindow — applySizeHints / applyMotifDecorations
+            // stashed them on the slot. Replay them here against the
+            // freshly-created NSWindow so minimum / maximum / resize-inc /
+            // aspect / decoration bits actually take effect.
+            if pendingSize != nil {
+                self.pushSizeHintsToWindow(win, id: id, hints: pendingSize,
+                                           scale: self.scaleFactor)
+            }
+            if let motif = win as? MotifWindow, pendingMotif != nil {
+                motif.frameView.applyMotifHints(pendingMotif)
+            }
 
             // Map-sequence events were already emitted synchronously above
             // on the read thread to keep wire order monotonic. Here we just
@@ -964,6 +988,112 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     public func descendantResized(id: UInt32, parent: UInt32, geometry: TopLevelGeometry) {
         // M3 hook — mark the NSView's region for that descendant as needing
         // redraw. M2 doesn't do anything visible.
+    }
+
+    /// WM_NORMAL_HINTS arrived (ChangeProperty) for a top-level. Translate
+    /// the X-client size constraints into AppKit `contentMinSize` /
+    /// `contentMaxSize` / `contentAspectRatio` / `contentResizeIncrements`
+    /// on the matching NSWindow. For MotifWindows the X-client area sits
+    /// inside the chrome, so we widen the constraints by the frame padding
+    /// before applying them to the NSWindow's content rect. nil hints
+    /// clears every constraint (property deleted or unparseable bytes).
+    /// Hints arriving before MapWindow are cached on the slot and applied
+    /// when mapTopLevel creates the NSWindow.
+    public func applySizeHints(id: UInt32, hints: WMSizeHints?) {
+        lock.lock()
+        slots[id]?.sizeHints = hints
+        let win = slots[id]?.window
+        lock.unlock()
+        guard let win = win else { return }
+        let scale = self.scaleFactor
+        DispatchQueue.main.async { [weak self] in
+            self?.pushSizeHintsToWindow(win, id: id, hints: hints, scale: scale)
+        }
+    }
+
+    /// Main-thread apply step. Extracted so mapTopLevel can call the same
+    /// path on a fresh NSWindow when the hints arrived before map.
+    fileprivate func pushSizeHintsToWindow(_ win: NSWindow, id: UInt32,
+                                           hints: WMSizeHints?, scale: Double) {
+        guard let hints = hints else {
+            win.contentMinSize = NSSize(width: 0, height: 0)
+            win.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                        height: CGFloat.greatestFiniteMagnitude)
+            win.contentResizeIncrements = NSSize(width: 1, height: 1)
+            win.contentAspectRatio = NSSize(width: 0, height: 0)
+            return
+        }
+        let backingScale = NSScreen.main?.backingScaleFactor ?? 2.0
+        let toPoints: (Int32) -> CGFloat = { CGFloat($0) * CGFloat(scale) / backingScale }
+        let chromePad = (win is MotifWindow)
+            ? (h: MotifTheme.current.horizontalPadding,
+               v: MotifTheme.current.verticalPadding)
+            : (h: CGFloat(0), v: CGFloat(0))
+
+        if hints.flags.contains(.pMinSize) {
+            win.contentMinSize = NSSize(
+                width: toPoints(hints.minWidth) + chromePad.h,
+                height: toPoints(hints.minHeight) + chromePad.v
+            )
+        }
+        if hints.flags.contains(.pMaxSize) {
+            win.contentMaxSize = NSSize(
+                width: toPoints(hints.maxWidth) + chromePad.h,
+                height: toPoints(hints.maxHeight) + chromePad.v
+            )
+        }
+        if hints.flags.contains(.pResizeInc),
+           hints.widthInc > 0, hints.heightInc > 0 {
+            // xterm's character-cell snap lives here. The increment is
+            // in X pixels; scale to points for AppKit.
+            win.contentResizeIncrements = NSSize(
+                width: toPoints(hints.widthInc),
+                height: toPoints(hints.heightInc)
+            )
+        }
+        if hints.flags.contains(.pAspect),
+           hints.minAspectX > 0, hints.minAspectY > 0 {
+            // AppKit takes one aspect ratio; X publishes min/max. We
+            // use min (the conservative choice) — most clients that
+            // care set both bounds equal anyway.
+            win.contentAspectRatio = NSSize(
+                width: CGFloat(hints.minAspectX),
+                height: CGFloat(hints.minAspectY)
+            )
+        }
+        log?.log("  bridge: WM_NORMAL_HINTS 0x\(String(id, radix: 16)) → " +
+            "min=\(win.contentMinSize) max=\(win.contentMaxSize) " +
+            "inc=\(win.contentResizeIncrements) aspect=\(win.contentAspectRatio)")
+    }
+
+    /// _MOTIF_WM_HINTS arrived for a top-level. Push the decoration bits
+    /// to the MotifFrameView so its chrome rendering can hide title /
+    /// resize handles / menu button on the windows that ask. For windows
+    /// not wrapped in a MotifWindow (native chrome path), silently no-op
+    /// — NSWindow.styleMask can't be safely mutated after creation.
+    /// Hints arriving before MapWindow are cached on the slot and applied
+    /// when mapTopLevel creates the NSWindow.
+    public func applyMotifDecorations(id: UInt32, hints: MotifWMHints?) {
+        lock.lock()
+        slots[id]?.motifHints = hints
+        let win = slots[id]?.window
+        lock.unlock()
+        DispatchQueue.main.async {
+            guard let motif = win as? MotifWindow else { return }
+            motif.frameView.applyMotifHints(hints)
+        }
+    }
+
+    /// The session learned the X client doesn't support WM_DELETE_WINDOW
+    /// (no WM_PROTOCOLS membership). The polite close path doesn't apply;
+    /// we orderOut the NSWindow synchronously so the visible window goes
+    /// away. The session is expected to follow this call with the
+    /// destroyTopLevel sequence that emits DestroyNotify to the X client.
+    public func forceCloseTopLevel(id: UInt32) {
+        let win = slot(id)?.window
+        DispatchQueue.main.async {
+            win?.orderOut(nil)
+        }
     }
 
     /// X client reconfigured an already-mapped top-level. Push the new
@@ -1789,6 +1919,13 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             let y0 = max(0, Int(r.y) * scale)
             let x1 = min(ctxW, (Int(r.x) + Int(r.width)) * scale)
             let y1 = min(ctxH, (Int(r.y) + Int(r.height)) * scale)
+            // Rect fully off-canvas (live-resize shrinking past the
+            // request) → empty intersection, nothing to invert. Without
+            // this guard, `for dx in x0..<x1` with x0 > x1 throws
+            // "Range requires lowerBound <= upperBound" mid-resize.
+            // Surfaced 2026-06-13 when dragging dtterm small enough that
+            // its cursor-blink XOR rect went past the right edge.
+            guard x1 > x0, y1 > y0 else { continue }
             for dy in y0..<y1 {
                 let rowBase = dy * bpr
                 for dx in x0..<x1 {
@@ -2913,14 +3050,20 @@ private final class XWindowDelegate: NSObject, NSWindowDelegate {
         bridge?.handleNSWindowFocusChange(id: windowId, gained: false)
     }
 
-    /// Red close button / Window > Close / ⌘W. Tell the session to send the
-    /// X client a polite WM_DELETE_WINDOW so the client (xterm/xcalc/etc.)
-    /// exits gracefully, then return true so AppKit closes the NSWindow
-    /// immediately for snappy visual feedback. The client's natural exit
-    /// drops the connection a moment later.
+    /// Red close button / Window > Close / ⌘W. Fan out to the session
+    /// (which decides polite vs force based on the client's WM_PROTOCOLS),
+    /// then return false so AppKit DOESN'T close the NSWindow itself.
+    /// The NSWindow stays open until the session reaches back and calls
+    /// bridge.destroyTopLevel — either because the client responded to
+    /// our polite WM_DELETE_WINDOW with XDestroyWindow, or because the
+    /// session took the force-close path directly. Without deferring, a
+    /// dtpad "save unsaved changes?" dialog would orphan: the parent
+    /// NSWindow vanishes, then the X-side save dialog gets mapped into a
+    /// new NSWindow whose parent NSWindow doesn't exist, and a Cancel
+    /// click leaves the user in a half-state.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         bridge?.handleNSWindowCloseRequest(id: windowId)
-        return true
+        return false
     }
 }
 

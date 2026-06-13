@@ -24,6 +24,12 @@ a date and rationale.
 
 ## Open
 
+### WM-proxy contract
+
+- **WM_DELETE_WINDOW force-close path skips recursive inferior teardown.** When the red close button fires on a window whose client never claimed `WM_DELETE_WINDOW` in `WM_PROTOCOLS`, `ServerSession.handleCloseRequest` calls `bridge.destroyTopLevel` directly and `windows.remove(topLevel)` — but it does NOT recursively destroy mapped inferiors the way the `.destroyWindow` opcode handler does. A misbehaving non-ICCCM client with descendant windows would leak those WindowEntries from our table (NSWindow is already orderOut so the visual is gone, but X-side state lingers). Latent — every client we host today claims `WM_DELETE_WINDOW` in `WM_PROTOCOLS` so the force path doesn't fire in practice. Real version: refactor `.destroyWindow` body into a reusable helper and call it from both paths.
+- **Hung-client polite close has no timeout fallback.** If the X client receives `WM_DELETE_WINDOW` but never responds (deadlocked, busy in a long compute, ignoring the message), the NSWindow stays open forever. User can repeatedly click the red close button; each click sends another `WM_DELETE_WINDOW` (well-behaved clients dedupe, hung clients ignore). Real version: track per-window `pendingCloseAt: Date`, second click within 30s = force-close path; or any single click after a 10s soft timeout escalates automatically.
+- **_MOTIF_WM_HINTS on native-chrome NSWindows is silently dropped.** `bridge.applyMotifDecorations` only routes the decoration bits when the top-level is wrapped in a `MotifWindow`. For windows opened with native chrome (Motif Frame off in Preferences, or Override-Redirect popups), the decoration bits never reach the user. `NSWindow.styleMask` is the equivalent native knob but isn't safe to mutate after window create — would need to defer hint application until window create, OR rebuild the NSWindow when hints flip mid-session.
+
 ### Resources, tables, replies
 
 - ~~**SetupAccepted is hardcoded.**~~ Partially closed 2026-05-27 (audit). `ServerConfig.init(displayConfig:)` now derives screen dimensions, mm, and scale from `NSScreen.main` via `DisplayConfig.forMainDisplay()` at startup. Still open: only PseudoColor 8-bit visual advertised (no TrueColor 24-bit per `DECISIONS.md`); matched-Sun resource-id-base and colormap IDs still hardcoded for replay-test compatibility.

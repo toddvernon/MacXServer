@@ -152,6 +152,27 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// WM_NAME or WM_ICON_NAME changed; bridge updates the NSWindow title.
     func setTopLevelTitle(id: UInt32, title: String)
 
+    /// WM_NORMAL_HINTS changed; apply min/max/resize-inc/aspect to the
+    /// matching NSWindow's constraint API. nil = clear all constraints
+    /// (property was deleted or unparseable).
+    func applySizeHints(id: UInt32, hints: WMSizeHints?)
+
+    /// _MOTIF_WM_HINTS changed; apply the decoration bits to the matching
+    /// MotifWindow's frame chrome. nil = revert to the static
+    /// `[motif-frame]` config defaults. Non-Motif chrome (native title
+    /// bar): ignored, see SHORTCUTS — no styleMask mutation post-create.
+    func applyMotifDecorations(id: UInt32, hints: MotifWMHints?)
+
+    /// User clicked the red close button (or ⌘W / Window > Close).
+    /// Polite path: session sends WM_DELETE_WINDOW ClientMessage and
+    /// does NOTHING else — the NSWindow stays open until the X client
+    /// responds with DestroyWindow (which routes back through
+    /// destroyTopLevel). Force path: session calls this when the client
+    /// hasn't claimed WM_DELETE_WINDOW in WM_PROTOCOLS; bridge orderOuts
+    /// the NSWindow and the session destroys the X window so the client
+    /// learns its window is gone.
+    func forceCloseTopLevel(id: UInt32)
+
     /// The X client reconfigured an already-mapped top-level via
     /// ConfigureWindow. Bridge moves and/or resizes the NSWindow to match
     /// the new geometry. Used heavily by Motif's menubar trick: a single
@@ -792,6 +813,9 @@ public extension WindowBridge {
     func setCursor(topLevel: UInt32, glyph: UInt16?) {}
     func setTopLevelWindowBackground(id: UInt32, color: RGB16) {}
     func reconfigureTopLevel(id: UInt32, geometry: TopLevelGeometry) {}
+    func applySizeHints(id: UInt32, hints: WMSizeHints?) {}
+    func applyMotifDecorations(id: UInt32, hints: MotifWMHints?) {}
+    func forceCloseTopLevel(id: UInt32) {}
     func flushTopLevel(_ topLevel: UInt32) {}
     func flushAllDeferred() {}
 }

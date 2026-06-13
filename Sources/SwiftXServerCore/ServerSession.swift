@@ -656,36 +656,86 @@ public final class ServerSession: @unchecked Sendable {
     }
 
     /// User asked to close one of our NSWindows (red traffic-light button,
-    /// Window > Close, or ⌘W). Send the X client a polite ICCCM
-    /// WM_DELETE_WINDOW message — well-behaved clients (xterm, xcalc,
-    /// xclock, xeyes, every Athena/Motif app of the era) treat that as
-    /// "shut down cleanly". The NSWindow is closed by AppKit independently
-    /// so the user sees the window vanish immediately; the client process
-    /// follows on its own a moment later.
+    /// Window > Close, or ⌘W). ICCCM polite-close: only send
+    /// WM_DELETE_WINDOW if the client claimed it in its WM_PROTOCOLS
+    /// property. If the client didn't claim it, force-close (no polite
+    /// message would arrive at the client's protocol handler since it
+    /// never registered for one — we'd just hang the NSWindow forever).
+    ///
+    /// The NSWindow is kept open on the polite path (delegate returned
+    /// false from windowShouldClose). The client responds to the polite
+    /// message by calling XDestroyWindow on its top-level, which routes
+    /// through the .destroyWindow opcode handler and eventually
+    /// bridge.destroyTopLevel — that's where the NSWindow actually
+    /// orderOuts + closes. The force path does the destroy here directly.
     public func handleCloseRequest(topLevel: UInt32) {
         guard let order = byteOrder else { return }
         guard windows.get(topLevel) != nil else { return }    // not our window
-        let wmProtocols = atoms.intern("WM_PROTOCOLS")
+
+        let wmProtocols = atoms.lookupOrZero("WM_PROTOCOLS")
         let wmDeleteWindow = atoms.intern("WM_DELETE_WINDOW")
-        // ClientMessage data field is exactly 20 bytes. For a 32-bit format
-        // ICCCM message we encode 5 UInt32s in connection byte order:
-        // [protocol-atom, time, 0, 0, 0]. CurrentTime (0) is fine here —
-        // ICCCM doesn't require a real timestamp on this message.
-        var w = ByteWriter(byteOrder: order)
-        w.writeUInt32(wmDeleteWindow)
-        w.writeUInt32(0)
-        w.writeUInt32(0)
-        w.writeUInt32(0)
-        w.writeUInt32(0)
-        let event = ClientMessageEvent(
-            sequenceNumber: sequenceNumber,
-            format: .format32,
-            window: topLevel,
-            type: wmProtocols,
-            data: w.bytes
+        let supportsDelete = clientClaimsAtomInWMProtocols(
+            window: topLevel, atom: wmDeleteWindow, wmProtocols: wmProtocols, byteOrder: order
         )
-        log?.log("  → ClientMessage(WM_PROTOCOLS, WM_DELETE_WINDOW) target=0x\(String(topLevel, radix: 16))")
-        outbound.append(event.encode(byteOrder: order))
+
+        if supportsDelete {
+            // ClientMessage data field is exactly 20 bytes. For a 32-bit
+            // format ICCCM message we encode 5 UInt32s in connection byte
+            // order: [protocol-atom, time, 0, 0, 0]. CurrentTime (0) is
+            // fine here — ICCCM doesn't require a real timestamp on this
+            // message.
+            var w = ByteWriter(byteOrder: order)
+            w.writeUInt32(wmDeleteWindow)
+            w.writeUInt32(0)
+            w.writeUInt32(0)
+            w.writeUInt32(0)
+            w.writeUInt32(0)
+            let event = ClientMessageEvent(
+                sequenceNumber: sequenceNumber,
+                format: .format32,
+                window: topLevel,
+                type: wmProtocols,
+                data: w.bytes
+            )
+            log?.log("  → ClientMessage(WM_PROTOCOLS, WM_DELETE_WINDOW) target=0x\(String(topLevel, radix: 16))")
+            outbound.append(event.encode(byteOrder: order))
+        } else {
+            // Force-close: client never claimed WM_DELETE_WINDOW so a
+            // polite message would have no handler at the other end. Emit
+            // DestroyNotify (the client learns its window is gone),
+            // orderOut + close the NSWindow, and drop the window-table
+            // entry. Best-effort cleanup of inferiors is skipped — a
+            // misbehaving client that doesn't follow ICCCM is by
+            // definition outside the supported envelope.
+            log?.log("  → force-close (client didn't claim WM_DELETE_WINDOW in WM_PROTOCOLS) 0x\(String(topLevel, radix: 16))")
+            bridge?.destroyTopLevel(id: topLevel, byteOrder: order,
+                                    sequence: sequenceNumber, outbound: outbound)
+            windows.remove(topLevel)
+        }
+    }
+
+    /// Returns true iff `wmProtocols` property is set on `window` and the
+    /// decoded ATOM list contains `atom`. Helper for ICCCM contract
+    /// checks: WM_DELETE_WINDOW / WM_TAKE_FOCUS / WM_SAVE_YOURSELF.
+    private func clientClaimsAtomInWMProtocols(window: UInt32, atom: UInt32,
+                                               wmProtocols: UInt32, byteOrder: ByteOrder) -> Bool {
+        guard wmProtocols != 0,
+              let entry = properties.get(window: window, property: wmProtocols),
+              entry.format == 32, entry.value.count >= 4, entry.value.count % 4 == 0
+        else { return false }
+        let count = entry.value.count / 4
+        for i in 0..<count {
+            let off = i * 4
+            let b0 = UInt32(entry.value[off])
+            let b1 = UInt32(entry.value[off + 1])
+            let b2 = UInt32(entry.value[off + 2])
+            let b3 = UInt32(entry.value[off + 3])
+            let a: UInt32 = byteOrder == .lsbFirst
+                ? (b0 | b1 << 8 | b2 << 16 | b3 << 24)
+                : (b3 | b2 << 8 | b1 << 16 | b0 << 24)
+            if a == atom { return true }
+        }
+        return false
     }
 
     /// User pressed Cmd-C / chose Edit > Copy in the focused X window. If
@@ -5099,6 +5149,7 @@ public final class ServerSession: @unchecked Sendable {
                 emitError(.match, majorOpcode: ChangeProperty.opcode)
                 break
             }
+            log?.log("  ChangeProperty win=0x\(String(r.window, radix: 16)) prop=\(r.property)\(atoms.name(for: r.property).map { " (\($0))" } ?? "") type=\(r.type) format=\(r.format.rawValue) bytes=\(r.data.count)")
             emitPropertyNotify(window: r.window, atom: r.property, state: .newValue, byteOrder: byteOrder)
             if r.window == config.rootWindowId {
                 coordinator.fanOutRootPropertyNotify(atom: r.property, state: .newValue, excludeToken: bridgeHandlerToken)
@@ -5159,6 +5210,31 @@ public final class ServerSession: @unchecked Sendable {
                 log?.log("  copy: received \(r.data.count) bytes from selection owner — writing NSPasteboard")
                 bridge?.writeClipboard(text: text)
                 properties.delete(window: r.window, property: r.property)
+            }
+            // WM_NORMAL_HINTS (atom 40, predefined) -> push size constraints
+            // to the matching NSWindow. Mode=Replace clobbers the prior
+            // value; Append/Prepend would build a malformed property anyway
+            // so we treat them the same — re-read the now-merged bytes.
+            if r.property == 40 {
+                let bytes = properties.get(window: r.window, property: r.property)?.value ?? r.data
+                let hints = WMSizeHints.decode(bytes, byteOrder: byteOrder)
+                if let h = hints {
+                    log?.log("  → WM_NORMAL_HINTS win=0x\(String(r.window, radix: 16)) flags=0x\(String(h.flags.rawValue, radix: 16)) min=\(h.minWidth)x\(h.minHeight) max=\(h.maxWidth)x\(h.maxHeight) inc=\(h.widthInc)x\(h.heightInc) base=\(h.baseWidth)x\(h.baseHeight)")
+                } else {
+                    log?.log("  → WM_NORMAL_HINTS win=0x\(String(r.window, radix: 16)) DECODE FAILED (\(bytes.count) bytes)")
+                }
+                bridge?.applySizeHints(id: r.window, hints: hints)
+            }
+            // _MOTIF_WM_HINTS (or the alias _MWM_HINTS) -> push decoration
+            // bits to the matching MotifFrameView. Same merge handling as
+            // WM_NORMAL_HINTS above.
+            let mwmAtom = atoms.lookupOrZero("_MOTIF_WM_HINTS")
+            let mwmAliasAtom = atoms.lookupOrZero("_MWM_HINTS")
+            if r.property != 0,
+               (r.property == mwmAtom || r.property == mwmAliasAtom) {
+                let bytes = properties.get(window: r.window, property: r.property)?.value ?? r.data
+                let hints = MotifWMHints.decode(bytes, byteOrder: byteOrder)
+                bridge?.applyMotifDecorations(id: r.window, hints: hints)
             }
 
         case .deleteProperty(let r):

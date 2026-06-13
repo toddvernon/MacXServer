@@ -1,4 +1,114 @@
-# Status 2026-06-12
+# Status 2026-06-13
+
+WM-proxy contract pass: closed two real charter gaps that we'd been
+silently ignoring for top-level Motif windows. WM_DELETE_WINDOW now
+respects WM_PROTOCOLS membership (no more sending the polite message to
+clients that never claimed it), and the NSWindow no longer closes
+underneath a "save unsaved changes?" dialog before the client can react.
+WM_NORMAL_HINTS and _MOTIF_WM_HINTS are now decoded server-side and
+plumbed into `NSWindow.contentMinSize` / `contentMaxSize` /
+`contentResizeIncrements` / `contentAspectRatio` and per-window Motif
+chrome decoration bits — was completely unimplemented before today (the
+property bytes were stored but never read). 1283 tests green; 19 new
+tests for the wire-up. Build clean.
+
+## Afternoon follow-ups: timing, crash, validation, decision
+
+After the morning's WM-proxy contract pass landed, drove dtpad / dtterm /
+xterm against the new code to verify. Found and fixed two real bugs,
+discovered one design question, and validated one win:
+
+- **Timing bug fix** (`CocoaWindowBridge.applySizeHints` /
+  `applyMotifDecorations`). Hints arriving between `CreateWindow` and
+  `MapWindow` were silently dropped — `slot(id)?.window` was nil and
+  the apply returned early. Added `sizeHints` / `motifHints` caching on
+  the `Slot` struct (same pattern as the existing `pendingTitle`);
+  `mapTopLevel` now reads and applies any pending hints after the
+  NSWindow is created. Caught by Todd reporting "min size not enforced"
+  on xterm — turned out the intercept was firing but the apply wasn't.
+- **Latent crash fix** (`CocoaWindowBridge.fillGXxorPixelValue`).
+  Shrinking dtterm small enough for its cursor-blink XOR rect to extend
+  past the right edge of the canvas tripped a fatal "Range requires
+  lowerBound <= upperBound" — `x0` was clamped to `max(0, ...)` but not
+  also bounded above by `ctxW`, so when the rect was fully off-canvas
+  `x0 > x1` and `for dx in x0..<x1` threw. Added `guard x1 > x0, y1 >
+  y0 else { continue }` defensive skip. Latent until today because
+  nothing else exercised the "shrink a window with an active XOR rect
+  past the canvas" path.
+- **Diagnostic logging** in `ServerSession.changeProperty` now prints
+  `prop=N (NAME)`, type, format, byte count on every write. Keeping it —
+  next time someone asks "why isn't WM_FOO working?" this single log
+  line answers it without a rebuild.
+- **Decision: no UX policy floor on declared minimums.** xterm declares
+  10×17 X pixel minimum (1 char cell); Sun-era dtpad declares 0×0
+  (empty WM_SIZE_HINTS struct with PMinSize bit on but values zero).
+  Both are spec-correct vintage X behavior — Linux WMs honor them and
+  let the user shrink to nothing. Could have imposed a Mac-style 360×220
+  floor; chose not to. See DECISIONS.md 2026-06-13 entry for the
+  reasoning.
+- **Concrete validation: quickplot's aspect-ratio constraint now works
+  end-to-end.** The xlib plot window declares `PAspect` in WM_NORMAL_HINTS;
+  pre-fix we ignored it, post-fix the NSWindow honors it during user
+  resize. First user-visible WM_NORMAL_HINTS win.
+
+## WM-proxy contract pass (today)
+
+Charter framing: macXserver is the WM (no client-side WM runs against
+us); macOS supplies actual window management via AppKit. The two items
+hit today are the contact surface between those layers — places where
+the X client thinks it's negotiating with a window manager (us) but we
+weren't doing our half.
+
+**#4 WM_DELETE_WINDOW gating** (`ServerSession.handleCloseRequest`,
+`CocoaWindowBridge.windowShouldClose`). Two bugs closed:
+
+- *Bug A*: `handleCloseRequest` sent `ClientMessage(WM_DELETE_WINDOW)`
+  unconditionally to every top-level. Now reads the window's
+  `WM_PROTOCOLS` property and only sends the polite message if the
+  `WM_DELETE_WINDOW` atom is listed. Clients that don't claim it get the
+  force path: `bridge.destroyTopLevel` emits `DestroyNotify` so the
+  client learns its window is gone, NSWindow orderOuts + closes.
+- *Bug B*: `windowShouldClose` returned `true`, closing the NSWindow
+  before the client could react. Specifically broke dtpad-style
+  "save changes? Yes/No/Cancel" flow: main window vanished, save dialog
+  appeared parentless, user-Cancel left the X main window alive with
+  no NSWindow. Now returns `false` — NSWindow stays open until the
+  client's natural `XDestroyWindow` (polite path) or our `destroyTopLevel`
+  (force path) closes it.
+
+**#6 WM_NORMAL_HINTS + _MOTIF_WM_HINTS application** (new
+`Sources/SwiftXServerCore/WMHints.swift`, `ServerSession` ChangeProperty
+interception, `CocoaWindowBridge.applySizeHints` /
+`applyMotifDecorations`, `MotifFrameView` decoration gating). Both
+properties had server-side decoders only in the capture tool; the server
+stored them as opaque bytes and never read them. Now intercepted at
+`ChangeProperty` (mirroring the existing WM_NAME / WM_CLASS / selection-
+sink pattern) and routed to AppKit:
+
+- `WM_NORMAL_HINTS`: `PMinSize` → `contentMinSize`, `PMaxSize` →
+  `contentMaxSize`, `PResizeInc` → `contentResizeIncrements` (xterm's
+  character-cell snap finally works), `PAspect` → `contentAspectRatio`.
+  Coordinate-scaled to points; widened by Motif chrome padding when the
+  NSWindow is a `MotifWindow`.
+- `_MOTIF_WM_HINTS` decoration bits (BORDER, TITLE, MENU, MINIMIZE,
+  MAXIMIZE, RESIZEH): gated in `MotifFrameView.drawTitleBar` so per-window
+  decoration overrides hide the right chrome elements without changing
+  the chrome layout (X-client area stays stable). Static `[motif-frame]`
+  config still wins when the property is absent or sets the `ALL` sentinel.
+
+**Tests**: 12 new across `WMHintsTests` (decoder edge cases incl. both
+byte orders + pre-ICCCM 15-element form) and `WMHintsDispatchTests`
+(integration — ChangeProperty reaches bridge with decoded values; close
+gates correctly on WM_PROTOCOLS three ways: claimed → polite, absent →
+force, present but lacks WM_DELETE_WINDOW → force).
+
+**Known gaps logged in SHORTCUTS**: force-close skips recursive inferior
+teardown (latent — every hosted client claims WM_DELETE_WINDOW); hung-
+client polite close has no timeout fallback (user can re-click);
+_MOTIF_WM_HINTS on native-chrome NSWindows is silently dropped (Motif
+Frame off path).
+
+## 2026-06-12 — Feature day: SSH launcher + v0.9.2 (preserved below)
 
 Feature day: SSH launcher, macxserver.com page documenting it,
 **MacXServer v0.9.2 shipped** (signed/notarized/stapled, on the website),

@@ -742,6 +742,24 @@ The telnet launcher (shipped 2026-05-27) covers vintage Sun boxes that don't hav
 
 ---
 
+## 2026-06-13 — Honor vintage X client size hints, no Mac-style UX floor
+
+When WM_NORMAL_HINTS arrived for server-side application (2026-06-13), the question came up: vintage X clients commonly declare microscopic or zero minimum sizes. xterm publishes `min=10×17` X pixels (one character cell plus chrome). Sun-era dtpad publishes `flags=PMinSize|PResizeInc|PBaseSize` with every value as `0×0` — literally an empty WM_SIZE_HINTS struct with the bits flipped. Same shape across most of the vintage corpus.
+
+**Chosen**: honor what the client declares, period. `NSWindow.contentMinSize` is set to the spec-correct value (decoded `min_width` / `min_height` plus Motif chrome padding); we don't impose a Mac-style minimum floor on top.
+
+**Alternatives considered**:
+
+1. **Bridge-side policy floor** (`max(declaredMin, 360×220)` X pixels, or similar). Would make vintage X windows feel more "Mac-y" — you couldn't accidentally shrink dtpad to a square millimeter. Rejected: a legitimately small floating panel (a color picker, an xfontsel-style chooser, the kind of tools palette quickplot might pop) wants to be that small, and a hardcoded floor over-enforces. Linux WMs (fvwm, twm, mwm) don't do this; they trust the client. Macxserver's charter is "vintage X clients on Mac," not "Mac-feeling clients" — fidelity to what the client asked for is more important than averting an unlikely user accident.
+
+2. **Per-app-class policy floor** driven by WM_CLASS. Larger floor for `dtpad` and `xterm`, no floor for small panels. Rejected as premature config: nobody has actually been bitten by the no-floor behavior yet (Todd tried it deliberately and decided to accept it); building a config layer for the imagined complaint adds maintenance with no proven demand.
+
+**Why this won**: the spec-correct path is also the simplest. The hint pipeline does exactly what ICCCM 4.1.2.3 says to do; clients that want a meaningful minimum can declare one (quickplot's plot window declares `PAspect` and the aspect constraint is verified working on the Studio Display 2026-06-13, which is the concrete evidence the pipeline functions); clients that don't get the freedom to shrink small. The "user accidentally shrinks dtpad to a sliver" scenario is real but reversible — drag the corner back out — so it doesn't justify trading away spec correctness for it.
+
+**Cost flagged**: Mac users new to vintage X may be surprised that dtpad / xterm / dtterm have no enforced minimum. The README / first-launch docs should mention this expectation gap if it surfaces in user feedback. Until then, accept and watch.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

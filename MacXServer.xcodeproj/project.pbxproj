@@ -103,6 +103,7 @@
 		6344EC3F7D1B8EB999A4E520 /* ResourceFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3786DF66F0E0DC6F2B22D543 /* ResourceFile.swift */; };
 		66CB6BD6801061FB8E792BDF /* XInputDeviceStatePayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = D606539476B25E95CB5B7836 /* XInputDeviceStatePayload.swift */; };
 		67A768141A575F58D4B40FC3 /* SwiftXCaptureApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D21855698CEA6046F07D7C01 /* SwiftXCaptureApp.swift */; };
+		67F43B9F55D042F11243BA5B /* WMHints.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B2C461591A75948EF37F7B0 /* WMHints.swift */; };
 		681997131EF68BF1AB98ADD8 /* ConfigureWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD7DBD5161EB25EB725B1BA2 /* ConfigureWindow.swift */; };
 		68E17F4A682CE0A2D8F1B712 /* SwiftXServerCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A754C2999E615AC3FD603922 /* SwiftXServerCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		6967E88E606D93C25474FF7D /* ReplayEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55EFA351EF159E81ED44E31A /* ReplayEngine.swift */; };
@@ -533,6 +534,7 @@
 		76F72696877FF055B735B6D8 /* OpcodeNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpcodeNames.swift; sourceTree = "<group>"; };
 		79899EF3BFEA18C936A5D2A7 /* CreateGlyphCursor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGlyphCursor.swift; sourceTree = "<group>"; };
 		79EA8765D448F503846DF6EB /* AllowEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AllowEvents.swift; sourceTree = "<group>"; };
+		7B2C461591A75948EF37F7B0 /* WMHints.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WMHints.swift; sourceTree = "<group>"; };
 		7C11DFDFB0020F8CBFCC0E29 /* Phase1Events.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Phase1Events.swift; sourceTree = "<group>"; };
 		7F1158F5435634F1A10649BF /* Listener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Listener.swift; sourceTree = "<group>"; };
 		800EAF3DF38A3331010EBCEF /* FontMappingsPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontMappingsPanelView.swift; sourceTree = "<group>"; };
@@ -748,6 +750,7 @@
 				010B57FDC5A36184A078543D /* ValueListReader.swift */,
 				1358892F3CB410549B5A7DDC /* WindowBridge.swift */,
 				CC732D2D44A5F1A36A63C730 /* WireTrace.swift */,
+				7B2C461591A75948EF37F7B0 /* WMHints.swift */,
 				14F46AC1EF70369D1062B2C6 /* XColorDatabase.swift */,
 				F6CB164E9CE64F95B26EDD7A /* XLFD.swift */,
 			);
@@ -1370,6 +1373,7 @@
 				251B566EEA8DD752C9165E7A /* TelnetLauncher.swift in Sources */,
 				2A9488BF82A47D5171A135C7 /* USKeymap.swift in Sources */,
 				DAB9115BC3D19F15AEC7B764 /* ValueListReader.swift in Sources */,
+				67F43B9F55D042F11243BA5B /* WMHints.swift in Sources */,
 				130F8B57DD364AC8CD1FC637 /* WindowBridge.swift in Sources */,
 				0719F2775A0B5D39866E0960 /* WireTrace.swift in Sources */,
 				C2622B4751B8CBE07AFED29B /* XColorDatabase.swift in Sources */,

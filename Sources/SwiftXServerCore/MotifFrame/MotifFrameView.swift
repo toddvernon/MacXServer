@@ -22,6 +22,32 @@ public final class MotifFrameView: NSView {
         didSet { needsDisplay = true }
     }
 
+    /// Per-window _MOTIF_WM_HINTS overrides; nil = use the static
+    /// `[motif-frame]` defaults (every decoration drawn). When non-nil
+    /// AND `hasExplicitDecorations` is true, the decoration bits gate
+    /// which chrome elements render. Title-bar buttons that the client
+    /// hid via this property won't be hit-testable either (`pressedButton`
+    /// stays nil because the rect drew empty); resize grooves remain
+    /// hit-testable since AppKit owns the actual NSWindow edge resize.
+    public var motifHints: MotifWMHints? {
+        didSet { needsDisplay = true }
+    }
+
+    /// Apply a new _MOTIF_WM_HINTS value (called by the bridge on every
+    /// ChangeProperty for `_MOTIF_WM_HINTS`). Equivalent to writing
+    /// `motifHints` directly; kept as a named method so the bridge call
+    /// site reads cleanly.
+    public func applyMotifHints(_ hints: MotifWMHints?) {
+        motifHints = hints
+    }
+
+    /// True if this decoration bit should render. Default (no hints,
+    /// or hints with no explicit DECORATIONS flag): true.
+    private func decorationShown(_ bit: MotifWMHints.Decorations) -> Bool {
+        guard let h = motifHints, h.hasExplicitDecorations else { return true }
+        return h.decorations.contains(bit)
+    }
+
     /// True when the X client has a SHAPE bounding region. Following mwm's
     /// SetFrameShape (frame = rectangular title bar OR'ed with the client's
     /// shape, punting on the resize border), we then draw ONLY the title bar
@@ -199,23 +225,33 @@ public final class MotifFrameView: NSView {
     }
 
     private func drawTitleBar(_ ctx: CGContext) {
+        // If the client explicitly turned the title-bar decoration off via
+        // _MOTIF_WM_HINTS, draw nothing in the title strip — the chrome
+        // bevel from drawChrome still ringed the bounds, so the empty
+        // strip just reads as more grey at the top.
+        guard decorationShown(.title) else { return }
+
         let menuR = menuButtonRect()
         let maxR  = maximizeButtonRect()
         let restR = restoreButtonRect()
 
-        raisedTile(ctx, menuR, pressed: pressedButton == 0)
-        raisedTile(ctx, maxR,  pressed: pressedButton == 2)
-        raisedTile(ctx, restR, pressed: pressedButton == 1)
+        let showMenu     = decorationShown(.menu)
+        let showRestore  = decorationShown(.minimize)
+        let showMaximize = decorationShown(.maximize)
+
+        if showMenu     { raisedTile(ctx, menuR, pressed: pressedButton == 0) }
+        if showMaximize { raisedTile(ctx, maxR,  pressed: pressedButton == 2) }
+        if showRestore  { raisedTile(ctx, restR, pressed: pressedButton == 1) }
 
         switch buttonStyle {
         case .motif:
-            raisedTileCentered(ctx, in: menuR, width: MotifTheme.current.menuDashW, height: MotifTheme.current.menuDashH)
-            raisedTileCentered(ctx, in: maxR,  width: MotifTheme.current.maximizeSq, height: MotifTheme.current.maximizeSq)
-            raisedTileCentered(ctx, in: restR, width: MotifTheme.current.restoreSq, height: MotifTheme.current.restoreSq)
+            if showMenu     { raisedTileCentered(ctx, in: menuR, width: MotifTheme.current.menuDashW, height: MotifTheme.current.menuDashH) }
+            if showMaximize { raisedTileCentered(ctx, in: maxR,  width: MotifTheme.current.maximizeSq, height: MotifTheme.current.maximizeSq) }
+            if showRestore  { raisedTileCentered(ctx, in: restR, width: MotifTheme.current.restoreSq, height: MotifTheme.current.restoreSq) }
         case .trafficLights:
-            dot(ctx, in: menuR, color: MotifTheme.macRed)
-            dot(ctx, in: restR, color: MotifTheme.macYellow)
-            dot(ctx, in: maxR,  color: MotifTheme.macGreen)
+            if showMenu     { dot(ctx, in: menuR, color: MotifTheme.macRed) }
+            if showRestore  { dot(ctx, in: restR, color: MotifTheme.macYellow) }
+            if showMaximize { dot(ctx, in: maxR,  color: MotifTheme.macGreen) }
         }
 
         let titleR = titleBarRect()
