@@ -798,6 +798,54 @@ The 2026-05-05 "Sun-era authenticity" argument doesn't survive scrutiny — vint
 
 ---
 
+## 2026-06-13 — WM_TRANSIENT_FOR uses z-order maintenance, NOT NSWindow.addChildWindow
+
+When the X client sets WM_TRANSIENT_FOR on a top-level (Motif XmDialogShell does this on every dialog), we need to keep that window visually above its parent regardless of focus. The obvious Mac primitive is `NSWindow.addChildWindow(child, ordered: .above)`. We tried it first (commit `7d95474`), then reverted to a manual z-order approach (commit TODO).
+
+**Chosen**: maintain a per-bridge `transientForParent` map on the slot table. On every `windowDidBecomeKey` of the parent, walk the table and call `child.order(.above, relativeTo: parent.windowNumber)` for each transient. Same on the initial WM_TRANSIENT_FOR property change.
+
+**Why we did NOT use addChildWindow** (this is the divergence-from-Mac-convention choice that this entry exists to document):
+
+`NSWindow.addChildWindow` is a tight Mac primitive that does FIVE things at once:
+
+1. Keeps child above parent in z-order
+2. Couples child position — child moves with parent
+3. Carries child through Spaces with parent
+4. Minimizes child when parent minimizes
+5. Closes child when parent closes
+
+For Mac-native apps that's the right bundle (Xcode's document window + inspector panels behave this way and it feels natural). For X clients ported to Mac via macXserver it breaks (2) in a way that creates a real user-trap:
+
+> A modeless transient dialog can land on top of a button on its parent
+> window. On Sun mwm the user slides the parent out from under the
+> dialog independently to reach the button. With addChildWindow, the
+> parent can't be moved without the dialog coming along — the button
+> stays covered forever.
+
+Verified user-visible with quickplot 2026-06-13: About dialog covering a Command Window button. Sun mwm lets the user move Command Window independently to access the button. Our addChildWindow implementation didn't, and Todd called this out as a problem.
+
+**Alternatives considered**:
+
+1. **`addChildWindow` + observe `windowDidMove` on the parent to snap the child back to its pre-move screen frame.** Hybrid approach. Rejected: flicker-prone (every drag tick fires the notification), fights AppKit's positioning, and the snap-back is racy with `setFrame` calls that AppKit makes mid-drag.
+
+2. **Use `NSWindow.level = .floating`** to put the transient above everything. Rejected: that puts it above every Mac app's windows too (other macXserver clients, the user's editor, etc.), not just above its X parent. Wrong scope.
+
+3. **Mac collectionBehavior with `.transient`.** Rejected: doesn't enforce z-order on focus changes; just tags the window for special Spaces handling. Doesn't solve the actual symptom.
+
+**Why this won**: the manual z-order maintenance gives us exactly what Sun mwm gives — child stays above parent regardless of focus, child is independently positionable — at the cost of losing the Mac coupling for Spaces, minimize, and follow-on-move. The project charter is "vintage X clients on Mac with proper modern rendering"; **vintage X behavior fidelity wins over Mac UX coupling** when they conflict, per the original project shape decision (2026-05-05 entry).
+
+**Cost flagged**:
+
+- Transient dialogs DON'T follow their parent through Spaces. If the user drags the parent main window to a different Space, the transient stays in the original Space. That's the Sun behavior (Sun didn't have Spaces) but a Mac user might be surprised.
+- Transient dialogs DON'T minimize with the parent. Minimizing the parent leaves the dialog as a floating window with no obvious owner. On Sun this didn't matter because there was no minimize-to-Dock concept; on Mac it might feel wrong.
+- Transient dialogs DON'T close with the parent. If the parent is closed via the WM (red Mac button → WM_DELETE_WINDOW → client unmaps the parent and its descendants), the transient closes when the client itself decides to close it — typically immediately, since the client knows the parent went away. So this gap is usually invisible.
+
+The Spaces and minimize gaps could be closed by adding NSWindow observers that mirror those specific operations onto transients, WITHOUT taking on position coupling. Punted until a user actually complains.
+
+The implementation lives at `CocoaWindowBridge.applyTransientForOnMain` / `restoreTransientsAbove` / the hook in `handleNSWindowFocusChange`. The 4 dispatch tests in `WMTransientForTests` exercise the wire path; the live z-order behavior is verified manually on a real quickplot session.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

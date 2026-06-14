@@ -587,6 +587,18 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     private static let focusDebounceMs = 80
 
     func handleNSWindowFocusChange(id: UInt32, gained: Bool) {
+        // When a window gains key focus, AppKit just raised it above
+        // every other window — including any of its WM_TRANSIENT_FOR
+        // transients. The X charter says those transients stay
+        // visually above the parent regardless of focus (Sun mwm), so
+        // immediately push them back above. See DECISIONS 2026-06-13
+        // (the WM_TRANSIENT_FOR entry) for why we don't use
+        // NSWindow.addChildWindow for this.
+        if gained {
+            DispatchQueue.main.async { [weak self] in
+                self?.restoreTransientsAbove(parent: id)
+            }
+        }
         // Cancel any pending emit for this window.
         Self.pendingFocusTask[id]?.cancel()
         Self.pendingFocusState[id] = gained
@@ -1113,21 +1125,37 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
-    /// WM_TRANSIENT_FOR arrived (ChangeProperty) for a top-level. Attach
-    /// the child NSWindow to the parent NSWindow via
-    /// `NSWindow.addChildWindow(_:ordered:.above)` so the child stays
-    /// visually above its parent regardless of focus, follows the parent
-    /// through Spaces, minimizes with it, and (per AppKit semantics)
-    /// closes with it. Matches Sun mwm's behavior for Motif transient
-    /// dialogs (XmDialogShell). nil parent removes any existing
-    /// child-window relationship.
+    /// WM_TRANSIENT_FOR arrived (ChangeProperty) for a top-level. Keep
+    /// the child NSWindow visually above its parent regardless of focus,
+    /// matching Sun mwm's behavior for Motif transient dialogs
+    /// (XmDialogShell). nil parent removes any existing transient
+    /// relationship.
+    ///
+    /// **Deliberate divergence from Mac convention** (DECISIONS
+    /// 2026-06-13, this is the second entry that day): we DO NOT use
+    /// `NSWindow.addChildWindow(_:ordered:.above)` even though it's the
+    /// natural Mac primitive for "stay above parent." `addChildWindow`
+    /// also couples position — the child moves with the parent — which
+    /// breaks a real user need on the X side: if the dialog happens to
+    /// land covering a button on the parent that the user wants to
+    /// reach, they need to be able to slide the parent out from under
+    /// the dialog independently. On Sun mwm transient dialogs are
+    /// position-independent. We preserve that behavior at the cost of
+    /// losing the Mac coupling for Spaces, minimize, and follow-on-
+    /// move. Mechanism: maintain a transientForParent map on the slots
+    /// (which we already do for the timing-deferred case), and on every
+    /// windowDidBecomeKey of the parent re-raise its transients via
+    /// `child.order(.above, relativeTo: parent.windowNumber)`.
+    /// Same on the initial attach. Spaces/minimize coupling is sacrificed
+    /// here; the project charter prioritizes vintage Unix client fidelity
+    /// over Mac UX coupling.
     ///
     /// Both windows might not exist at NSWindow level when the property
     /// arrives — XmDialogShell typically sets WM_TRANSIENT_FOR before
     /// mapping the dialog, and the parent main window is usually
     /// already mapped, but the order isn't guaranteed. The child's
     /// `transientForParent` is cached on the slot so mapTopLevel can
-    /// re-apply the relationship when both NSWindows exist.
+    /// re-attempt the raise when both NSWindows exist.
     public func applyTransientFor(child: UInt32, parent: UInt32?) {
         lock.lock()
         slots[child]?.transientForParent = parent
@@ -1146,32 +1174,43 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     fileprivate func applyTransientForOnMain(child: UInt32, childWin: NSWindow?,
                                              parent: UInt32?, parentWin: NSWindow?) {
         guard let childWin = childWin else { return }
-        // Detach from any prior parent first so we don't accumulate
-        // dangling child relationships on rebind.
-        if let priorParent = childWin.parent {
-            priorParent.removeChildWindow(childWin)
-        }
         guard let parent = parent else {
-            // nil → just detach. Already done above.
+            // nil → relationship cleared from the slot table by the
+            // caller; nothing to do at the NSWindow level (we never
+            // installed an addChildWindow link).
             log?.log("  bridge: WM_TRANSIENT_FOR 0x\(String(child, radix: 16)) → detached")
             return
         }
         guard let parentWin = parentWin else {
-            // Parent NSWindow doesn't exist yet. Slot already cached
-            // the relationship; mapTopLevel will replay this when the
-            // parent's NSWindow is created.
             log?.log("  bridge: WM_TRANSIENT_FOR 0x\(String(child, radix: 16)) → parent 0x\(String(parent, radix: 16)) deferred (parent NSWindow not yet created)")
             return
         }
-        // AppKit refuses self-parent and would silently break the
-        // ordering invariants if you try to make a window its own
-        // parent's parent (cycle). Guard both.
         guard childWin !== parentWin else {
             log?.log("  bridge: WM_TRANSIENT_FOR 0x\(String(child, radix: 16)) → self, ignored")
             return
         }
-        parentWin.addChildWindow(childWin, ordered: .above)
-        log?.log("  bridge: WM_TRANSIENT_FOR 0x\(String(child, radix: 16)) → parent 0x\(String(parent, radix: 16)) attached")
+        childWin.order(.above, relativeTo: parentWin.windowNumber)
+        log?.log("  bridge: WM_TRANSIENT_FOR 0x\(String(child, radix: 16)) → above 0x\(String(parent, radix: 16))")
+    }
+
+    /// Re-raise every transient that lists `parent` as its
+    /// `transientForParent` so they sit above `parent` again in
+    /// z-order. Called from the focus handler whenever `parent` becomes
+    /// key (AppKit would otherwise have just raised `parent` above its
+    /// transients on the click). Idempotent: calling on a window with
+    /// no transients is a cheap O(N) scan and no NSWindow mutations.
+    @MainActor
+    fileprivate func restoreTransientsAbove(parent: UInt32) {
+        lock.lock()
+        let parentWin = slots[parent]?.window
+        let transients: [NSWindow] = slots.values
+            .filter { $0.transientForParent == parent }
+            .compactMap { $0.window }
+        lock.unlock()
+        guard let parentWin = parentWin, !transients.isEmpty else { return }
+        for child in transients where child !== parentWin {
+            child.order(.above, relativeTo: parentWin.windowNumber)
+        }
     }
 
     /// The session learned the X client doesn't support WM_DELETE_WINDOW
