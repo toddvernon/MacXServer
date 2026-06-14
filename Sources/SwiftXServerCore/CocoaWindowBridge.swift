@@ -1199,6 +1199,16 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// key (AppKit would otherwise have just raised `parent` above its
     /// transients on the click). Idempotent: calling on a window with
     /// no transients is a cheap O(N) scan and no NSWindow mutations.
+    ///
+    /// CRITICAL: only re-order VISIBLE transients. Calling `order(.above, ...)`
+    /// on an `orderOut`'d NSWindow brings it back on screen as an empty
+    /// frame — the X client (which already issued UnmapWindow) won't
+    /// paint into it and won't receive events through it, so the user
+    /// sees a phantom dialog that can't be dismissed. Verified with
+    /// dtpad's settings dialog 2026-06-13 (which dismisses to UnmapWindow
+    /// rather than DestroyWindow, keeping the slot+transient relationship
+    /// alive). `isVisible` returns false after orderOut and true after
+    /// orderFront/order, which is the right gate.
     @MainActor
     fileprivate func restoreTransientsAbove(parent: UInt32) {
         lock.lock()
@@ -1208,7 +1218,7 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             .compactMap { $0.window }
         lock.unlock()
         guard let parentWin = parentWin, !transients.isEmpty else { return }
-        for child in transients where child !== parentWin {
+        for child in transients where child !== parentWin && child.isVisible {
             child.order(.above, relativeTo: parentWin.windowNumber)
         }
     }
