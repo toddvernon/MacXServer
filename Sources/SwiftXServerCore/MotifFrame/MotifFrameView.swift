@@ -199,37 +199,24 @@ public final class MotifFrameView: NSView {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let W = bounds.width, H = bounds.height
 
-        // Shaped client: mwm draws only the rectangular title bar and lets the
-        // client shape show below it, with no surrounding border or resize
-        // grooves (SetFrameShape "punts on the resize handle"). Clear to
-        // transparent, draw the title-bar strip, done — the shaped client view
-        // composites on top in its clientRect.
+        // Shaped client: mwm shapes its own frame window to match the
+        // client shape union'd with the rectangular title bar
+        // (WmCDecor.c:2857-2911 `SetFrameShape`). Within the visible
+        // title strip there is just the title widget itself — no outer
+        // frame bevel around it, no corner grooves, no surrounding fill.
+        // The comment at WmCDecor.c:2854 is explicit: "currently punt on
+        // resize handle around the frame."
+        //
+        // Implementation: clear the bounds (so the area outside the title
+        // widget composites through to the desktop), then draw only the
+        // title bar (buttons + title text + their own intrinsic raised
+        // bevels — drawTitleBar handles its own widget shading). The
+        // shaped client view composites on top in its clientRect, showing
+        // through where the bounds were cleared. Verified against real
+        // Sun mwm rendering of oclock / xeyes 2026-06-14.
         if clientIsShaped {
-            // Render the EXACT normal top-of-frame chrome (outer raised + inner
-            // sunken bevel band + title bar), but clipped to the title-bar
-            // strip so the raised band border wraps above and to the sides of
-            // the title row just like the unshaped frame. Everything below the
-            // client top stays transparent — mwm shapes away the side/bottom
-            // border + resize handles for a shaped client (SetFrameShape).
             ctx.clear(bounds)
-            ctx.saveGState()
-            // Clip the strip to the bottom of the button row (not all the way
-            // to clientTopInset) — clientTopInset includes a bevelWidth of band
-            // below the buttons, which otherwise shows as a stray sliver of
-            // frame fill above the shaped client. Ending at the button bottoms
-            // gives the clean lower edge.
-            let stripBottom = MotifTheme.current.clientTopInset - MotifTheme.current.bevelWidth
-            ctx.clip(to: CGRect(x: 0, y: 0, width: W, height: stripBottom))
-            fill(ctx, bounds, MotifTheme.current.fill)
-            bevel(ctx, bounds, topLeft: MotifTheme.current.highlight, bottomRight: MotifTheme.current.shadow)
-            let innerTop = CGRect(x: band, y: band, width: W - 2*band, height: H - 2*band)
-            bevel(ctx, innerTop, topLeft: MotifTheme.current.shadow, bottomRight: MotifTheme.current.highlight)
-            // Corner grooves: the clip keeps the two TOP grab-handle grooves
-            // (where the buttons meet the outer frame) and drops the bottom
-            // pair, matching mwm punting on the lower resize handles.
-            drawCornerGrooves(ctx, W: W, H: H)
             drawTitleBar(ctx)
-            ctx.restoreGState()
             return
         }
 
