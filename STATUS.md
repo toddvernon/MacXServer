@@ -1,41 +1,194 @@
 # Status 2026-06-14
 
-Small day so far — one commit, one user-visible bug fix on top of
-yesterday's v0.9.4 release.
+Five commits, **MacXServer v0.9.5 shipped** (signed/notarized/stapled,
+download button live on macxserver.com). Day broke into three chunks:
+shaped-client deform fix in the morning, Motif chrome audit against
+mwm source + two MAJOR-severity findings closed mid-day, and a
+single-knob color-derivation refactor in the afternoon that took the
+chrome from four hardcoded color resources to one. 1293 tests still
+green, no test changes today (drawing paths aren't easily mockable
+through AppKit; live verification only).
 
-## Shaped-client resize / deform fix (today)
+## Release: MacXServer v0.9.5 (today)
 
-`02b253a` — SHAPE: drop `.resizable` while client is shaped.
+- Tag: `MacXServer-v0.9.5`. GitHub release at
+  `releases/tag/MacXServer-v0.9.5`. Hugo `appVersion` bumped to 0.9.5;
+  download button live on macxserver.com.
+- Built, signed (Developer ID Application), notarized (notarytool
+  --wait), stapled, republished via `./release.sh MacXServer 0.9.5`.
+- Diff vs v0.9.4 (which shipped late 2026-06-13): shaped-client deform
+  fix (oclock / xeyes), Motif chrome bevel cleanup on shaped clients,
+  focus-state coloring across the full chrome (not just title text),
+  single-knob color derivation, and the late-06-13 dtpad-settings
+  WM_TRANSIENT_FOR fix (`6bdb969`, missed v0.9.4 cut by ~20 minutes).
 
-Symptom (Todd's screenshot 2026-06-13): oclock could be resized by
-dragging the (now-transparent) NSWindow edges into non-square bounds,
-which oclock then drew as an ellipse with hands extending well past
-the visible clock face. xeyes had the same shape.
+## Shaped-client deform fix (morning)
 
-Diagnosis: the Motif-frame title-bar-only drawing path
-(`clientIsShaped`) was correct — it made the frame body transparent
-below the title bar, matching mwm's `SetFrameShape` policy. But we
-kept `.resizable` in the NSWindow.styleMask the whole time, so
-AppKit still gave the user invisible resize zones around the
-transparent edges. Drag any, deform happens.
+Two commits (`02b253a`, `377283d`). Symptom from Todd's 2026-06-13
+screenshot: oclock could be resized by dragging the now-transparent
+NSWindow edges into non-square bounds, which it drew as an ellipse
+with hands extending well past the visible face. xeyes had the same
+shape. Two separate things were wrong:
 
-Sun mwm behavior (Todd verified 2026-06-14 on u5): shaped clients
-get a title-bar-only frame with no rectangular corners to grab. "You
-can't make it happen because there's nothing to drag." Implementation
-matched: `setWindowBoundingShape` now `styleMask.remove(.resizable)`
-when applying a non-nil shape, `insert(.resizable)` when clearing.
+1. **NSWindow let the user resize.** `setWindowBoundingShape` left
+   `.resizable` in the styleMask the whole time the client was shaped,
+   so AppKit still offered invisible resize zones around the
+   transparent edges. Fix: `styleMask.remove(.resizable)` when
+   applying a non-nil shape, `insert` when clearing. Matches Sun mwm:
+   "you can't make it happen because there's nothing to drag" (Todd
+   verified live on u5).
+2. **Our title-bar drawing rendered the full outer frame bevel +
+   grooves inside the title strip on shaped clients** even though the
+   strip should just be the title widget itself. Real mwm shapes its
+   frame window to match (client shape ∪ title bar) and draws no
+   surrounding chrome (`WmCDecor.c:2854-2911 SetFrameShape`, "currently
+   punt on resize handle around the frame"). Fix: when
+   `clientIsShaped`, `draw()` just clears the bounds and calls
+   `drawTitleBar` — no outer fill, no outer bevel, no corner grooves.
+   Title widget renders with its own intrinsic raised bevel.
 
 Cost flagged: real Sun mwm leaves narrow in-title-bar resize handles
 at the upper-left / upper-right corners of the title bar. We don't
-yet expose those — shaped clients are now fully fixed-size on our
-side. Re-adding the title-bar-corner resize is a separate piece of
-work (custom mouse handling on MotifFrameView's title-bar corners,
-likely with uniform-aspect lock to prevent re-introducing the
-deformation). Punted; matches user-perceivable Sun behavior closely
-enough for now.
+expose those — shaped clients are fully fixed-size on our side.
+Re-adding them is custom mouse handling on the title-bar corners
+with an aspect-ratio lock; punted, the visible behavior matches Sun
+closely enough for now.
 
-1293 tests still pass (no test changes — the path isn't easily mockable
-through AppKit; live verification only).
+## Motif frame audit (mid-day)
+
+`MOTIF_FRAME_AUDIT_2026-06-14.md`. Forked an agent to audit
+`MotifFrameView` against the authoritative mwm source under
+`reference/motif/clients/mwm/`. 15 findings: 3 MAJOR, 6 MINOR, 6
+COSMETIC. Three of the MAJORs were addressed today:
+
+- **F1 (focused vs unfocused color distinction)** — initially shipped
+  in `952fdae` as a 50% title-text blend toward chrome fill. Todd
+  said the focus shift wasn't visible enough; expanded into the
+  full single-knob derivation (next section) where every chrome
+  surface shifts state, not just the title text.
+- **F2 (system-menu button behavior)** — mwm's left-corner button
+  pops a system menu on single-click; we now require a double-click
+  on it to close the window outright. Single-click does nothing.
+  Decision per Todd: Mac users already have traffic-light close /
+  minimize / zoom via the native title bar, so a Motif pop-up menu
+  is redundant. Documented at the call site (`MotifFrameView` mouseUp
+  case 0 requires `event.clickCount >= 2`).
+- **F3 (maximize state bevel inversion)** — deliberately deferred
+  per Todd's explicit "I like the way it works now." mwm inverts
+  the maximize button's bevel when the window is zoomed; we don't.
+  Skipped on purpose, not an oversight.
+
+The other 12 audit findings (6 MINOR: MWM_DECOR_ALL XOR semantic,
+icon-tile bevels 2px vs mwm 1px, corner grooves 6px stubs vs ~30px
+L-pieces, etc.; 6 COSMETIC) remain open. None are user-visible
+quality issues; the audit doc has the full table for the next pass.
+
+## Single-knob color derivation (afternoon)
+
+`eedcc5f` — `MotifTheme: single-knob color derivation for frame chrome`.
+Refactor that replaced four hardcoded color resources with one base
+color + derivation math:
+
+**Before**: `Mwm*background`, `Mwm*topShadowColor`,
+`Mwm*bottomShadowColor`, `Mwm*title*foreground` all set independently
+in the resource file. Focus state shifted only the title text
+(50% blend toward chrome fill). The four-key surface tempted
+inconsistent edits.
+
+**After**: one `Mwm*background` (active bg). Highlight, shadow, title
+text all derived from it via mwm's `XmGetColors`-style blend math
+(highlight = 70% toward white, shadow = 60% toward black, title text
+= contrast-picked against luminance). Inactive bg derived from
+active by blending 50% toward a dark neutral gray — the entire
+inactive palette then re-derives from that darker base. Optional
+`Mwm*inactiveBackground` override for users who want a specific
+inactive shade.
+
+Net effect on focus state: every chrome surface (outer bevels, grooves,
+button tiles, traffic-light gradient, title text) shifts together
+when the window loses focus, not just the title. Visually obvious
+which window is active without squinting.
+
+Implementation:
+- `MotifTheme`: new `activeBackground` / `inactiveBackground` fields,
+  static derivation helpers (`colors(for:)`, `deriveInactive(from:)`,
+  `contrastingTitleColor(for:)`), computed `activeColors` /
+  `inactiveColors` returning a new `MotifStateColors` struct.
+- `MotifFrameView`: new `private var colors: MotifStateColors`
+  accessor that picks active vs inactive based on `isActiveWindow`;
+  all 7 chrome draw sites switched from
+  `MotifTheme.current.{fill,highlight,shadow,titleColor}` to
+  `colors.{...}`. Old title-text dimming logic deleted (per-state
+  title color makes it intrinsic).
+- `MotifTheme.default` geometry aligned to seed values
+  (bevelWidth=1, frameWidth=3, titleBarHeight=26). Previously
+  defaults drifted (2/2/32) so commenting out the `[motif-frame]`
+  section produced different dimensions than a fresh seed. Now a
+  user with no resource file, an empty section, or fully-commented
+  values sees identical chrome to a first-launch user.
+- Seed `[motif-frame]` block in `DefaultThemes.swift` and Todd's
+  existing `~/.macxserver-resources` updated to the new
+  single-knob shape (four removed keys → one bg + four geometry).
+
+Trade-off accepted: per-color overrides are gone. If derivation ever
+looks wrong, the fix is to tune the formula (everyone benefits), not
+override per-site. Backward-compatibility wasn't preserved
+deliberately — the old per-color resources are silently ignored if
+they're still in a user's file. Doc note in seed explains the model.
+
+## Today's commits (X repo, chronological)
+
+- `02b253a` — SHAPE: drop `.resizable` while client is shaped (oclock/xeyes deform fix)
+- `046f677` — STATUS: roll forward to 2026-06-14 — shaped-client deform fix
+- `377283d` — SHAPE: draw title widget only, no surrounding frame bevel/grooves
+- `952fdae` — MotifFrame: focus state title-text dim + system-menu double-click close
+- `eedcc5f` — MotifTheme: single-knob color derivation for frame chrome
+
+(Hugo: `appVersion` bump to 0.9.5 for today's release.)
+
+5 commits in the X repo today, one Hugo bump, one public release
+shipped clean. One audit doc added (`MOTIF_FRAME_AUDIT_2026-06-14.md`).
+No DECISIONS / SHORTCUTS / OPCODE_STATUS rolls today — the work was
+all in our chrome (rendering layer, not protocol).
+
+## What's working
+
+- v0.9.5 live: notarized, stapled, `spctl`-clean. Hugo site download
+  button updated.
+- oclock and xeyes now render correctly: title-bar-only frame, no
+  resize, no deform.
+- Active vs inactive Motif frames visually distinct across the whole
+  chrome (not just title text). Inactive bg darker + desaturated by
+  derivation.
+- Single-knob color model: change `Mwm*background` and the entire
+  chrome (active + inactive, all surfaces) recolors coherently.
+- Default chrome dimensions consistent across full-config, empty
+  section, no-file scenarios.
+- 1293 tests green, 27 skipped (unchanged baseline). Build clean.
+
+## What's next / open
+
+- **v0.9.5 in the wild** — watch for in-the-field reports on the
+  shaped-client / focus-state changes. The focus-state shift is the
+  most visible behavior change of the release.
+- **Motif audit leftovers** (12 of 15 findings still open): see
+  `MOTIF_FRAME_AUDIT_2026-06-14.md`. 6 MINOR (icon-tile bevel
+  thickness, corner-groove L-piece length, MWM_DECOR_ALL XOR
+  handling, etc.); 6 COSMETIC. None are blocking quality issues;
+  pick off as time allows.
+- **F3 (maximize state bevel inversion)** is deferred *deliberately*
+  per Todd. Skip in any audit-leftover sweep.
+- **TrueColor cleanup follow-on** (carryover from 2026-06-13, all
+  logged in SHORTCUTS): PutImage ZPixmap depth-24, PixelBuffer
+  depth-24 support, Colormap-op BadMatch semantics, CopyPlane
+  reverse-map cleanup, depth-8 ZPixmap semantics. None blocking;
+  each surfaces when a specific client exercises it.
+- **WM-proxy charter punch-list leftovers** (carryover): #12
+  SetSelectionOwner time-comparison gate (~5 lines), #7 CWBackPixmap
+  ParentRelative descendant case, #8 GetProperty type filter,
+  #10 / #12b / #12c lower-priority items.
+- **macXcapture still at v0.9.1.** No capture-side code moved
+  today; no reason to cut a new capture release.
 
 ---
 
