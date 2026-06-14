@@ -18,6 +18,21 @@ public final class MotifFrameView: NSView {
         }
     }
 
+    /// True when the owning NSWindow is the key window (X-side: focused).
+    /// Real mwm shows focused vs unfocused state by varying the title
+    /// bar's colors / text shade — without it the user can't tell at a
+    /// glance which X window has focus. We dim the title-text color when
+    /// inactive; the chrome's background/shadow stay constant to keep
+    /// the change subtle. Driven by XWindowDelegate's
+    /// windowDidBecomeKey / windowDidResignKey, set from
+    /// `MotifWindow.frameView.isActiveWindow`.
+    public var isActiveWindow: Bool = true {
+        didSet {
+            guard isActiveWindow != oldValue else { return }
+            setNeedsDisplay(titleBarRect())
+        }
+    }
+
     public var buttonStyle: MotifFrameButtonStyle = .motif {
         didSet { needsDisplay = true }
     }
@@ -307,9 +322,20 @@ public final class MotifFrameView: NSView {
         // X window of bounded width; we approximate by clipping the draw to
         // the title-bar rect. See reference/cde/cde/programs/dtwm/WmGraphics.c
         // (WmDrawXmString) + WmCDecor.c (GetTextBox).
+        // Inactive: blend the title color halfway toward the chrome fill
+        // so the text fades but stays readable. Same trick mwm uses with
+        // its activeForeground / inactiveForeground resource pair.
+        let titleColor: NSColor
+        if isActiveWindow {
+            titleColor = MotifTheme.current.titleColor
+        } else {
+            titleColor = MotifTheme.current.titleColor.blended(
+                withFraction: 0.5, of: MotifTheme.current.fill
+            ) ?? MotifTheme.current.titleColor
+        }
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: MotifTheme.current.titleFontSize, weight: .medium),
-            .foregroundColor: MotifTheme.current.titleColor,
+            .foregroundColor: titleColor,
         ]
         let text = windowTitle as NSString
         let sz = text.size(withAttributes: attrs)
@@ -542,11 +568,20 @@ public final class MotifFrameView: NSView {
         if let btn = pressedButton {
             switch btn {
             case 0:
-                // performClose beeps on non-.titled windows. Invoke the
-                // delegate's windowShouldClose hook manually (that's where
-                // the WM_DELETE_WINDOW polite-close flow lives) and then
-                // close the NSWindow directly.
-                if menuButtonRect().contains(pt), let win = window {
+                // System-menu button: real mwm single-click posts a
+                // pop-up menu (Move / Size / Minimize / Maximize / Lower
+                // / Close); double-click closes the window. We skip the
+                // pop-up entirely — Mac users have ⌘W, Window menu, the
+                // red traffic light, and right-click on the Dock icon for
+                // those operations, so a Motif-style pop-up adds nothing.
+                // We do honor the double-click → close gesture so the
+                // muscle memory of long-time Motif users still works.
+                // Single-click on the menu button shows visual press
+                // feedback (raisedTile pressed:) but does nothing on
+                // release. performClose beeps on non-.titled windows so
+                // route through windowShouldClose manually.
+                if menuButtonRect().contains(pt), let win = window,
+                   event.clickCount >= 2 {
                     let ok = win.delegate?.windowShouldClose?(win) ?? true
                     if ok { win.close() }
                 }

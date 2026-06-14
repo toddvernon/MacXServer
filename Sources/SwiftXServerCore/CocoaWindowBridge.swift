@@ -3200,10 +3200,14 @@ private final class XWindowDelegate: NSObject, NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) {
         bridge?.handleNSWindowFocusChange(id: windowId, gained: true)
+        // Repaint the Motif chrome with the active title-text color.
+        // mwm shows focused-vs-unfocused state via title-bar coloring.
+        (notification.object as? MotifWindow)?.frameView.isActiveWindow = true
     }
 
     func windowDidResignKey(_ notification: Notification) {
         bridge?.handleNSWindowFocusChange(id: windowId, gained: false)
+        (notification.object as? MotifWindow)?.frameView.isActiveWindow = false
     }
 
     /// Red close button / Window > Close / ⌘W. Fan out to the session
