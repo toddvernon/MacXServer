@@ -1,4 +1,45 @@
-# Status 2026-06-13
+# Status 2026-06-14
+
+Small day so far — one commit, one user-visible bug fix on top of
+yesterday's v0.9.4 release.
+
+## Shaped-client resize / deform fix (today)
+
+`02b253a` — SHAPE: drop `.resizable` while client is shaped.
+
+Symptom (Todd's screenshot 2026-06-13): oclock could be resized by
+dragging the (now-transparent) NSWindow edges into non-square bounds,
+which oclock then drew as an ellipse with hands extending well past
+the visible clock face. xeyes had the same shape.
+
+Diagnosis: the Motif-frame title-bar-only drawing path
+(`clientIsShaped`) was correct — it made the frame body transparent
+below the title bar, matching mwm's `SetFrameShape` policy. But we
+kept `.resizable` in the NSWindow.styleMask the whole time, so
+AppKit still gave the user invisible resize zones around the
+transparent edges. Drag any, deform happens.
+
+Sun mwm behavior (Todd verified 2026-06-14 on u5): shaped clients
+get a title-bar-only frame with no rectangular corners to grab. "You
+can't make it happen because there's nothing to drag." Implementation
+matched: `setWindowBoundingShape` now `styleMask.remove(.resizable)`
+when applying a non-nil shape, `insert(.resizable)` when clearing.
+
+Cost flagged: real Sun mwm leaves narrow in-title-bar resize handles
+at the upper-left / upper-right corners of the title bar. We don't
+yet expose those — shaped clients are now fully fixed-size on our
+side. Re-adding the title-bar-corner resize is a separate piece of
+work (custom mouse handling on MotifFrameView's title-bar corners,
+likely with uniform-aspect lock to prevent re-introducing the
+deformation). Punted; matches user-perceivable Sun behavior closely
+enough for now.
+
+1293 tests still pass (no test changes — the path isn't easily mockable
+through AppKit; live verification only).
+
+---
+
+## Preserved below: 2026-06-13 marathon day
 
 Marathon day, **MacXServer v0.9.3 shipped** (signed/notarized/stapled,
 on macxserver.com). Five substantive chunks landed in sequence: WM-proxy
