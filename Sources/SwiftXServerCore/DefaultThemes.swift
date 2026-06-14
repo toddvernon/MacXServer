@@ -57,14 +57,17 @@ public enum DefaultThemes {
         ! Mac-side frame drawn around X windows (Preferences > Display).
         ! Colors are #RRGGBB hex. Restart the server to see changes.
         !
-        Mwm*background:         #B8BAC0
-        Mwm*topShadowColor:     #ECECEE
-        Mwm*bottomShadowColor:  #46474C
-        Mwm*title*foreground:   #101010
-        Mwm*frameBorderWidth:   3
-        Mwm*resizeBorderWidth:  1
-        Mwm*titleBarHeight:     26
-        Mwm*buttonStyle:        motif
+        ! Single-knob color model: pick ONE active background color and the
+        ! highlight, shadow, and title-text colors derive from it (same formula
+        ! mwm's XmGetColors uses: lighter = top-shadow, darker = bottom-shadow).
+        ! The inactive-window palette derives a step further by blending toward
+        ! neutral gray.
+        !
+        Mwm*background:           #B8BAC0
+        Mwm*frameBorderWidth:     3
+        Mwm*resizeBorderWidth:    1
+        Mwm*titleBarHeight:       26
+        Mwm*buttonStyle:          motif
         """
     }
 
@@ -74,13 +77,16 @@ public enum DefaultThemes {
         ! Mac-side frame drawn around X windows (Preferences > Display).
         ! Colors are #RRGGBB hex. Restart the server to see changes.
         !
-        Mwm*background:         #B8BAC0
-        Mwm*topShadowColor:     #ECECEE
-        Mwm*bottomShadowColor:  #46474C
-        Mwm*title*foreground:   #101010
-        Mwm*frameBorderWidth:   3
-        Mwm*resizeBorderWidth:  1
-        Mwm*titleBarHeight:     26
-        Mwm*buttonStyle:        motif
+        ! Single-knob color model: pick ONE active background color and the
+        ! highlight, shadow, and title-text colors derive from it (same formula
+        ! mwm's XmGetColors uses: lighter = top-shadow, darker = bottom-shadow).
+        ! The inactive-window palette derives a step further by blending toward
+        ! neutral gray.
+        !
+        Mwm*background:           #B8BAC0
+        Mwm*frameBorderWidth:     3
+        Mwm*resizeBorderWidth:    1
+        Mwm*titleBarHeight:       26
+        Mwm*buttonStyle:          motif
         """
 }

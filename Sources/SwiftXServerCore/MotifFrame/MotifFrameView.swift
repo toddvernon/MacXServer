@@ -149,6 +149,17 @@ public final class MotifFrameView: NSView {
     private var bs: CGFloat   { MotifTheme.current.buttonSize }
     private var bi: CGFloat   { MotifTheme.current.buttonInset }
 
+    /// Chrome colors for the current focus state. All four draw-time
+    /// colors (fill, highlight, shadow, titleColor) come from this single
+    /// accessor — derived from `MotifTheme.activeBackground` /
+    /// `inactiveBackground` so the whole palette stays internally
+    /// consistent and one knob (`Mwm*background`) recolors everything.
+    private var colors: MotifStateColors {
+        return isActiveWindow
+            ? MotifTheme.current.activeColors
+            : MotifTheme.current.inactiveColors
+    }
+
     // MARK: - Layout rects
 
     public var clientRect: NSRect {
@@ -235,16 +246,18 @@ public final class MotifFrameView: NSView {
             return
         }
 
+        let c = colors
+
         // Band body
-        fill(ctx, bounds, MotifTheme.current.fill)
+        fill(ctx, bounds, c.fill)
 
         // Outer raised bevel
-        bevel(ctx, bounds, topLeft: MotifTheme.current.highlight, bottomRight: MotifTheme.current.shadow)
+        bevel(ctx, bounds, topLeft: c.highlight, bottomRight: c.shadow)
 
         // Inner sunken bevel — combined with the outer raised, the band reads
         // as a slab raised from both sides simultaneously.
         let inner = CGRect(x: band, y: band, width: W - 2*band, height: H - 2*band)
-        bevel(ctx, inner, topLeft: MotifTheme.current.shadow, bottomRight: MotifTheme.current.highlight)
+        bevel(ctx, inner, topLeft: c.shadow, bottomRight: c.highlight)
 
         drawCornerGrooves(ctx, W: W, H: H)
         drawTitleBar(ctx)
@@ -300,9 +313,10 @@ public final class MotifFrameView: NSView {
         ctx.addEllipse(in: outerR)
         ctx.addEllipse(in: innerR)
         ctx.clip(using: .evenOdd)
+        let c = colors
         let gradient = CGGradient(
             colorsSpace: CGColorSpaceCreateDeviceRGB(),
-            colors: [MotifTheme.current.shadow.cgColor, MotifTheme.current.highlight.cgColor] as CFArray,
+            colors: [c.shadow.cgColor, c.highlight.cgColor] as CFArray,
             locations: [0, 1])!
         ctx.drawLinearGradient(
             gradient,
@@ -322,20 +336,13 @@ public final class MotifFrameView: NSView {
         // X window of bounded width; we approximate by clipping the draw to
         // the title-bar rect. See reference/cde/cde/programs/dtwm/WmGraphics.c
         // (WmDrawXmString) + WmCDecor.c (GetTextBox).
-        // Inactive: blend the title color halfway toward the chrome fill
-        // so the text fades but stays readable. Same trick mwm uses with
-        // its activeForeground / inactiveForeground resource pair.
-        let titleColor: NSColor
-        if isActiveWindow {
-            titleColor = MotifTheme.current.titleColor
-        } else {
-            titleColor = MotifTheme.current.titleColor.blended(
-                withFraction: 0.5, of: MotifTheme.current.fill
-            ) ?? MotifTheme.current.titleColor
-        }
+        // Title color follows focus state via the colors accessor: derived
+        // contrast against the (state-appropriate) background. Inactive
+        // bg is naturally grayer, which fades the title without any
+        // explicit per-state blending here.
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: MotifTheme.current.titleFontSize, weight: .medium),
-            .foregroundColor: titleColor,
+            .foregroundColor: colors.titleColor,
         ]
         let text = windowTitle as NSString
         let sz = text.size(withAttributes: attrs)
@@ -379,10 +386,11 @@ public final class MotifFrameView: NSView {
     // MARK: - Bevel primitives
 
     private func raisedTile(_ ctx: CGContext, _ r: CGRect, pressed: Bool = false) {
-        fill(ctx, r, MotifTheme.current.fill)
+        let c = colors
+        fill(ctx, r, c.fill)
         bevel(ctx, r,
-              topLeft:     pressed ? MotifTheme.current.shadow    : MotifTheme.current.highlight,
-              bottomRight: pressed ? MotifTheme.current.highlight : MotifTheme.current.shadow)
+              topLeft:     pressed ? c.shadow    : c.highlight,
+              bottomRight: pressed ? c.highlight : c.shadow)
     }
 
     private func raisedTileCentered(_ ctx: CGContext, in outer: CGRect,
@@ -420,19 +428,21 @@ public final class MotifFrameView: NSView {
 
     private func horizontalGroove(_ ctx: CGContext,
                                   x: CGFloat, y: CGFloat, length: CGFloat) {
+        let c = colors
         for i in 0..<Int(bv) {
             let o = CGFloat(i)
-            fill(ctx, CGRect(x: x, y: y + o,      width: length, height: 1), MotifTheme.current.shadow)
-            fill(ctx, CGRect(x: x, y: y + bv + o, width: length, height: 1), MotifTheme.current.highlight)
+            fill(ctx, CGRect(x: x, y: y + o,      width: length, height: 1), c.shadow)
+            fill(ctx, CGRect(x: x, y: y + bv + o, width: length, height: 1), c.highlight)
         }
     }
 
     private func verticalGroove(_ ctx: CGContext,
                                 x: CGFloat, y: CGFloat, length: CGFloat) {
+        let c = colors
         for i in 0..<Int(bv) {
             let o = CGFloat(i)
-            fill(ctx, CGRect(x: x + o,      y: y, width: 1, height: length), MotifTheme.current.shadow)
-            fill(ctx, CGRect(x: x + bv + o, y: y, width: 1, height: length), MotifTheme.current.highlight)
+            fill(ctx, CGRect(x: x + o,      y: y, width: 1, height: length), c.shadow)
+            fill(ctx, CGRect(x: x + bv + o, y: y, width: 1, height: length), c.highlight)
         }
     }
 
