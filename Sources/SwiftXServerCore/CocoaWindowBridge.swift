@@ -2833,6 +2833,76 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         return (out, w, h)
     }
 
+    /// Honor CWBackPixmap: blit the source pixmap into each destination rect
+    /// on the top-level's backing, with the pixmap origin landing at
+    /// `(originDeviceX, originDeviceY)` in top-level device coords.
+    ///
+    /// xli — the canonical caller — sets a depth-24 pixmap as the bg for a
+    /// top-level whose dimensions are ≤ the pixmap's. So a single crop +
+    /// blit per dest rect is enough. The full X spec calls for tiling when
+    /// the dest extends past the pixmap, but no hosted client we've seen
+    /// exercises tile-larger-than-pixmap; the out-of-bounds region simply
+    /// doesn't get drawn (see SHORTCUTS for the tiling exit plan).
+    public func paintWindowFromPixmap(
+        topLevel: UInt32,
+        sourcePixmapId: UInt32,
+        rects: [BoxRec],
+        originDeviceX: Int32,
+        originDeviceY: Int32
+    ) {
+        appendDeferred(topLevel: topLevel) { [weak self] in
+            guard let self = self,
+                  let view = self.slot(topLevel)?.view, let ctx = view.backing else { return }
+            guard let buffer = self.lookupPixmapBuffer(sourcePixmapId),
+                  let srcImage = buffer.context.makeImage() else {
+                log?.log("  paintWindowFromPixmap: pixmap 0x\(String(sourcePixmapId, radix: 16)) unreadable — drop")
+                return
+            }
+            // The pixmap's CGBitmapContext stores `width*scale × height*scale`
+            // device pixels. srcImage is device-resolution. Dest rects + origin
+            // are also device coords.
+            let pmDeviceW = CGFloat(buffer.context.width)
+            let pmDeviceH = CGFloat(buffer.context.height)
+            ctx.saveGState()
+            ctx.setShouldAntialias(false)
+            ctx.interpolationQuality = .none
+            self.applyDeviceCoordCTM(ctx) {
+                for box in rects {
+                    let dstX = CGFloat(box.x1)
+                    let dstY = CGFloat(box.y1)
+                    let dstW = CGFloat(box.x2 - box.x1)
+                    let dstH = CGFloat(box.y2 - box.y1)
+                    guard dstW > 0, dstH > 0 else { continue }
+                    // Source coords: dst minus pixmap origin in top-level
+                    // device coords.
+                    let srcX = dstX - CGFloat(originDeviceX)
+                    let srcY = dstY - CGFloat(originDeviceY)
+                    // Clip the source to pixmap bounds; carry the same clip
+                    // back to the destination so the parts we DO draw land
+                    // at the correct pixel.
+                    let srcUnclipped = CGRect(x: srcX, y: srcY, width: dstW, height: dstH)
+                    let srcClipped = srcUnclipped.intersection(
+                        CGRect(x: 0, y: 0, width: pmDeviceW, height: pmDeviceH)
+                    )
+                    guard !srcClipped.isNull, srcClipped.width > 0, srcClipped.height > 0 else { continue }
+                    let dstClipped = CGRect(
+                        x: dstX + (srcClipped.minX - srcX),
+                        y: dstY + (srcClipped.minY - srcY),
+                        width: srcClipped.width,
+                        height: srcClipped.height
+                    )
+                    guard let sub = srcImage.cropping(to: srcClipped) else { continue }
+                    // See GRAPHICS_Y_FLIP.md — the helper counter-flips
+                    // image rows so depth-24 pixels land top-down in memory.
+                    ctx.drawImageRespectingYFlip(sub, in: dstClipped)
+                }
+            }
+            ctx.restoreGState()
+            view.setNeedsDisplay(view.bounds)
+        }
+        flushTopLevel(topLevel)
+    }
+
     /// Paint the server-owned window-background rects (each carrying its own
     /// color) into the top-level's backing, in device coords.
     public func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {

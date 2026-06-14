@@ -1,13 +1,20 @@
 # Status 2026-06-14
 
-Five commits, **MacXServer v0.9.5 shipped** (signed/notarized/stapled,
-download button live on macxserver.com). Day broke into three chunks:
+Five-plus commits, **MacXServer v0.9.5 shipped** (signed/notarized/stapled,
+download button live on macxserver.com). Day broke into five chunks:
 shaped-client deform fix in the morning, Motif chrome audit against
-mwm source + two MAJOR-severity findings closed mid-day, and a
-single-knob color-derivation refactor in the afternoon that took the
-chrome from four hardcoded color resources to one. 1293 tests still
-green, no test changes today (drawing paths aren't easily mockable
-through AppKit; live verification only).
+mwm source + two MAJOR-severity findings closed mid-day, single-knob
+color-derivation refactor in the afternoon, TrueColor cleanup pass in
+the early evening (PutImage depth-24, CopyPlane window-depth fix,
+SHORTCUTS / OPCODE_STATUS updates), and CWBackPixmap honoring in the
+late evening (xli sets a depth-24 pixmap as the bg of its top-level
+child window and pans by ConfigureWindow on that child — we used to
+silently drop the bg-pixmap and the window came up white; then with
+bg-pixmap honored, the pure-move newly-exposed strip wasn't being
+repainted, so pans accumulated streak smears along the leading edge).
+1302 tests green (+9 from baseline — 2 PutImage depth-24,
+7 CWBackPixmap including the pure-move regression), 27 skipped
+(unchanged baseline).
 
 ## Release: MacXServer v0.9.5 (today)
 
@@ -136,6 +143,138 @@ override per-site. Backward-compatibility wasn't preserved
 deliberately — the old per-color resources are silently ignored if
 they're still in a user's file. Doc note in seed explains the model.
 
+## TrueColor cleanup pass (evening)
+
+Closed out the carryover items from the 2026-06-13 TrueColor visual
+switch. Five items on the list; landed three with code, audited two
+to closure without code changes.
+
+**PutImage ZPixmap depth-24 (the big one).** The depth-24 ZPixmap
+arm was silent-dropping — well-behaved Linux clients sending
+PutImage on the now-primary path got nothing. Added
+`expandZPixmapDepth24`: reads 4 bytes per pixel `[pad, R, G, B]`
+(msbFirst per imageByteOrder, the symmetric inverse of GetImage's
+depth-24 emission) and converts to BGRA for the bridge ARGB blit.
+No colormap involvement, lossless. Dispatch refactored to do
+explicit depth-match validation against the drawable's depth per
+spec — Bitmap requires depth=1, ZPixmap requires the request depth
+to match the drawable's depth. Spec-illegal combos now emit BadMatch
+instead of silent-dropping. Three new tests in
+`PutImageDispatchTests` cover the happy path and the two BadMatch
+cases.
+
+**Vintage depth-8 ZPixmap → BadMatch.** The PseudoColor-era
+motifbur menu-icon path. After the TrueColor switch each source
+byte unpacked to a near-black-blue shade — non-meaningful rendering
+that masqueraded as success. Now emits BadMatch (no advertised
+PixmapFormat for depth-8). One existing test rewritten; vintage
+motifbur replay captures will surface the error rather than render
+broken-colored icons.
+
+**CopyPlane fixes.** Two stale spots from the PseudoColor era:
+(1) the window-source-depth assumption was hardcoded to 8 (the old
+rootDepth), so CopyPlane on plane index ≥8 of a window would have
+emitted spurious BadMatch — now 24 to match the actual rootDepth;
+(2) the handler comment + OPCODE_STATUS row 132 still described
+the lossy ARGB-reverse-map-misses-pixel-zero behavior from when
+ColorTable was a real allocation table. Under TrueColor
+`ColorTable.pixel(for:)` is a pure bit-pack of R/G/B — lossless,
+no misses. Comment and status row refreshed.
+
+**Colormap-op BadMatch claim → false alarm.** STATUS note from
+2026-06-13 said AllocColorCells / AllocColorPlanes / StoreColors /
+StoreNamedColor should emit BadMatch under TrueColor "per spec."
+Verified against `reference/X11R6/xc/programs/Xserver/dix/colormap.c`:
+the X11R6 reference server returns `BadAlloc` for
+AllocColorCells/AllocColorPlanes on non-DynamicClass visuals and
+`BadAccess` for StoreColors/StoreNamedColor — which is exactly what
+we already emit. The colormap-MARK comment updated to record the
+verification; no code change.
+
+**PixelBuffer depth-24 support → no-op.** Per the PixelBuffer file
+header, the Mac-side bitmap is always 32-bit ARGB regardless of
+X-side depth; depth conversion happens at the I/O boundary
+(PutImage / GetImage / CopyPlane). PutImage was the only gap,
+which the depth-24 work above closes.
+
+OPCODE_STATUS rows 72 (PutImage) and 63 (CopyPlane) updated.
+OPCODES_PUBLIC.yaml coverage strings updated to match. SHORTCUTS
+PutImage entry updated to reflect "XYPixmap is the only remaining
+silent-drop; spec-illegal depth combos now emit BadMatch."
+
+## CWBackPixmap honoring (late evening)
+
+xli over the SSH launcher surfaced this. xli's strategy: build the
+image in a depth-24 pixmap with 19 PutImages, then set
+`ChangeWindowAttributes window=... mask=0x841 [bg-pixmap=<pixmap-id>]`
+on the top-level and expect the server to paint the window bg using
+the pixmap content. We silently dropped CWBackPixmap (tracked
+SHORTCUT since 2026-05-15), so the window came up all white. The
+PutImages were landing correctly — the broken half was the
+server-owned bg paint that should have used the pixmap source.
+
+Three pieces landed:
+
+**Storage**: `WindowEntry.backPixmapId: UInt32?` and
+`backPixmapParentRelative: Bool` next to existing `backPixel`.
+Setters enforce X spec's "alternatives" rule — setting either
+implicitly clears the other. `WindowTable` gets `setBackPixmapId`,
+`setBackPixmapParentRelative`, `setBackgroundNone` helpers.
+
+**Parsing**: CreateWindow and ChangeWindowAttributes both read
+`CW.backPixmap` from the value list with the spec's three cases —
+0=None (clear bg), 1=ParentRelative (flag set), N=pixmap id
+(validated). Bit order matters: CWBackPixmap is bit 0, CWBackPixel
+is bit 1, and the reference X server applies bits in ascending
+order, so a CWBackPixel in the same call overrides CWBackPixmap.
+Validations: BadPixmap on unknown id, BadMatch on depth mismatch.
+
+**Paint**: new bridge method `paintWindowFromPixmap(topLevel:,
+sourcePixmapId:, rects:, originDeviceX:, originDeviceY:)`.
+`CocoaWindowBridge` snapshots the pixmap's CGBitmapContext as a
+CGImage, crops to each rect's source region (clipped to pixmap
+bounds — out-of-bounds = unpainted for now), and uses
+`drawImageRespectingYFlip` so depth-24 pixels land top-down.
+`paintWindowPixmapBackgrounds(topLevelId:)` walks the subtree and
+issues the blit for every window with `backPixmapId` set.
+`paintRectsForWindow` skips its bg-fill branch when `backPixmapId
+!= nil` — the solid-color and pixmap paths are mutually exclusive
+per window. Called from the MapWindow paint site right after
+`paintWindowRects`.
+
+Open shortcuts logged: pixmap tiling when window > pixmap (xli's
+pixmap is larger than its window, so single-blit covers it);
+ParentRelative honoring (flag stored but `paintWindowPixmapBackgrounds`
+skips it — no client we host sets it); CWBorderPixmap still silently
+dropped.
+
+**Follow-on smear fix.** First xli run worked at MapWindow but
+pan-via-drag accumulated vertical-streak smears along the leading
+edge. xli's pan idiom (revealed by a second capture): outer parent
+window stays still, inner child has the bg-pixmap and gets
+`ConfigureWindow y=-2, -3, -4, ... -282` on each MotionNotify, so the
+child slides up within the parent and progressively-deeper rows of
+the bg-pixmap become visible at the bottom edge of the parent.
+
+The pure-move ConfigureWindow path was running its bit-gravity blit
+(content shifts up) but the newly-exposed strip at the bottom got no
+fresh paint — the bg-paint block was gated on
+`eventMask & exposureMask`, and xli's child has no ExposureMask (it
+expects the server to honor the bg contract without client
+involvement). So each pan left another sliver of stale MapWindow-era
+pixels behind. Fix: added an unconditional `paintWindowFromPixmap`
+for the `newClip - blitDst` region whenever the moved window has
+`backPixmapId`, with the origin tracking the moved child's new
+content top-left. After: pan is clean. 7th test added in
+`ChangeWindowAttributesTests` (the pure-move regression).
+
+Result on Todd's hardware: xli renders the photo correctly AND pans
+noticeably faster than the same xli running against the vintage Sun
+workstation upstream.
+
+OPCODE_STATUS rows 1 and 2 updated. OPCODES_PUBLIC.yaml coverage
+lines updated.
+
 ## Today's commits (X repo, chronological)
 
 - `02b253a` — SHAPE: drop `.resizable` while client is shaped (oclock/xeyes deform fix)
@@ -178,11 +317,10 @@ all in our chrome (rendering layer, not protocol).
   pick off as time allows.
 - **F3 (maximize state bevel inversion)** is deferred *deliberately*
   per Todd. Skip in any audit-leftover sweep.
-- **TrueColor cleanup follow-on** (carryover from 2026-06-13, all
-  logged in SHORTCUTS): PutImage ZPixmap depth-24, PixelBuffer
-  depth-24 support, Colormap-op BadMatch semantics, CopyPlane
-  reverse-map cleanup, depth-8 ZPixmap semantics. None blocking;
-  each surfaces when a specific client exercises it.
+- **TrueColor cleanup follow-on** — closed in the evening pass; see
+  the dedicated section above. XYPixmap PutImage is the only
+  remaining PutImage silent-drop and stays open until a hosted
+  client exercises it.
 - **WM-proxy charter punch-list leftovers** (carryover): #12
   SetSelectionOwner time-comparison gate (~5 lines), #7 CWBackPixmap
   ParentRelative descendant case, #8 GetProperty type filter,

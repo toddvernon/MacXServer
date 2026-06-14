@@ -38,7 +38,20 @@ public struct WindowEntry: Equatable, Sendable {
     /// Effective CWBackPixel for the window. nil = no explicit background
     /// (windowBackground() falls back to white). Seeded from CreateWindow's
     /// valueList; ChangeWindowAttributes updates it.
+    ///
+    /// Per X spec, CWBackPixel and CWBackPixmap are alternatives: setting
+    /// either implicitly clears the other on the WindowEntry side.
     public var backPixel: UInt32?
+    /// Effective CWBackPixmap (a real pixmap id, NOT 0=None or 1=ParentRelative).
+    /// nil = no pixmap source set. When non-nil the server paints exposed
+    /// regions of this window's bg by blitting the pixmap content (tiled
+    /// at the window's origin per X spec) instead of filling backPixel.
+    /// Setting backPixmapId clears backPixel and backPixmapParentRelative.
+    public var backPixmapId: UInt32?
+    /// CWBackPixmap = ParentRelative. The window inherits the parent's bg
+    /// pixmap (using the parent's origin so tiling aligns across the boundary).
+    /// Setting it clears backPixel and backPixmapId.
+    public var backPixmapParentRelative: Bool
     /// Effective CWBorderPixel. nil = no explicit border color (default black
     /// on real X servers). Drives the 1px-or-N-px ring painted around the
     /// window's content area.
@@ -152,6 +165,8 @@ public struct WindowEntry: Equatable, Sendable {
         valueMask: UInt32, valueList: [UInt8],
         mapped: Bool = false, eventMask: UInt32 = 0,
         backPixel: UInt32? = nil,
+        backPixmapId: UInt32? = nil,
+        backPixmapParentRelative: Bool = false,
         borderPixel: UInt32? = nil,
         cursor: UInt32? = nil,
         overrideRedirect: Bool = false,
@@ -179,6 +194,8 @@ public struct WindowEntry: Equatable, Sendable {
         self.visual = visual; self.valueMask = valueMask; self.valueList = valueList
         self.mapped = mapped; self.eventMask = eventMask
         self.backPixel = backPixel
+        self.backPixmapId = backPixmapId
+        self.backPixmapParentRelative = backPixmapParentRelative
         self.borderPixel = borderPixel
         self.cursor = cursor
         self.overrideRedirect = overrideRedirect
@@ -254,10 +271,50 @@ public final class WindowTable: @unchecked Sendable {
     }
 
     /// Set the window's CWBackPixel background color (nil = no explicit bg).
+    /// Per X spec, CWBackPixel and CWBackPixmap are alternatives — setting
+    /// the pixel clears any pixmap-source / ParentRelative state.
     public func setBackPixel(_ id: UInt32, _ pixel: UInt32?) {
         lock.lock(); defer { lock.unlock() }
         guard var w = _windows[id] else { return }
         w.backPixel = pixel
+        w.backPixmapId = nil
+        w.backPixmapParentRelative = false
+        _windows[id] = w
+    }
+
+    /// Set the window's CWBackPixmap to a real pixmap id (caller must
+    /// resolve the 0=None / 1=ParentRelative sentinels and pick the right
+    /// setter). Clears CWBackPixel and ParentRelative per the spec's
+    /// alternatives rule.
+    public func setBackPixmapId(_ id: UInt32, _ pixmapId: UInt32) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.backPixmapId = pixmapId
+        w.backPixel = nil
+        w.backPixmapParentRelative = false
+        _windows[id] = w
+    }
+
+    /// Set the window's CWBackPixmap = ParentRelative. Clears CWBackPixel
+    /// and any concrete pixmap source.
+    public func setBackPixmapParentRelative(_ id: UInt32) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.backPixmapParentRelative = true
+        w.backPixmapId = nil
+        w.backPixel = nil
+        _windows[id] = w
+    }
+
+    /// Clear all CWBackPixmap / CWBackPixel state — equivalent to CWBackPixmap
+    /// = None. After this, the window has no defined background; the server
+    /// will not paint exposed regions.
+    public func setBackgroundNone(_ id: UInt32) {
+        lock.lock(); defer { lock.unlock() }
+        guard var w = _windows[id] else { return }
+        w.backPixel = nil
+        w.backPixmapId = nil
+        w.backPixmapParentRelative = false
         _windows[id] = w
     }
 

@@ -16,7 +16,7 @@ core_opcodes:
     description: |
       Allocates a new Window as a child of an existing parent, with depth, class (InputOutput / InputOnly / CopyFromParent), visual, and an optional value-mask of CWAttributes (background, border, event-mask, override-redirect, colormap, cursor, and so on). Every toolkit calls this dozens of times per app boot: Xt creates a Shell, then a frame, then each Motif widget as a subwindow, and xterm creates one for the menu pop-ups it hides offscreen. The window is created unmapped; the client follows up with MapWindow once the geometry is settled.
     coverage: |
-      Implemented; top-level windows route to a backing NSWindow and descendants live in the window table, with CWBackPixel and CWBorderPixel honored on paint.
+      Implemented; top-level windows route to a backing NSWindow and descendants live in the window table, with CWBackPixel, CWBackPixmap, and CWBorderPixel honored on paint.
   - number: 2
     name: ChangeWindowAttributes
     category: Window
@@ -24,7 +24,7 @@ core_opcodes:
     description: |
       Updates one or more of the same CWAttributes that CreateWindow takes (event-mask, background-pixel/pixmap, border, override-redirect, cursor, colormap, do-not-propagate-mask, save-under, backing-store). Toolkits use this constantly: Xt calls it right after CreateWindow to add SubstructureNotify or KeyPress to the event-mask once a widget is realized, and a Motif menu shell flips override-redirect to True so the window manager leaves it alone when it pops up.
     coverage: |
-      Implemented; all 13 CW attributes are stored and round-tripped, but CWBackPixmap and CWBorderPixmap are silently dropped.
+      Implemented; 14 CW attributes stored and round-tripped (including CWBackPixmap, which blits the source pixmap as the window bg at paint time per xli's idiom). CWBorderPixmap still silently dropped; CWBackPixmap tiling and ParentRelative are tracked open shortcuts.
   - number: 3
     name: GetWindowAttributes
     category: Window
@@ -509,7 +509,7 @@ core_opcodes:
     description: |
       Takes a single bit-plane out of the source Drawable and stamps it onto the destination using the GC's foreground (where the bit is 1) and background (where it's 0), so a 1-bit Pixmap becomes a 2-color blit at the destination's depth. This is how every X font glyph cached as a depth-1 Pixmap gets to the screen, and how toolkits render checkbox/radio button bitmaps with theme colors instead of black-on-white. Same exposure rules as CopyArea.
     coverage: |
-      Implemented for the common paths; reverse-maps source pixels through the colormap so anti-aliased edges and unallocated colors degrade to pixel zero.
+      Implemented; extracts the requested plane bit from the source's 24-bit packed RGB pixels, packs as a 1-bpp bitmap, and routes through the depth-1 PutImage path for fg/bg expansion at the destination.
   - number: 64
     name: PolyPoint
     category: Drawing
@@ -581,7 +581,7 @@ core_opcodes:
     description: |
       Uploads a client-side image into a rectangle of the Drawable, with the format choosing how to interpret the bytes: Bitmap (depth 1, foreground/background expanded from each bit), XYPixmap (bit-plane-per-scanline at the Drawable's depth), or ZPixmap (packed pixels at the Drawable's depth). This is how xv displays a JPEG, how xeyes uploads its pupil pixmaps, and how every toolkit gets a client-rendered image (font glyph caches, theme bitmaps, screenshots) onto the server. MIT-SHM later layered a shared-memory fast path over the same semantics for clients that can't afford the socket copy.
     coverage: |
-      Implemented; depth-1 Bitmap, ZPixmap depth-1, and ZPixmap depth-8 all decode through the colormap, while XYPixmap and other ZPixmap depths are silently dropped.
+      Implemented; depth-1 Bitmap and depth-1 ZPixmap decode via fg/bg, and depth-24 ZPixmap blits direct BGRA from the wire — the path modern Linux clients use on our TrueColor visual. Format/depth combos that don't match an advertised PixmapFormat emit BadMatch; XYPixmap is unimplemented and silently dropped.
   - number: 73
     name: GetImage
     category: Image

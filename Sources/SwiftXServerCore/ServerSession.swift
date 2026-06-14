@@ -2565,6 +2565,41 @@ public final class ServerSession: @unchecked Sendable {
         return argb
     }
 
+    /// Expand a ZPixmap depth=24 source (bpp=32, scanlines already 32-bit
+    /// aligned) into row-major BGRA bytes. Wire layout per pixel is
+    /// `[pad, R, G, B]` (imageByteOrder=msbFirst), the symmetric inverse
+    /// of what GetImage emits for depth-24 ZPixmap. The pad byte is
+    /// ignored: 24 bits are meaningful, the 4th byte is X.org alignment
+    /// padding. Returns nil if the source is too short.
+    func expandZPixmapDepth24(data: [UInt8], width w: Int, height h: Int) -> [UInt8]? {
+        guard w > 0, h > 0 else { return nil }
+        let rowStride = w * 4   // bpp=32 → 4 bytes per pixel; already 32-bit-aligned for any width
+        guard data.count >= rowStride * h else {
+            log?.log("    zPixmap-d24 short-data: have \(data.count)b, need \(rowStride * h)b — drop")
+            return nil
+        }
+        var argb = [UInt8](repeating: 0, count: w * h * 4)
+        argb.withUnsafeMutableBufferPointer { dst in
+            data.withUnsafeBufferPointer { src in
+                for y in 0..<h {
+                    let srcRow = y * rowStride
+                    let dstRow = y * w * 4
+                    for x in 0..<w {
+                        let s = srcRow + x * 4
+                        let d = dstRow + x * 4
+                        // Source MSB-first: [pad, R, G, B].
+                        // Dest BGRA: [B, G, R, A=255].
+                        dst[d + 0] = src[s + 3]    // B
+                        dst[d + 1] = src[s + 2]    // G
+                        dst[d + 2] = src[s + 1]    // R
+                        dst[d + 3] = 255
+                    }
+                }
+            }
+        }
+        return argb
+    }
+
     /// Expand a ZPixmap depth=8 source (bpp=8, scanlines padded to 32 bits)
     /// into row-major BGRA bytes. Each source byte is a colormap index
     /// resolved by `resolve`. Returns nil if the source is too short.
@@ -2686,6 +2721,41 @@ public final class ServerSession: @unchecked Sendable {
         _ = windows.resize(id, width: nil, height: nil, x: px, y: py)
     }
 
+    /// Issue bridge-level pixmap blits for every window in the subtree rooted
+    /// at `topLevelId` whose CWBackPixmap resolves to a real pixmap id.
+    /// Pairs with the solid-color paintRectsForWindow / paintWindowRects
+    /// path — pixmap-backed windows are skipped on that path (no double
+    /// paint) and routed through here instead. Coords match the rest of the
+    /// paint pipeline: clipList is device-coord, pixmap origin lands at the
+    /// window's content top-left in device coords.
+    func paintWindowPixmapBackgrounds(topLevelId: UInt32) {
+        guard let bridge = bridge else { return }
+        let s = config.deviceScale
+        var queue: [UInt32] = [topLevelId]
+        while !queue.isEmpty {
+            let id = queue.removeFirst()
+            for (childId, w) in windows.windows where w.parent == id && w.mapped {
+                queue.append(childId)
+            }
+            guard let w = windows.get(id), let pmId = w.backPixmapId else { continue }
+            // Window content top-left in top-level device coords. Top-level
+            // itself is at (0,0); descendants offset by topLevelAndOffset.
+            let (originDeviceX, originDeviceY): (Int32, Int32) = {
+                if id == topLevelId { return (0, 0) }
+                guard let (_, dx, dy) = topLevelAndOffset(for: id) else { return (0, 0) }
+                return (Int32(dx) * s, Int32(dy) * s)
+            }()
+            if w.clipList.rects.isEmpty { continue }
+            bridge.paintWindowFromPixmap(
+                topLevel: topLevelId,
+                sourcePixmapId: pmId,
+                rects: w.clipList.rects,
+                originDeviceX: originDeviceX,
+                originDeviceY: originDeviceY
+            )
+        }
+    }
+
     /// Build the paint list for a newly-mapped top-level: the top-level's own
     /// background fill plus one rect-pair per already-mapped descendant
     /// (border ring + interior bg). Order is parent-then-children so
@@ -2703,7 +2773,8 @@ public final class ServerSession: @unchecked Sendable {
             let id = queue.removeFirst()
             for (childId, w) in windows.windows where w.parent == id && w.mapped {
                 queue.append(childId)
-                guard w.backPixel != nil || (w.borderPixel != nil && w.borderWidth > 0),
+                guard w.backPixel != nil || w.backPixmapId != nil ||
+                        (w.borderPixel != nil && w.borderWidth > 0),
                       let (_, dx, dy) = topLevelAndOffset(for: childId) else { continue }
                 out.append(contentsOf: paintRectsForWindow(entry: w, dx: dx, dy: dy, byteOrder: byteOrder))
             }
@@ -2795,7 +2866,10 @@ public final class ServerSession: @unchecked Sendable {
                 ))
             }
         }
-        if entry.backPixel != nil {
+        // Windows with a pixmap-source bg (CWBackPixmap) skip the solid-fill
+        // branch — the caller issues a parallel paintWindowFromPixmap on the
+        // bridge with the same clipList. Mixing both would double-paint.
+        if entry.backPixel != nil && entry.backPixmapId == nil {
             let bg = windowBackground(entry.id, byteOrder: byteOrder)
             // Clip the bg rect to the window's visible region (clipList).
             // clipList is already in top-level coords. Empty clipList =
@@ -3469,19 +3543,18 @@ public final class ServerSession: @unchecked Sendable {
         //
         // We don't store actual bit-planes — pixmaps are 32-bit ARGB
         // regardless of X-side depth. So we read the src as ARGB, reverse-
-        // map each pixel to its X colormap index via ColorTable, check the
-        // requested plane bit, and pack the result as a 1-bpp MSB-first
-        // bitmap with 32-bit scanline pad. Then hand that bitmap to the
-        // existing drawPutImage path which already knows how to expand
-        // depth-1 → fg/bg into a depth-N target.
+        // map each pixel to its 24-bit packed RGB pixel value via
+        // ColorTable, check the requested plane bit, and pack the result
+        // as a 1-bpp MSB-first bitmap with 32-bit scanline pad. Then hand
+        // that bitmap to the existing drawPutImage path which already
+        // knows how to expand depth-1 → fg/bg into a depth-N target.
         //
-        // The reverse-map is what limits visual fidelity here: ARGB values
-        // not registered in ColorTable (anti-aliased edges, intermediate
-        // tones) reverse-map to pixel 0 (white/bg). For x11perf's depth-1
-        // source pixmaps that doesn't matter — they're solid fg/bg fills
-        // through PutImage Bitmap. For deepcopyplane variants the src is a
-        // window whose pixel values came through AllocColor at some point,
-        // so most pixels reverse-map cleanly.
+        // The reverse-map is lossless since the 2026-06-13 TrueColor
+        // switch — `ColorTable.pixel(for:)` is now a pure bit-pack of
+        // R/G/B, no allocation table to miss against. AA-edge fidelity
+        // matches GetImage (which extracts the same way). Valid plane
+        // bits cover the full 24 bits of the RGB pixel value: bits 0-7
+        // probe blue, 8-15 green, 16-23 red.
         if !isKnownDrawable(r.srcDrawable) {
             emitError(.drawable, majorOpcode: CopyPlane.opcode, badResourceId: r.srcDrawable)
             return
@@ -3511,11 +3584,13 @@ public final class ServerSession: @unchecked Sendable {
             return
         }
 
-        // Figure out src depth so we can validate planeIndex.
+        // Figure out src depth so we can validate planeIndex. Window depth
+        // is the rootDepth=24 advertised in SetupAccepted since the
+        // 2026-06-13 TrueColor switch (was 8 under PseudoColor).
         let srcDepth: Int
         switch srcTarget {
         case .pixmap(_, let d): srcDepth = Int(d)
-        case .window:           srcDepth = 8           // root depth advertised in setup
+        case .window:           srcDepth = 24
         }
         if planeIndex >= srcDepth {
             emitError(.match, majorOpcode: CopyPlane.opcode)
@@ -3627,10 +3702,13 @@ public final class ServerSession: @unchecked Sendable {
             y2: (Int32(r.y) + Int32(dy) + Int32(fillH)) * s
         )
         let clippedRects: [Framer.Rectangle]
+        let clippedBoxes: [BoxRec]
         if reqBox.isEmpty {
             clippedRects = []
+            clippedBoxes = []
         } else {
             let clipped = entry.clipList.intersected(with: Region(box: reqBox))
+            clippedBoxes = clipped.rects
             clippedRects = clipped.rects.map { box in
                 Framer.Rectangle(
                     x: Int16(clamping: box.x1),
@@ -3640,7 +3718,24 @@ public final class ServerSession: @unchecked Sendable {
                 )
             }
         }
-        bridge.clearArea(topLevel: top, rects: clippedRects, background: bg)
+        // X spec: "the rectangle is painted with the window's background
+        // pixel or pixmap." When backPixmapId is set, blit the pixmap into
+        // the cleared region (pixmap origin = window's content top-left in
+        // top-level device coords) instead of filling solid. xli's pan
+        // mechanism: CopyArea to scroll, then ClearArea on the newly-
+        // exposed strip — the strip must fill from the bg-pixmap or it
+        // shows whatever stale pixels CopyArea left behind.
+        if let pmId = entry.backPixmapId, !clippedBoxes.isEmpty {
+            bridge.paintWindowFromPixmap(
+                topLevel: top,
+                sourcePixmapId: pmId,
+                rects: clippedBoxes,
+                originDeviceX: Int32(dx) * s,
+                originDeviceY: Int32(dy) * s
+            )
+        } else {
+            bridge.clearArea(topLevel: top, rects: clippedRects, background: bg)
+        }
         // X11 spec: if `exposures` is True, the server sends an Expose event
         // for the cleared region (so the client can redraw on top). xcalc's
         // LCD update sequence is "ClearArea + wait for Expose + draw digits"
@@ -3965,7 +4060,45 @@ public final class ServerSession: @unchecked Sendable {
                 ValueListReader.read(valueList: r.valueList, mask: mask, bit: bit, byteOrder: byteOrder)
             }
             let eventMask = read(CW.eventMask) ?? 0
-            let backPixel = read(CW.backPixel)
+            // CWBackPixmap and CWBackPixel are alternatives; the reference
+            // X server applies value-mask bits in ascending order, so
+            // CWBackPixel (bit 1) wins when both are supplied with CWBackPixmap
+            // (bit 0). Resolve here: pixmap first, then let an explicit
+            // backPixel override.
+            var backPixel = read(CW.backPixel)
+            var backPixmapId: UInt32? = nil
+            var backPixmapParentRelative = false
+            var bgValidationError: XErrorCode? = nil
+            var bgValidationBadId: UInt32 = 0
+            if let pmRaw = read(CW.backPixmap) {
+                switch pmRaw {
+                case 0:    // None — leave all bg state nil; server won't paint
+                    break
+                case 1:    // ParentRelative
+                    backPixmapParentRelative = true
+                default:   // real pixmap id
+                    if let pix = pixmaps.get(pmRaw) {
+                        if pix.depth != r.depth {
+                            // BadMatch: pixmap depth must match window depth.
+                            bgValidationError = .match
+                        } else {
+                            backPixmapId = pmRaw
+                        }
+                    } else {
+                        bgValidationError = .pixmap
+                        bgValidationBadId = pmRaw
+                    }
+                }
+                // CWBackPixel in the same call overrides pixmap state.
+                if backPixel != nil {
+                    backPixmapId = nil
+                    backPixmapParentRelative = false
+                }
+            }
+            if let code = bgValidationError {
+                emitError(code, majorOpcode: CreateWindow.opcode, badResourceId: bgValidationBadId)
+                break
+            }
             let borderPixel = read(CW.borderPixel)
             let cursor = read(CW.cursor)
             let overrideRedirect = (read(CW.overrideRedirect) ?? 0) != 0
@@ -3989,6 +4122,8 @@ public final class ServerSession: @unchecked Sendable {
                 valueMask: mask, valueList: r.valueList,
                 mapped: false, eventMask: eventMask,
                 backPixel: backPixel,
+                backPixmapId: backPixmapId,
+                backPixmapParentRelative: backPixmapParentRelative,
                 borderPixel: borderPixel,
                 cursor: (cursor == 0) ? nil : cursor,
                 overrideRedirect: overrideRedirect,
@@ -4060,6 +4195,37 @@ public final class ServerSession: @unchecked Sendable {
                 } else {
                     windows.setEventMask(r.window, newMask)
                 }
+            }
+            // CWBackPixmap is bit 0 — applied BEFORE CWBackPixel (bit 1) so
+            // a CWBackPixel in the same call wins per the reference X server's
+            // ascending-bit dispatch order. None of these are paint triggers
+            // per spec — the new bg only fires on next Expose/ClearArea.
+            var bgPmError: XErrorCode? = nil
+            var bgPmBadId: UInt32 = 0
+            if let pmRaw = ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: CW.backPixmap, byteOrder: byteOrder) {
+                let isRoot = r.window == config.rootWindowId
+                switch pmRaw {
+                case 0:    // None
+                    if !isRoot { windows.setBackgroundNone(r.window) }
+                case 1:    // ParentRelative
+                    if !isRoot { windows.setBackPixmapParentRelative(r.window) }
+                default:   // real pixmap id
+                    if let pix = pixmaps.get(pmRaw) {
+                        let winDepth: UInt8 = isRoot ? 24 : (windows.get(r.window)?.depth ?? 24)
+                        if pix.depth != winDepth {
+                            bgPmError = .match
+                        } else if !isRoot {
+                            windows.setBackPixmapId(r.window, pmRaw)
+                        }
+                    } else {
+                        bgPmError = .pixmap
+                        bgPmBadId = pmRaw
+                    }
+                }
+            }
+            if let code = bgPmError {
+                emitError(code, majorOpcode: ChangeWindowAttributes.opcode, badResourceId: bgPmBadId)
+                break
             }
             if let newBackPixel = ValueListReader.read(valueList: r.valueList, mask: r.valueMask, bit: CW.backPixel, byteOrder: byteOrder) {
                 windows.setBackPixel(r.window, newBackPixel)
@@ -4338,6 +4504,11 @@ public final class ServerSession: @unchecked Sendable {
                 if !paints.isEmpty {
                     bridge?.paintWindowRects(topLevel: r.window, rects: paints)
                 }
+                // CWBackPixmap: blit pixmap-sourced bg for every window in
+                // the subtree that has one. Pixmap blits and solid-color
+                // rects are mutually exclusive per window — paintRectsForWindow
+                // skips bg when backPixmapId is set.
+                paintWindowPixmapBackgrounds(topLevelId: r.window)
                 // Root substructure notify for new top-level visibility
                 // (fires only if a WM-style client registered
                 // SubstructureNotifyMask on root).
@@ -5032,6 +5203,43 @@ public final class ServerSession: @unchecked Sendable {
                 //   via ConfigureWindow, the children need to redraw at
                 //   their new positions; Expose is the standard signal.
                 //   Test broadly after building.
+                // Pure-move newly-visible bg-pixmap repaint. Independent of
+                // ExposureMask because the bg-paint contract is server-side
+                // — clients with a bg-pixmap (xli's pan child window) don't
+                // need to select ExposureMask. After a pure-move blit the
+                // window's newly-visible strip (= newClip minus blit dst)
+                // still holds stale pixels from MapWindow time; each pan
+                // pre-2026-06-14 accumulated another sliver of stale
+                // content into the strip and produced "vertical streak"
+                // smears in xli at the leading edge of the pan direction.
+                if blittedPureMove,
+                   let postEntry = windows.get(r.window),
+                   let pmId = postEntry.backPixmapId,
+                   let topId = moveSubtreeTop {
+                    let newClip = postEntry.clipList
+                    var preMoveUnion = preMoveOwnClipList
+                    for descId in preMoveDescendants {
+                        if let descClip = preMoveClipLists[descId] {
+                            preMoveUnion = preMoveUnion.unioned(with: descClip)
+                        }
+                    }
+                    let preservedDev = preMoveUnion
+                        .translated(dx: pureMoveDeviceDx, dy: pureMoveDeviceDy)
+                        .intersected(with: newClip)
+                    let newlyVisibleDev = newClip.subtracting(preservedDev)
+                    if !newlyVisibleDev.rects.isEmpty,
+                       let (_, ndx, ndy) = topLevelAndOffset(for: r.window) {
+                        let s = config.deviceScale
+                        bridge?.paintWindowFromPixmap(
+                            topLevel: topId,
+                            sourcePixmapId: pmId,
+                            rects: newlyVisibleDev.rects,
+                            originDeviceX: Int32(ndx) * s,
+                            originDeviceY: Int32(ndy) * s
+                        )
+                    }
+                }
+
                 if (sizeGrew || posChanged) && (entry.eventMask & MockWindowBridge.exposureMask != 0) {
                     if blittedPureMove {
                         // Newly-visible (for r.window's Expose) = r.window's
@@ -5466,12 +5674,18 @@ public final class ServerSession: @unchecked Sendable {
 
         // MARK: Colormap opcodes 78-90 (post-comparison-study sweep 2026-05-15)
         //
-        // We only advertise the default colormap. PseudoColor → TrueColor
-        // backing means no real palette: writable cells aren't supported,
-        // colormap allocation isn't real. Emitting the spec-correct error
-        // (BadAlloc for "we can't allocate", BadAccess for "writable but
-        // not by you", BadColor for "no such colormap") lets Xt's color-
-        // converter fallback paths degrade gracefully.
+        // We only advertise the default colormap on a TrueColor visual
+        // (depth=24 since 2026-06-13). No real palette: writable cells
+        // aren't supported, colormap allocation isn't real. Error semantics
+        // mirror the X11R6 reference server (dix/colormap.c):
+        //   - AllocColorCells / AllocColorPlanes on non-DynamicClass → BadAlloc
+        //   - StoreColors / StoreNamedColor on non-DynamicClass → BadAccess
+        //   - Unknown cmap → BadColor
+        //   - Default cmap free/recreate → BadAccess / BadAlloc
+        // Xt's color converter accepts these codes and falls back to read-
+        // only AllocColor. (An earlier note claimed the codes should be
+        // BadMatch under TrueColor — verified against dix/colormap.c, they
+        // shouldn't; reference X11R6 returns the same codes we do.)
 
         case .createColormap(let r):
             // We don't allocate additional colormaps. BadAlloc says
@@ -5851,28 +6065,39 @@ public final class ServerSession: @unchecked Sendable {
             }
             guard validateGC(r.gc, majorOpcode: PutImage.opcode) != nil else { break }
 
-            // Three formats are implemented:
+            // Formats implemented:
             //   - Bitmap (format=0, depth=1): packed 1bpp source, expanded
-            //     via GC fg/bg. Quickplot's icon-button path:
-            //     XCreatePixmapFromBitmapData → XPutImage format=Bitmap
-            //     depth=1 into a depth-N pixmap.
+            //     via GC fg/bg into a target of any depth. Quickplot's
+            //     icon-button path. Spec: depth must be 1.
             //   - ZPixmap depth=1 (format=2, depth=1): packed 1bpp source,
-            //     pixel-value-is-color (0→ColorTable[0]=white, 1→ColorTable[1]
-            //     =black). What viewres/xgas/xgc use for 6x3 and 16x16
-            //     button glyphs.
-            //   - ZPixmap depth=8 (format=2, depth=8): byte-per-pixel
-            //     colormap-index source, looked up through ColorTable. What
-            //     motifbur uses for its 24x20 menu icons.
+            //     pixel-value-is-color (paper/ink). viewres/xgas/xgc's
+            //     button-glyph path. Requires depth-1 drawable per spec
+            //     ("depth must match the depth of the drawable").
+            //   - ZPixmap depth=24 (format=2, depth=24): 4 bytes/pixel
+            //     [pad,R,G,B] wire, blits direct BGRA to the bridge. The
+            //     primary path for modern Linux clients on our TrueColor
+            //     visual (depth=24 since 2026-06-13).
             //
-            // Other combinations (XYPixmap, ZPixmap at other depths) stay
-            // silent-dropped — none of the clients we host today exercise
-            // them. See SHORTCUTS.
+            // Other combinations are spec-illegal on our advertised setup
+            // (single PixmapFormat depth=24, single allowed depth 24, plus
+            // the implicit depth-1 bitmap format). They emit BadMatch.
+            // XYPixmap stays unimplemented (no hosted client exercises it);
+            // see SHORTCUTS.
             guard let target = validateDrawTarget(r.drawable, majorOpcode: PutImage.opcode) else {
                 emitError(.implementation, majorOpcode: PutImage.opcode)
                 break
             }
             let (dx, dy) = target.windowOffset
             let state = gcState(r.gc, byteOrder: byteOrder)
+            // Drawable depth for the ZPixmap depth-match validation. Window
+            // depth is the rootDepth=24 we advertise; pixmap depth is on
+            // the DrawTarget enum.
+            let targetDepth: UInt8 = {
+                switch target {
+                case .pixmap(_, let d): return d
+                case .window:           return 24
+                }
+            }()
             switch (r.format, r.depth) {
             case (.bitmap, 1):
                 let fg = resolveColor(state.foreground, target: target)
@@ -5888,15 +6113,18 @@ public final class ServerSession: @unchecked Sendable {
                     clipRectangles: state.clipRectangles
                 )
 
+            case (.bitmap, _):
+                // Spec: Bitmap format requires depth==1, else Match.
+                log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) bitmap depth=\(r.depth) → BadMatch (Bitmap requires depth=1)")
+                emitError(.match, majorOpcode: PutImage.opcode)
+
             case (.zPixmap, 1):
-                // Pixel 0 → ColorTable[0] = white; pixel 1 → ColorTable[1] =
-                // black. ColorTable pins these at init (see ColorTable.swift
-                // / OPCODE_STATUS opcode 84). Pre-resolving once outside
-                // the inner loop keeps the per-pixel cost flat.
-                // ZPixmap depth-1: each bit is a literal pixel value (0
-                // or 1) for the depth-1 visual. Use target-aware resolve
-                // so it follows the paper/ink convention regardless of
-                // the host visual class.
+                // Spec: ZPixmap requires request depth to match drawable depth.
+                guard targetDepth == 1 else {
+                    log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) zPixmap-d1 into depth-\(targetDepth) drawable → BadMatch")
+                    emitError(.match, majorOpcode: PutImage.opcode)
+                    break
+                }
                 let c0 = resolveColor(0, target: target)
                 let c1 = resolveColor(1, target: target)
                 log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) zPixmap-d1 \(r.width)x\(r.height) at (\(r.dstX),\(r.dstY))")
@@ -5913,11 +6141,15 @@ public final class ServerSession: @unchecked Sendable {
                     )
                 }
 
-            case (.zPixmap, 8):
-                log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) zPixmap-d8 \(r.width)x\(r.height) at (\(r.dstX),\(r.dstY))")
-                if let argb = expandZPixmapDepth8(data: r.data,
-                                                   width: Int(r.width), height: Int(r.height),
-                                                   resolve: { resolveColor($0) }) {
+            case (.zPixmap, 24):
+                guard targetDepth == 24 else {
+                    log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) zPixmap-d24 into depth-\(targetDepth) drawable → BadMatch")
+                    emitError(.match, majorOpcode: PutImage.opcode)
+                    break
+                }
+                log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) zPixmap-d24 \(r.width)x\(r.height) at (\(r.dstX),\(r.dstY))")
+                if let argb = expandZPixmapDepth24(data: r.data,
+                                                    width: Int(r.width), height: Int(r.height)) {
                     bridge?.drawPutImageARGB(
                         target: target,
                         argb: argb,
@@ -5927,8 +6159,17 @@ public final class ServerSession: @unchecked Sendable {
                     )
                 }
 
+            case (.zPixmap, _):
+                // Any other ZPixmap depth is spec-illegal: we advertise
+                // exactly one PixmapFormat (depth=24) plus the implicit
+                // depth-1 bitmap. depth=8 ZPixmap (the vintage PseudoColor
+                // motifbur path) lands here post-2026-06-13.
+                log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) zPixmap depth=\(r.depth) → BadMatch (no matching PixmapFormat advertised)")
+                emitError(.match, majorOpcode: PutImage.opcode)
+
             default:
-                log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) format=\(r.format) depth=\(r.depth) \(r.width)x\(r.height) — silent-drop (format/depth combo not implemented; see SHORTCUTS)")
+                // XYPixmap (any depth) — not implemented.
+                log?.log("  PutImage drawable=0x\(String(r.drawable, radix: 16)) format=\(r.format) depth=\(r.depth) \(r.width)x\(r.height) — silent-drop (XYPixmap not implemented; see SHORTCUTS)")
             }
 
         case .getImage(let r):

@@ -123,19 +123,17 @@ final class PutImageDispatchTests: XCTestCase {
         XCTAssertEqual(call.background, RGB16(red: 65535, green: 65535, blue: 65535))
     }
 
-    /// ZPixmap depth=8 (vintage capture-replay path): one byte per pixel.
-    /// Under TrueColor (since 2026-06-13) we don't advertise a depth-8
-    /// visual, but the PutImage handler still resolves each byte through
-    /// ColorTable for backwards compatibility with captured PseudoColor
-    /// sessions being replayed. Each byte unpacks via TrueColor packing:
-    /// the byte value populates only the blue channel of the resulting
-    /// 24-bit pixel (since the byte fits into the low 8 bits). Not a
-    /// semantically meaningful path under TrueColor — depth-8 should
-    /// really emit BadMatch — but kept for replay compatibility.
-    func testZPixmapDepth8DispatchesToBridge() throws {
+    /// ZPixmap depth=8 was the vintage PseudoColor motifbur menu-icon path.
+    /// After the 2026-06-13 TrueColor switch we advertise exactly one
+    /// PixmapFormat (depth=24) plus the implicit depth-1 bitmap; depth=8
+    /// is no longer a meaningful wire format. Emit BadMatch per spec
+    /// rather than silently producing near-black-blue rendering from the
+    /// truncated TrueColor unpack of a 1-byte pixel.
+    func testZPixmapDepth8EmitsBadMatch() throws {
         let bridge = RecPutImageBridge()
         let session = ServerSession(bridge: bridge)
         _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        _ = session.outbound.drain()
 
         let pixmapId: UInt32 = 0x4400020
         let gcId: UInt32 = 0x4400021
@@ -144,26 +142,95 @@ final class PutImageDispatchTests: XCTestCase {
         _ = session.feed(CreateGC(cid: gcId, drawable: pixmapId,
                                    valueMask: 0, valueList: []).encode(byteOrder: .lsbFirst))
 
-        // Row 0: byte 0xFF; row 1: byte 0x00.
         let data: [UInt8] = [
             0xFF, 0xFF, 0xFF, 0xFF,
             0x00, 0x00, 0x00, 0x00,
         ]
-        _ = session.feed(PutImage(
+        let bytes = session.feed(PutImage(
             format: .zPixmap, drawable: pixmapId, gc: gcId,
             width: 4, height: 2, dstX: 0, dstY: 0,
             leftPad: 0, depth: 8, data: data
         ).encode(byteOrder: .lsbFirst))
 
-        XCTAssertEqual(bridge.calls.count, 0, "ZPixmap must route through ARGB path, not Bitmap")
-        XCTAssertEqual(bridge.argbCalls.count, 1, "ZPixmap depth=8 must dispatch to drawPutImageARGB")
+        XCTAssertEqual(bridge.calls.count, 0, "ZPixmap depth-8 must not reach the bridge")
+        XCTAssertEqual(bridge.argbCalls.count, 0, "ZPixmap depth-8 must not reach the bridge")
+        // First byte of an X error packet is 0; second byte is the error code.
+        // BadMatch = 8.
+        XCTAssertGreaterThan(bytes.count, 0, "must emit an XError for spec-illegal depth")
+        XCTAssertEqual(bytes[0], 0, "X error first byte is 0")
+        XCTAssertEqual(bytes[1], 8, "error code 8 = BadMatch")
+    }
+
+    /// ZPixmap depth=24 is the primary path for modern Linux clients on
+    /// our TrueColor 24-bit visual (since 2026-06-13). Wire layout per
+    /// pixel is `[pad, R, G, B]` (4 bytes, imageByteOrder=msbFirst); the
+    /// PutImage handler converts to BGRA and hands directly to the
+    /// bridge ARGB blit — no colormap lookup, lossless.
+    func testZPixmapDepth24DispatchesToBridge() throws {
+        let bridge = RecPutImageBridge()
+        let session = ServerSession(bridge: bridge)
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+
+        let pixmapId: UInt32 = 0x4400050
+        let gcId: UInt32 = 0x4400051
+        _ = session.feed(CreatePixmap(depth: 24, pid: pixmapId, drawable: 0x28,
+                                       width: 2, height: 2).encode(byteOrder: .lsbFirst))
+        _ = session.feed(CreateGC(cid: gcId, drawable: pixmapId,
+                                   valueMask: 0, valueList: []).encode(byteOrder: .lsbFirst))
+
+        // 2x2 image, 4 bytes per pixel msbFirst [pad, R, G, B]:
+        //   (0,0) red    pad=0 R=0xFF G=0x00 B=0x00
+        //   (1,0) green  pad=0 R=0x00 G=0xFF B=0x00
+        //   (0,1) blue   pad=0 R=0x00 G=0x00 B=0xFF
+        //   (1,1) gray80 pad=0 R=0xCC G=0xCC B=0xCC
+        let data: [UInt8] = [
+            0, 0xFF, 0,    0,       0, 0,    0xFF, 0,
+            0, 0,    0,    0xFF,    0, 0xCC, 0xCC, 0xCC,
+        ]
+        _ = session.feed(PutImage(
+            format: .zPixmap, drawable: pixmapId, gc: gcId,
+            width: 2, height: 2, dstX: 0, dstY: 0,
+            leftPad: 0, depth: 24, data: data
+        ).encode(byteOrder: .lsbFirst))
+
+        XCTAssertEqual(bridge.calls.count, 0, "depth-24 ZPixmap must not use the Bitmap path")
+        XCTAssertEqual(bridge.argbCalls.count, 1, "depth-24 ZPixmap must dispatch to drawPutImageARGB")
         let call = bridge.argbCalls[0]
-        XCTAssertEqual(call.width, 4); XCTAssertEqual(call.height, 2)
-        XCTAssertEqual(call.argb.count, 4 * 2 * 4, "ARGB buffer must be width*height*4")
-        // Row 0 byte 0xFF → TrueColor unpack: R=0, G=0, B=0xFF. BGRA [0xFF,0,0,255].
-        XCTAssertEqual(Array(call.argb.prefix(4)), [0xFF, 0, 0, 255])
-        // Row 1 byte 0x00 → RGB(0,0,0). BGRA [0,0,0,255].
-        XCTAssertEqual(Array(call.argb[16...19]), [0, 0, 0, 255])
+        XCTAssertEqual(call.width, 2); XCTAssertEqual(call.height, 2)
+        XCTAssertEqual(call.argb.count, 2 * 2 * 4)
+        // Bridge expects BGRA per pixel: [B, G, R, A=255].
+        XCTAssertEqual(Array(call.argb[0..<4]),   [0x00, 0x00, 0xFF, 255], "red → BGRA")
+        XCTAssertEqual(Array(call.argb[4..<8]),   [0x00, 0xFF, 0x00, 255], "green → BGRA")
+        XCTAssertEqual(Array(call.argb[8..<12]),  [0xFF, 0x00, 0x00, 255], "blue → BGRA")
+        XCTAssertEqual(Array(call.argb[12..<16]), [0xCC, 0xCC, 0xCC, 255], "gray80 → BGRA")
+    }
+
+    /// ZPixmap whose depth doesn't match the target drawable's depth is a
+    /// spec violation regardless of whether the depth itself is a format
+    /// we know how to decode. Locks in BadMatch for depth=24 ZPixmap into
+    /// a depth-1 pixmap.
+    func testZPixmapDepth24IntoDepth1DrawableEmitsBadMatch() throws {
+        let bridge = RecPutImageBridge()
+        let session = ServerSession(bridge: bridge)
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        _ = session.outbound.drain()
+
+        let pixmapId: UInt32 = 0x4400060
+        let gcId: UInt32 = 0x4400061
+        _ = session.feed(CreatePixmap(depth: 1, pid: pixmapId, drawable: 0x28,
+                                       width: 2, height: 2).encode(byteOrder: .lsbFirst))
+        _ = session.feed(CreateGC(cid: gcId, drawable: pixmapId,
+                                   valueMask: 0, valueList: []).encode(byteOrder: .lsbFirst))
+
+        let bytes = session.feed(PutImage(
+            format: .zPixmap, drawable: pixmapId, gc: gcId,
+            width: 2, height: 2, dstX: 0, dstY: 0,
+            leftPad: 0, depth: 24, data: [UInt8](repeating: 0, count: 16)
+        ).encode(byteOrder: .lsbFirst))
+
+        XCTAssertEqual(bridge.argbCalls.count, 0)
+        XCTAssertEqual(bytes[0], 0)
+        XCTAssertEqual(bytes[1], 8, "error code 8 = BadMatch")
     }
 
     /// ZPixmap depth=1 (viewres/xgas/xgc's button-glyph path): packed

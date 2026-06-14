@@ -544,6 +544,22 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// pixel BEFORE the client draws on top.
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect])
 
+    /// Honor CWBackPixmap: blit the source pixmap into the given destination
+    /// rects on the top-level's backing, with the pixmap's (0,0) landing at
+    /// `(originDeviceX, originDeviceY)` in top-level device coords (= the
+    /// window-with-backPixmap's content top-left). Dest rects are also in
+    /// top-level device coords. Per X spec the pixmap tiles when the dest
+    /// extends beyond pixmap bounds; the simple non-tiling case (pixmap
+    /// >= window) is the only one most real clients exercise — xli, the
+    /// trigger for landing this, is exactly that.
+    func paintWindowFromPixmap(
+        topLevel: UInt32,
+        sourcePixmapId: UInt32,
+        rects: [BoxRec],
+        originDeviceX: Int32,
+        originDeviceY: Int32
+    )
+
     /// Blit a set of source rects on the top-level's backing to dest positions
     /// offset by (dx, dy) DEVICE pixels. The bridge snapshots the backing
     /// once at execution time and draws each rect from the snapshot to its
@@ -819,6 +835,13 @@ public extension WindowBridge {
         clipRectangles: [Rectangle]?
     ) {}
     func paintWindowRects(topLevel: UInt32, rects: [WindowBackgroundRect]) {}
+    func paintWindowFromPixmap(
+        topLevel: UInt32,
+        sourcePixmapId: UInt32,
+        rects: [BoxRec],
+        originDeviceX: Int32,
+        originDeviceY: Int32
+    ) {}
     func setWindowBoundingShape(topLevel: UInt32, rects: [Rectangle]?) {}
     func readDepth1MaskDevicePixels(pixmapId: UInt32) -> (pixels: [UInt32], width: Int, height: Int)? { nil }
     func setCursor(topLevel: UInt32, glyph: UInt16?) {}
