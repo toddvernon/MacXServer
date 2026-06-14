@@ -1,7 +1,14 @@
 # Status 2026-06-13
 
-Big day, **MacXServer v0.9.3 shipped** (signed/notarized/stapled, on
-macxserver.com). Three substantive chunks landed:
+Marathon day, **MacXServer v0.9.3 shipped** (signed/notarized/stapled,
+on macxserver.com). Five substantive chunks landed in sequence: WM-proxy
+contract pass in the morning, TrueColor visual switch in the afternoon,
+depth-1 paper/ink caret fix, dialog title-bar carve-out fix and
+WM_TRANSIENT_FOR z-order plumbing in the evening. 1293 tests green, two
+investigation docs preserved for the audit trail, both repos clean,
+v0.9.3 verified live.
+
+Headline lands (chronological):
 
 1. **Morning — WM-proxy contract pass.** WM_DELETE_WINDOW gating on
    WM_PROTOCOLS, NSWindow close deferred until the client responds (fixes
@@ -13,12 +20,12 @@ macxserver.com). Three substantive chunks landed:
    static `[motif-frame]` config.
 
 2. **Afternoon — TrueColor 24-bit visual switch.** Supersedes the
-   2026-05-05 PseudoColor 8-bit choice (DECISIONS 2026-06-13 for the
-   full reasoning). Driven by Todd's "wacky colors in capture replay"
-   symptom, which traced to PseudoColor cell-collision; the broader
-   re-think solved that plus the GetImage AA-edge fidelity loss, the
-   AllocColor 256-cell ceiling, and the modern-Linux-app blocker that
-   the 2026-06-12 SSH launcher exposed.
+   2026-05-05 PseudoColor 8-bit choice (DECISIONS 2026-06-13 first
+   entry for the full reasoning). Driven by Todd's "wacky colors in
+   capture replay" symptom, which traced to PseudoColor cell-collision;
+   the broader re-think solved that plus the GetImage AA-edge fidelity
+   loss, the AllocColor 256-cell ceiling, and the modern-Linux-app
+   blocker that the 2026-06-12 SSH launcher exposed.
 
 3. **End-of-afternoon — depth-1 paper/ink fix.** Todd's smoke test
    caught the Motif XmText caret rendering as a solid black block
@@ -27,11 +34,41 @@ macxserver.com). Three substantive chunks landed:
    of visual class; the convention was implicit under PseudoColor's
    pinned cells. TrueColor moved blackPixel to 0, silently inverting
    the depth-1 meaning. Fix: target-aware `resolveColor` that
-   special-cases depth-1 to honor paper/ink, falls through to TrueColor
-   unpack otherwise.
+   special-cases depth-1 to honor paper/ink.
 
-Working-tree clean across both repos, all pushed to origin. 1284 tests
-green, 27 skipped (unchanged baseline). Live download artifact verified
+4. **Evening — Motif chrome tuning + revert.** First attempted to
+   shrink chrome at 3x via per-scale multipliers; reverted because the
+   approach silently over-rode explicit resource-file values and made
+   dialog rendering worse. Captured the failure modes in
+   `CHROME_NOTES_2026-06-13.md` so the next attempt starts from sound
+   ground. Then landed the real fixes in isolation: seed defaults
+   updated to match Todd's personal `[motif-frame]` values
+   (frameBorderWidth 2→3, resizeBorderWidth 2→1, titleBarHeight
+   32→26); `titleBarRect()` now extends frame-to-frame on dialogs
+   that hide menu/min/max via `_MOTIF_WM_HINTS` (matches Sun mwm,
+   verified against u5); `raisedTileCentered` floor()'s offsets to
+   avoid half-pixel blur.
+
+5. **Late evening — modal investigation + WM_TRANSIENT_FOR plumbing.**
+   Quickplot's About / Quit / Lines dialogs misbehaved relative to
+   the command window. Investigation against `reference/quickplot/`,
+   `reference/motif/lib/Xt/`, and Sun running the same scenario
+   confirmed: (a) quickplot's dialogs are explicitly MODELESS, not
+   modal — `XmNdialogStyle` defaults to MODELESS in dialog.c:465;
+   (b) the "both dismiss on Cancel" matches Sun behavior exactly;
+   (c) the real gap was `WM_TRANSIENT_FOR` layering — Sun mwm keeps
+   transient dialogs above their parent regardless of focus, we
+   didn't. Implemented via z-order maintenance in
+   `CocoaWindowBridge`: `child.order(.above, relativeTo: parent.windowNumber)`
+   on every parent `windowDidBecomeKey`. Initially tried
+   `NSWindow.addChildWindow` and reverted because it couples position
+   (parent move drags child along), trapping the user when a dialog
+   covers a parent button. Documented as a deliberate
+   Mac-convention divergence in DECISIONS 2026-06-13 second entry.
+
+Working-tree clean across both repos, all pushed to origin. **1293
+tests green, 27 skipped** (1284 baseline + 5 MotifFrameViewGeometryTests
++ 4 WMTransientForTests). Live v0.9.3 download artifact verified
 clean (`spctl` accepted, `stapler validate` passes).
 
 ## Release: MacXServer v0.9.3 (today)
@@ -48,26 +85,37 @@ clean (`spctl` accepted, `stapler validate` passes).
   WM_NORMAL_HINTS / _MOTIF_WM_HINTS server-side application, TrueColor
   visual flip, depth-1 paper/ink fix.
 
-## Today's commits (X repo)
+## Today's commits (X repo, chronological)
 
-- `b5df2e0` — WM-proxy contract pass (WM_DELETE_WINDOW + WM_NORMAL_HINTS
-  + _MOTIF_WM_HINTS + tests)
+- `b5df2e0` — WM-proxy contract pass (WM_DELETE_WINDOW + WM_NORMAL_HINTS + _MOTIF_WM_HINTS + tests)
 - `25a9814` — STATUS: roll in Gatekeeper docs + launcher feature page
 - `6f7bba6` — release.sh: comment the unzip canary
-- `f74b7fb` — STATUS: end-of-day roll for 2026-06-12, v0.9.2 shipped
+- `f74b7fb` — STATUS: end-of-day v0.9.2
 - `6431316` — Gatekeeper investigation/findings/probe-script tracked
 - `ed5355a` — Switch advertised visual from PseudoColor 8-bit to TrueColor 24-bit
 - `2f517ed` — TrueColor follow-ups: GetImage depth-24 output, docs, SHORTCUTS cleanup
-- `f151feb` — TrueColor: honor depth-1 paper/ink convention in pixel resolution
-- (`8b…` or similar) — release.sh bump for v0.9.3
+- `f151feb` — TrueColor: honor depth-1 paper/ink convention
+- `87caf85` — STATUS: end-of-day v0.9.3 shipped
+- `99afed5` — Motif chrome: update seed defaults + CHROME_NOTES from failed-attempt
+- `e252338` — MotifFrameView: extend title bar across hidden-button corners
+- `0cfd6c8` — Notes: open modal-dialog investigation
+- `7d95474` — WM_TRANSIENT_FOR: attach transient dialogs as NSWindow child windows (reverted approach)
+- `f85161b` — Notes: mark modal investigation RESOLVED
+- `c6f76f5` — WM_TRANSIENT_FOR: maintain z-order ourselves, not via addChildWindow
 
-(Hugo: `6bb1270` appVersion bump to 0.9.2 drift fix; `54f1ff0` appVersion
-bump to 0.9.3 for today's release.)
+(Hugo: `6bb1270` appVersion bump to 0.9.2 drift fix; `54f1ff0`
+appVersion bump to 0.9.3 for today's release.)
+
+15 commits in the X repo today, 2 in the Hugo repo, one public
+release shipped clean. Two architectural decisions logged in
+DECISIONS.md (TrueColor supersession + WM_TRANSIENT_FOR
+divergence). Two investigation docs preserved
+(`CHROME_NOTES_2026-06-13.md`, `MODAL_INVESTIGATION_2026-06-13.md`).
 
 ## Charter status check
 
-The 2026-06-13 work closes most of the WM-proxy / charter-fidelity gaps
-that Todd's "what should we attack next" punch list flagged:
+Closed today (from the WM-proxy / charter-fidelity punch list and from
+the modal-dialog investigation):
 
 - **#4 WM_DELETE_WINDOW gating** — done (Bug A + Bug B both closed)
 - **#6 WM_NORMAL_HINTS / _MOTIF_WM_HINTS honoring** — done (both
@@ -79,12 +127,20 @@ that Todd's "what should we attack next" punch list flagged:
   captures replay against TrueColor as muted near-black-blue shades
   rather than the previous "wacky color collision" symptom — visually
   wrong but no longer corrupted by collision (per DECISIONS analysis).
+- **#11 TRANSIENT_FOR → NSPanel** — done, but via manual z-order
+  maintenance rather than `NSWindow.addChildWindow` (DECISIONS
+  2026-06-13 second entry; the addChildWindow approach was tried first
+  and reverted because it couples position).
+- **Title-bar carve-out on hidden-button dialogs** — emerged from the
+  WM-proxy work, closed with `titleBarRect()` extending frame-to-frame
+  when `_MOTIF_WM_HINTS` decoration bits hide menu/min/max. Verified
+  against u5.
 
 Still open from that punch list:
 - **#12 SetSelectionOwner time-comparison gate** — ~5 lines, deferred
 - **#7 CWBackPixmap ParentRelative descendant case** — verify-then-fix
 - **#8 GetProperty type filter** — latent INCR dep
-- **#10/11/12** lower-priority items per Todd's gut sort
+- **#10 / 12b / 12c** lower-priority items per Todd's gut sort
 
 ## What's open in the TrueColor cleanup follow-on
 
@@ -123,18 +179,42 @@ None blocking; each surfaces when a specific client exercises it.
   value is now a valid RGB)
 - GetImage reverse-maps ARGB → 8-bit pixel via ColorTable (direct ARGB
   extraction now)
-- New: WM-proxy contract section added (WM_DELETE_WINDOW force-close
-  skips inferior teardown; hung-client polite close has no timeout
-  fallback; _MOTIF_WM_HINTS on native-chrome NSWindows silently dropped)
+
+Opened today (WM-proxy contract gaps, deferred to follow-on):
+- WM_DELETE_WINDOW force-close skips recursive inferior teardown
+  (latent — every hosted client claims WM_DELETE_WINDOW so the force
+  path doesn't fire in practice)
+- Hung-client polite close has no timeout fallback (NSWindow stays
+  open forever if the client never responds; second-click force-
+  close not implemented)
+- _MOTIF_WM_HINTS decoration bits silently dropped on native-chrome
+  NSWindows (only honored on Motif-frame NSWindows; NSWindow.styleMask
+  can't be safely mutated post-create)
+- WM_TRANSIENT_FOR transients don't follow parent through Spaces,
+  don't minimize with parent, don't auto-close with parent (deliberate
+  per DECISIONS 2026-06-13 second entry; could be re-added selectively
+  via NSWindow observers without taking on position coupling)
 
 ## What's next / open
 
-- v0.9.3 in the wild — watch for in-the-field reports
-- macXcapture still at v0.9.1. No capture-side code moved this session;
-  no reason to cut a new capture release.
-- TrueColor cleanup follow-on items above, picked off as real clients
-  surface them
-- The other punch-list items (#7, #8, #12) when convenient
+- **v0.9.3 in the wild** — watch for in-the-field reports. The post-
+  v0.9.3 evening work (title-bar carve-out, WM_TRANSIENT_FOR, seed
+  defaults) didn't ship — would justify a v0.9.4 cut if the modal/
+  layering improvements feel worth releasing in their own right.
+- **macXcapture still at v0.9.1.** No capture-side code moved today
+  beyond diagnostic-log polish; no reason to cut a new capture release.
+- **TrueColor cleanup follow-on items** (#18 PutImage depth-24,
+  #19 PixelBuffer depth-24, #20 colormap-op BadMatch, plus
+  CopyPlane / depth-8 ZPixmap cleanup) — pick off as real clients
+  surface them. None blocking.
+- **The other punch-list items (#7 CWBackPixmap descendant case,
+  #8 GetProperty type filter, #12 SetSelectionOwner time gate)** —
+  when convenient. #12 is a 5-line drop-in.
+- **WM_TRANSIENT_FOR re-add Spaces/minimize coupling** — could
+  observe parent's `windowDidChangeSpace` / `windowDidMiniaturize` and
+  mirror onto transients WITHOUT taking on position coupling. Worth
+  doing if the gap becomes user-visible. See DECISIONS 2026-06-13
+  second entry "Cost flagged" for the full list.
 
 ## TrueColor 24-bit visual switch — detailed write-up
 
