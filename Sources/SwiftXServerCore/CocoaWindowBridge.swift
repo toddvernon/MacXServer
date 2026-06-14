@@ -2792,8 +2792,22 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             if rects != nil {
                 win.isOpaque = false
                 win.backgroundColor = .clear
+                // Drop AppKit's `.resizable` while shaped. The Motif-frame
+                // title-bar-only drawing matches mwm's SetFrameShape policy,
+                // but without ALSO removing .resizable, AppKit still gives
+                // the user invisible resize zones around the (now-transparent)
+                // window edges — drag any of them and the X client area
+                // deforms (oclock circle → oval, etc.). Sun mwm shaped
+                // clients can't be free-deformed for the same reason:
+                // they have no frame corners to grab. Verified 2026-06-14
+                // against oclock/xeyes on u5.
+                win.styleMask.remove(.resizable)
             } else {
                 win.isOpaque = true
+                // Shape cleared: restore AppKit resize so unshaped clients
+                // (e.g. a top-level that turns off its shape mid-session)
+                // get their resize edges back.
+                win.styleMask.insert(.resizable)
             }
             slot.view?.needsDisplay = true
         }
