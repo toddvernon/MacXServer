@@ -290,6 +290,44 @@ echo
 echo "==> Deploying Hugo site so the download button picks up the new version"
 ( cd "$HUGO_DIR" && ./deploy.sh )
 
+# -------- Xcode project default version bump --------
+
+# Purely cosmetic for dev-build UX. The shipped artifact already has
+# $VERSION baked in via the xcodebuild MARKETING_VERSION override above
+# (~line 172), so this step has no bearing on what users download. What
+# it fixes: a plain `xcodebuild` / Xcode dev build picks up the project's
+# default MARKETING_VERSION, which would otherwise lag a release behind
+# until manually bumped — meaning the About dialog on dev builds shows
+# the previous shipped version. Bumping here keeps those builds honest.
+#
+# Idempotent: re-running the same version leaves the file byte-identical
+# and the `git diff` check skips the commit. Pattern is intentionally
+# tight (semver only) so the sed can't accidentally chew through
+# DYLIB_*_VERSION = 1 or other version-looking settings.
+#
+# Runs AFTER Hugo deploy so any failure here can't strand the public
+# download button on a stale version.
+
+echo
+echo "==> Bumping default MARKETING_VERSION in project.pbxproj to $VERSION"
+PBXPROJ="$PROJECT_FILE/project.pbxproj"
+sed -i "" -E "s/MARKETING_VERSION = [0-9]+\.[0-9]+\.[0-9]+;/MARKETING_VERSION = $VERSION;/g" "$PBXPROJ"
+COUNT=$(grep -c "MARKETING_VERSION = $VERSION;" "$PBXPROJ" 2>/dev/null || echo 0)
+echo "    pbxproj now has MARKETING_VERSION = $VERSION in $COUNT place(s)"
+
+# Auto-commit + push so the source tree stays in sync with what shipped.
+# Only stages the one file — any unrelated in-progress edits in the
+# working tree stay put (Todd was warned about a dirty tree at the
+# sanity-check step and chose to proceed).
+if ! ( cd "$PROJECT_ROOT" && git diff --quiet -- "$PBXPROJ" ); then
+    echo
+    echo "==> Committing pbxproj version bump"
+    ( cd "$PROJECT_ROOT" \
+        && git add "$PBXPROJ" \
+        && git commit -m "Project: bump default MARKETING_VERSION to $VERSION (post-release sync)" \
+        && git push )
+fi
+
 # -------- done --------
 
 DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/$APP.zip"
