@@ -1,4 +1,48 @@
-# Status 2026-06-14
+# Status 2026-06-15
+
+Single small follow-up to yesterday's xterm-scrollbar work. Todd
+noticed that dragging the xterm scrollbar thumb stopped tracking the
+moment the cursor left the xterm window; came back when it re-entered.
+Tracked it to one deliberate branch in `dispatchCrossWindowDrag` that
+was dropping MotionNotify when the cursor was outside every managed
+NSWindow. The branch was correct for its original popup-menu use case
+(May 2026): a stream of off-window motion would just be noise for a
+menu. It was wrong for grab-based widgets like xterm's Athena
+Scrollbar that legitimately need every Motion regardless of where
+the cursor is.
+
+Fix in `CocoaWindowBridge.swift:3587-3635`: when an X grab is active
+(`dragAnchorWindowId != nil`) and the cursor is outside every managed
+NSWindow, route MotionNotify to the anchor as well, not just
+ButtonRelease. Coords are translated against the anchor's view and
+go negative or overflow, which is legal X11 behavior for events
+delivered outside the event window. The session's `grabRedirect`
+re-targets to the actual grab window for ownerEvents=false, so xterm
+gets the motion as if the cursor were still over the scrollbar widget.
+
+Verified: build clean, 1305 tests still green, no behavior change for
+non-grab drags. Manual smoke-test left for Todd to confirm with a
+live xterm.
+
+One unknown flagged at the call site: AppKit's `addLocalMonitorForEvents`
+only sees events macOS delivers to our app. For a button-down drag
+started in our window, macOS keeps routing `mouseDragged` to the
+originating app even when the cursor wanders over another app's
+window — so the local monitor should still see them. If the field
+report says scrolling freezes the moment the cursor crosses into
+another app's window, the next move is a global monitor or CGEventTap.
+
+## Today's commits
+
+- `7b30f4f` — Cross-window drag: route motion to anchor while grab is active
+
+One commit in the X repo today. No DECISIONS / SHORTCUTS /
+OPCODE_STATUS rolls — this is a bridge-level routing tweak, not a
+protocol change.
+
+---
+
+## Preserved below: 2026-06-14 marathon day
 
 Marathon day, **MacXServer v0.9.5 shipped** (signed/notarized/stapled,
 download button live on macxserver.com). Day broke into seven chunks:
