@@ -32,26 +32,74 @@ window — so the local monitor should still see them. If the field
 report says scrolling freezes the moment the cursor crosses into
 another app's window, the next move is a global monitor or CGEventTap.
 
-## Release: MacXServer v0.9.6 (today)
+## About dialog fix (late morning)
 
-- Tag: `MacXServer-v0.9.6`. GitHub release at
-  `releases/tag/MacXServer-v0.9.6`. Hugo `appVersion` bumped to 0.9.6;
-  download button live on macxserver.com.
-- Built, signed (Developer ID Application), notarized, stapled, and
-  republished via `./release.sh MacXServer 0.9.6`.
-- Diff vs v0.9.5: just the cross-window-drag motion-routing fix above.
-  Tiny single-commit release — Todd reported the scrollbar drag-off
-  bug the morning after v0.9.5 shipped and patch-bump felt cleaner
-  than letting it sit until the next feature batch.
+Todd noticed right after v0.9.6 shipped: the About panel always said
+`0.1.0` no matter what version `release.sh` passed, and the copyright
+footer read `Copyright © Todd Vernon. swift-x project.` — leaking the
+internal project name into the user-facing app.
+
+Two root causes:
+
+1. **Version literal in Info.plist.** Both `Xcode/Server-Info.plist`
+   and `Xcode/Capture-Info.plist` had
+   `CFBundleShortVersionString = 0.1.0` as a hardcoded string, not
+   `$(MARKETING_VERSION)`. And the `.app` target build configs in
+   `MacXServer.xcodeproj` didn't define `MARKETING_VERSION` or
+   `CURRENT_PROJECT_VERSION` at all — only the framework / test
+   targets did. So even though `release.sh` was passing
+   `MARKETING_VERSION=0.9.6` to xcodebuild, nothing on the app
+   target consumed it, and the literal `0.1.0` survived through
+   to the bundle.
+2. **Copyright string.** `NSHumanReadableCopyright` said
+   "Copyright © Todd Vernon. swift-x project." — the trailing
+   project-name leak is the kind of thing you only notice once a
+   user opens the About dialog.
+
+Fix:
+- Info.plist: `CFBundleShortVersionString = $(MARKETING_VERSION)`,
+  `CFBundleVersion = $(CURRENT_PROJECT_VERSION)` for both apps.
+- pbxproj: added `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION`
+  to all four `.app` build configs (Server Debug+Release,
+  Capture Debug+Release). Defaults bumped to track shipping version
+  (currently 0.9.7); release.sh's xcodebuild override still wins
+  at release time.
+- Copyright: `Copyright © 2026 Todd Vernon` for both apps.
+
+Verified end-to-end on the shipped 0.9.7 binary: `PlistBuddy` reads
+`0.9.7 / 0.9.7 / Copyright © 2026 Todd Vernon`. About panel will now
+match.
+
+## Release: MacXServer v0.9.6 → v0.9.7 (today)
+
+Two releases in one morning, both small.
+
+- **v0.9.6** (`MacXServer-v0.9.6`): cross-window-drag motion-routing
+  fix above. Shipped clean but with the latent About-dialog bug that
+  surfaced minutes later when Todd opened About on the download.
+- **v0.9.7** (`MacXServer-v0.9.7`): About-dialog fix above. No
+  functional code change vs v0.9.6 — just the Info.plist plumbing
+  and copyright string. Patch-bumped rather than re-tagging 0.9.6
+  to avoid the "same version number, different binary" foot-gun
+  for anyone who already downloaded.
+
+Both signed (Developer ID Application), notarized via `notarytool`,
+stapled, published to `toddvernon/MacXServer` releases, and pulled
+live on macxserver.com via the Hugo `appVersion` bump in each
+`release.sh` run.
 
 ## Today's commits
 
 - `7b30f4f` — Cross-window drag: route motion to anchor while grab is active
 - `92f7312` — STATUS: roll forward to 2026-06-15
+- `5a6edd8` — STATUS: note MacXServer v0.9.6 shipped
+- `1600b01` — About dialog: fix version display and copyright string
+- `6e13afc` — Project: bump default MARKETING_VERSION to 0.9.7 for v0.9.7 release
 
-One code commit in the X repo today, plus the STATUS roll and the
-release. No DECISIONS / SHORTCUTS / OPCODE_STATUS rolls — this is a
-bridge-level routing tweak, not a protocol change.
+Two code-touching commits in the X repo today, both small. No
+DECISIONS / SHORTCUTS / OPCODE_STATUS rolls — bridge-level routing
+plus an Xcode-project / Info.plist plumbing fix, neither one a
+protocol change.
 
 ---
 
