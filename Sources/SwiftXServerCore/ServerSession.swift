@@ -268,6 +268,14 @@ public final class ServerSession: @unchecked Sendable {
     private var heldButtons: Set<UInt8> = []
     private var implicitGrab: Bool = false
 
+    /// In-flight server-side button rewrites (xterm scrollbar extension and
+    /// future siblings). Press time: if context overrides the wire button
+    /// from N → M, store [N: M]. Release time: look up M from N so heldButtons
+    /// removal and the wire ButtonRelease both use the same value the press
+    /// used. Cleared at release; never persists across the gesture.
+    /// Tiny map (1-3 entries) — three Mac buttons max.
+    private var pendingButtonOverrides: [UInt8: UInt8] = [:]
+
     /// Current X keyboard focus window, set via SetInputFocus. nil = no
     /// explicit focus (KeyPress falls back to keyTarget — the shallowest
     /// descendant with KeyPressMask, then the top-level). Motif sets focus
@@ -653,6 +661,9 @@ public final class ServerSession: @unchecked Sendable {
             theme.frameWidth = (theme.frameWidth * chromeScale).rounded()
             MotifTheme.install(theme)
         }
+        // PointerConfig is installed from the app side (SwiftXServer reads
+        // UserDefaults via Preferences and calls PointerConfig.install at
+        // launch + on every Preferences change). Core does not touch it.
     }
 
     /// User asked to close one of our NSWindows (red traffic-light button,
@@ -925,6 +936,16 @@ public final class ServerSession: @unchecked Sendable {
     ) {
         guard let order = byteOrder else { return }
         guard windows.get(topLevel) != nil else { return }
+        // Apply any pending button override set at press time so the motion
+        // event's button-state bit matches what we sent on the press.
+        // Without this, a scrollbar-thumb-grab drag (press wire 2 via the
+        // override, then physical-button drag) would report the original
+        // unmodified button in MotionNotify's state, confusing xterm's
+        // Athena Scrollbar tracking.
+        var button = button
+        if let override = pendingButtonOverrides[button] {
+            button = override
+        }
         // Refresh the cached modifier state from the live event's flags. This
         // also makes any state-bearing path that reads currentModifierState
         // (crossing emissions during drag, etc.) see the current picture.
@@ -973,6 +994,36 @@ public final class ServerSession: @unchecked Sendable {
         outbound.append(event.encode(code: 6, byteOrder: order))
     }
 
+    /// XTERM EXTENSION (server-side app-specific hack #1): does this window
+    /// look like an xterm Athena Scrollbar widget? Heuristic — xterm doesn't
+    /// set per-widget WM_CLASS, but the scrollbar's geometry profile is
+    /// unmistakable: narrow (≤25 logical px wide), at least half its parent's
+    /// height, and pinned to the left or right edge of its parent. The caller
+    /// is expected to have already confirmed `wmClass == "XTerm"` for the
+    /// session before invoking us.
+    ///
+    /// Future-Helios-eyes: this is the first widget-role inference. When we
+    /// grow more (xterm VT100 content area, Motif menu shell, dt-app
+    /// scrollbars), they'll either join here as sibling heuristics or move
+    /// into a shared `WidgetRole` tag on `WindowEntry` set at CreateWindow
+    /// time. For now an on-the-fly check keeps the change small.
+    func isXtermScrollbarWindow(_ id: UInt32) -> Bool {
+        guard let win = windows.get(id) else { return false }
+        guard win.width <= 25 else { return false }
+        guard let parent = windows.get(win.parent) else { return false }
+        guard win.height >= parent.height / 2 else { return false }
+        // Edge tolerance: Athena widgets render their 1-pixel border outside
+        // the geometry rect, so xterm positions its scrollbar at x=-1 (left)
+        // or x=parentWidth+1-width (right) to align the border with the form
+        // edge. Without the tolerance the override misses every left-click on
+        // the scrollbar — surfaced live by Todd on 2026-06-14.
+        let leftOffset  = Int(win.x)
+        let rightOffset = Int(win.x) + Int(win.width) - Int(parent.width)
+        let isLeftEdge  = abs(leftOffset)  <= 2
+        let isRightEdge = abs(rightOffset) <= 2
+        return isLeftEdge || isRightEdge
+    }
+
     /// Mouse-down/up at top-level-local logical coords (x, y). Resolves the
     /// deepest mapped descendant containing the click whose event mask has
     /// ButtonPressMask (1<<2) or ButtonReleaseMask (1<<3) set; falls back
@@ -985,6 +1036,51 @@ public final class ServerSession: @unchecked Sendable {
         let mask: UInt32 = isDown ? (1 << 2) : (1 << 3)
         let mask16: UInt16 = UInt16(mask)
         let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
+        // Server-side context-aware button rewrite, applied BEFORE held-
+        // button bookkeeping so the press and release both see the
+        // overridden value. First-of-its-kind: when the user is hosting
+        // xterm AND has the scrollbar-thumb-override on AND this click
+        // resolves to an xterm-shaped scrollbar widget, force the wire
+        // button to 2 ("grab thumb"). Keeps left-click-selects-text in
+        // the xterm content area while giving Mac users the "any button
+        // grabs the thumb" behavior in the scrollbar.
+        //
+        // Press: lookup target with ButtonPressMask, decide override, stash
+        // original→effective in pendingButtonOverrides so the matching
+        // release reuses the same effective value regardless of where the
+        // pointer ends up at release time.
+        // Release: prefer the stashed override (set at the press location)
+        // over a fresh lookup, then clear the entry.
+        var button = button
+        if isDown {
+            // Decide whether this press needs the xterm-scrollbar override.
+            let overrideFires =
+                PointerConfig.current.xtermScrollbarThumbOverride
+                && wmClass == "XTerm"
+                && mouseTarget(topLevel: topLevel, x: x, y: y,
+                               eventMaskBit: 1 << 2)
+                    .map { isXtermScrollbarWindow($0.0) } ?? false
+            if overrideFires {
+                if button != 2 {
+                    log?.log("  xterm-ext: scrollbar click button \(button) → 2")
+                    pendingButtonOverrides[button] = 2
+                    button = 2
+                }
+            } else {
+                // A non-overriding press MUST clear any leftover entry for
+                // this physical button — without this, a stale pending
+                // entry from a previous botched scrollbar interaction
+                // (release dropped, dragMonitor consumed it, etc.) bleeds
+                // into the release of THIS press and rewrites the wire
+                // button. Symptom: content-area left-click selection
+                // breaks because the press goes out as wire 1 but the
+                // release goes out as wire 2.
+                pendingButtonOverrides.removeValue(forKey: button)
+            }
+        } else if let override = pendingButtonOverrides.removeValue(forKey: button) {
+            button = override
+        }
+
         // Update held-button bookkeeping first; resolve target second; then
         // (after delivery) install or tear down the implicit grab.
         if isDown { heldButtons.insert(button) } else { heldButtons.remove(button) }

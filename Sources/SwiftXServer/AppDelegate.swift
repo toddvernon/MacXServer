@@ -65,10 +65,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// lifetime.
     weak var bridge: CocoaWindowBridge?
 
-    /// Builds the delegate and its `Preferences` instance.
+    /// Builds the delegate and its `Preferences` instance. Runs the one-
+    /// time `[pointer]` resource-file → UserDefaults migration before the
+    /// `Preferences` is observed, so a stale `swapButtons23: true` in the
+    /// user's file lands as the right popup selections on first launch.
+    /// Then snapshots the current mapping into `PointerConfig` so the
+    /// first click after launch already honors the user's preference.
     override init() {
-        self.preferences = Preferences()
+        Preferences.migratePointerResourceSection()
+        let prefs = Preferences()
+        prefs.applyPointerConfig()
+        self.preferences = prefs
         super.init()
+        // Re-apply whenever the Preferences dialog (or any other writer)
+        // mutates a value. PointerConfig.install is the cheap path; we
+        // re-snapshot all three keys but only the pointer ones can have
+        // changed in a way that affects PointerConfig.
+        NotificationCenter.default.addObserver(
+            forName: Preferences.didChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.preferences.applyPointerConfig()
+        }
     }
 
     /// Thread-safe handle to the clipboard preferences for the listener thread.

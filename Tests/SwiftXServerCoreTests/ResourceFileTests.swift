@@ -191,7 +191,39 @@ final class ResourceFileTests: XCTestCase {
             "quickplot theme rules NOT included; user picked 'nonexistent'")
     }
 
-    // MARK: - Seed (round-trip)
+    // MARK: - PointerConfig (now driven by UserDefaults; tests exercise
+    // the remap function and the resource-file-free seed.)
+
+    func testPointerConfigRemapHonorsThreeProperties() {
+        let prior = PointerConfig.current
+        PointerConfig.install(PointerConfig(
+            leftClickWireButton: 2,    // Mac left grabs scrollbar thumb
+            wheelClickWireButton: 1,
+            rightClickWireButton: 3
+        ))
+        let custom = PointerConfig.current
+        XCTAssertEqual(custom.remapButton(1), 2, "Mac left → wire 2")
+        XCTAssertEqual(custom.remapButton(2), 1, "Mac wheel → wire 1")
+        XCTAssertEqual(custom.remapButton(3), 3, "Mac right → wire 3")
+        XCTAssertEqual(custom.remapButton(4), 4, "scroll wheel up passes through")
+        XCTAssertEqual(custom.remapButton(5), 5, "scroll wheel down passes through")
+        PointerConfig.install(prior)
+    }
+
+    func testPointerConfigDefaultsAreIdentity() {
+        let cfg = PointerConfig.default
+        XCTAssertEqual(cfg.remapButton(1), 1)
+        XCTAssertEqual(cfg.remapButton(2), 2)
+        XCTAssertEqual(cfg.remapButton(3), 3)
+    }
+
+    func testSeedContentNoLongerCarriesPointerSection() {
+        // The mouse-button mapping moved to the Preferences dialog +
+        // UserDefaults storage. The resource file is back to motif/theme
+        // territory only — no [pointer] section in the seed.
+        XCTAssertFalse(DefaultThemes.seedContent.contains("[pointer]"),
+                       "seed must not include the deprecated [pointer] section")
+    }
 
     func testSeedContentParsesAndYieldsExpectedTheme() {
         let file = ResourceFile.parse(DefaultThemes.seedContent)

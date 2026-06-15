@@ -1,20 +1,112 @@
 # Status 2026-06-14
 
-Five-plus commits, **MacXServer v0.9.5 shipped** (signed/notarized/stapled,
-download button live on macxserver.com). Day broke into five chunks:
+Marathon day, **MacXServer v0.9.5 shipped** (signed/notarized/stapled,
+download button live on macxserver.com). Day broke into seven chunks:
 shaped-client deform fix in the morning, Motif chrome audit against
 mwm source + two MAJOR-severity findings closed mid-day, single-knob
 color-derivation refactor in the afternoon, TrueColor cleanup pass in
-the early evening (PutImage depth-24, CopyPlane window-depth fix,
-SHORTCUTS / OPCODE_STATUS updates), and CWBackPixmap honoring in the
-late evening (xli sets a depth-24 pixmap as the bg of its top-level
-child window and pans by ConfigureWindow on that child — we used to
-silently drop the bg-pixmap and the window came up white; then with
-bg-pixmap honored, the pure-move newly-exposed strip wasn't being
-repainted, so pans accumulated streak smears along the leading edge).
-1302 tests green (+9 from baseline — 2 PutImage depth-24,
-7 CWBackPixmap including the pure-move regression), 27 skipped
-(unchanged baseline).
+the early evening (PutImage depth-24, CopyPlane window-depth fix),
+CWBackPixmap honoring (xli renders + pans cleanly) in the mid-evening,
+pointer/mouse-button rework with new Mouse tab in Preferences in the
+late evening, and the first **server-side xterm extension** —
+scrollbar widget recognition + button override — as the closing piece.
+Two unrelated docs surfaced: Helios mission statement (untracked then,
+tracked tonight) for AI-driven dev on vintage Suns via macXserver's
+own terminal. 1305 tests green (+12 from morning baseline:
+2 PutImage depth-24, 7 CWBackPixmap, 3 Pointer/Mouse config), 27
+skipped (unchanged baseline).
+
+## Pointer rework + first xterm server-side extension (late evening)
+
+Started as a "quick wheel-mouse fix" and grew into a small architecture
+moment — the first server-side hack that uses macXserver's "we know
+what client we're hosting" position to do something X11 protocol
+can't express. Bones for a Helios-class feature surface (see
+`Helios-Mission.md` tracked tonight).
+
+**Mouse wheel → Button4/5.** `FlippedXView.scrollWheel(with:)`
+accumulates `event.scrollingDeltaY` and emits synthetic
+Button4 (up) / Button5 (down) press+release pairs at a 10-point detent
+threshold, capped at 16 emissions per AppKit event. Horizontal scroll
+goes Button6/7. Modern xterm reads natively; vintage xterm needs one
+`.Xdefaults` line.
+
+**Per-Mac-button mapping moved out of resources, into a new
+Preferences › Mouse tab.** Three popups — Left click, Wheel click,
+Right click — each picks what X-protocol action that physical button
+performs in content areas. Labels are action-verbs ("Select text",
+"Paste selection", "Extend selection / open menu") not button numbers;
+the X11 wire numbering stays the server's private business. Default
+is identity 1/2/3 for a standard 3-button mouse. UserDefaults-backed,
+live-reactive (next click after a popup change uses the new mapping),
+with a one-time migration that strips the old `[pointer]` block from
+existing users' `~/.macxserver-resources` and translates the prior
+`swapButtons23` boolean to the equivalent popup state.
+
+The previous afternoon iteration tried to ship this as a single boolean
+in the resource file (`swapButtons23`) but the resource-file UX
+surfaced two problems immediately: nobody knows what X11 button
+numbers mean, and "the file is the UI" is wrong for something a user
+needs to think about. Pulling it into a typed dialog with semantic
+labels is the right shape.
+
+**`dispatchCrossWindowDrag` remap bug closed.** Found by capturing
+the wire and diffing press/release: with `swapButtons23` on, the press
+went through `FlippedXView.dispatchMouse` and got the remap, but the
+release went through the bridge's cross-window-drag monitor and used
+the RAW button number from `xButton(forNSEventType:)`. Wire ended up
+with `ButtonPress(2)` ... `ButtonRelease(3)`, heldButtons never
+emptied, implicit grab pinned the scrollbar, all subsequent clicks
+got redirected through the stuck grab, double-click-to-close
+needed retries. Fix: moved `remapButton` onto `PointerConfig` itself
+(single source of truth) and applied it in both code paths. Patterns
+match the MIT X server's `dix/events.c ProcessOtherEvent` — one place
+swaps physical→logical, everything downstream uses the logical
+number.
+
+**Server-side xterm scrollbar extension** (the new pattern). One
+Mouse-tab checkbox: "On an xterm scrollbar, any mouse button grabs
+the thumb." When on, every click that lands in an xterm-shaped
+scrollbar widget gets its wire button rewritten to 2 ("grab thumb")
+regardless of the user's per-Mac-button popup mapping. So left-click
+still selects text in the xterm content area, but left-click on the
+scrollbar grabs the thumb — which X11's flat global pointer mapping
+cannot express on its own. The cheating-with-knowledge mechanism:
+
+- Session-level `wmClass == "XTerm"` check (we already track WM_CLASS
+  for capture-file naming).
+- `isXtermScrollbarWindow(_:)` heuristic at click time —
+  width ≤ 25, height ≥ parent.height / 2, x within 2 pixels of the
+  parent's left or right edge. Athena renders its 1-pixel border
+  outside the geometry rect so xterm's left scrollbar reports
+  `x = -1` not `x = 0`; live testing tonight surfaced this and the
+  tolerance landed in the same hour.
+- `pendingButtonOverrides: [UInt8: UInt8]` maps original-wire to
+  effective-wire across the press/release pair, so the rewrite
+  survives the gesture (drag off-scrollbar releases still match the
+  press's wire button). Generic — any future "server knows X" rewrite
+  reuses it.
+- Override applied in BOTH `handleMouseEvent` (press / release) and
+  `handleMouseDragged` (MotionNotify state-bit) so the wire is
+  consistent end-to-end.
+
+Importantly the override gates on `wmClass == "XTerm"` so non-xterm
+clients are untouched. New `PointerConfig.xtermScrollbarThumbOverride`
+flag, off by default. The whole xterm-extension surface fits in
+~50 lines today; the `pendingButtonOverrides` map + the
+"`isXtermScrollbarWindow` is the first widget-role inference"
+groundwork is the foundation for the next class of hacks (Helios's
+"intercept this xterm keystroke and route it to the chat input"
+falls out of the same plumbing).
+
+**Helios docs.** `Helios-Mission.md` (untracked all day, tracked in
+this commit) captures the larger arc: macXserver owns the xterm fd
+and cell grid, so it's the natural home for a Claude-driven dev
+workbench targeting vintage Suns. MVP is the hello-world syntax-error
+self-correction loop; we're not building it yet, but the
+xterm-extension primitives shipped tonight (widget-role inference,
+press/release wire rewrites, per-app gating) are exactly what
+Phase 0 needs.
 
 ## Release: MacXServer v0.9.5 (today)
 
@@ -247,6 +339,42 @@ pixmap is larger than its window, so single-blit covers it);
 ParentRelative honoring (flag stored but `paintWindowPixmapBackgrounds`
 skips it — no client we host sets it); CWBorderPixmap still silently
 dropped.
+
+## Pointer feature pass (very late evening)
+
+Two small UX wins driven by Todd's wheel-mouse + xterm scrollbar gripe.
+
+**Mouse wheel → Button4/5.** `FlippedXView.scrollWheel(with:)`
+accumulates `event.scrollingDeltaY` (and X for horizontal) and emits
+synthetic X Button4 (up) / Button5 (down) press+release pairs per
+detent threshold crossing (10 points; tuned for both Logitech wheels
+and Magic Mouse / trackpad). Per-event emission capped at 16 so a
+flick-inertia scroll doesn't fire 200 button events into a vintage
+xterm. Horizontal scroll generates Button6/7 — most clients ignore
+them, xterm handles via translation table. Modern xterm reads
+Button4/5 natively for scroll-history; vintage Sun xterm needs one
+`.Xdefaults` translation line, documented in the seed file.
+
+**`[pointer] swapButtons23`** config flag in
+`~/.macxserver-resources`. Wheel-mouse users (where the physical
+button-2 IS the wheel click and awkward to drag) set it to `true`
+and Mac right-click reports as X button 2 — xterm's Athena
+scrollbar now grabs the thumb on Mac right-click instead of
+wheel-press. Mac wheel-click reports as button 3 (Motif menu post).
+Three-button-mouse users with a real middle button leave it false.
+Default off, opt-in. New `PointerConfig` struct mirrors
+`MotifTheme`'s load-at-session-init + `.current`/`.install` pattern;
+swap applied via `FlippedXView.remapButton(_:)` before both
+`dispatchMouse` and `dispatchDrag`. Scroll-wheel buttons 4/5/6/7
+pass through unchanged.
+
+Files touched: `FlippedXView.swift` (~70 lines for scrollWheel +
+remapButton), new `PointerConfig.swift` (~50 lines),
+`ResourceFile.swift` (`.pointer` section kind + `pointerSettings`
+accessor), `ServerSession.swift` (install at startup), `DefaultThemes.swift`
+(seed `[pointer]` section with explanatory comments). 5 new tests
+in `ResourceFileTests` cover the parse, the bool spelling tolerance,
+the remap function, and the seed roundtrip.
 
 **Follow-on smear fix.** First xli run worked at MapWindow but
 pan-via-drag accumulated vertical-streak smears along the leading

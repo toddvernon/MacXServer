@@ -3496,7 +3496,13 @@ extension CocoaWindowBridge {
             screenPt = event.locationInWindow
         }
 
-        let button = Self.xButton(forNSEventType: event.type)
+        // Same pointer remap as FlippedXView.dispatchMouse/Drag — without
+        // this, a swapButtons23=true user gets press-via-NSResponder with
+        // the swapped wire button but release-via-cross-window-monitor with
+        // the RAW button, so heldButtons never empties, the implicit grab
+        // never tears down, and xterm's scrollbar grabs every subsequent
+        // click. Single source of truth: PointerConfig.remapButton.
+        let button = PointerConfig.current.remapButton(Self.xButton(forNSEventType: event.type))
         let isUp: Bool = (event.type == .leftMouseUp
                           || event.type == .rightMouseUp
                           || event.type == .otherMouseUp)

@@ -26,6 +26,10 @@ struct PreferencesPanelView: View {
                 .tabItem {
                     Label("Capture", systemImage: "recordingtape")
                 }
+            MouseTab(model: model)
+                .tabItem {
+                    Label("Mouse", systemImage: "computermouse")
+                }
             DisplayTab(model: model)
                 .tabItem {
                     Label("Display", systemImage: "display")
@@ -126,6 +130,111 @@ private struct CaptureTab: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+// MARK: - Mouse tab
+
+/// The three "logical" X11 mouse buttons. Internal numbering matches
+/// the X wire protocol (button 1 = primary, 2 = middle, 3 = secondary)
+/// but the user never sees the numbers — the popups describe each role
+/// by what it does in the **content area** of an X client (text widgets,
+/// drawing areas, dialog buttons). Scrollbar-specific behavior is
+/// handled by the dedicated toggle below the popups, so the popup labels
+/// don't have to compete with scrollbar semantics.
+private enum XButtonRole: UInt8, CaseIterable, Identifiable {
+    case primary   = 1     // content: select / activate
+    case middle    = 2     // content: paste in xterm, drag in Motif
+    case secondary = 3     // content: extend selection in xterm, pop menu in Motif
+
+    var id: UInt8 { rawValue }
+
+    var menuLabel: String {
+        switch self {
+        case .primary:   return "Select text"
+        case .middle:    return "Paste selection"
+        case .secondary: return "Extend selection / open menu"
+        }
+    }
+}
+
+private struct MouseTab: View {
+    @ObservedObject var model: PreferencesPanelModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            PanelHeader(
+                icon: "computermouse",
+                title: "Mouse buttons",
+                caption: "What each Mac mouse button does in X content areas."
+            )
+
+            Text("Pick what each Mac mouse button does in X content areas — text in xterm, the drawing area in quickplot, dialog buttons in dtcalc. Scrollbar behavior is handled by the override below.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+                GridRow {
+                    Text("Left click:")
+                    rolePicker(selection: Binding(
+                        get: { XButtonRole(rawValue: model.pointerLeftClick) ?? .primary },
+                        set: { model.pointerLeftClick = $0.rawValue }
+                    ))
+                }
+                GridRow {
+                    Text("Wheel click:")
+                    rolePicker(selection: Binding(
+                        get: { XButtonRole(rawValue: model.pointerWheelClick) ?? .middle },
+                        set: { model.pointerWheelClick = $0.rawValue }
+                    ))
+                }
+                GridRow {
+                    Text("Right click:")
+                    rolePicker(selection: Binding(
+                        get: { XButtonRole(rawValue: model.pointerRightClick) ?? .secondary },
+                        set: { model.pointerRightClick = $0.rawValue }
+                    ))
+                }
+            }
+            .padding(.leading, 4)
+
+            Text("Scroll wheel rotation always emits scroll events. Modern xterm reads them natively; vintage xterm needs `<Btn4Down>: scroll-back(1,line)` / `<Btn5Down>: scroll-forw(1,line)` in `~/.Xdefaults`.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Scrollbar")
+                    .font(.headline)
+                Toggle("On an xterm scrollbar, any mouse button grabs the thumb",
+                       isOn: $model.xtermScrollbarThumbOverride)
+                    .toggleStyle(.checkbox)
+                Text("macXserver detects when a click lands on an xterm scrollbar widget and substitutes \u{201C}grab thumb\u{201D} only there. Your content-area mapping above is untouched, and non-xterm clients are unaffected.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 20)
+            }
+
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func rolePicker(selection: Binding<XButtonRole>) -> some View {
+        Picker("", selection: selection) {
+            ForEach(XButtonRole.allCases) { role in
+                Text(role.menuLabel).tag(role)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .frame(width: 320, alignment: .leading)
     }
 }
 
@@ -334,6 +443,38 @@ final class PreferencesPanelModel: ObservableObject {
         }
     }
 
+    @Published var pointerLeftClick: UInt8 {
+        didSet {
+            if pointerLeftClick != prefs.pointerLeftClick {
+                prefs.pointerLeftClick = pointerLeftClick
+            }
+        }
+    }
+
+    @Published var pointerWheelClick: UInt8 {
+        didSet {
+            if pointerWheelClick != prefs.pointerWheelClick {
+                prefs.pointerWheelClick = pointerWheelClick
+            }
+        }
+    }
+
+    @Published var pointerRightClick: UInt8 {
+        didSet {
+            if pointerRightClick != prefs.pointerRightClick {
+                prefs.pointerRightClick = pointerRightClick
+            }
+        }
+    }
+
+    @Published var xtermScrollbarThumbOverride: Bool {
+        didSet {
+            if xtermScrollbarThumbOverride != prefs.xtermScrollbarThumbOverride {
+                prefs.xtermScrollbarThumbOverride = xtermScrollbarThumbOverride
+            }
+        }
+    }
+
     var captureDirectory: String { prefs.captureDirectory }
 
     /// Path of the user-editable resources file. Same path the resources
@@ -352,6 +493,10 @@ final class PreferencesPanelModel: ObservableObject {
         self.motifFrameEnabled = preferences.motifFrameEnabled
         self.motifFrameButtonStyle = preferences.motifFrameButtonStyle
         self.displayScale = preferences.displayScale
+        self.pointerLeftClick = preferences.pointerLeftClick
+        self.pointerWheelClick = preferences.pointerWheelClick
+        self.pointerRightClick = preferences.pointerRightClick
+        self.xtermScrollbarThumbOverride = preferences.xtermScrollbarThumbOverride
     }
 
     /// Reseed the user resources file from the bundled defaults. Same

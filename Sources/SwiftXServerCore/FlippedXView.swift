@@ -256,6 +256,74 @@ public final class FlippedXView: NSView {
     public override func rightMouseDragged(with event: NSEvent) { dispatchDrag(event, button: 3) }
     public override func otherMouseDragged(with event: NSEvent) { dispatchDrag(event, button: 2) }
 
+    /// Scroll wheel → synthesized X Button4 (up) / Button5 (down) press+
+    /// release pairs, the X11 convention since ~2000. Modern xterm reads
+    /// these natively for scroll-history; vintage xterm needs one line in
+    /// `.Xdefaults` (`<Btn4Down>: scroll-back(1,line)` etc.) to honor them.
+    ///
+    /// AppKit gives us `scrollingDeltaY` in points: a discrete mouse wheel
+    /// reports integer-ish deltas (~1 per detent); a trackpad reports
+    /// fractional points with high update frequency. Accumulating into
+    /// `scrollAccumY` and emitting one button event per threshold crossing
+    /// gives consistent click-like behavior on both inputs. Threshold
+    /// matches a typical wheel-detent height in points.
+    public override func scrollWheel(with event: NSEvent) {
+        guard let handler = mouseHandler else { return }
+        let (x, y) = logicalLocation(of: event)
+        guard isInsideShape(logicalX: x, logicalY: y) else { return }
+        let mods = event.modifierFlags.rawValue
+        scrollAccumY += event.scrollingDeltaY
+        scrollAccumX += event.scrollingDeltaX
+        let threshold = FlippedXView.scrollDetentPoints
+        // Cap per-event emissions so a fling/inertial scroll doesn't spam
+        // hundreds of button events into a vintage xterm in one frame.
+        var emitted = 0
+        let maxPerEvent = 16
+        while scrollAccumY >= threshold, emitted < maxPerEvent {
+            scrollAccumY -= threshold
+            handler(x, y, 4, true, mods)      // Button4 press
+            handler(x, y, 4, false, mods)     // Button4 release
+            emitted += 1
+        }
+        while scrollAccumY <= -threshold, emitted < maxPerEvent {
+            scrollAccumY += threshold
+            handler(x, y, 5, true, mods)      // Button5 press
+            handler(x, y, 5, false, mods)     // Button5 release
+            emitted += 1
+        }
+        // Horizontal scroll: Button6 = left, Button7 = right per the X11
+        // convention. Most clients ignore these; xterm honors them with the
+        // same translation-table mechanism. State-bit math in
+        // ServerSession only covers buttons 1..5, but Button6/7 are
+        // momentary events (immediate release) so the state bit doesn't
+        // matter — clients react to the press itself.
+        while scrollAccumX >= threshold, emitted < maxPerEvent {
+            scrollAccumX -= threshold
+            handler(x, y, 7, true, mods)
+            handler(x, y, 7, false, mods)
+            emitted += 1
+        }
+        while scrollAccumX <= -threshold, emitted < maxPerEvent {
+            scrollAccumX += threshold
+            handler(x, y, 6, true, mods)
+            handler(x, y, 6, false, mods)
+            emitted += 1
+        }
+    }
+
+    /// One wheel detent ≈ this many AppKit points. AppKit reports
+    /// scrollingDeltaY in points; a Magic Mouse detent comes out around
+    /// ~5-10 points, a Logitech wheel ~20-30. Picking the lower end lets
+    /// chunky-wheel users feel the click immediately and trackpad users
+    /// still get smooth granularity.
+    private static let scrollDetentPoints: CGFloat = 10
+
+    /// Sub-detent scroll budget. Accumulates fractional scrollingDelta
+    /// from trackpad / Magic Mouse until a detent threshold is crossed,
+    /// then emits one X button event and rolls the leftover over.
+    private var scrollAccumY: CGFloat = 0
+    private var scrollAccumX: CGFloat = 0
+
     public override func mouseMoved(with event: NSEvent) {
         guard let handler = mouseMovedHandler else { return }
         let (x, y) = logicalLocation(of: event)
@@ -313,14 +381,15 @@ public final class FlippedXView: NSView {
         // Swallow clicks that land outside the SHAPE bounding region: those
         // pixels aren't part of the window, so no X button event is generated.
         guard isInsideShape(logicalX: x, logicalY: y) else { return }
-        handler(x, y, button, isDown, event.modifierFlags.rawValue)
+        let remapped = PointerConfig.current.remapButton(button)
+        handler(x, y, remapped, isDown, event.modifierFlags.rawValue)
     }
 
     private func dispatchDrag(_ event: NSEvent, button: UInt8) {
         guard let handler = mouseDraggedHandler else { return }
         let (x, y) = logicalLocation(of: event)
         guard isInsideShape(logicalX: x, logicalY: y) else { return }
-        handler(x, y, button, event.modifierFlags.rawValue)
+        handler(x, y, PointerConfig.current.remapButton(button), event.modifierFlags.rawValue)
     }
 
     /// True if the logical point is inside the bounding shape, or the window
