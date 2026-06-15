@@ -32,13 +32,26 @@ window — so the local monitor should still see them. If the field
 report says scrolling freezes the moment the cursor crosses into
 another app's window, the next move is a global monitor or CGEventTap.
 
+## Release: MacXServer v0.9.6 (today)
+
+- Tag: `MacXServer-v0.9.6`. GitHub release at
+  `releases/tag/MacXServer-v0.9.6`. Hugo `appVersion` bumped to 0.9.6;
+  download button live on macxserver.com.
+- Built, signed (Developer ID Application), notarized, stapled, and
+  republished via `./release.sh MacXServer 0.9.6`.
+- Diff vs v0.9.5: just the cross-window-drag motion-routing fix above.
+  Tiny single-commit release — Todd reported the scrollbar drag-off
+  bug the morning after v0.9.5 shipped and patch-bump felt cleaner
+  than letting it sit until the next feature batch.
+
 ## Today's commits
 
 - `7b30f4f` — Cross-window drag: route motion to anchor while grab is active
+- `92f7312` — STATUS: roll forward to 2026-06-15
 
-One commit in the X repo today. No DECISIONS / SHORTCUTS /
-OPCODE_STATUS rolls — this is a bridge-level routing tweak, not a
-protocol change.
+One code commit in the X repo today, plus the STATUS roll and the
+release. No DECISIONS / SHORTCUTS / OPCODE_STATUS rolls — this is a
+bridge-level routing tweak, not a protocol change.
 
 ---
 
