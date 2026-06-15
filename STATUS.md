@@ -70,9 +70,32 @@ Verified end-to-end on the shipped 0.9.7 binary: `PlistBuddy` reads
 `0.9.7 / 0.9.7 / Copyright © 2026 Todd Vernon`. About panel will now
 match.
 
-## Release: MacXServer v0.9.6 → v0.9.7 (today)
+## release.sh auto-bumps pbxproj default (early afternoon)
 
-Two releases in one morning, both small.
+The About-dialog fix flushed out a recurring per-release annoyance:
+the project's default `MARKETING_VERSION` in `project.pbxproj` lags a
+release behind until manually bumped, so dev builds from Xcode show
+the previous shipped version in About until someone notices and edits.
+The shipped artifact is fine — `release.sh` already passes
+`MARKETING_VERSION=$VERSION` to xcodebuild as an override — but
+opening About on a dev build was always going to show the wrong
+number.
+
+Added a post-deploy block to `release.sh` that seds the pbxproj
+default to `$VERSION` and auto-commits + pushes that one file as
+"Project: bump default MARKETING_VERSION to X.Y.Z (post-release
+sync)". Runs AFTER Hugo deploy so any failure here can't strand the
+public download button on a stale version. Sed pattern is semver-only
+so it can't chew through `DYLIB_*_VERSION = 1` or other version-
+looking settings. Idempotent — re-running the same version is a no-op
+and the git-diff check skips the empty commit.
+
+Tested end-to-end below with the v0.9.8 cut.
+
+## Release: MacXServer v0.9.6 → v0.9.7 → v0.9.8 (today)
+
+Three releases in one morning, the last two purely about exercising
+the release pipeline cleanly.
 
 - **v0.9.6** (`MacXServer-v0.9.6`): cross-window-drag motion-routing
   fix above. Shipped clean but with the latent About-dialog bug that
@@ -82,11 +105,17 @@ Two releases in one morning, both small.
   and copyright string. Patch-bumped rather than re-tagging 0.9.6
   to avoid the "same version number, different binary" foot-gun
   for anyone who already downloaded.
+- **v0.9.8** (`MacXServer-v0.9.8`): test release for the new
+  `release.sh` post-deploy bump. No functional code change vs v0.9.7.
+  Pipeline ran end-to-end: build, notarize, staple, GitHub release,
+  Hugo deploy, pbxproj sed (12 occurrences bumped to 0.9.8), auto-
+  commit, auto-push. Shipped binary verified via PlistBuddy:
+  `0.9.8 / 0.9.8 / Copyright © 2026 Todd Vernon`.
 
-Both signed (Developer ID Application), notarized via `notarytool`,
-stapled, published to `toddvernon/MacXServer` releases, and pulled
-live on macxserver.com via the Hugo `appVersion` bump in each
-`release.sh` run.
+All three signed (Developer ID Application), notarized via
+`notarytool`, stapled, published to `toddvernon/MacXServer` releases,
+and pulled live on macxserver.com via the Hugo `appVersion` bump in
+each `release.sh` run.
 
 ## Today's commits
 
@@ -95,11 +124,15 @@ live on macxserver.com via the Hugo `appVersion` bump in each
 - `5a6edd8` — STATUS: note MacXServer v0.9.6 shipped
 - `1600b01` — About dialog: fix version display and copyright string
 - `6e13afc` — Project: bump default MARKETING_VERSION to 0.9.7 for v0.9.7 release
+- `9033504` — STATUS: note v0.9.7 shipped (About-dialog fix)
+- `062b1aa` — release.sh: auto-bump pbxproj default MARKETING_VERSION post-release
+- `5172a9d` — Project: bump default MARKETING_VERSION to 0.9.8 (post-release sync)
 
-Two code-touching commits in the X repo today, both small. No
-DECISIONS / SHORTCUTS / OPCODE_STATUS rolls — bridge-level routing
-plus an Xcode-project / Info.plist plumbing fix, neither one a
-protocol change.
+Three code-touching commits today (cross-window drag fix, Info.plist
+plumbing, release.sh post-deploy bump), plus four release-driven
+metadata bumps and STATUS rolls. No DECISIONS / SHORTCUTS /
+OPCODE_STATUS rolls — bridge-level routing and release tooling
+only, no protocol changes.
 
 ---
 
