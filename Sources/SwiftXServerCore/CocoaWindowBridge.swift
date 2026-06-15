@@ -3588,27 +3588,32 @@ extension CocoaWindowBridge {
             // Pointer outside all managed NSWindows. The previous window's
             // ExitView already fired above.
             //
-            // A button RELEASE here still has to reach the grabbing client.
-            // For an xterm/Motif popup menu the release-outside IS the
-            // dismiss signal: xterm does an active pointer grab when it
-            // posts the Ctrl+button menu, and on ButtonRelease anywhere
-            // outside a menu item it unmaps the popup. The old code dropped
-            // this event, so a release over empty desktop (outside every
-            // NSWindow) never reached xterm and the menu was orphaned on
-            // screen. Route it to the last top-level the pointer was over
-            // during this grab (dragAnchorWindowId), with coords measured
-            // relative to that window. The point lands outside the window's
-            // bounds, which is exactly how real X reports a release outside
-            // the event window (the eventX/eventY go negative or overflow,
-            // that's legal). The session's grab redirect re-targets the
-            // event to the actual grab window for ownerEvents=false grabs;
-            // for the common gesture (drag out of the popup, release on the
-            // desktop) the anchor IS the popup, so ownerEvents=true lands
-            // correctly too. Motion outside all windows is still dropped —
-            // no grabbed client gets motion off every window in our rootless
-            // model, and a stream of off-window Motion events would just be
-            // noise.
-            if isUp, let anchorId = dragAnchorWindowId,
+            // Both motion and release have to reach the grabbing client
+            // while a grab is active. Route to the last top-level the
+            // pointer was over during this grab (dragAnchorWindowId), with
+            // coords measured relative to that window. The point lands
+            // outside the window's bounds, which is exactly how real X
+            // reports input outside the event window: eventX/eventY go
+            // negative or overflow, that's legal. The session's grab
+            // redirect re-targets the event to the actual grab window for
+            // ownerEvents=false grabs; for the common popup-menu gesture
+            // (drag out, release on desktop) the anchor IS the popup, so
+            // ownerEvents=true lands correctly too.
+            //
+            // Two gestures motivate this:
+            //   - xterm/Motif popup menu: ButtonRelease anywhere outside
+            //     the popup IS the dismiss signal. Without it the menu
+            //     orphans on screen.
+            //   - xterm Athena Scrollbar thumb drag: client needs
+            //     continuous MotionNotify while the button is held so
+            //     scrolling tracks the cursor even when it wanders off
+            //     the xterm window. The earlier "motion off all windows
+            //     is just noise" theory missed grab-based widgets that
+            //     legitimately need every Motion.
+            //
+            // dragAnchorWindowId is only non-nil while an X grab is
+            // active, so non-grab drags are unaffected.
+            if let anchorId = dragAnchorWindowId,
                let anchorView = slot(anchorId)?.view,
                let anchorWin = anchorView.window {
                 let bs = NSScreen.main?.backingScaleFactor ?? 2.0
@@ -3619,8 +3624,13 @@ extension CocoaWindowBridge {
                 let viewPt = anchorView.convert(windowPt, from: nil)
                 let logicalX = Int16(clamping: Int((viewPt.x * bs / CGFloat(scaleFactor)).rounded()))
                 let logicalY = Int16(clamping: Int((viewPt.y * bs / CGFloat(scaleFactor)).rounded()))
-                fireMouse(id: anchorId, x: logicalX, y: logicalY,
-                          button: button, isDown: false, mods: mods)
+                if isUp {
+                    fireMouse(id: anchorId, x: logicalX, y: logicalY,
+                              button: button, isDown: false, mods: mods)
+                } else {
+                    fireMouseDragged(id: anchorId, x: logicalX, y: logicalY,
+                                     button: button, mods: mods)
+                }
             }
             dragLastWindowId = nil
         }
