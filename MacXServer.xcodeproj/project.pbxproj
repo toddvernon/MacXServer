@@ -1676,7 +1676,7 @@
 					"@executable_path/../Frameworks",
 				);
 				CURRENT_PROJECT_VERSION = 1;
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.9.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.server;
 				PRODUCT_NAME = MacXServer;
 				SDKROOT = macosx;
@@ -1699,7 +1699,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.9.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.Framer;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1850,7 +1850,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.9.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.SwiftXServerCore;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1870,7 +1870,7 @@
 					"@executable_path/../Frameworks",
 				);
 				CURRENT_PROJECT_VERSION = 1;
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.9.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.capture;
 				PRODUCT_NAME = MacXCapture;
 				SDKROOT = macosx;
@@ -1893,7 +1893,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.9.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.SwiftXCaptureUI;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1913,7 +1913,7 @@
 					"@executable_path/../Frameworks",
 				);
 				CURRENT_PROJECT_VERSION = 1;
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.9.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.server;
 				PRODUCT_NAME = MacXServer;
 				SDKROOT = macosx;
@@ -1936,7 +1936,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.9.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.SwiftXServerCore;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1960,7 +1960,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.9.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.SwiftXCaptureCore;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1984,7 +1984,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.9.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.SwiftXCaptureCore;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -2008,7 +2008,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.9.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.SwiftXCaptureUI;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -2032,7 +2032,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.9.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.Framer;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -2052,7 +2052,7 @@
 					"@executable_path/../Frameworks",
 				);
 				CURRENT_PROJECT_VERSION = 1;
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.9.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.capture;
 				PRODUCT_NAME = MacXCapture;
 				SDKROOT = macosx;
