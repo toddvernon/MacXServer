@@ -278,6 +278,202 @@ that ships with the app." Roughly an ordered punch list.
 - **Marketing line.** "The vintage Sun environment that runs on
   your laptop. No setup, no install, no Sun hardware required."
 
+## File plane architecture (Helios enablement)
+
+The bundled-QEMU posture creates an opportunity Helios couldn't fully
+exploit on bare-metal Suns: the Mac IS the NAS, and the AI dev loop
+benefits from broad filesystem visibility into the guest. This section
+captures the design direction; implementation lands alongside Helios
+MVP. Background: `Helios-Mission.md`.
+
+### Mac as NAS over slirp
+
+`Helios-Mission.md` specifies NFS as the file plane (source of truth
+on a shared mount, both sides see the same bytes). On bare-metal Suns
+the NAS is a separate device. With the bundled emulator, the NAS
+becomes the Mac itself running its built-in `nfsd`, served back to
+the guest via slirp's gateway alias `10.0.2.2`. Same architecture,
+no extra hardware.
+
+Mechanics:
+
+- macOS exports a workspace via `/etc/exports` to the slirp guest's
+  fixed IP (10.0.2.15).
+- Pin `nfsd` and `mountd` to fixed ports so slirp NAT works
+  deterministically. NFS's portmapper-allocated dynamic ports are
+  otherwise painful through user-mode NAT.
+- Solaris 2.6 mounts via
+  `mount -F nfs 10.0.2.2:/export/dev /mnt/dev`, with `nolock` to
+  dodge macOS `nfsd`'s flaky locking layer.
+- uid squashing: macOS exports with `-mapall=<tvernon-uid>` so all
+  edits from the Mac side land as the guest's user regardless of
+  which Mac account wrote them. This is exactly the
+  `all_squash, anonuid=<nas-uid>` pattern Helios specifies, just
+  with macOS as the server.
+
+### Three boot architectures
+
+How much of the guest's filesystem lives on NFS versus the qcow2 is
+a spectrum, not a binary.
+
+**Option A: boot from qcow2, NFS-mount only the workspace.** One
+extra mount line in `/etc/vfstab`. AI sees the workspace; nothing
+else. Slirp is sufficient. This is the Helios MVP path and what the
+plugin v1 should ship.
+
+**Option B: boot from minimal qcow2, NFS-mount most of `/`.** Boot
+disk holds kernel, `/etc`, init scripts, NFS client tools. NFS-mount
+`/usr`, `/opt`, `/export/home`, optionally `/var/sadm`. AI has near-
+complete filesystem visibility. Slirp still works. This is the Sun
+"dataless workstation" pattern from the 1990s, when full-diskless
+was overkill but local disk was tight. Compelling middle ground for
+Helios.
+
+**Option C: full diskless. No qcow2.** Mac runs `bootparamd` +
+`tftpd` + `nfsd`, exports a complete Solaris root. QEMU boots via
+`-netdev vmnet-shared` (Apple's vmnet.framework, supported since
+QEMU 7.x; prompts the user for permission once, no kext). OpenBOOT
+issues `boot net`. The whole filesystem lives on the Mac. AI has
+total visibility, including ability to edit `/etc/init.d` scripts
+and watch them take effect on next boot. Most authentic Sun-
+datacenter setup, biggest infrastructure lift, and requires layer-2
+networking rather than slirp.
+
+The shipping product picks A. Helios mode picks B (with the
+workarounds below) or C. They share most of the NFS infrastructure;
+the diff is the boot path and the network mode.
+
+### Option B blind spots and workarounds
+
+What stays opaque on the qcow2 in Option B clusters into "system-
+level state" rather than "dev-level state." For Helios's MVP loop
+(write source, build, run, observe) nothing important is lost. Where
+it hurts is anything sysadmin-flavored.
+
+Opaque from the Mac in Option B:
+
+- **`/etc/*` system config.** `passwd`/`shadow`/`group`,
+  `inetd.conf`, `rcS.d`/`rc2.d`/`rc3.d` init scripts, `vfstab`,
+  `system`, `cron.d`, `nsswitch.conf`, `resolv.conf`,
+  `profile`/`.login`, `dt/*` CDE defaults.
+- **`/var/adm/messages` and `/var/log/*`.** Syslog and system logs.
+  AI can't watch kernel messages, login failures, daemon errors from
+  the Mac side without terminal puppetry, exactly when diagnosis
+  benefits most from instant file access.
+- **`/var/sadm/install/contents`.** Solaris package database. Can't
+  see installed packages without running `pkginfo` over the
+  terminal.
+- **`/sbin`, `/kernel`, `/dev`, `/devices`, `/proc`.** Kernel-
+  special or boot-time. AI doesn't need to edit these.
+
+Cheap workarounds that close the worst gaps without going to
+Option C:
+
+1. **Symlink logs into NFS-visible space at image-prep time.**
+   `mv /var/adm/messages /export/dev/sys/messages` then
+   `ln -s /export/dev/sys/messages /var/adm/messages`. Syslogd
+   writes through the symlink; the file lives on NFS; AI reads it
+   instantly from the Mac. Same trick for the inetd log and any
+   other chatty daemon log.
+2. **Symlink selected `/etc` config to NFS.** Snapshot
+   `/etc/inetd.conf`, `/etc/services`, `/etc/hosts` into
+   `/export/dev/sysconf/` and symlink them back. Safe for service-
+   config files. Do NOT do this for `passwd`/`shadow` (PAM cares
+   about the actual inode).
+3. **Pre-stage a system-snapshot script.** A Sun-side script dumping
+   interesting state to NFS:
+   `pkginfo > /export/dev/sys/installed`,
+   `netstat -rn > .../routes`, etc. Run on boot and on demand. AI
+   reads snapshot files instantly without terminal use.
+4. **NFS-mount `/var/sadm` directly.** Post-boot stable, doesn't
+   need to be local. AI gets read access to the package database.
+
+With those four additions, Option B reaches roughly 90% of Option C's
+visibility without the vmnet/bootparamd/tftpd lift. The shipping
+posture for Helios mode is probably "Option B+" rather than B or C.
+
+### NFS-mounted tools directory
+
+The same NFS plane that enables file sharing also enables tool
+extension. Sun's `/opt` convention was designed for exactly this:
+self-contained package tree, no `pkgadd` ceremony, no reboot, no
+package database. The plugin ports the convention onto the Mac side.
+
+Structure:
+
+```
+/export/dev/tools/
+  bin/      cross-compiled SPARC binaries: gcc, gmake, gdb, bash, less, gawk, gsed
+  lib/      shared libs (or build static, sidesteps dependency hell)
+  share/    man pages, headers, gcc support files
+  etc/      tool config
+  agent/    AI-curated scripts: ai-syscheck, ai-pkglist, ai-tail-messages
+```
+
+Mac side owns the entire tree. Drop a binary, the guest sees it on
+next invocation. Remove a broken tool, same deal. AI iterates on its
+own tooling without rebuilding the disk image.
+
+PATH baked into `/etc/profile` at image-prep time:
+
+```sh
+PATH=/export/dev/tools/bin:$PATH
+MANPATH=/export/dev/tools/share/man:$MANPATH
+LD_LIBRARY_PATH=/export/dev/tools/lib:$LD_LIBRARY_PATH
+export PATH MANPATH LD_LIBRARY_PATH
+```
+
+One terminal edit at image-prep, then permanent for every login.
+
+System prompt to AI: "Sun-side tools are in `/export/dev/tools/bin`.
+Prefer those over `/usr/ucb` and `/usr/bin` equivalents when both
+exist; the curated set is GNU-ish, the shipped set is Sun-1996-ish."
+That single sentence dissolves most of the Sun-shell-quirks guidance
+in `Helios-Mission.md`. AI defaults to bash, gmake, gawk, GNU sed and
+only falls back to the Sun originals when something specifically needs
+them.
+
+Seed tools worth shipping in the bundle:
+
+- **gcc-3.x or gcc-4.x for `sparc-sun-solaris2.6`.** Sunfreeware /
+  Blastwave-era binaries exist. The shipped Sun `cc` on a 2.6 install
+  is the unbundled K&R cc (SunPro C was a paid add-on most installs
+  lacked). Modern GCC is transformative: ANSI C, real warnings AI can
+  act on, decent error messages, C++.
+- **GNU make.** Solaris `make` lacks `$<` in non-suffix rules plus
+  other GNU-isms AI expects.
+- **bash.** AI's training is overwhelmingly bash-shaped; bash on the
+  Sun removes a whole category of "use backticks not `$()`"
+  corrections.
+- **gdb.** AI's debugger fluency is gdb-shaped, not dbx-shaped.
+- **AI-side toolkit.** `ai-syscheck`, `ai-pkglist`, `ai-tail-messages`:
+  small scripts wrapping Sun tools and dumping output to NFS-readable
+  files. Closes the Option B sysadmin gaps without terminal puppetry.
+
+Real gotchas:
+
+1. **NFS mounts often default to `nosuid`.** Setuid binaries on the
+   share won't escalate. Not a problem for compilers/editors, but
+   blocks `sudo`-like behavior from dropped-in tools. Consider
+   whether the tools mount should drop `nosuid` (and accept the
+   security posture).
+2. **Static linking strongly preferred for seeded tools.** Sun's
+   `libc.so.1` on 2.6 has specific symbol versions; cross-compiled
+   binaries against a different libc fail at runtime in weird ways.
+   `-static` or `-Bstatic` sidesteps the dependency hell. Bigger
+   binaries, but it's NFS not floppy.
+3. **`LD_LIBRARY_PATH` is the escape valve when static doesn't work.**
+   Pre-set in `/etc/profile`, point at `/export/dev/tools/lib`.
+   Dynamically-linked dropped-in tools find their bundled libs
+   without polluting `/usr/lib`.
+
+Shipping story: the plugin includes a pre-built `/export/dev/tools/`
+tree as a resource in the .app bundle, copied to writable storage on
+first launch alongside the qcow2. Out-of-the-box the user (or AI) has
+a modern toolchain on the bundled SS-5 without compiling anything.
+Much more delightful than "you've got a vintage Solaris box, now go
+figure out how to install gcc on it."
+
 ## Open questions
 
 Things we've thought about but not decided. Each blocks a phase but
