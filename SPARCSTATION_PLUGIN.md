@@ -278,6 +278,178 @@ that ships with the app." Roughly an ordered punch list.
 - **Marketing line.** "The vintage Sun environment that runs on
   your laptop. No setup, no install, no Sun hardware required."
 
+## Distribution and bundling mechanics
+
+How the user gets from "downloaded macXserver" to "booted CDE desktop"
+without homebrew, Terminal, or any setup step. This section captures
+direction from a 2026-06-16 conversation; nothing here is code yet.
+
+### Plugin-as-downloadable-bundle (UX shape)
+
+Keep macXserver's base download small. The SPARCstation parts are an
+optional payload the app pulls down on demand from the OldSilicon CDN
+(which already distributes the disk image). The plugin framing from
+Todd's original sketch maps cleanly onto this distribution shape: the
+plugin literally is a separately-downloaded, separately-versioned
+bundle that drops into Application Support.
+
+Plugin bundle on disk:
+
+```
+~/Library/Application Support/macXserver/Plugins/
+  SPARCstation.macxplugin/
+    Info.plist           name, version, sha256 of each payload, min macXserver version
+    qemu-system-sparc    notarized, hardened-runtime, JIT entitled (see signing below)
+    openbios-sparc32     ROM
+    lib/                 bundled dylibs (see bundling mechanics below)
+    SS5-cde-ready.qcow2  Solaris 2.6 image with a savevm snapshot named "cde-ready"
+```
+
+Self-contained: no PATH leakage, no system mutations, removable with
+one `rm -rf`. Disk image gets copied out to a writable path on first
+boot so the plugin bundle itself stays read-only / re-installable
+without nuking user state.
+
+Distribution: a single `.tar.gz` of the plugin plus a tiny
+`manifest.json` (version, URL, sha256, size) hosted alongside it.
+macXserver fetches the manifest only when the user clicks Install. No
+background polling, no telemetry on first launch.
+
+Install flow inside macXserver:
+
+- `macXserver → Install SPARCstation Plugin…` opens a sheet: "Adds a
+  working SPARCstation 5 with Solaris 2.6 and CDE. ~350 MB download.
+  From oldsilicon.com."
+- Click Install: NSURLSession streams the tarball with a progress
+  bar, SHA256 verified against the manifest before unpacking, atomic
+  move into Application Support.
+- After install, a `Window → Boot SPARCstation 5` menu item appears
+  and a launcher entry auto-materializes (`[host:sparcstation-local]`
+  with `display = 10.0.2.2:0`, `host = 127.0.0.1`, dynamically
+  chosen port).
+
+Boot UX: click Boot, macXserver spawns the bundled QEMU with
+`-loadvm cde-ready -qmp unix:...`. With a saved-state snapshot the
+user is at CDE in ~2 seconds. No "VM is starting" modal, no boot
+console.
+
+Updates and removal: `macXserver → Manage Plugins…` lists installed
+plugins with version, "Check for Update", and "Uninstall" buttons.
+Same download mechanism for updates; not Sparkle, just the same ~200
+lines of NSURLSession + sha256 verification.
+
+Alternatives considered:
+
+- **Two .app downloads** (`macXserver.app` vs
+  `macXserver-SPARCstation.app`). Simpler — no plugin loader to
+  write, two separately notarized builds. Cost: discoverability
+  ("did I download the right one?") and the release pipeline
+  doubles. Lean: no.
+- **Everything embedded in one fat .app.** Eliminates the install
+  flow entirely but every SSH-to-real-Sun user pays ~400 MB on the
+  base download. Breaks the "macXserver is small" character of the
+  product. Lean: no.
+- **Sparkle for the plugin.** Overkill — Sparkle is for app updates,
+  not optional content. Roll-your-own keeps the dependency surface
+  tight. Lean: no.
+
+### QEMU bundling mechanics (the homebrew-style dep tree problem)
+
+Homebrew's QEMU is a fat developer install: every target, every UI
+backend, every codec, every optional feature, ~30 dylibs of deps.
+None of that is what we want to ship. The right move is to NOT ship
+the homebrew binary at all; build our own trimmed QEMU and bundle the
+few surviving dylibs into the plugin.
+
+**Step 1: collapse the dep list at configure time.** For headless
+SPARC-only QEMU driving slirp networking, almost every homebrew dep
+is dead weight:
+
+```
+./configure --target-list=sparc-softmmu \
+  --enable-tcg --enable-slirp=internal \
+  --disable-sdl --disable-gtk --disable-cocoa --disable-curses --disable-vnc \
+  --disable-opengl --disable-virglrenderer --disable-spice \
+  --disable-gnutls --disable-nettle --disable-gcrypt \
+  --disable-libssh --disable-curl --disable-libnfs --disable-libusb \
+  --disable-bzip2 --disable-lzo --disable-snappy --disable-libxml2 \
+  --disable-rdma --disable-vde --disable-vhost-net --disable-docs \
+  --disable-tools --disable-guest-agent --disable-capstone
+```
+
+`--enable-slirp=internal` bakes the slirp library in so it's not an
+external dep. After this, `otool -L qemu-system-sparc` typically
+shows:
+
+- `libglib-2.0` + `libgobject-2.0` + `libgio-2.0` + `libgmodule-2.0`
+  (glib bundle)
+- `libpixman-1`
+- `libintl`, `libpcre2`, `libffi` (glib's deps)
+- `libz`, `libiconv`, `libSystem`, `libc++` (system; don't bundle)
+
+That's ~5 non-system dylibs. Stripped binary ~8 MB, bundled deps add
+~5 MB, total ~15 MB in the binary layer. Disk image dominates the
+download.
+
+**Step 2: bundle the surviving dylibs with `@executable_path`
+rewriting.** Standard macOS pattern: copy the dylibs into the plugin
+and rewrite the binary's install names to load them from
+`@executable_path/lib/`. Use the actively-maintained
+`auriamg/macdylibbundler` (brew-installable, build-time tool only,
+never shipped):
+
+```sh
+dylibbundler -od -b -x ./SPARCstation.macxplugin/qemu-system-sparc \
+             -d  ./SPARCstation.macxplugin/lib/ \
+             -p  '@executable_path/lib/'
+```
+
+It walks the dep graph transitively, copies every non-system dylib
+into `lib/`, rewrites every `LC_LOAD_DYLIB` to
+`@executable_path/lib/libfoo.dylib`. Sanity check after: `otool -L`
+on the binary; every entry should point at `@executable_path/lib/`
+or a system path under `/usr/lib/` or `/System/`. Anything pointing
+at `/opt/homebrew/…` or `/usr/local/…` is a leak that breaks on the
+customer's machine — the most common "ship a Mac app with bundled
+CLI tools" bug.
+
+**Step 3: build from source, not from homebrew.** Homebrew's QEMU
+package and its deps roll forward weekly. For a shippable binary we
+want determinism: a `build-qemu-plugin.sh` that fetches pinned
+tarballs for QEMU + glib + pixman + libffi + libpcre2, builds each
+into a private prefix, links QEMU against the private prefix, runs
+dylibbundler against the result. Reproducible across machines and
+releases. The script doubles as build documentation. Setup is
+roughly a one-afternoon job; reruns are ~5 minutes.
+
+**Step 4: codesign in the right order.** Codesign is recursive but
+fiddly. The drill:
+
+1. Sign each `.dylib` in `lib/` with Developer ID Application,
+   hardened runtime, no entitlements.
+2. Sign `qemu-system-sparc` with hardened runtime + JIT entitlements
+   (`com.apple.security.cs.allow-jit`,
+   `com.apple.security.cs.allow-unsigned-executable-memory`). TCG on
+   Apple Silicon needs JIT or it falls back to interpreter and
+   bootup goes from 90 seconds to 10+ minutes. This is the bug that
+   eats release week if discovered late.
+3. Bundle plugin into `.tar.gz`, hash it, ship.
+4. Notarize the macXserver .app as normal; plugin contents are
+   evaluated by Gatekeeper at expand time if signed by the same Team
+   ID. Plugin tarball can also be notarized separately as a `.dmg`;
+   mostly aesthetic.
+
+Skipping step 1 (one unsigned `libglib-2.0.dylib`) means Gatekeeper
+kills the binary at load time on the customer machine and the user
+sees "Cannot open SPARCstation plugin." Easy to miss in dev because
+the homebrew copy is on the dyld search path.
+
+**Final sanity test before any release:** clean Mac (or fresh user
+account), drag the .app, install the plugin, click Boot. The
+homebrew `qemu-system-sparc` and dylibs must not exist anywhere on
+the test machine. If anything links to `/opt/homebrew` or
+`/usr/local` it'll fail here, not in dev.
+
 ## File plane architecture (Helios enablement)
 
 The bundled-QEMU posture creates an opportunity Helios couldn't fully
