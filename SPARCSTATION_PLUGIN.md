@@ -163,6 +163,48 @@ and hardened runtime makes it ignore any `DYLD_*` override. The audit
 is `otool -L` showing zero `/opt/homebrew` or `/usr/local` paths,
 verified on a clean account with no homebrew.
 
+## Next milestone: shippable plugin v1 (do this BEFORE Helios)
+
+This is the agreed next batch of work, decided 2026-06-16. It comes
+before any Helios work. Helios (`Helios-Mission.md`) sits on top of this
+substrate and is explicitly NOT started until plugin v1 ships; a future
+session may discuss Helios but should not implement any of it until the
+three deliverables below are done.
+
+Plugin v1 is the first end-to-end shippable form: a user downloads one
+app, installs the disk image from a menu, and boots a working
+SPARCstation with the console visible. No AI, no Helios.
+
+**Deliverable 1: a shippable app binary with the engine built in, no
+disk image.** Bundle SparkPlug's `qemu-system-sparc` + glib dylibs into
+`MacXServer.app` (`Contents/Helpers/` + `Contents/Frameworks/`), run the
+`dylibbundler` relink (zero `/opt/homebrew` paths), codesign with the
+JIT entitlements, and notarize as part of the normal app release. Result
+is one uploadable `.app` that carries the engine but NOT the ~250 MB
+qcow2. This is the code-vs-data seam from the decisions above made real.
+
+**Deliverable 2: the menu installs the disk image on demand.** Before
+install the SparkPlug menu offers only "Install SparkPlug" (or similar).
+Selecting it downloads the gzipped Solaris image (~250 MB), verifies its
+sha256, and decompresses it to `~/Library/Application Support/macXserver/`
+(absolute path, never relative to the bundle). Once present, the menu
+flips to "Run SparkPlug" and the SparkPlug launcher entry un-grays. State
+keys off "is the qcow2 in Application Support."
+
+**Deliverable 3: launch with an observation window + enable the
+launcher.** "Run SparkPlug" spawns the bundled engine as a subprocess
+(`-nographic` serial console) and routes that console stream into an
+observation window in macXserver so the user can watch the boot and the
+serial console. When it's up, the SparkPlug launcher entry is enabled so
+the user can launch X clients (xterm, CDE) into the guest, which render
+through macXserver as normal. The observation window is also the
+foundation Helios later builds its split-window terminal on, but for v1
+it's just a read-only console view.
+
+Acceptance: on a clean Mac with no homebrew, drag the app in, "Install
+SparkPlug" (downloads image), "Run SparkPlug" (boots, console visible in
+the observation window, launcher enabled), launch xterm into the guest.
+
 ## Working recipe (technical reference)
 
 The configuration that survived an afternoon of bring-up. Everything
