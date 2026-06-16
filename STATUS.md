@@ -1,10 +1,18 @@
 # Status 2026-06-16
 
-Short doc-only day. One commit (`f2047c7`) expanded
-`SPARCSTATION_PLUGIN.md` with a new "Distribution and bundling
-mechanics" section, capturing direction from an afternoon conversation
-about "how does the user get from downloaded macXserver to booted CDE
-desktop without homebrew or Terminal."
+Two-half day. Morning was design conversation captured as docs
+(distribution and bundling mechanics for the SPARCstation plugin).
+Afternoon was hands-on QEMU bring-up — converged the persistent
+guest-side network config into a canonical bourne script that turns
+any Solaris 2.6 SPARC install into the slirp-shaped baseline. No
+macXserver code or tests touched; everything landed in
+`SPARCSTATION_PLUGIN.md` and a new `Tools/` script.
+
+## Morning: distribution and bundling mechanics (doc)
+
+Commit `f2047c7` expanded `SPARCSTATION_PLUGIN.md` with a new section
+capturing the answer to "how does the user get from downloaded
+macXserver to booted CDE desktop without homebrew or Terminal."
 
 Two threads in the new section:
 
@@ -44,15 +52,110 @@ any release: clean Mac (no homebrew), drag the .app, install plugin,
 boot. If `otool -L` shows any `/opt/homebrew` or `/usr/local` path,
 it's broken on the customer's machine.
 
+## Afternoon: QEMU guest network bring-up + canonical baseline script
+
+Spent the afternoon getting the Solaris 2.6 SPARC guest's networking
+to actually work end-to-end through slirp NAT — outbound TCP/UDP,
+DNS, default route persistence — and converged the working state
+into a single bourne script (`Tools/sparcstation-baseline-config.sh`)
+that turns any Solaris 2.6 install into the slirp-shaped baseline.
+
+The bring-up arc, in order of what bit us:
+
+1. **`ping` from guest returned "Network unreachable" from the
+   guest's own IP.** Diagnosis: missing default route entirely, not
+   slirp blocking ICMP. Runtime fix `route add default 10.0.2.2`;
+   persistent fix `/etc/defaultrouter` = `10.0.2.2`.
+2. **`nslookup google.com` (using the documented slirp stub at
+   `10.0.2.3`) hung.** Diagnosis: libslirp's macOS stub forwarder
+   reads system DNS via SystemConfiguration framework and frequently
+   comes up empty, so the stub at `10.0.2.3` has nothing to forward
+   to. Workaround: skip the stub, point `/etc/resolv.conf` at public
+   DNS (`8.8.8.8`) or any reachable resolver directly. UDP NAT
+   through slirp itself is fine; just the stub forwarder is broken.
+3. **Pointing `/etc/resolv.conf` at Todd's LAN DNS box
+   (`192.168.7.3`) failed "Network unreachable" again.** Diagnosis:
+   the disk image had a leftover `/etc/defaultrouter` entry from
+   when it ran on real hardware on Todd's LAN, so the boot installed
+   two default routes — `10.0.2.2` AND `192.168.7.1`. Solaris's
+   route picker preferred the LAN gateway because the destination
+   was in the same `/24` as it, but `192.168.7.1` itself was
+   unreachable from inside slirp. Fix: strip `192.168.7.1` from
+   `/etc/defaultrouter`.
+4. **First clean reboot showed `add net default: gateway 10.0.2.2:
+   Network is unreachable` during boot.** Diagnosis: `le0` was
+   coming up at `192.168.7.16` (per a stale `/etc/hostname.le0` that
+   resolved to the LAN address via `/etc/hosts`), so `10.0.2.2`
+   wasn't on any reachable subnet at the moment `inetinit` tried to
+   install the route. Two persistent fixes needed: `/etc/hostname.le0`
+   set to literal `10.0.2.15`, and `/etc/inet/netmasks` told that
+   `10.0.0.0` is a `/24` so the netmask is correct at first plumb.
+   Also added a belt-and-suspenders late-boot script
+   (`/etc/init.d/defaultroute` + `S99` symlink) that re-adds the
+   route after everything else has settled, in case inetinit races
+   on a future QEMU/Solaris combo.
+5. **Backspace/delete key echoed `^H` instead of erasing.** xterm
+   sends `^H` for the BackSpace keysym by default; Solaris's stty
+   erase defaults to `^?`. Fix: `stty erase ^H` in `/etc/profile`.
+   (Other choice: tell xterm to send `^?` via `*VT100.backarrowKey:
+   false`. Picked the stty side because Solaris's whole toolchain
+   assumes `^H` is backspace.)
+
+Todd asked me to capture the converged config as a bourne script
+he could paste and re-run rather than hand-applying. First cut had
+two Solaris-2.6 portability bugs (`id -u` doesn't exist on Solaris
+2.6; heredocs were sometimes mangled by serial paste). Second cut
+replaced heredocs with sequential `echo > file` / `echo >> file`,
+swapped the root check to `case "\`id\`" in uid=0\(*) ...`, made
+every step echo its own progress line. That cut worked. Saved
+as `Tools/sparcstation-baseline-config.sh`. The doc's
+"Guest-side Solaris configuration" subsection now points at the
+script as canonical and summarizes what it does without restating
+all eight edits.
+
+Todd's UX framing for the shipped plugin: at install time, the
+plugin should ask the user "Which DNS server?" with a default of
+`8.8.8.8 / 1.1.1.1` and an override field for their own resolver
+(pi-hole, corporate DNS, LAN DNS box). The chosen value is baked
+into the writable `/etc/resolv.conf` on the qcow2 before first
+boot. That captures it in the doc's install-flow section. The
+Mac-side DNS forwarder daemon idea is captured under "Alternatives
+considered" — defer to v2 networking, not worth shipping in v1
+because we'd be replicating the same libslirp stub that's broken
+on macOS and started this whole detour.
+
+Also worth noting from the bring-up:
+
+- **Slirp blocks ICMP by design.** Ping never works through slirp,
+  even when everything else is fine. Test with `telnet host 80`,
+  not ping. Already documented in the gotchas section; this
+  afternoon reinforced it.
+- **Solaris 2.6 nslookup does a reverse-PTR on the server IP
+  before forward queries.** When the resolver has no PTR (private
+  IPs, slirp's stub, LAN DNS boxes), nslookup prints "Default
+  servers are not available" — cosmetic, not a real failure.
+  `telnet host 80` is the real test of `gethostbyname`.
+- **Solaris's `id` doesn't take `-u`.** Use `case "\`id\`" in
+  uid=0\(*) ...` for root checks in portable bourne scripts.
+- **Disk-image config inertia is real.** Anything the image was
+  configured for on its previous host (LAN IP, defaultrouter,
+  hostname-to-IP mapping in /etc/hosts) survives moving to QEMU
+  and quietly fights every workaround you try.
+
 ## Today's commits
 
 - `f2047c7` — Docs: SPARCSTATION_PLUGIN — distribution and bundling mechanics
+- `85d3560` — STATUS: roll forward to 2026-06-16
+- (pending) Tools/ baseline script + doc references + DNS install-UX
 
-One commit, doc-only, not a release driver. No code change, no test
-change, no protocol change. SPARCSTATION_PLUGIN.md continues to
-function as the forward-looking direction doc for the bundled-emulator
-product surface; today's section moves it from "we have a working
-recipe" to "we know the distribution and packaging shape."
+Doc-only day. No macXserver code, no tests, no protocol. The new
+shell script is build-time tooling for the disk image, not part of
+the shipped app. SPARCSTATION_PLUGIN.md moved from "we know the
+distribution shape" (this morning) to "we have a canonical, tested
+bring-up recipe" (this afternoon). The plugin's Phase 1 bundling
+work now has a concrete starting point — the script's output is
+exactly what wants to be `savevm`'d as the shipped `cde-ready`
+snapshot.
 
 ---
 

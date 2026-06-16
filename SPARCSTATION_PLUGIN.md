@@ -113,20 +113,45 @@ Flag-by-flag:
 
 ### Guest-side Solaris configuration
 
-The disk image needs three persistent changes to come up networked
-correctly for slirp. All under `/etc`:
+The full set of edits needed to turn a generic Solaris 2.6 install
+into a slirp-shaped baseline lives in
+`Tools/sparcstation-baseline-config.sh`. The script is canonical;
+this section just sketches what it does so the recipe is readable
+without opening the file.
 
-- `/etc/hostname.le0` contains `10.0.2.15`. This is the address slirp
-  expects to find the guest at. Solaris brings `le0` up with this
-  static address at boot.
+What ends up on the guest:
+
+- `/etc/hostname.le0` contains `10.0.2.15`. Slirp's `hostfwd` rewrites
+  inbound packets with destination IP `10.0.2.15:N`; if le0 is on any
+  other address Solaris drops them at the IP layer.
+- `/etc/hosts` maps `10.0.2.15` to the guest's hostname (also includes
+  `loghost` alias so syslogd is happy).
+- `/etc/inet/netmasks` has an entry for `10.0.0.0 255.255.255.0` so
+  le0 comes up at first plumb with the correct `/24` mask instead of
+  class-A default.
 - `/etc/defaultrouter` contains `10.0.2.2`. Slirp's gateway alias.
-- `/etc/nodename` contains the hostname (`PiSPARC` in Todd's image,
-  whatever you want for a shippable one).
+- `/etc/init.d/defaultroute` + `/etc/rc3.d/S99defaultroute` re-adds
+  the default route late in boot. `inetinit`'s `/etc/defaultrouter`
+  handling races against interface bring-up in some QEMU/Solaris
+  combos and silently fails with "Network is unreachable"; the S99
+  script catches that case. Harmless if `inetinit` already succeeded
+  (kernel rejects the duplicate).
+- `/etc/resolv.conf` points at public DNS (`8.8.8.8` + `1.1.1.1`) so
+  the image works on any network. The plugin install UX may want to
+  let the user override this — see the Distribution section.
+- `/etc/nsswitch.conf` `hosts:` line includes `dns` so libc's
+  `gethostbyname` consults the resolver (Solaris 2.6 defaults to
+  `files nis` only).
+- `/etc/profile` runs `stty erase ^H` so the Mac Delete key erases
+  instead of echoing `^H` (xterm sends `^H` for the BackSpace keysym
+  by default).
 
-Why the static IP matches slirp's expected guest address: slirp's
-`hostfwd` rewrites inbound packets with destination IP `10.0.2.15:N`.
-If the guest's `le0` is on any other address, Solaris drops the
-packets at the IP layer because the destination isn't ours.
+The script backs up every file it touches to
+`/var/tmp/macxserver-baseline-backup/` before overwriting, prints a
+running progress log, and is safe to re-run. Run it as root inside
+the guest, then `init 6` to verify the boot trajectory comes up clean
+(no "Network is unreachable" message, default route present in
+`netstat -rn`, `telnet google.com 80` connects). Then snapshot.
 
 ### macXserver launcher entry
 
@@ -323,6 +348,16 @@ Install flow inside macXserver:
 - Click Install: NSURLSession streams the tarball with a progress
   bar, SHA256 verified against the manifest before unpacking, atomic
   move into Application Support.
+- One small wizard question before first boot: "DNS server (optional)."
+  Default `8.8.8.8 / 1.1.1.1` (which works on any network with
+  outbound Internet); the user can override to their own resolver
+  (their pi-hole, their corporate DNS, their LAN DNS box) if they
+  have one. The chosen value gets written into the writable copy of
+  `SS5-cde-ready.qcow2`'s `/etc/resolv.conf` before the first boot
+  via a tiny one-shot guest agent OR by mounting the qcow2 on the
+  Mac side and editing the file directly (qemu-img's qcow2 driver
+  supports this offline). Saves users from rediscovering that the
+  default `8.8.8.8` is fine but suboptimal in their environment.
 - After install, a `Window → Boot SPARCstation 5` menu item appears
   and a launcher entry auto-materializes (`[host:sparcstation-local]`
   with `display = 10.0.2.2:0`, `host = 127.0.0.1`, dynamically
@@ -352,6 +387,18 @@ Alternatives considered:
 - **Sparkle for the plugin.** Overkill — Sparkle is for app updates,
   not optional content. Roll-your-own keeps the dependency surface
   tight. Lean: no.
+- **Mac-side DNS forwarder daemon at `10.0.2.3`** (or another fixed
+  slirp-internal address). Instead of baking a static
+  `/etc/resolv.conf` into the disk image, run a tiny resolver on the
+  Mac that forwards guest queries to whatever resolver the user
+  prefers, with macXserver's Preferences exposing the choice. The
+  guest's `/etc/resolv.conf` stays unchanged across user network
+  swaps (home → coffee shop → corp VPN). Costs: bind permission on
+  port 53 (sandbox awkwardness), more moving parts, replicates work
+  libslirp's stub forwarder is supposed to do (the same forwarder
+  that's broken on macOS and started this whole detour). Lean: defer
+  to "v2 networking" if the static `/etc/resolv.conf` proves too
+  brittle in the wild; not worth shipping in v1.
 
 ### QEMU bundling mechanics (the homebrew-style dep tree problem)
 
