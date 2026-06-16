@@ -1,4 +1,62 @@
-# Status 2026-06-15
+# Status 2026-06-16
+
+Short doc-only day. One commit (`f2047c7`) expanded
+`SPARCSTATION_PLUGIN.md` with a new "Distribution and bundling
+mechanics" section, capturing direction from an afternoon conversation
+about "how does the user get from downloaded macXserver to booted CDE
+desktop without homebrew or Terminal."
+
+Two threads in the new section:
+
+**Plugin-as-downloadable-bundle (UX shape).** Keep macXserver's base
+download small. The SPARCstation parts are an optional payload the
+app pulls down on demand from the OldSilicon CDN (which already
+distributes the disk image). The plugin literally is a separately-
+downloaded, separately-versioned bundle that drops into Application
+Support: `SPARCstation.macxplugin/{Info.plist, qemu-system-sparc,
+openbios-sparc32, lib/, SS5-cde-ready.qcow2}`. Self-contained,
+removable with one `rm -rf`. Install flow inside macXserver is one
+menu item, a progress sheet, sha256-verified download, atomic move.
+After install, `Window → Boot SPARCstation 5` appears; with the saved
+snapshot, the user is at CDE in ~2 seconds. Alternatives considered
+and rejected: two .app downloads (discoverability cost, doubled
+release pipeline), everything embedded in a fat .app (~400 MB base
+download, breaks the "macXserver is small" character), Sparkle
+(overkill for optional content).
+
+**QEMU bundling mechanics (the homebrew-style dep tree problem).**
+Homebrew QEMU pulls in ~30 dylibs of deps because it ships every
+target and every optional feature; our shipped build doesn't need any
+of that. Trimmed configure (sparc-softmmu only,
+`--enable-slirp=internal`, disable every UI / codec / optional
+feature) collapses the surviving dep list to ~5: glib + gobject +
+gio + gmodule, pixman, libintl, libpcre2, libffi. Stripped binary
+~8 MB, bundled deps ~5 MB. `auriamg/macdylibbundler` does the
+`@executable_path/lib/` rewriting mechanically. From-source build
+(NOT homebrew) for determinism: a `build-qemu-plugin.sh` with pinned
+tarballs, ~5 minute reruns. Codesign order matters: dylibs first
+(Developer ID, hardened runtime, no entitlements), then the binary
+(hardened runtime + JIT entitlements `com.apple.security.cs.allow-jit`
+and `com.apple.security.cs.allow-unsigned-executable-memory`). JIT is
+mandatory: without it TCG falls back to interpreter and Solaris
+bootup goes from 90 seconds to 10+ minutes. Final sanity test before
+any release: clean Mac (no homebrew), drag the .app, install plugin,
+boot. If `otool -L` shows any `/opt/homebrew` or `/usr/local` path,
+it's broken on the customer's machine.
+
+## Today's commits
+
+- `f2047c7` — Docs: SPARCSTATION_PLUGIN — distribution and bundling mechanics
+
+One commit, doc-only, not a release driver. No code change, no test
+change, no protocol change. SPARCSTATION_PLUGIN.md continues to
+function as the forward-looking direction doc for the bundled-emulator
+product surface; today's section moves it from "we have a working
+recipe" to "we know the distribution and packaging shape."
+
+---
+
+## Preserved below: 2026-06-15
 
 Single small follow-up to yesterday's xterm-scrollbar work. Todd
 noticed that dragging the xterm scrollbar thumb stopped tracking the
