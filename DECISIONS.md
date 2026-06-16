@@ -846,6 +846,26 @@ The implementation lives at `CocoaWindowBridge.applyTransientForOnMain` / `resto
 
 ---
 
+## 2026-06-16: SparkPlug — engine bundled in the app, QEMU source in a separate repo
+
+**Chosen**: Ship the bundled SPARCstation as one notarized `MacXServer.app`. The QEMU engine (`qemu-system-sparc` + glib dylibs) lives *inside* the app as a nested helper executable, spawned as a subprocess. The QEMU source lives in its own standalone private repo, `github.com:toddvernon/SparkPlug` (vendored qemu-9.2.4, not a fork). Only the Solaris disk image is downloaded on demand into Application Support; the engine is always present. Full detail and the licensing posture are in `SPARCSTATION_PLUGIN.md` (the 2026-06-16 sections).
+
+**Alternatives considered**:
+
+1. **Engine in the downloadable plugin** (the original `SPARCSTATION_PLUGIN.md` plan): a self-contained `SPARCstation.macxplugin` bundle carrying the qemu binary + dylibs + image, fetched on demand.
+2. **One fused binary**: link QEMU into the macXserver process so there's a single executable.
+3. **SparkPlug source merged into the macXserver repo** (one repo for everything, since the product ships together).
+4. **A `.pkg` installer** instead of drag-to-Applications.
+
+**Why this won**:
+
+- **Code-vs-data is the right seam.** The only genuinely hard packaging problem is trusting a downloaded *executable* (Developer ID signing, notarization, JIT entitlements, hardened-runtime load checks, the no-sandbox constraint). Putting the engine in the app folds all of that into the app notarization we already run, and leaves the on-demand payload as pure *data* (no signing, no quarantine xattr via NSURLSession, no Gatekeeper prompt). The cost of coupling the engine to the app release cadence is near-zero because QEMU's sun4m emulation is frozen.
+- **Subprocess, not fused.** QEMU owns its own main loop, threads, signals, and process exit; fusing would mean two event loops fighting, would spread the JIT entitlement to the whole app and gut its hardened-runtime posture, and would couple crashes. They communicate over sockets anyway (X over slirp). The subprocess boundary also keeps the GPL clean: mere aggregation, so macXserver does not become GPL (it would be murky if fused).
+- **Separate repo.** macXserver is public and lean; SparkPlug is private and vendors 163 MB of GPLv2 QEMU. Merging would force that source public and bloat every macXserver clone forever, for a benefit (independent release) we don't need now that the engine ships with the app. The build only needs the engine *artifact*, not QEMU's source, so we couple at the build output, not the source tree. (Precedent: macXcapture co-habits the repo fine, but it's small first-party same-license code; the GPL bulk is what makes SparkPlug different.)
+- **No installer.** Drag-to-Applications survives because the engine rides in the app and the image lands in user-writable Application Support with no privileged files. A `.pkg` would add a separate Developer ID Installer cert and its own notarization for zero benefit. (One rule: read/write the image by absolute Application Support path, never relative to the bundle, so app-translocation can't hide it.)
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
