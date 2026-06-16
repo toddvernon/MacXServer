@@ -164,6 +164,47 @@ No code change for the plugin itself today beyond the launcher key
 But the proof-of-concept landed cleanly end-to-end, which means the
 remaining work is packaging and polish rather than invention.
 
+## SPARCSTATION_PLUGIN file plane architecture (late afternoon)
+
+Continued the QEMU-plugin discussion into design direction for AI
+filesystem access. Pushed `SPARCSTATION_PLUGIN.md` from "we have a
+working recipe" to "we know how to feed Helios from inside the
+bundled emulator" with one new top-level section, four subsections:
+
+- **Mac as NAS over slirp.** `Helios-Mission.md` already specifies
+  NFS as the file plane. In the bundled-emulator case the NAS is
+  just macOS `nfsd` served back to the guest via slirp's `10.0.2.2`
+  gateway. No extra hardware, no kext, no privilege escalation.
+  Mechanics noted: pin nfsd/mountd to fixed ports so slirp NAT works
+  deterministically, Solaris mounts with `nolock` to dodge macOS
+  nfsd's locking flake, `-mapall=<uid>` for the squash.
+- **Three boot architectures.** Option A (boot qcow2, NFS-mount
+  workspace only), Option B (boot minimal qcow2, NFS-mount most of
+  `/`), Option C (full diskless via `-netdev vmnet-shared` with
+  bootparamd/tftpd/nfsd on the Mac side). Shipping product picks A;
+  Helios mode picks B with workarounds or C.
+- **Option B blind spots.** What stays opaque on the qcow2 is
+  sysadmin-flavored state, not dev work. Catalogued: `/etc/*`,
+  `/var/adm/messages`, `/var/log/*`, `/var/sadm`. Plus four cheap
+  workarounds (symlink logs into NFS-visible space, symlink selected
+  `/etc` config files, system-snapshot script, NFS-mount `/var/sadm`
+  directly) that get Option B to ~90% of Option C visibility without
+  the vmnet/bootparamd/tftpd lift.
+- **NFS-mounted tools directory.**
+  `/export/dev/tools/{bin,lib,share,etc,agent}` served from the Mac.
+  Drop a binary, guest sees it on next invocation. PATH baked into
+  `/etc/profile` at image-prep. Seed with gcc-3.x/4.x for
+  `sparc-sun-solaris2.6`, gmake, bash, gdb, and an AI-side toolkit
+  (`ai-syscheck`, `ai-pkglist`, `ai-tail-messages`). System prompt
+  steers AI toward `/export/dev/tools/bin` first, which dissolves
+  most of the Sun-shell-quirks guidance in `Helios-Mission.md`.
+  Gotchas: NFS `nosuid` default, prefer static linking,
+  `LD_LIBRARY_PATH` as escape valve.
+
+Net: the plugin doc now covers the full design arc from "what landed
+today" through "how this enables Helios." No code change; one
+commit (`ec59452`).
+
 ## Today's commits
 
 - `7b30f4f` — Cross-window drag: route motion to anchor while grab is active
@@ -176,11 +217,16 @@ remaining work is packaging and polish rather than invention.
 - `5172a9d` — Project: bump default MARKETING_VERSION to 0.9.8 (post-release sync)
 - `6a5e4c0` — STATUS: note v0.9.8 shipped and release.sh post-deploy bump
 - `4f7ff3c` — Launcher: add optional `display` key for DISPLAY override
+- `77f5657` — Launchers window: open at Resources-window size
+- `6d5af9b` — Docs: SPARCSTATION_PLUGIN direction + QEMU bring-up recipe
+- `ec59452` — Docs: SPARCSTATION_PLUGIN — file plane architecture for Helios mode
 
 Three code-touching commits today (cross-window drag fix, Info.plist
 plumbing, release.sh post-deploy bump), plus four release-driven
-metadata bumps and STATUS rolls. No DECISIONS / SHORTCUTS /
-OPCODE_STATUS rolls — bridge-level routing and release tooling
+metadata bumps and STATUS rolls, plus two SPARCSTATION_PLUGIN doc
+commits (initial direction + recipe, then late-afternoon file-plane
+architecture). No DECISIONS / SHORTCUTS / OPCODE_STATUS rolls —
+bridge-level routing, release tooling, and forward-looking docs
 only, no protocol changes.
 
 ---
