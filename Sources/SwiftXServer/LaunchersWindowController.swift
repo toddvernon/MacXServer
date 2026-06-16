@@ -6,7 +6,7 @@ final class LaunchersWindowController: NSWindowController {
     init(path: String = LauncherFileLoader.defaultPath) {
         let hostingView = NSHostingView(rootView: LaunchersPanelView(path: path))
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 700, height: 480),
+            contentRect: NSRect(x: 0, y: 0, width: 1520, height: 1160),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .utilityWindow],
             backing: .buffered, defer: false
         )
