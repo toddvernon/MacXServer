@@ -45,6 +45,14 @@ public struct LauncherEntry: Equatable, Sendable {
     /// for every existing launcher; set `transport = ssh` on a host block to
     /// use ssh (key-based auth, no password injection).
     public let transport: LauncherTransport
+    /// Optional override for the `DISPLAY` value the wrapper exports before
+    /// running `command`. nil means "auto-compute from the Mac's primary
+    /// LAN IPv4 + the server's display number," which is the right answer
+    /// for any host that reaches the Mac directly. Set this when the host
+    /// can't see the Mac at its LAN IP -- the canonical case is a QEMU/slirp
+    /// guest, where the Mac is reachable as `10.0.2.2:0` from inside the
+    /// VM regardless of what the Mac's real LAN IP is.
+    public let display: String?
 
     /// Build an entry. Prompts and port carry the documented defaults when omitted.
     public init(name: String, group: String, host: String, command: String, user: String,
@@ -53,13 +61,15 @@ public struct LauncherEntry: Equatable, Sendable {
                 passwordPrompt: String = "assword:",
                 shellPrompt: String = "$ ",
                 password: String? = nil,
-                transport: LauncherTransport = .telnet) {
+                transport: LauncherTransport = .telnet,
+                display: String? = nil) {
         self.name = name; self.group = group
         self.host = host; self.command = command
         self.user = user; self.port = port; self.verbose = verbose
         self.loginPrompt = loginPrompt; self.passwordPrompt = passwordPrompt
         self.shellPrompt = shellPrompt; self.password = password
         self.transport = transport
+        self.display = display
     }
 }
 
@@ -178,7 +188,8 @@ public struct LauncherFile: Sendable {
                 passwordPrompt: merged["password_prompt"] ?? "assword:",
                 shellPrompt: merged["shell_prompt"] ?? "$ ",
                 password: merged["password"],
-                transport: transport
+                transport: transport,
+                display: merged["display"]
             ))
         }
 

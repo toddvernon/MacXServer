@@ -30,6 +30,16 @@ public enum DefaultLaunchers {
         #   shell_prompt    = substring          (default: "$ ", telnet only)
         #   password  = login password           (optional, telnet only;
         #                                         see below)
+        #   display   = host:N override          (optional; default is the
+        #                                         Mac's primary LAN IPv4 +
+        #                                         the server's display
+        #                                         number. Set this for hosts
+        #                                         that can't reach the Mac
+        #                                         at its LAN IP -- the
+        #                                         canonical case is a
+        #                                         QEMU/slirp guest, where
+        #                                         the Mac is 10.0.2.2 from
+        #                                         inside the VM.)
         #
         # Transports:
         #   - telnet (default): the original path for vintage Unix boxes

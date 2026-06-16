@@ -487,7 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func executeLaunch(entry: LauncherEntry, password: String) {
-        let display = "\(advertisedHost):\(displayNumber)"
+        let display = entry.display ?? "\(advertisedHost):\(displayNumber)"
         let launcher: RemoteLauncher
         switch entry.transport {
         case .telnet:
