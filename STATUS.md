@@ -117,6 +117,53 @@ All three signed (Developer ID Application), notarized via
 and pulled live on macxserver.com via the Hugo `appVersion` bump in
 each `release.sh` run.
 
+## QEMU SPARCstation 5 plugin proof of concept (afternoon)
+
+After the release-pipeline polish wrapped, the conversation turned to
+project direction. Out of the discussion came two threads that landed
+as code and docs the same afternoon:
+
+1. **End-to-end QEMU SS-5 plumbing.** Got `qemu-system-sparc` booting
+   Solaris 2.6 headless via serial console, slirp NAT outbound (so
+   guest X clients reach macXserver), slirp `hostfwd` inbound (so
+   macXserver's launcher can telnet into the guest), and the full
+   launcher → telnet → xterm-back-on-Mac round trip working. The
+   working go script lives at `~/Dropbox/dev/QEMU/go`; the persistent
+   Solaris-side config is `/etc/hostname.le0=10.0.2.15` +
+   `/etc/defaultrouter=10.0.2.2`.
+2. **Launcher `display` key.** The existing launcher format computes
+   `DISPLAY=<mac-lan-ip>:0` automatically, which is right for every
+   vintage Sun on the LAN but wrong for a QEMU/slirp guest (slirp
+   only exposes the Mac as `10.0.2.2` from inside the VM). Added an
+   optional `display` key that overrides the auto-computed value on
+   host blocks. Three small edits across `LauncherFile.swift`,
+   `AppDelegate.swift`, and the `DefaultLaunchers.swift` seed
+   docstring. Existing entries unchanged (key is optional). Commit
+   `4f7ff3c`.
+
+The QEMU bring-up surfaced a "we have this discussion a lot" meta-
+issue: when I add a new key to a config format, I update the seed
+file (`DefaultLaunchers.swift`) but forget to ALSO update Todd's
+actual `~/.macxserver-launchers` on disk. The seed is one-shot —
+it only fires on first launch when the dotfile is absent. Saved
+`feedback_seed_files_are_one_shot.md` as a memory so this stops
+happening.
+
+**`SPARCSTATION_PLUGIN.md`** (new, top-level) captures the full
+discussion: the product framing ("a working SPARCstation 5 in a
+Mac app"), the working recipe (QEMU flags, slirp config, Solaris-
+side persistence, launcher entry shape), the gotchas that ate time
+today, the path from proof-of-concept to shippable feature, and the
+open product questions. Sibling to `Helios-Mission.md` — both are
+forward-looking direction docs that build on the existing X-server
+substrate. The plugin direction is also the natural test substrate
+for Helios (snapshot/restore around AI experiments).
+
+No code change for the plugin itself today beyond the launcher key
+— this is documentation of a direction, not a commitment to ship it.
+But the proof-of-concept landed cleanly end-to-end, which means the
+remaining work is packaging and polish rather than invention.
+
 ## Today's commits
 
 - `7b30f4f` — Cross-window drag: route motion to anchor while grab is active
@@ -127,6 +174,8 @@ each `release.sh` run.
 - `9033504` — STATUS: note v0.9.7 shipped (About-dialog fix)
 - `062b1aa` — release.sh: auto-bump pbxproj default MARKETING_VERSION post-release
 - `5172a9d` — Project: bump default MARKETING_VERSION to 0.9.8 (post-release sync)
+- `6a5e4c0` — STATUS: note v0.9.8 shipped and release.sh post-deploy bump
+- `4f7ff3c` — Launcher: add optional `display` key for DISPLAY override
 
 Three code-touching commits today (cross-window drag fix, Info.plist
 plumbing, release.sh post-deploy bump), plus four release-driven
