@@ -87,10 +87,34 @@ public final class QemuEngine: @unchecked Sendable {
     /// chunk boundaries the pipe splits output on.
     private var consoleTail = ""
 
+    /// 0...1 boot/shutdown progress, driven by console milestones. Grows
+    /// while booting, recedes while shutting down.
+    private var progress: Double = 0
+
     private var consoleCallback: ((String) -> Void)?
     private var stateCallback: ((State) -> Void)?
     private var terminatedCallback: (() -> Void)?
     private var cleanHaltCallback: (() -> Void)?
+    private var progressCallback: ((Double) -> Void)?
+
+    /// Console substrings mapped to a boot-progress fraction. The highest
+    /// match present in the recent console wins (monotonic via max()).
+    private static let bootMilestones: [(String, Double)] = [
+        ("OpenBIOS", 0.12),
+        ("SunOS Release", 0.30),
+        ("configuring network interfaces", 0.50),
+        ("syslog service starting", 0.70),
+        ("The system is ready", 0.92),
+        ("console login:", 1.0),
+    ]
+    /// Console substrings mapped to a shutdown-progress fraction. The lowest
+    /// match present wins (monotonic recede via min()).
+    private static let shutdownMilestones: [(String, Double)] = [
+        ("The system is coming down", 0.70),
+        ("System services are now being stopped", 0.45),
+        ("The system is down", 0.20),
+        (cleanHaltMarker, 0.10),
+    ]
 
     public init(config: QemuEngineConfig) {
         self.config = config
@@ -119,6 +143,11 @@ public final class QemuEngine: @unchecked Sendable {
     /// a graceful shutdown -- the positive "safe to power off" signal.
     public func onCleanHalt(_ callback: @escaping () -> Void) {
         self.cleanHaltCallback = callback
+    }
+
+    /// Fires on the main queue with a 0...1 boot/shutdown progress value.
+    public func onProgress(_ callback: @escaping (Double) -> Void) {
+        self.progressCallback = callback
     }
 
     // MARK: - State
@@ -189,7 +218,9 @@ public final class QemuEngine: @unchecked Sendable {
                 self.loggedIn = false
                 self.sawCleanHalt = false
                 self.consoleTail = ""
+                self.progress = 0
                 self.emitState()
+                self.emitProgress()
                 let cb = self.terminatedCallback
                 DispatchQueue.main.async { cb?() }
             }
@@ -203,6 +234,7 @@ public final class QemuEngine: @unchecked Sendable {
         self.loggedIn = false
         self.sawCleanHalt = false
         self.consoleTail = ""
+        self.progress = 0
 
         do {
             try p.run()
@@ -214,7 +246,9 @@ public final class QemuEngine: @unchecked Sendable {
             throw QemuEngineError.spawnFailed(error.localizedDescription)
         }
         isRunning = true
+        progress = 0.05            // a visible sliver the moment qemu launches
         emitState()
+        emitProgress()
     }
 
     /// Graceful shutdown: send `init 5` to the (root) console. Solaris syncs,
@@ -341,8 +375,33 @@ public final class QemuEngine: @unchecked Sendable {
             DispatchQueue.main.async { cb?() }
         }
 
+        // Progress: grow on boot milestones, recede on shutdown milestones.
+        let updated = shuttingDown
+            ? min(progress, Self.matchedProgress(Self.shutdownMilestones, in: consoleTail, default: 1.0, pickLowest: true))
+            : max(progress, Self.matchedProgress(Self.bootMilestones, in: consoleTail, default: 0.0, pickLowest: false))
+        if updated != progress {
+            progress = updated
+            let pc = progressCallback
+            DispatchQueue.main.async { pc?(updated) }
+        }
+
         let cb = consoleCallback
         DispatchQueue.main.async { cb?(s) }
+    }
+
+    /// Scan `text` for milestone substrings; return the highest (boot) or
+    /// lowest (shutdown) matching fraction, or `default` if none match.
+    private static func matchedProgress(_ milestones: [(String, Double)], in text: String,
+                                        default def: Double, pickLowest: Bool) -> Double {
+        var result: Double? = nil
+        for (marker, value) in milestones where text.contains(marker) {
+            if let r = result {
+                result = pickLowest ? Swift.min(r, value) : Swift.max(r, value)
+            } else {
+                result = value
+            }
+        }
+        return result ?? def
     }
 
     /// Write to qemu's stdin (the serial console). Best-effort: the pipe may
@@ -356,5 +415,11 @@ public final class QemuEngine: @unchecked Sendable {
         let s = state
         let cb = stateCallback
         DispatchQueue.main.async { cb?(s) }
+    }
+
+    private func emitProgress() {
+        let p = progress
+        let cb = progressCallback
+        DispatchQueue.main.async { cb?(p) }
     }
 }

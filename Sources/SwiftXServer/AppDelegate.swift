@@ -36,8 +36,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var qemuEngine: QemuEngine?
     private var sparcConsole: SparcPlugConsoleWindowController?
     private var sparcWelcome: SparcStationWelcomeWindowController?
-    /// True while we're holding app termination for a graceful guest shutdown.
-    private var quitPending = false
 
     /// LAN host the launcher hands to remote apps as `DISPLAY`; set by the
     /// bootstrap once the listener resolves the bind address.
@@ -158,8 +156,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         engine.onCleanHalt { [weak self] in
             self?.sparcConsole?.markCleanHalt()
         }
-        engine.onTerminated { [weak self] in
-            self?.finishQuitIfPending()
+        engine.onProgress { [weak self] value in
+            self?.sparcConsole?.setProgress(value)
         }
         self.qemuEngine = engine
         self.sparcConsole?.setState(engine.state)
@@ -172,29 +170,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         false
     }
 
-    /// If the SPARCstation is running when the user quits, shut it down
-    /// gracefully first so Solaris syncs and unmounts (avoids fsck / a wedged
-    /// image), and so we never orphan the qemu subprocess. Hold termination
-    /// until the guest powers off, with a hard-kill fallback so quit can't
-    /// hang forever.
+    /// Don't let the user quit macXserver out from under a running
+    /// SPARCstation -- that would either orphan qemu or pull the power on
+    /// Solaris (fsck on next boot). Refuse the quit and point them at the
+    /// console, where they can Shut Down cleanly, then quit again.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let engine = qemuEngine,
               engine.state == .running || engine.state == .shuttingDown else {
             return .terminateNow
         }
-        quitPending = true
-        ensureSparcConsole()
-        sparcConsole?.showWindow()
-        if engine.state == .running { engine.shutDown() }
-        // Fallback: if the guest hasn't powered off in time, force it and quit.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
-            guard let self = self, self.quitPending else { return }
-            self.qemuEngine?.kill()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-                self?.finishQuitIfPending()
-            }
+        let alert = NSAlert()
+        alert.messageText = "Shut down the SPARCstation first"
+        alert.informativeText = "The SPARCstation is still running. Shut it down from its console "
+            + "so Solaris can sync its disk, then quit macXserver. Quitting now could leave the "
+            + "disk image needing a repair on next boot."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Go to Console")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            ensureSparcConsole()
+            sparcConsole?.showWindow()
         }
-        return .terminateLater
+        return .terminateCancel
     }
 
     // MARK: - Status item
@@ -726,13 +723,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return f
     }()
 
-    /// Called from the engine's terminated callback; completes a quit we were
-    /// holding open for a graceful guest shutdown.
-    private func finishQuitIfPending() {
-        guard quitPending else { return }
-        quitPending = false
-        NSApp.reply(toApplicationShouldTerminate: true)
-    }
 
     @MainActor
     @objc private func showSparcConsole(_ sender: Any?) {

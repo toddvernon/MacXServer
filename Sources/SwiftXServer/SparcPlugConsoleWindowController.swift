@@ -44,6 +44,11 @@ final class SparcPlugConsoleWindowController: NSWindowController {
         model.state = state
     }
 
+    /// 0...1 boot/shutdown progress for the thermometer.
+    func setProgress(_ value: Double) {
+        model.progress = value
+    }
+
     /// Solaris reported filesystems synced -- show the positive safe signal.
     func markCleanHalt() {
         model.safeToQuit = true
@@ -56,6 +61,8 @@ final class SparcPlugConsoleModel: ObservableObject {
     @Published var state: QemuEngine.State = .stopped
     /// Set once Solaris confirms filesystems are synced during shutdown.
     @Published var safeToQuit = false
+    /// 0...1 boot/shutdown progress for the top thermometer.
+    @Published var progress: Double = 0
 
     private let mono: AttributeContainer = {
         var c = AttributeContainer()
@@ -74,6 +81,28 @@ struct SparcPlugConsoleView: View {
     let forceQuit: () -> Void
 
     var body: some View {
+        VStack(spacing: 0) {
+            bootBar
+            content
+        }
+        .frame(minWidth: 480, minHeight: 240)
+    }
+
+    /// Full-width blue thermometer: grows as the guest boots, recedes as it
+    /// shuts down. Driven by QemuEngine progress milestones.
+    private var bootBar: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Color.blue.opacity(0.15))
+                Rectangle().fill(Color.blue)
+                    .frame(width: geo.size.width * model.progress)
+            }
+        }
+        .frame(height: 5)
+        .animation(.easeInOut(duration: 0.45), value: model.progress)
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center, spacing: 12) {
                 Image(systemName: "desktopcomputer")

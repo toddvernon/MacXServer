@@ -130,9 +130,14 @@ qemu. All DONE 2026-06-17.
   Shut Down + Force Quit buttons and shows a "Filesystems synced — safe to
   power off" banner when the clean-halt signal lands. Menu: Start / Shut
   Down SPARCstation / Show Console / Back Up Disk Image.
-- [x] **Quit safety net.** `applicationShouldTerminate` shuts the guest down
-  gracefully and holds termination (`.terminateLater`) until it powers off,
-  with a 30s hard-kill fallback so quit never hangs or orphans qemu.
+- [x] **Quit guard.** `applicationShouldTerminate` refuses to quit while the
+  SPARCstation is running (`.terminateCancel`) and pops a dialog — "Go to
+  Console" (reveals the console so the user can Shut Down) / "Cancel". The
+  user shuts the guest down cleanly, then quits. Prevents both the orphaned
+  qemu and the power-yank fsck.
+- [x] **Boot thermometer.** Full-width blue progress bar across the top of
+  the console window, driven by `QemuEngine` console milestones (`onProgress`):
+  grows as the guest boots, recedes as it shuts down.
 - [x] **Force quit.** `kill()` (SIGTERM) behind a confirm dialog, for wedged
   cases.
 - [x] **Back Up Disk Image.** Menu item enabled only when stopped; copies the
