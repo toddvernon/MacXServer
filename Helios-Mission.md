@@ -3,7 +3,7 @@
 *Working name: **Helios** (a heliostat reflects modern light onto a fixed Sun). Alternatives: Sundial, Photon, Apollo. Name TBD.*
 
 > **STATUS / SEQUENCING (as of 2026-06-16): DO NOT IMPLEMENT YET.**
-> Helios is gated behind the SparkPlug "shippable plugin v1" milestone
+> Helios is gated behind the SPARCplug "shippable plugin v1" milestone
 > (three deliverables: engine-in-app binary, on-demand disk-image
 > install, observation window + launcher enable). See the "Next
 > milestone" section in `SPARCSTATION_PLUGIN.md`. Future sessions are

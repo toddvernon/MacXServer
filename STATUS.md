@@ -28,7 +28,7 @@ no design decisions left to make in the morning. Concretely:
    or a 2.95-incompatible idiom; the compile error will say where.
 
 If all three platforms green: that's the end of tomorrow. We move
-cx onto the bundled SparkPlug image and start seed-daemon design next
+cx onto the bundled SPARCplug image and start seed-daemon design next
 session.
 
 If something breaks: capture the build/test output, drop it where I can
@@ -54,9 +54,9 @@ guest's slirp networking working end to end (outbound TCP/UDP, DNS,
 default-route persistence) and converged it into
 `Tools/sparcstation-baseline-config.sh`.
 
-**Evening (this Mac): SparkPlug repo + minimal engine build +
+**Evening (this Mac): SPARCplug repo + minimal engine build +
 distribution/licensing decisions.** New standalone private repo
-`github.com:toddvernon/SparkPlug`, vendored qemu-9.2.4 (clean import,
+`github.com:toddvernon/SPARCplug`, vendored qemu-9.2.4 (clean import,
 not a fork), `build-qemu.sh` produces an 8.6 MB headless
 `qemu-system-sparc` that boots Solaris 2.6 to login on emulated SS-5.
 Engine-in-app + image-downloaded-on-demand decided; one bundle, not
@@ -77,9 +77,9 @@ implements).
 
 ## What's working (verified today)
 
-- **SparkPlug minimal QEMU engine builds and boots** (morning/evening of
+- **SPARCplug minimal QEMU engine builds and boots** (morning/evening of
   today; details in the previous STATUS lineage, unchanged).
-- **Solaris image lives at `~/Dropbox/dev/Sparkplug/SUN40G.qcow2`**
+- **Solaris image lives at `~/Dropbox/dev/SPARCplug/SUN40G.qcow2`**
   (1.3 GB actual / 42.9 GB virtual / ~250 MB gzipped).
 - **macXserver app + server**: untouched today, still green.
 - **NEW (this evening): cx libraries build clean on Solaris 2.6**
@@ -95,7 +95,7 @@ implements).
   `DECISIONS.md` 2026-06-16 entry + `SPARCSTATION_PLUGIN.md` 2026-06-16
   sections.
 - **One app bundle, not a fused binary.** qemu as nested helper.
-- **SparkPlug source stays in its own private repo** (not merged).
+- **SPARCplug source stays in its own private repo** (not merged).
 - **No `.pkg` installer.** Drag-to-Applications survives.
 - **Licensing posture** captured (`SPARCSTATION_PLUGIN.md` "Licensing
   and attribution").
@@ -114,11 +114,11 @@ implements).
 
 ## Not done / open
 
-- `packaging/` scripts in SparkPlug (`dylibbundler` + codesign with JIT
+- `packaging/` scripts in SPARCplug (`dylibbundler` + codesign with JIT
   entitlements) are skeletons, NOT exercised. Unchanged from yesterday.
 - The plugin has never been bundled into `MacXServer.app` or notarized.
   Unchanged.
-- No menu/UI in macXserver for SparkPlug yet (install/run, observation
+- No menu/UI in macXserver for SPARCplug yet (install/run, observation
   window, launcher enable). Unchanged.
 - **NEW: cx `CxProcess` cwd+timeout overload designed but not yet
   applied.** Full source in `Tools/CX_PROCESS_TIMEOUT_AND_CWD.md`.
@@ -134,9 +134,9 @@ This hasn't moved. Three deliverables, fully defined in
 
 1. **Engine-in-app binary, no disk image.** dylibbundler relink, JIT
    codesign, notarize. One uploadable `.app`.
-2. **Menu installs the disk image on demand.** "Install SparkPlug"
+2. **Menu installs the disk image on demand.** "Install SPARCplug"
    downloads + verifies sha256 + decompresses to Application Support;
-   menu flips to "Run SparkPlug" and launcher entry un-grays.
+   menu flips to "Run SPARCplug" and launcher entry un-grays.
 3. **Run with observation window + enable the launcher.** Spawn engine,
    route `-nographic` serial console into an observation window, enable
    launcher to launch X clients into the guest.
@@ -147,13 +147,13 @@ move in parallel without conflict.
 
 ## Pointers
 
-- SparkPlug engine: `~/dev/SparkPlug` (cloned today onto this Mac) /
-  `github.com:toddvernon/SparkPlug` (private). Build with
+- SPARCplug engine: `~/dev/SPARCplug` (cloned today onto this Mac) /
+  `github.com:toddvernon/SPARCplug` (private). Build with
   `./build-qemu.sh`; smoke test in its README.
 - Plugin design + milestone + licensing: `SPARCSTATION_PLUGIN.md`.
 - Decision record: `DECISIONS.md` (2026-06-16 entry).
 - Helios (gated, design-only): `Helios-Mission.md`.
-- Assets (qcow2): `~/Dropbox/dev/Sparkplug/` (Dropbox-synced, not git).
+- Assets (qcow2): `~/Dropbox/dev/SPARCplug/` (Dropbox-synced, not git).
 - **NEW: Helios tool survey** (read-only inventory of a Sun box):
   `Tools/helios-tool-survey.sh`. Run as `sh helios-tool-survey.sh
   > out.txt`.

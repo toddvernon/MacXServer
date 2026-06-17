@@ -4,7 +4,7 @@ The Helios tool survey on the current image flagged four agent-
 ergonomics gaps. None blocks the seed-daemon build, but they all make
 the eventual agentic loop materially less frustrating. This doc
 captures what to add, how to add it, and how to fold the install into
-the SparkPlug image-prep flow so future bundled images ship with the
+the SPARCplug image-prep flow so future bundled images ship with the
 tools already present.
 
 Run all install steps as root on the Sun.
@@ -46,10 +46,10 @@ Sunfreeware (`sunfreeware.com`) is the canonical source for prebuilt
 GNU on Solaris 2.6. Packages are gzipped `.pkg` archives named like
 `gdb-7.5.1-sol26-sparc-local.gz`.
 
-For SparkPlug shipping, mirror the packages locally so the install is
+For SPARCplug shipping, mirror the packages locally so the install is
 reproducible across machines and survives sunfreeware.com going down:
 
-- Stash the four `.gz` packages in `~/Dropbox/dev/Sparkplug/pkg/`
+- Stash the four `.gz` packages in `~/Dropbox/dev/SPARCplug/pkg/`
 - `sparcstation-baseline-config.sh` fetches from this local mirror,
   not from the live sunfreeware URL
 - Record the exact filename + sha256 in a `pkg/MANIFEST.txt` alongside
@@ -106,7 +106,7 @@ And the summary line should read:
 Agent ergonomics:    GOOD (bash + gdb + less + gawk all present)
 ```
 
-## Folding into the SparkPlug image-prep flow
+## Folding into the SPARCplug image-prep flow
 
 The bundled disk image should ship with these tools by default — every
 new user shouldn't have to repeat the install. Extend

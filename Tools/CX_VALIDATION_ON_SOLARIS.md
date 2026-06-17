@@ -2,7 +2,7 @@
 
 Goal: prove the cx libraries the Helios seed daemon will be built from
 (`net`, `json`, `log`, plus process spawning) build cleanly and pass
-their own test suite on the same Solaris 2.6 image SparkPlug ships.
+their own test suite on the same Solaris 2.6 image SPARCplug ships.
 
 One-time validation. On success, the seed-daemon design can proceed
 against a known-working substrate. This is **not** Helios code — it's
@@ -30,7 +30,7 @@ in `~/Dropbox/dev/cx/cx_tests/`. You want both.
 
 Pick the transfer that fits your setup:
 
-**Option A — HTTP from the Mac.** Works in the bundled SparkPlug guest
+**Option A — HTTP from the Mac.** Works in the bundled SPARCplug guest
 via slirp's `10.0.2.2` alias and on any LAN-reachable real Sun. On the
 Mac:
 

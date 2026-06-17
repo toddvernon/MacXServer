@@ -67,19 +67,19 @@ polish, not invention.
 That's the entire feature in skeleton form. Everything from here is
 making it shippable.
 
-## What landed 2026-06-16: SparkPlug repo, proven minimal build, distribution shape
+## What landed 2026-06-16: SPARCplug repo, proven minimal build, distribution shape
 
 Two things firmed up on 2026-06-16: the engine got its own home and a
 real build, and the distribution architecture got decided. The sections
 further down (Path to product, Distribution and bundling mechanics) were
 written before these calls; where they disagree, this section wins.
 
-**The engine is now its own project: SparkPlug.** Standalone private
-repo `github.com:toddvernon/SparkPlug` (local working tree `~/dev/Sparkplug`),
+**The engine is now its own project: SPARCplug.** Standalone private
+repo `github.com:toddvernon/SPARCplug` (local working tree `~/dev/SPARCplug`),
 deliberately separate from the macXserver repo. It builds and ships
 independently. Cross-machine rule: editable source rides git, big
 never-edited blobs (the qcow2, ROM, snapshot, final binary) ride Dropbox
-at `~/Dropbox/dev/Sparkplug`, the same split macXserver uses for
+at `~/Dropbox/dev/SPARCplug`, the same split macXserver uses for
 `reference/`. QEMU is vendored, not forked: `qemu/` is a clean import of
 qemu-9.2.4 (roms/ pruned, since a sparc-only build uses the pre-built
 `pc-bios/openbios-sparc32` blob), provenance in `qemu.lock`. "In the
@@ -99,7 +99,7 @@ surface, and that surface is a cold path here anyway since the guest's
 X clients render over the X protocol to macXserver, not through the
 guest framebuffer. Verified to still boot.
 
-macOS build gotcha (load-bearing, see SparkPlug README): homebrew's
+macOS build gotcha (load-bearing, see SPARCplug README): homebrew's
 `python@3.14` ships a broken pyexpat that breaks QEMU's build-venv
 creation and glib's gdbus-codegen. `build-qemu.sh` sidesteps it with an
 isolated system-python (3.9) venv and `--disable-dbus-display`.
@@ -116,9 +116,9 @@ seam is code-vs-data, not engine-vs-image:
   constraint) fold into the app pipeline we already run.
 - The **disk image** is the only thing downloaded on demand. It's pure
   data: no signing, no notarization, and (fetched via NSURLSession) no
-  quarantine xattr, so no Gatekeeper prompt on it. "Install SparkPlug"
+  quarantine xattr, so no Gatekeeper prompt on it. "Install SPARCplug"
   fetches it, verifies a sha256, decompresses into Application Support;
-  the menu then flips to "Run SparkPlug" and the launcher entry ungrays.
+  the menu then flips to "Run SPARCplug" and the launcher entry ungrays.
 
 Why this and not the engine-in-the-download: it collapses the only
 genuinely hard packaging problem (trusting a downloaded executable) into
@@ -129,7 +129,7 @@ patch it.
 
 **It's one app bundle, not one fused binary, and not a separate
 installer.**
-- macXserver and SparkPlug stay as two Mach-Os in one bundle: the app
+- macXserver and SPARCplug stay as two Mach-Os in one bundle: the app
   in `Contents/MacOS/`, the engine as a nested helper (e.g.
   `Contents/Helpers/qemu-system-sparc`) spawned as a subprocess. Fusing
   them into a single executable is the wrong call: QEMU isn't a library
@@ -176,7 +176,7 @@ app, installs the disk image from a menu, and boots a working
 SPARCstation with the console visible. No AI, no Helios.
 
 **Deliverable 1: a shippable app binary with the engine built in, no
-disk image.** Bundle SparkPlug's `qemu-system-sparc` + glib dylibs into
+disk image.** Bundle SPARCplug's `qemu-system-sparc` + glib dylibs into
 `MacXServer.app` (`Contents/Helpers/` + `Contents/Frameworks/`), run the
 `dylibbundler` relink (zero `/opt/homebrew` paths), codesign with the
 JIT entitlements, and notarize as part of the normal app release. Result
@@ -184,25 +184,25 @@ is one uploadable `.app` that carries the engine but NOT the ~250 MB
 qcow2. This is the code-vs-data seam from the decisions above made real.
 
 **Deliverable 2: the menu installs the disk image on demand.** Before
-install the SparkPlug menu offers only "Install SparkPlug" (or similar).
+install the SPARCplug menu offers only "Install SPARCplug" (or similar).
 Selecting it downloads the gzipped Solaris image (~250 MB), verifies its
 sha256, and decompresses it to `~/Library/Application Support/macXserver/`
 (absolute path, never relative to the bundle). Once present, the menu
-flips to "Run SparkPlug" and the SparkPlug launcher entry un-grays. State
+flips to "Run SPARCplug" and the SPARCplug launcher entry un-grays. State
 keys off "is the qcow2 in Application Support."
 
 **Deliverable 3: launch with an observation window + enable the
-launcher.** "Run SparkPlug" spawns the bundled engine as a subprocess
+launcher.** "Run SPARCplug" spawns the bundled engine as a subprocess
 (`-nographic` serial console) and routes that console stream into an
 observation window in macXserver so the user can watch the boot and the
-serial console. When it's up, the SparkPlug launcher entry is enabled so
+serial console. When it's up, the SPARCplug launcher entry is enabled so
 the user can launch X clients (xterm, CDE) into the guest, which render
 through macXserver as normal. The observation window is also the
 foundation Helios later builds its split-window terminal on, but for v1
 it's just a read-only console view.
 
 Acceptance: on a clean Mac with no homebrew, drag the app in, "Install
-SparkPlug" (downloads image), "Run SparkPlug" (boots, console visible in
+SPARCplug" (downloads image), "Run SPARCplug" (boots, console visible in
 the observation window, launcher enabled), launch xterm into the guest.
 
 ## Working recipe (technical reference)
@@ -376,13 +376,13 @@ that ships with the app." Roughly an ordered punch list.
 
 ### Phase 1: bundling
 
-- **Build a stripped QEMU.** DONE 2026-06-16, in the SparkPlug repo
+- **Build a stripped QEMU.** DONE 2026-06-16, in the SPARCplug repo
   (`build-qemu.sh`). `--target-list=sparc-softmmu` plus disable every
   UI/codec/crypto/audio/optional feature. Result is an 8.6 MB binary
   that boots Solaris 2.6 to login, deps down to glib + bundled libslirp.
   Goes as a nested helper in `MacXServer.app/Contents/Helpers/`. Not a
   fork — vendored qemu-9.2.4, see the 2026-06-16 section above and the
-  SparkPlug `qemu.lock`.
+  SPARCplug `qemu.lock`.
 - **Bundle the OpenBOOT ROM.** OldSilicon's distribution side
   solves the legal question. Embed as a resource alongside the
   binary. (`pc-bios/openbios-sparc32`, already in the build tree.)
@@ -484,7 +484,7 @@ background polling, no telemetry on first launch.
 
 Install flow inside macXserver:
 
-- `macXserver → Install SparkPlug…` opens a sheet: "Adds a working
+- `macXserver → Install SPARCplug…` opens a sheet: "Adds a working
   SPARCstation 5 with Solaris 2.6 and CDE. ~250 MB download. From
   oldsilicon.com." (Engine's already in the app; this fetches only the
   disk image.)
@@ -553,7 +553,7 @@ few surviving dylibs into the plugin.
 
 **Step 1: collapse the dep list at configure time.** For headless
 SPARC-only QEMU driving slirp networking, almost every homebrew dep
-is dead weight. The canonical, working flag set lives in SparkPlug's
+is dead weight. The canonical, working flag set lives in SPARCplug's
 `build-qemu.sh` (don't hand-copy from here; that script is the source
 of truth and was validated against qemu-9.2.4's actual options). The
 shape, for reference:
@@ -680,14 +680,14 @@ one binary, this would be murky. We didn't, so it's clean.
 2. *Make the corresponding source available.* For a component we use
    **unmodified**, the upstream source at the exact version we bundle
    *is* the corresponding source, so an upstream link at that version
-   satisfies it. We host SparkPlug (our QEMU source) ourselves; for the
+   satisfies it. We host SPARCplug (our QEMU source) ourselves; for the
    prebuilt deps we link upstream at-version.
 
 **The compliance surface (the About/Licenses panel) lists, per
 component: name, exact version, full license text, an "unmodified"
 statement, and a source link:**
 
-- **QEMU** (GPLv2) -> tagged public SparkPlug repo (our build is
+- **QEMU** (GPLv2) -> tagged public SPARCplug repo (our build is
   unmodified upstream qemu-9.2.4, sparc-only headless; roms/ pruned).
 - **OpenBIOS ROM** `openbios-sparc32` (GPLv2) -> upstream OpenBIOS source
   at the revision QEMU built the blob from. *Needs an explicit link
@@ -697,16 +697,16 @@ statement, and a source link:**
   clause); source link satisfies the rest.
 - **libslirp** (BSD), **pcre2** (BSD), **libffi** (MIT) -> permissive,
   notice text only, no source obligation. (libslirp's source also rides
-  in the SparkPlug tree under `qemu/subprojects/`.)
+  in the SPARCplug tree under `qemu/subprojects/`.)
 
 **Two load-bearing rules:**
 
 - *The "unmodified" statement must stay true.* It's what lets an
   upstream link stand in for hosting our own source. The day we patch
   QEMU (or anything), upstream no longer matches what we shipped, and we
-  must publish *our* modified tree instead. SparkPlug going public is
+  must publish *our* modified tree instead. SPARCplug going public is
   that safety net.
-- *Tag SparkPlug at the exact commit each released binary was built
+- *Tag SPARCplug at the exact commit each released binary was built
   from,* and keep the repo public and reachable for as long as we ship
   that binary. "Corresponding source" means the source for *that* build;
   a tag keeps it unambiguous across future QEMU bumps.

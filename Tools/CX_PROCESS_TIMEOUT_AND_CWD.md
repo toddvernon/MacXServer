@@ -969,7 +969,7 @@ State to confirm before moving to the bundled SS5 image:
 - [ ] **SS5**: same three checks. If g++ 2.95.3 chokes on anything, it
       will be in the new process.cpp; the test output will say where.
 - [ ] Once all three platforms green: move the SS5-validated cx onto
-      the bundled SparkPlug disk image and continue toward the seed
+      the bundled SPARCplug disk image and continue toward the seed
       daemon design.
 
 The legacy `run(const char *)` path remains popen-based and untouched
