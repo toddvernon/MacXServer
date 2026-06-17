@@ -69,13 +69,15 @@ and survives a clean-Mac load + notarization. Engine build already exists
   `allow-unsigned-executable-memory`). Result: boots Solaris 2.6 to
   `login:` in ~14s loading only bundled dylibs + bundled ROM. This is the
   full production signing posture validated locally, minus notarization.
-- [ ] **A4. Xcode bundle wiring.** New Copy Files phase: helper into
-  `Contents/Helpers/qemu-system-sparc` with its `lib/` subdir alongside
-  (dylibbundler rewrote to `@executable_path/lib/`, so the dylibs live next
-  to the helper, NOT in `Contents/Frameworks/`). Firmware dir
-  (`openbios-sparc32`) into `Contents/Resources/qemu-firmware/` (or
-  alongside the helper). The `dist/` layout already matches this:
-  `qemu-system-sparc` + `lib/` + `firmware/`.
+- [ ] **A4. Bundle layout / dev override.** Shipped layout: helper +
+  `lib/` into `Contents/Helpers/` (dylibbundler rewrote to
+  `@executable_path/lib/`, so the dylibs live next to the helper, NOT in
+  `Contents/Frameworks/`); firmware into `Contents/Resources/qemu-firmware/`.
+  The `dist/` layout already matches. Realized at release time by A5 (the
+  `release.sh` copy-in), not a fragile pbxproj Copy Files phase. For dev,
+  `QemuEngine.defaultConfig()` honors `SPARCPLUG_ENGINE_DIR` /
+  `SPARCPLUG_DISK_IMAGE` so the controller runs against `dist/` with no
+  bundle wiring at all (proven by the live test).
 - [ ] **A5. `release.sh` copy-in + helper signing.** Copy the SPARCplug
   `dist/` payload in before signing; sign inside-out with the helper
   getting `qemu.entitlements`. (See settled decision above.) The local A3
@@ -87,15 +89,20 @@ and survives a clean-Mac load + notarization. Engine build already exists
 
 ## Track B — Run the engine (Deliverable 3 core)
 
-- [ ] **B1. `QemuEngine` controller** (new, `SwiftXServerCore`). Clone the
-  `Process`/`Pipe`/`readabilityHandler`/`terminationHandler` pattern from
-  `SSHLauncher.swift:52-119` (the only subprocess code in the tree, exactly
-  the right shape). Resolve the helper by absolute `Bundle.main` path
-  (app-translocation-safe). Arg vector from the working recipe
-  (`SPARCSTATION_PLUGIN.md:219-225`) plus the `-L` firmware path from A2 and
-  `-drive` pointing at the Application Support qcow2.
-- [ ] **B2. Engine state model.** `notInstalled → installedStopped →
-  running`. Drives the menu label and the launcher-entry enable state.
+- [x] **B1. `QemuEngine` controller. DONE 2026-06-17.**
+  `Sources/SwiftXServerCore/QemuEngine.swift`, modeled on `SSHLauncher`
+  (`Process`/`Pipe`/`readabilityHandler`/`terminationHandler`, dedicated
+  queue, pure static `buildArguments` for testing). Resolves the helper via
+  `defaultConfig()` (bundle `Contents/Helpers/` or dev override), passes the
+  `-L` firmware path + `-drive` at the qcow2. `onConsole` streams the serial
+  console; `onStateChange` reports transitions. Tests in
+  `QemuEngineTests.swift`: argv pinned, path resolution (both modes), state,
+  and a `SPARCPLUG_LIVE_TEST`-gated live boot that spawned the real engine
+  and streamed console in 0.3s (uses a throwaway disk, never a real qcow2).
+- [x] **B2. Engine state model. DONE 2026-06-17.** `notInstalled → stopped →
+  running` on `QemuEngine.State`, computed from disk-image presence + run
+  state, surfaced via `onStateChange`. Wiring it to the menu label and
+  launcher-entry enable is Track D.
 - [ ] **B3. Observation window.** Reuse `LaunchProgressWindowController`
   (its `appendText` + AttributedString + autoscroll model is already a
   streaming console). Pipe qemu `-nographic` stdout in. Read-only for v1.
