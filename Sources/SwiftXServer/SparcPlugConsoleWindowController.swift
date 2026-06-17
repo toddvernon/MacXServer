@@ -4,16 +4,16 @@ import SwiftXServerCore
 
 // Read-only observation window for the bundled SPARCstation engine's
 // -nographic serial console. Modeled on LaunchProgressWindowController: an
-// NSPanel hosting a SwiftUI monospaced transcript that autoscrolls. For
-// plugin v1 it's display-only (you watch the boot); the interactive console
-// / QMP control surface is a post-v1 concern. Helios later builds its split
-// terminal on this same window.
+// NSPanel hosting a SwiftUI monospaced transcript that autoscrolls. The user
+// watches the boot here and drives shutdown from the buttons. Helios later
+// builds its split terminal on this same window.
 final class SparcPlugConsoleWindowController: NSWindowController {
 
     private let model = SparcPlugConsoleModel()
 
-    init() {
-        let hostingView = NSHostingView(rootView: SparcPlugConsoleView(model: model))
+    init(onShutDown: @escaping () -> Void, onForceQuit: @escaping () -> Void) {
+        let hostingView = NSHostingView(rootView: SparcPlugConsoleView(
+            model: model, shutDown: onShutDown, forceQuit: onForceQuit))
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 520),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .utilityWindow],
@@ -40,7 +40,13 @@ final class SparcPlugConsoleWindowController: NSWindowController {
     }
 
     func setState(_ state: QemuEngine.State) {
+        if state == .running { model.safeToQuit = false }   // fresh boot
         model.state = state
+    }
+
+    /// Solaris reported filesystems synced -- show the positive safe signal.
+    func markCleanHalt() {
+        model.safeToQuit = true
     }
 }
 
@@ -48,6 +54,8 @@ final class SparcPlugConsoleWindowController: NSWindowController {
 final class SparcPlugConsoleModel: ObservableObject {
     @Published var content = AttributedString()
     @Published var state: QemuEngine.State = .stopped
+    /// Set once Solaris confirms filesystems are synced during shutdown.
+    @Published var safeToQuit = false
 
     private let mono: AttributeContainer = {
         var c = AttributeContainer()
@@ -62,6 +70,8 @@ final class SparcPlugConsoleModel: ObservableObject {
 
 struct SparcPlugConsoleView: View {
     @ObservedObject var model: SparcPlugConsoleModel
+    let shutDown: () -> Void
+    let forceQuit: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -94,14 +104,20 @@ struct SparcPlugConsoleView: View {
                 }
             }
 
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Circle()
                     .fill(statusColor)
                     .frame(width: 9, height: 9)
                 Text(statusText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if model.safeToQuit {
+                    Label("Filesystems synced — safe to power off", systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
                 Spacer()
+                controls
             }
         }
         .padding(.horizontal, 20)
@@ -109,9 +125,24 @@ struct SparcPlugConsoleView: View {
         .frame(minWidth: 480, minHeight: 240)
     }
 
+    @ViewBuilder
+    private var controls: some View {
+        switch model.state {
+        case .running:
+            Button("Shut Down", action: shutDown)
+            Button("Force Quit", action: forceQuit)
+        case .shuttingDown:
+            // Graceful shutdown underway; still offer the escape hatch.
+            Button("Force Quit", action: forceQuit)
+        case .stopped, .notInstalled:
+            EmptyView()
+        }
+    }
+
     private var statusColor: Color {
         switch model.state {
         case .running: return .green
+        case .shuttingDown: return .orange
         case .stopped: return .secondary
         case .notInstalled: return .orange
         }
@@ -120,6 +151,7 @@ struct SparcPlugConsoleView: View {
     private var statusText: String {
         switch model.state {
         case .running: return "Running"
+        case .shuttingDown: return "Shutting down\u{2026}"
         case .stopped: return "Stopped"
         case .notInstalled: return "No disk image installed"
         }

@@ -36,6 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var qemuEngine: QemuEngine?
     private var sparcConsole: SparcPlugConsoleWindowController?
     private var sparcWelcome: SparcStationWelcomeWindowController?
+    /// True while we're holding app termination for a graceful guest shutdown.
+    private var quitPending = false
 
     /// LAN host the launcher hands to remote apps as `DISPLAY`; set by the
     /// bootstrap once the listener resolves the bind address.
@@ -153,6 +155,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         engine.onStateChange { [weak self] state in
             self?.sparcConsole?.setState(state)
         }
+        engine.onCleanHalt { [weak self] in
+            self?.sparcConsole?.markCleanHalt()
+        }
+        engine.onTerminated { [weak self] in
+            self?.finishQuitIfPending()
+        }
         self.qemuEngine = engine
         self.sparcConsole?.setState(engine.state)
     }
@@ -162,6 +170,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // Status-bar app — keep running after the last X window closes so
         // we can accept a fresh client connection without relaunching.
         false
+    }
+
+    /// If the SPARCstation is running when the user quits, shut it down
+    /// gracefully first so Solaris syncs and unmounts (avoids fsck / a wedged
+    /// image), and so we never orphan the qemu subprocess. Hold termination
+    /// until the guest powers off, with a hard-kill fallback so quit can't
+    /// hang forever.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let engine = qemuEngine,
+              engine.state == .running || engine.state == .shuttingDown else {
+            return .terminateNow
+        }
+        quitPending = true
+        ensureSparcConsole()
+        sparcConsole?.showWindow()
+        if engine.state == .running { engine.shutDown() }
+        // Fallback: if the guest hasn't powered off in time, force it and quit.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self = self, self.quitPending else { return }
+            self.qemuEngine?.kill()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.finishQuitIfPending()
+            }
+        }
+        return .terminateLater
     }
 
     // MARK: - Status item
@@ -319,15 +352,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                action: #selector(startSparcStation(_:)), keyEquivalent: "")
         start.target = self
         sparcMenu.addItem(start)
-        let stop = NSMenuItem(title: "Stop SPARCstation",
-                              action: #selector(stopSparcStation(_:)), keyEquivalent: "")
-        stop.target = self
-        sparcMenu.addItem(stop)
+        let shutDown = NSMenuItem(title: "Shut Down SPARCstation",
+                                  action: #selector(shutDownSparcStation(_:)), keyEquivalent: "")
+        shutDown.target = self
+        sparcMenu.addItem(shutDown)
         sparcMenu.addItem(.separator())
         let showConsole = NSMenuItem(title: "Show Console",
                                      action: #selector(showSparcConsole(_:)), keyEquivalent: "")
         showConsole.target = self
         sparcMenu.addItem(showConsole)
+        let backup = NSMenuItem(title: "Back Up Disk Image\u{2026}",
+                                action: #selector(backUpDiskImage(_:)), keyEquivalent: "")
+        backup.target = self
+        sparcMenu.addItem(backup)
         sparcMenuItem.submenu = sparcMenu
         main.addItem(sparcMenuItem)
 
@@ -614,7 +651,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func ensureSparcConsole() {
         if sparcConsole == nil {
-            let console = SparcPlugConsoleWindowController()
+            let console = SparcPlugConsoleWindowController(
+                onShutDown: { [weak self] in self?.qemuEngine?.shutDown() },
+                onForceQuit: { [weak self] in self?.confirmForceQuit() }
+            )
             console.setState(qemuEngine?.state ?? .stopped)
             sparcConsole = console
         }
@@ -624,7 +664,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func startSparcStation(_ sender: Any?) {
         guard let engine = qemuEngine else { return }
         switch engine.state {
-        case .running:
+        case .running, .shuttingDown:
             return                       // menu item is disabled here anyway
         case .stopped:
             launchSparcStation()
@@ -633,8 +673,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    @objc private func stopSparcStation(_ sender: Any?) {
-        qemuEngine?.stop()
+    @objc private func shutDownSparcStation(_ sender: Any?) {
+        ensureSparcConsole()
+        sparcConsole?.showWindow()      // so the user sees the shutdown progress
+        qemuEngine?.shutDown()
+    }
+
+    @MainActor
+    private func confirmForceQuit() {
+        let alert = NSAlert()
+        alert.messageText = "Force quit the SPARCstation?"
+        alert.informativeText = "This pulls the power without a clean shutdown, like yanking the "
+            + "cord. Solaris will run fsck on the next boot. Use this only if a graceful shut down "
+            + "won't complete."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Force Quit")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            qemuEngine?.kill()
+        }
+    }
+
+    @MainActor
+    @objc private func backUpDiskImage(_ sender: Any?) {
+        // Only valid when stopped (validateMenuItem enforces it). Copy the
+        // qcow2 alongside itself with a dated name.
+        let path = (preferences.sparcDiskImagePath as NSString).expandingTildeInPath
+        guard !path.isEmpty else { return }
+        let src = URL(fileURLWithPath: path)
+        let dir = src.deletingLastPathComponent()
+        let base = src.deletingPathExtension().lastPathComponent
+        let ext = src.pathExtension
+        let stamp = Self.backupDateFormatter.string(from: Date())
+        var dest = dir.appendingPathComponent("\(base) backup \(stamp).\(ext)")
+        // Avoid clobbering an earlier backup made the same day.
+        var n = 2
+        while FileManager.default.fileExists(atPath: dest.path) {
+            dest = dir.appendingPathComponent("\(base) backup \(stamp) (\(n)).\(ext)")
+            n += 1
+        }
+        do {
+            try FileManager.default.copyItem(at: src, to: dest)
+            NSWorkspace.shared.activateFileViewerSelecting([dest])
+        } catch {
+            showLaunchError("Backup failed: \(error.localizedDescription)")
+        }
+    }
+
+    private static let backupDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// Called from the engine's terminated callback; completes a quit we were
+    /// holding open for a graceful guest shutdown.
+    private func finishQuitIfPending() {
+        guard quitPending else { return }
+        quitPending = false
+        NSApp.reply(toApplicationShouldTerminate: true)
     }
 
     @MainActor
@@ -710,9 +807,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         let state = qemuEngine?.state ?? .notInstalled
         switch item.action {
-        case #selector(startSparcStation(_:)): return state != .running
-        case #selector(stopSparcStation(_:)):  return state == .running
-        case #selector(showSparcConsole(_:)):  return sparcConsole != nil
+        case #selector(startSparcStation(_:)):    return state == .stopped || state == .notInstalled
+        case #selector(shutDownSparcStation(_:)): return state == .running
+        case #selector(showSparcConsole(_:)):     return sparcConsole != nil
+        case #selector(backUpDiskImage(_:)):      return state == .stopped
         default: return true
         }
     }

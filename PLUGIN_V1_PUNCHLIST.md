@@ -111,6 +111,37 @@ and survives a clean-Mac load + notarization. Engine build already exists
   unbounded over a long session (same as the launcher progress window); cap
   later if it matters.
 
+## Lifecycle & shutdown safety (added 2026-06-17)
+
+Not in the original three deliverables, but a correctness requirement: a
+hard kill of qemu leaves Solaris (non-logging UFS) needing fsck on next boot,
+and quitting the app without stopping the engine would orphan a headless
+qemu. All DONE 2026-06-17.
+
+- [x] **Graceful shutdown.** `QemuEngine` now drives the serial console
+  (writable stdin + `sendConsole`). On boot it auto-logs-in as root (the
+  image allows passwordless root console login — also the Helios
+  prerequisite, so it's on by default). `shutDown()` sends `init 5`; the
+  guest syncs/unmounts and powers off, so qemu exits on its own.
+  Empirically verified: the positive "safe to power off" signal is the
+  console line `syncing file systems... done` (`onCleanHalt`), and `init 5`
+  cleanly exits qemu (not parked at `ok`).
+- [x] **States + UI.** Added `State.shuttingDown`. Console window has
+  Shut Down + Force Quit buttons and shows a "Filesystems synced — safe to
+  power off" banner when the clean-halt signal lands. Menu: Start / Shut
+  Down SPARCstation / Show Console / Back Up Disk Image.
+- [x] **Quit safety net.** `applicationShouldTerminate` shuts the guest down
+  gracefully and holds termination (`.terminateLater`) until it powers off,
+  with a 30s hard-kill fallback so quit never hangs or orphans qemu.
+- [x] **Force quit.** `kill()` (SIGTERM) behind a confirm dialog, for wedged
+  cases.
+- [x] **Back Up Disk Image.** Menu item enabled only when stopped; copies the
+  qcow2 alongside itself with a dated name (APFS clonefile via copyItem).
+- [x] **Tests.** Unit tests plus two `SPARCPLUG_LIVE_TEST`-gated live tests:
+  console streaming, and a full boot → auto-login → `init 5` → clean-halt →
+  terminate cycle (passes in ~65s, runs against an APFS clone so the master
+  image is never mutated).
+
 ## Track C — Install the disk image (Deliverable 2)
 
 - [ ] **C1. Downloader** (new). `NSURLSession` w/ progress → SHA256 verify

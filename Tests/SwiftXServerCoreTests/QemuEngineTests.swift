@@ -127,9 +127,68 @@ final class QemuEngineTests: XCTestCase {
         XCTAssertEqual(engine.state, .running)
 
         wait(for: [sawConsole], timeout: 30)
-        engine.stop()
+        engine.kill()
         wait(for: [sawStopped], timeout: 10)
         XCTAssertNotEqual(engine.state, .running)
+    }
+
+    /// Live test: boot the real image, let auto-login happen, then drive a
+    /// graceful `init 5` shutdown and assert the clean-halt signal and process
+    /// termination both fire. Uses an APFS clone of the image so the master is
+    /// never mutated. Gated like the other live test, plus needs the real
+    /// SPARCPLUG_DISK_IMAGE (a bootable Solaris qcow2).
+    ///
+    ///   SPARCPLUG_LIVE_TEST=1 SPARCPLUG_ENGINE_DIR=~/dev/SPARCplug/dist \
+    ///   SPARCPLUG_DISK_IMAGE=~/Dropbox/dev/SPARCplug/SUN40G.qcow2 \
+    ///     swift test --filter testLiveGracefulShutdown
+    func testLiveGracefulShutdown() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["SPARCPLUG_LIVE_TEST"] != nil,
+              let dir = env["SPARCPLUG_ENGINE_DIR"], !dir.isEmpty,
+              let img = env["SPARCPLUG_DISK_IMAGE"], !img.isEmpty
+        else { throw XCTSkip("set SPARCPLUG_LIVE_TEST=1, SPARCPLUG_ENGINE_DIR, SPARCPLUG_DISK_IMAGE") }
+
+        let base = URL(fileURLWithPath: dir, isDirectory: true)
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("qemu-graceful-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // APFS clonefile: instant, copy-on-write, master untouched.
+        let work = tmp.appendingPathComponent("work.qcow2")
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: img), to: work)
+
+        let config = QemuEngineConfig(
+            helper: base.appendingPathComponent("qemu-system-sparc"),
+            firmwareDir: base.appendingPathComponent("firmware", isDirectory: true),
+            diskImage: work)
+        let engine = QemuEngine(config: config)
+
+        let cleanHalt = expectation(description: "clean halt marker")
+        let terminated = expectation(description: "process terminated")
+        engine.onCleanHalt { cleanHalt.fulfill() }
+        engine.onTerminated { terminated.fulfill() }
+
+        // Once the login prompt appears, the engine auto-logs-in as root; give
+        // the shell a few seconds to settle, then request graceful shutdown.
+        let lock = NSLock()
+        var buf = ""
+        var triggered = false
+        engine.onConsole { chunk in
+            lock.lock()
+            buf += chunk
+            let fire = !triggered && buf.contains("login:")
+            if fire { triggered = true }
+            lock.unlock()
+            if fire {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6) { engine.shutDown() }
+            }
+        }
+
+        try engine.start()
+        wait(for: [cleanHalt], timeout: 200)   // boot + auto-login + init 5 + sync
+        wait(for: [terminated], timeout: 30)    // power-off -> qemu exits
+        XCTAssertEqual(engine.state, .stopped)
     }
 
     // MARK: - helpers

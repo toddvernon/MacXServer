@@ -52,23 +52,45 @@ public struct QemuEngineConfig: Sendable, Equatable {
 public final class QemuEngine: @unchecked Sendable {
 
     public enum State: Sendable, Equatable {
-        /// No disk image installed yet (the menu offers "Install").
+        /// No disk image installed yet.
         case notInstalled
-        /// Image present, engine not running (the menu offers "Run").
+        /// Image present, engine not running.
         case stopped
-        /// Engine running (the menu offers "Stop"; launcher entry un-grays).
+        /// Engine running.
         case running
+        /// Graceful shutdown in progress (init 5 sent, waiting for halt).
+        case shuttingDown
     }
+
+    /// Console prompt that means we can auto-log-in. The image allows root
+    /// console login with no password.
+    private static let loginPrompt = "login:"
+    private static let loginUser = "root"
+    /// Console line Solaris prints once filesystems are flushed and unmounted
+    /// -- the positive "safe to power off" signal (verified empirically with
+    /// `init 5` on this image). qemu then powers off and exits on its own.
+    private static let cleanHaltMarker = "syncing file systems"
 
     private let config: QemuEngineConfig
     private let queue = DispatchQueue(label: "swiftx.qemu-engine")
     private var process: Process?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
+    private var stdinPipe: Pipe?
     private var isRunning = false
+    private var shuttingDown = false
+    /// Auto-login fires once per run, on the first login prompt.
+    private var loggedIn = false
+    /// The clean-halt signal fires once per shutdown.
+    private var sawCleanHalt = false
+    /// Rolling tail of recent console text, for marker detection across the
+    /// chunk boundaries the pipe splits output on.
+    private var consoleTail = ""
 
     private var consoleCallback: ((String) -> Void)?
     private var stateCallback: ((State) -> Void)?
+    private var terminatedCallback: (() -> Void)?
+    private var cleanHaltCallback: (() -> Void)?
 
     public init(config: QemuEngineConfig) {
         self.config = config
@@ -87,11 +109,24 @@ public final class QemuEngine: @unchecked Sendable {
         self.stateCallback = callback
     }
 
+    /// Fires on the main queue when the qemu process has exited (clean
+    /// power-off or kill). Used by the app-quit path to know the guest is down.
+    public func onTerminated(_ callback: @escaping () -> Void) {
+        self.terminatedCallback = callback
+    }
+
+    /// Fires on the main queue when Solaris reports filesystems synced during
+    /// a graceful shutdown -- the positive "safe to power off" signal.
+    public func onCleanHalt(_ callback: @escaping () -> Void) {
+        self.cleanHaltCallback = callback
+    }
+
     // MARK: - State
 
-    /// Current state. When not running, distinguishes notInstalled vs stopped
-    /// by whether the disk image is on disk.
+    /// Current state. Shutting-down takes precedence; otherwise running vs
+    /// (stopped | notInstalled by disk-image presence).
     public var state: State {
+        if shuttingDown { return .shuttingDown }
         if isRunning { return .running }
         return FileManager.default.fileExists(atPath: config.diskImage.path)
             ? .stopped : .notInstalled
@@ -116,46 +151,58 @@ public final class QemuEngine: @unchecked Sendable {
         p.executableURL = config.helper
         p.arguments = args
 
-        let outPipe = Pipe(), errPipe = Pipe()
+        let outPipe = Pipe(), errPipe = Pipe(), inPipe = Pipe()
         p.standardOutput = outPipe
         p.standardError = errPipe
-        // No stdin for v1: the observation window is read-only. Interactive
-        // console / QMP control is a post-v1 concern.
-        p.standardInput = FileHandle.nullDevice
+        // Writable stdin: we drive the serial console to auto-login and to
+        // issue a graceful `init 5` shutdown.
+        p.standardInput = inPipe
 
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             if data.isEmpty { handle.readabilityHandler = nil; return }
-            self?.handleChunk(data)
+            self?.queue.async { self?.ingest(data) }
         }
         errPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             if data.isEmpty { handle.readabilityHandler = nil; return }
-            self?.handleChunk(data)
+            self?.queue.async { self?.ingest(data) }
         }
 
         p.terminationHandler = { [weak self] _ in
             self?.queue.async {
                 guard let self = self else { return }
                 if let rest = try? outPipe.fileHandleForReading.readToEnd(), !rest.isEmpty {
-                    self.handleChunk(rest)
+                    self.ingest(rest)
                 }
                 if let rest = try? errPipe.fileHandleForReading.readToEnd(), !rest.isEmpty {
-                    self.handleChunk(rest)
+                    self.ingest(rest)
                 }
                 outPipe.fileHandleForReading.readabilityHandler = nil
                 errPipe.fileHandleForReading.readabilityHandler = nil
                 self.process = nil
                 self.stdoutPipe = nil
                 self.stderrPipe = nil
+                self.stdinPipe = nil
                 self.isRunning = false
+                self.shuttingDown = false
+                self.loggedIn = false
+                self.sawCleanHalt = false
+                self.consoleTail = ""
                 self.emitState()
+                let cb = self.terminatedCallback
+                DispatchQueue.main.async { cb?() }
             }
         }
 
         self.process = p
         self.stdoutPipe = outPipe
         self.stderrPipe = errPipe
+        self.stdinPipe = inPipe
+        self.shuttingDown = false
+        self.loggedIn = false
+        self.sawCleanHalt = false
+        self.consoleTail = ""
 
         do {
             try p.run()
@@ -163,16 +210,37 @@ public final class QemuEngine: @unchecked Sendable {
             self.process = nil
             self.stdoutPipe = nil
             self.stderrPipe = nil
+            self.stdinPipe = nil
             throw QemuEngineError.spawnFailed(error.localizedDescription)
         }
         isRunning = true
         emitState()
     }
 
-    public func stop() {
+    /// Graceful shutdown: send `init 5` to the (root) console. Solaris syncs,
+    /// unmounts, prints the clean-halt marker (onCleanHalt fires), then powers
+    /// off so qemu exits on its own (onTerminated fires). Safe no-op if not
+    /// running or already shutting down.
+    public func shutDown() {
+        queue.async { [weak self] in
+            guard let self = self, self.isRunning, !self.shuttingDown else { return }
+            self.shuttingDown = true
+            self.emitState()
+            self.writeConsole("init 5\n")
+        }
+    }
+
+    /// Hard kill: SIGTERM to qemu (pulls the power cord -- Solaris will fsck on
+    /// next boot). For wedged cases where graceful shutdown won't complete.
+    public func kill() {
         queue.async { [weak self] in
             self?.process?.terminate()
         }
+    }
+
+    /// Write raw text to the serial console (appends nothing; include "\n").
+    public func sendConsole(_ text: String) {
+        queue.async { [weak self] in self?.writeConsole(text) }
     }
 
     // MARK: - Argument construction
@@ -247,13 +315,41 @@ public final class QemuEngine: @unchecked Sendable {
                                 diskImage: diskImage, memoryMB: memoryMB)
     }
 
-    // MARK: - I/O
+    // MARK: - I/O (all on `queue`)
 
-    private func handleChunk(_ data: Data) {
+    /// Process a console chunk: forward it to the UI, auto-login on the first
+    /// login prompt, and fire the clean-halt signal during shutdown. Runs on
+    /// `queue` so the flags and tail buffer aren't raced.
+    private func ingest(_ data: Data) {
         guard let s = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .ascii) else { return }
+
+        // Keep a bounded tail so markers split across chunks still match.
+        consoleTail += s
+        if consoleTail.count > 8192 {
+            consoleTail = String(consoleTail.suffix(8192))
+        }
+
+        if !loggedIn, consoleTail.contains(Self.loginPrompt) {
+            loggedIn = true
+            writeConsole("\(Self.loginUser)\n")
+        }
+
+        if shuttingDown, !sawCleanHalt, consoleTail.contains(Self.cleanHaltMarker) {
+            sawCleanHalt = true
+            let cb = cleanHaltCallback
+            DispatchQueue.main.async { cb?() }
+        }
+
         let cb = consoleCallback
         DispatchQueue.main.async { cb?(s) }
+    }
+
+    /// Write to qemu's stdin (the serial console). Best-effort: the pipe may
+    /// already be closed if the guest powered off.
+    private func writeConsole(_ text: String) {
+        guard let handle = stdinPipe?.fileHandleForWriting else { return }
+        try? handle.write(contentsOf: Data(text.utf8))
     }
 
     private func emitState() {
