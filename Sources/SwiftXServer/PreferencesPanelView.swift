@@ -400,6 +400,16 @@ private struct SparcStationTab: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            Divider()
+
+            Toggle("Back up the disk image after each clean shutdown",
+                   isOn: $model.sparcAutoBackupOnShutdown)
+
+            Text("Keeps a dated \u{201C}last known good\u{201D} copy next to the image whenever the SPARCstation shuts down cleanly, so you can roll back if a later session corrupts it. Only the most recent few are kept. Turn this off to skip the automatic copies.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             Spacer()
         }
         .padding(24)
@@ -551,6 +561,14 @@ final class PreferencesPanelModel: ObservableObject {
         }
     }
 
+    @Published var sparcAutoBackupOnShutdown: Bool {
+        didSet {
+            if sparcAutoBackupOnShutdown != prefs.sparcAutoBackupOnShutdown {
+                prefs.sparcAutoBackupOnShutdown = sparcAutoBackupOnShutdown
+            }
+        }
+    }
+
     var captureDirectory: String { prefs.captureDirectory }
 
     /// Path of the user-editable resources file. Same path the resources
@@ -574,6 +592,7 @@ final class PreferencesPanelModel: ObservableObject {
         self.pointerRightClick = preferences.pointerRightClick
         self.xtermScrollbarThumbOverride = preferences.xtermScrollbarThumbOverride
         self.sparcDiskImagePath = preferences.sparcDiskImagePath
+        self.sparcAutoBackupOnShutdown = preferences.sparcAutoBackupOnShutdown
     }
 
     /// Pick a Solaris disk image with an open panel and store its path.

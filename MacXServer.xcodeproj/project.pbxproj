@@ -54,6 +54,7 @@
 		2BA449C6EB730AA28192DD16 /* GetProperty.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88E2FA8704FBC71C8A3C5B5F /* GetProperty.swift */; };
 		2BB0CFF94E4FC7CDC1021473 /* SwiftXCaptureUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08FC1E8C330E95BC28022D41 /* SwiftXCaptureUI.framework */; };
 		2D357D8D959034DDAE7AADB5 /* ServerEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = D899EE8C17AAED546A288ECA /* ServerEntry.swift */; };
+		2F2C923C19D7C5ECF2B23794 /* SparcBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B01D59F31E525E644B827791 /* SparcBackup.swift */; };
 		2F84F769261D18B6121706F8 /* XInputReplies.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60184FDABB324FE88ECF9BA2 /* XInputReplies.swift */; };
 		2F9E9AD50AB9540D6BC98615 /* ChangeProperty.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C76D9CB0E09373F6808C9E /* ChangeProperty.swift */; };
 		2FF1A89AE14D6B11CDAD37BF /* RenderReplies.swift in Sources */ = {isa = PBXBuildFile; fileRef = 881FD1878A77E69244329EA9 /* RenderReplies.swift */; };
@@ -581,6 +582,7 @@
 		AEFF605BCF9A3DD6DE699A8C /* FontMappingsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontMappingsWindowController.swift; sourceTree = "<group>"; };
 		AF9DA8205C0055712457E54F /* KeyboardOpcodes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardOpcodes.swift; sourceTree = "<group>"; };
 		AFD844086EE13EE665B7EC88 /* Geometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Geometry.swift; sourceTree = "<group>"; };
+		B01D59F31E525E644B827791 /* SparcBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparcBackup.swift; sourceTree = "<group>"; };
 		B0C0657F2AA6EBAD71334B12 /* ExtensionDumper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionDumper.swift; sourceTree = "<group>"; };
 		B1E38DA72875F2CB1EE5A11B /* ResourceTables.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceTables.swift; sourceTree = "<group>"; };
 		B285FD582FAF4933BADFEC56 /* SelectionMediator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionMediator.swift; sourceTree = "<group>"; };
@@ -753,6 +755,7 @@
 				397C1DB799237FC342A95BB7 /* ServerSession.swift */,
 				47DE8FD81191EC2F95EAEE34 /* ShapeExtension.swift */,
 				9DF3816F21F8223631A5A34F /* SiblingChain.swift */,
+				B01D59F31E525E644B827791 /* SparcBackup.swift */,
 				08CB18B437E54871E3E40C4C /* SSHLauncher.swift */,
 				B3CBEEBE7AF2170953119CAE /* SynthesizedFonts.swift */,
 				149BF1A018D63F3CDF368D84 /* TelnetLauncher.swift */,
@@ -1406,6 +1409,7 @@
 				B8EB593ABD9F9E31FD4B32BB /* ServerSession.swift in Sources */,
 				26D61E26CF20E4649E4BAF97 /* ShapeExtension.swift in Sources */,
 				50C2987BA7EFE3F73D71450A /* SiblingChain.swift in Sources */,
+				2F2C923C19D7C5ECF2B23794 /* SparcBackup.swift in Sources */,
 				6CCA6AC049210CAAE0930ACF /* SynthesizedFonts.swift in Sources */,
 				251B566EEA8DD752C9165E7A /* TelnetLauncher.swift in Sources */,
 				2A9488BF82A47D5171A135C7 /* USKeymap.swift in Sources */,

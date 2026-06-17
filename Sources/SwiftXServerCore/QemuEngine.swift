@@ -93,7 +93,7 @@ public final class QemuEngine: @unchecked Sendable {
 
     private var consoleCallback: ((String) -> Void)?
     private var stateCallback: ((State) -> Void)?
-    private var terminatedCallback: (() -> Void)?
+    private var terminatedCallback: ((Bool) -> Void)?
     private var cleanHaltCallback: (() -> Void)?
     private var progressCallback: ((Double) -> Void)?
 
@@ -135,7 +135,11 @@ public final class QemuEngine: @unchecked Sendable {
 
     /// Fires on the main queue when the qemu process has exited (clean
     /// power-off or kill). Used by the app-quit path to know the guest is down.
-    public func onTerminated(_ callback: @escaping () -> Void) {
+    /// The Bool is whether this run ended via a verified clean halt (the
+    /// `syncing file systems` signal was seen) vs. a hard kill / crash -- the
+    /// auto-backup path uses it to copy only known-good images. It's captured
+    /// before per-run state is reset, so it reflects the run that just ended.
+    public func onTerminated(_ callback: @escaping (Bool) -> Void) {
         self.terminatedCallback = callback
     }
 
@@ -213,6 +217,10 @@ public final class QemuEngine: @unchecked Sendable {
                 self.stdoutPipe = nil
                 self.stderrPipe = nil
                 self.stdinPipe = nil
+                // Capture the clean-halt result before resetting per-run
+                // state, so the terminated callback can tell a graceful
+                // power-off from a hard kill.
+                let wasCleanHalt = self.sawCleanHalt
                 self.isRunning = false
                 self.shuttingDown = false
                 self.loggedIn = false
@@ -222,7 +230,7 @@ public final class QemuEngine: @unchecked Sendable {
                 self.emitState()
                 self.emitProgress()
                 let cb = self.terminatedCallback
-                DispatchQueue.main.async { cb?() }
+                DispatchQueue.main.async { cb?(wasCleanHalt) }
             }
         }
 

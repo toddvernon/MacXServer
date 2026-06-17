@@ -167,7 +167,7 @@ final class QemuEngineTests: XCTestCase {
         let cleanHalt = expectation(description: "clean halt marker")
         let terminated = expectation(description: "process terminated")
         engine.onCleanHalt { cleanHalt.fulfill() }
-        engine.onTerminated { terminated.fulfill() }
+        engine.onTerminated { _ in terminated.fulfill() }
 
         // Once the login prompt appears, the engine auto-logs-in as root; give
         // the shell a few seconds to settle, then request graceful shutdown.

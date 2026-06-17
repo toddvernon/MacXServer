@@ -159,6 +159,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         engine.onProgress { [weak self] value in
             self?.sparcConsole?.setProgress(value)
         }
+        engine.onTerminated { [weak self] wasCleanHalt in
+            self?.autoBackupAfterCleanShutdown(wasCleanHalt: wasCleanHalt)
+        }
         self.qemuEngine = engine
         self.sparcConsole?.setState(engine.state)
     }
@@ -694,21 +697,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @MainActor
     @objc private func backUpDiskImage(_ sender: Any?) {
         // Only valid when stopped (validateMenuItem enforces it). Copy the
-        // qcow2 alongside itself with a dated name.
+        // qcow2 alongside itself with a dated name and reveal it in Finder.
+        // Manual backups use the "backup" marker and are never auto-pruned.
         let path = (preferences.sparcDiskImagePath as NSString).expandingTildeInPath
         guard !path.isEmpty else { return }
         let src = URL(fileURLWithPath: path)
-        let dir = src.deletingLastPathComponent()
-        let base = src.deletingPathExtension().lastPathComponent
-        let ext = src.pathExtension
-        let stamp = Self.backupDateFormatter.string(from: Date())
-        var dest = dir.appendingPathComponent("\(base) backup \(stamp).\(ext)")
-        // Avoid clobbering an earlier backup made the same day.
-        var n = 2
-        while FileManager.default.fileExists(atPath: dest.path) {
-            dest = dir.appendingPathComponent("\(base) backup \(stamp) (\(n)).\(ext)")
-            n += 1
-        }
+        let dest = Self.backupDestination(for: src, marker: "backup")
         do {
             try FileManager.default.copyItem(at: src, to: dest)
             NSWorkspace.shared.activateFileViewerSelecting([dest])
@@ -717,11 +711,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    private static let backupDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
+    /// How many auto-backups to keep before pruning the oldest. Auto-backups
+    /// are full logical images, so without a cap they'd accumulate one per
+    /// clean shutdown forever. Manual backups are exempt from this.
+    nonisolated private static let autoBackupKeepCount = 5
+
+    /// Fired from `QemuEngine.onTerminated` after every run. Makes a "last
+    /// known good" copy of the image, but only when the run ended via a
+    /// verified clean halt (so we never snapshot a possibly-dirty image after
+    /// a hard kill) and the user hasn't opted out. Runs off the main thread:
+    /// same-volume APFS makes this an instant clonefile, but a cross-volume
+    /// image would be a full copy we don't want to block the UI on.
+    private func autoBackupAfterCleanShutdown(wasCleanHalt: Bool) {
+        guard wasCleanHalt, preferences.sparcAutoBackupOnShutdown else { return }
+        let path = (preferences.sparcDiskImagePath as NSString).expandingTildeInPath
+        guard !path.isEmpty else { return }
+        let src = URL(fileURLWithPath: path)
+        DispatchQueue.global(qos: .utility).async {
+            Self.writeAutoBackup(of: src)
+        }
+    }
+
+    /// Clone `src` to a dated "autobackup" sibling, then prune to the most
+    /// recent `autoBackupKeepCount`. No UI: on the clean-shutdown path a modal
+    /// would be intrusive, so failures are logged, not surfaced.
+    nonisolated private static func writeAutoBackup(of src: URL) {
+        let dest = backupDestination(for: src, marker: SparcBackup.autoMarker)
+        do {
+            try FileManager.default.copyItem(at: src, to: dest)
+        } catch {
+            NSLog("SPARCstation auto-backup failed: \(error.localizedDescription)")
+            return
+        }
+        pruneAutoBackups(for: src, keep: autoBackupKeepCount)
+    }
+
+    /// Delete the oldest auto-backup siblings of `src` beyond `keep`. The
+    /// selection (oldest-first, autobackup-marker-only) is `SparcBackup`'s job;
+    /// this just gathers names + creation dates and does the deletes.
+    nonisolated private static func pruneAutoBackups(for src: URL, keep: Int) {
+        let dir = src.deletingLastPathComponent()
+        let base = src.deletingPathExtension().lastPathComponent
+        let ext = src.pathExtension
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.creationDateKey]) else { return }
+        let entries = urls.map { url -> (name: String, created: Date) in
+            let created = (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast
+            return (url.lastPathComponent, created)
+        }
+        let doomed = SparcBackup.autoBackupsToPrune(entries: entries, base: base, ext: ext, keep: keep)
+        for name in doomed {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
+        }
+    }
+
+    /// A dated, collision-free backup path alongside `src`. Naming (marker,
+    /// same-day suffixing) is `SparcBackup`'s job; this resolves the directory
+    /// and the set of names already present.
+    nonisolated private static func backupDestination(for src: URL, marker: String) -> URL {
+        let dir = src.deletingLastPathComponent()
+        let base = src.deletingPathExtension().lastPathComponent
+        let ext = src.pathExtension
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let stamp = formatter.string(from: Date())
+        let existing = Set((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+        let name = SparcBackup.backupName(base: base, ext: ext, marker: marker,
+                                          stamp: stamp, existing: existing)
+        return dir.appendingPathComponent(name)
+    }
 
 
     @MainActor

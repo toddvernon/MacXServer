@@ -141,11 +141,35 @@ qemu. All DONE 2026-06-17.
 - [x] **Force quit.** `kill()` (SIGTERM) behind a confirm dialog, for wedged
   cases.
 - [x] **Back Up Disk Image.** Menu item enabled only when stopped; copies the
-  qcow2 alongside itself with a dated name (APFS clonefile via copyItem).
+  qcow2 alongside itself with a dated `... backup <date>.qcow2` name (APFS
+  clonefile via copyItem). Manual backups are never auto-pruned.
+- [x] **Auto-backup on clean shutdown (2026-06-17).** Default-on Preferences
+  setting (SPARCstation tab; off = "live dangerously"). On every *verified
+  clean halt* -- never a hard kill -- macXserver clones the image to a dated
+  `... autobackup <date>.qcow2` sibling and prunes to the newest 5. Fires off
+  `QemuEngine.onTerminated`, which now reports whether the run ended via the
+  `syncing file systems` signal so we only ever copy a known-good image. The
+  naming + rotation policy is the pure, unit-tested `SparcBackup` in
+  SwiftXServerCore; the load-bearing test pins that rotation never selects the
+  master or a manual backup. This is a rolling "last known good" that protects
+  *future* sessions; it only refreshes on clean exits (a crashy session makes
+  no copy, which is correct -- you never snapshot a dirty image).
+- [ ] **Restore from Backup (deferred -- fix before shipping).** There's no
+  in-app way to roll the master back to one of those autobackups yet. The
+  intended shape is a stopped-only "Restore from Backup…" menu item (mirroring
+  Back Up's gating): list autobackups + manual backups newest-first, default
+  to the most recent, and on confirm rename the current master aside (e.g.
+  `... before-restore <date>.qcow2`) before copying the chosen backup into the
+  image path -- a *restore*, not a boot-from-backup (v1 boots read-write, so
+  booting a backup in place would consume it). The pick-and-restore logic is
+  pure and belongs alongside `SparcBackup`. **Workaround for now:** the user
+  swaps the image file by hand (or repoints Preferences → SPARCstation) before
+  launching. v1 must ship with the real UI.
 - [x] **Tests.** Unit tests plus two `SPARCPLUG_LIVE_TEST`-gated live tests:
   console streaming, and a full boot → auto-login → `init 5` → clean-halt →
   terminate cycle (passes in ~65s, runs against an APFS clone so the master
-  image is never mutated).
+  image is never mutated). Plus `SparcBackupTests` (7) for the auto-backup
+  naming + rotation policy.
 
 ## Track C — Install the disk image (Deliverable 2)
 

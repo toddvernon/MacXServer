@@ -31,6 +31,7 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         static let pointerRightClick     = "pointer.rightClick"     // int
         static let xtermScrollbarThumbOverride = "xterm.scrollbarThumbOverride" // bool
         static let sparcDiskImagePath = "sparcplug.diskImagePath"   // string, "" = not installed
+        static let sparcAutoBackupOnShutdown = "sparcplug.autoBackupOnShutdown" // bool
     }
 
     /// Where server-side captures land when capture is enabled. /tmp is
@@ -58,6 +59,7 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
             Key.pointerRightClick: 3,
             Key.xtermScrollbarThumbOverride: false,
             Key.sparcDiskImagePath: "",
+            Key.sparcAutoBackupOnShutdown: true,
         ])
     }
 
@@ -206,6 +208,22 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         get { defaults.string(forKey: Key.sparcDiskImagePath) ?? "" }
         set {
             defaults.set(newValue, forKey: Key.sparcDiskImagePath)
+            NotificationCenter.default.post(name: Self.didChange, object: self)
+        }
+    }
+
+    /// When true (default), macXserver auto-clones the disk image after every
+    /// *clean* SPARCstation shutdown -- a rolling "last known good" restore
+    /// point captured at the one moment the image is guaranteed coherent
+    /// (Solaris synced its filesystems, qemu flushed and closed the qcow2).
+    /// Only fires on the verified clean-halt path, never after a hard kill
+    /// (which could snapshot a dirty image). Auto-backups are pruned to the
+    /// most recent few; manual "Back Up Disk Image" copies are never touched.
+    /// Off = live dangerously: no automatic safety copies.
+    var sparcAutoBackupOnShutdown: Bool {
+        get { defaults.bool(forKey: Key.sparcAutoBackupOnShutdown) }
+        set {
+            defaults.set(newValue, forKey: Key.sparcAutoBackupOnShutdown)
             NotificationCenter.default.post(name: Self.didChange, object: self)
         }
     }
