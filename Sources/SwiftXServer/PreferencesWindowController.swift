@@ -9,8 +9,14 @@ import SwiftUI
 
 final class PreferencesWindowController: NSWindowController {
 
+    /// Owned here (not created inside the SwiftUI view) so callers can drive
+    /// the selected tab.
+    private let model: PreferencesPanelModel
+
     init(preferences: Preferences) {
-        let hostingView = NSHostingView(rootView: PreferencesPanelView(preferences: preferences))
+        let model = PreferencesPanelModel(preferences: preferences)
+        self.model = model
+        let hostingView = NSHostingView(rootView: PreferencesPanelView(model: model))
 
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 560, height: 460),
@@ -28,7 +34,9 @@ final class PreferencesWindowController: NSWindowController {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
-    func showWindow() {
+    /// Show the window, optionally jumping to a specific tab.
+    func showWindow(selecting tab: PreferencesTab? = nil) {
+        if let tab { model.selectedTab = tab }
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

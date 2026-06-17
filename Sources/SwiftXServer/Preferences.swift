@@ -30,6 +30,7 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         static let pointerWheelClick     = "pointer.wheelClick"     // int
         static let pointerRightClick     = "pointer.rightClick"     // int
         static let xtermScrollbarThumbOverride = "xterm.scrollbarThumbOverride" // bool
+        static let sparcDiskImagePath = "sparcplug.diskImagePath"   // string, "" = not installed
     }
 
     /// Where server-side captures land when capture is enabled. /tmp is
@@ -56,6 +57,7 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
             Key.pointerWheelClick: 2,
             Key.pointerRightClick: 3,
             Key.xtermScrollbarThumbOverride: false,
+            Key.sparcDiskImagePath: "",
         ])
     }
 
@@ -190,6 +192,20 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         get { defaults.bool(forKey: Key.xtermScrollbarThumbOverride) }
         set {
             defaults.set(newValue, forKey: Key.xtermScrollbarThumbOverride)
+            NotificationCenter.default.post(name: Self.didChange, object: self)
+        }
+    }
+
+    /// Absolute path to the SPARCstation Solaris disk image (qcow2). Empty
+    /// means "not installed": the SPARCstation menu offers Install and Run is
+    /// disabled. The user can put the image anywhere; this one setting is the
+    /// source of truth for both dev and release. In release the disk-image
+    /// downloader writes the user-chosen path here at download time, so the
+    /// engine resolves the image the same way in both.
+    var sparcDiskImagePath: String {
+        get { defaults.string(forKey: Key.sparcDiskImagePath) ?? "" }
+        set {
+            defaults.set(newValue, forKey: Key.sparcDiskImagePath)
             NotificationCenter.default.post(name: Self.didChange, object: self)
         }
     }

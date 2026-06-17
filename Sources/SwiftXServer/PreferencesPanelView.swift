@@ -8,32 +8,47 @@ import SwiftXServerCore
 // vocabulary as the Resources editor so the two windows feel like
 // they belong to the same app.
 
+/// Identifies the Preferences tabs so callers (e.g. the SPARCstation menu's
+/// Install action) can open the window to a specific tab.
+enum PreferencesTab: Hashable {
+    case cutPaste, capture, mouse, display, sparcStation, network
+}
+
 struct PreferencesPanelView: View {
 
-    @StateObject private var model: PreferencesPanelModel
+    @ObservedObject var model: PreferencesPanelModel
 
-    init(preferences: Preferences) {
-        _model = StateObject(wrappedValue: PreferencesPanelModel(preferences: preferences))
+    init(model: PreferencesPanelModel) {
+        self.model = model
     }
 
     var body: some View {
-        TabView {
+        TabView(selection: $model.selectedTab) {
             CutPasteTab(model: model)
                 .tabItem {
                     Label("Cut/Paste", systemImage: "doc.on.clipboard")
                 }
+                .tag(PreferencesTab.cutPaste)
             CaptureTab(model: model)
                 .tabItem {
                     Label("Capture", systemImage: "recordingtape")
                 }
+                .tag(PreferencesTab.capture)
             MouseTab(model: model)
                 .tabItem {
                     Label("Mouse", systemImage: "computermouse")
                 }
+                .tag(PreferencesTab.mouse)
             DisplayTab(model: model)
                 .tabItem {
                     Label("Display", systemImage: "display")
                 }
+                .tag(PreferencesTab.display)
+            SparcStationTab(model: model)
+                .tabItem {
+                    Label("SPARCstation", systemImage: "desktopcomputer")
+                }
+                .tag(PreferencesTab.sparcStation)
             PlaceholderTab(
                 icon: "network",
                 title: "Network",
@@ -42,6 +57,7 @@ struct PreferencesPanelView: View {
                 .tabItem {
                     Label("Network", systemImage: "network")
                 }
+                .tag(PreferencesTab.network)
         }
         .frame(minWidth: 520, minHeight: 400)
         .padding(.top, 12)
@@ -343,6 +359,54 @@ private struct DisplayTab: View {
     }
 }
 
+// MARK: - SPARCstation tab
+
+private struct SparcStationTab: View {
+    @ObservedObject var model: PreferencesPanelModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            PanelHeader(
+                icon: "desktopcomputer",
+                title: "SPARCstation",
+                caption: "The bundled SPARCstation 5 running Solaris 2.6."
+            )
+
+            Text("Disk image:")
+                .foregroundStyle(.secondary)
+
+            Text(model.sparcDiskImagePath.isEmpty
+                 ? "No disk image selected" : model.sparcDiskImagePath)
+                .font(.callout)
+                .foregroundStyle(model.sparcDiskImagePath.isEmpty ? .secondary : .primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            HStack {
+                Button("Choose\u{2026}") { model.chooseSparcDiskImage() }
+                if !model.sparcDiskImagePath.isEmpty {
+                    Button("Reveal in Finder") { model.revealSparcDiskImage() }
+                    Button("Clear") { model.sparcDiskImagePath = "" }
+                }
+                Spacer()
+            }
+
+            Text("Point this at a Solaris qcow2 disk image; the SPARCstation \u{203A} Run command boots it. Until the in-app downloader ships, this is how you select the image. Booting writes to the image (the VM persists its own state), so use a copy if you want to keep a pristine master.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
 // MARK: - Placeholder tab
 
 private struct PlaceholderTab: View {
@@ -394,6 +458,10 @@ private struct PanelHeader: View {
 final class PreferencesPanelModel: ObservableObject {
 
     private let prefs: Preferences
+
+    /// Which tab is showing. Driven by the tab bar, and set programmatically
+    /// when a caller opens Preferences to a specific tab.
+    @Published var selectedTab: PreferencesTab = .cutPaste
 
     @Published var clipboardEnabled: Bool {
         didSet {
@@ -475,6 +543,14 @@ final class PreferencesPanelModel: ObservableObject {
         }
     }
 
+    @Published var sparcDiskImagePath: String {
+        didSet {
+            if sparcDiskImagePath != prefs.sparcDiskImagePath {
+                prefs.sparcDiskImagePath = sparcDiskImagePath
+            }
+        }
+    }
+
     var captureDirectory: String { prefs.captureDirectory }
 
     /// Path of the user-editable resources file. Same path the resources
@@ -497,6 +573,28 @@ final class PreferencesPanelModel: ObservableObject {
         self.pointerWheelClick = preferences.pointerWheelClick
         self.pointerRightClick = preferences.pointerRightClick
         self.xtermScrollbarThumbOverride = preferences.xtermScrollbarThumbOverride
+        self.sparcDiskImagePath = preferences.sparcDiskImagePath
+    }
+
+    /// Pick a Solaris disk image with an open panel and store its path.
+    func chooseSparcDiskImage() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Solaris Disk Image"
+        panel.prompt = "Choose"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        if !sparcDiskImagePath.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: sparcDiskImagePath).deletingLastPathComponent()
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        sparcDiskImagePath = url.path
+    }
+
+    /// Reveal the selected disk image in Finder.
+    func revealSparcDiskImage() {
+        guard !sparcDiskImagePath.isEmpty else { return }
+        NSWorkspace.shared.selectFile(sparcDiskImagePath, inFileViewerRootedAtPath: "")
     }
 
     /// Reseed the user resources file from the bundled defaults. Same

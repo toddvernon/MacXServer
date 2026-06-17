@@ -13,7 +13,7 @@ import SwiftXCaptureUI
 /// NSApplicationDelegate for the server app: owns the status-bar item, the
 /// standard Mac main menu, and the Preferences / Resources / Launchers windows.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// User-facing settings (capture, display scale, clipboard, Motif frame).
     let preferences: Preferences
@@ -30,6 +30,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var launchersMenu: NSMenu?
     private var activeLauncher: RemoteLauncher?
     private var progressController: LaunchProgressWindowController?
+
+    /// The bundled SPARCstation engine controller, and its console window.
+    /// Created once at launch; the engine doesn't run until "Run SPARCstation".
+    private var qemuEngine: QemuEngine?
+    private var sparcConsole: SparcPlugConsoleWindowController?
+    private var sparcWelcome: SparcStationWelcomeWindowController?
 
     /// LAN host the launcher hands to remote apps as `DISPLAY`; set by the
     /// bootstrap once the listener resolves the bind address.
@@ -98,10 +104,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         installStatusItem()
         installMainMenu()
+        setupSparcEngine()
         NotificationCenter.default.addObserver(
             self, selector: #selector(launchersFileChanged(_:)),
             name: .launchersFileDidChange, object: nil
         )
+    }
+
+    /// Build the engine controller and keep it in sync with the disk-image
+    /// path in Preferences (the source of truth for where the image lives).
+    private func setupSparcEngine() {
+        rebuildSparcEngine()
+        // When the disk-image path changes in Preferences, rebuild so the
+        // menu state and the next Run pick it up. Don't yank the config out
+        // from under a running VM.
+        NotificationCenter.default.addObserver(
+            forName: Preferences.didChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            // queue: .main means this block runs on the main thread, so the
+            // main-actor hop is an assertion, not a dispatch.
+            MainActor.assumeIsolated {
+                guard let self = self, self.qemuEngine?.state != .running else { return }
+                self.rebuildSparcEngine()
+            }
+        }
+    }
+
+    /// Resolve the engine config: the engine binary comes from the app
+    /// bundle (or SPARCPLUG_ENGINE_DIR in dev), and the disk image from the
+    /// Preferences path. Empty path -> the engine reports notInstalled.
+    private func makeSparcConfig() -> QemuEngineConfig {
+        var config = QemuEngine.defaultConfig()
+        let path = preferences.sparcDiskImagePath
+        if !path.isEmpty {
+            config.diskImage = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        }
+        return config
+    }
+
+    /// (Re)create the engine and route its console + state to the observation
+    /// window. The closures fire on the main queue (QemuEngine dispatches
+    /// them), so touching the console window here is safe.
+    private func rebuildSparcEngine() {
+        let engine = QemuEngine(config: makeSparcConfig())
+        engine.onConsole { [weak self] text in
+            self?.sparcConsole?.appendConsole(text)
+        }
+        engine.onStateChange { [weak self] state in
+            self?.sparcConsole?.setState(state)
+        }
+        self.qemuEngine = engine
+        self.sparcConsole?.setState(engine.state)
     }
 
     /// Returns false so the status-bar app keeps running with no X windows open.
@@ -255,6 +308,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildLaunchersMenu(lMenu)
         launchersMenuItem.submenu = lMenu
         main.addItem(launchersMenuItem)
+
+        // SPARCstation menu -- the bundled QEMU SS-5. Start handles the
+        // missing-image case itself (it presents the install flow), so there's
+        // no separate Install item. Start is enabled whenever not running;
+        // Stop when running.
+        let sparcMenuItem = NSMenuItem()
+        let sparcMenu = NSMenu(title: "SPARCstation")
+        let start = NSMenuItem(title: "Start SPARCstation",
+                               action: #selector(startSparcStation(_:)), keyEquivalent: "")
+        start.target = self
+        sparcMenu.addItem(start)
+        let stop = NSMenuItem(title: "Stop SPARCstation",
+                              action: #selector(stopSparcStation(_:)), keyEquivalent: "")
+        stop.target = self
+        sparcMenu.addItem(stop)
+        sparcMenu.addItem(.separator())
+        let showConsole = NSMenuItem(title: "Show Console",
+                                     action: #selector(showSparcConsole(_:)), keyEquivalent: "")
+        showConsole.target = self
+        sparcMenu.addItem(showConsole)
+        sparcMenuItem.submenu = sparcMenu
+        main.addItem(sparcMenuItem)
 
         // Window menu -- minimise / close are handy when an X window is up.
         let windowMenuItem = NSMenuItem()
@@ -533,6 +608,113 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    // MARK: - SPARCstation
+
+    private func ensureSparcConsole() {
+        if sparcConsole == nil {
+            let console = SparcPlugConsoleWindowController()
+            console.setState(qemuEngine?.state ?? .stopped)
+            sparcConsole = console
+        }
+    }
+
+    @MainActor
+    @objc private func startSparcStation(_ sender: Any?) {
+        guard let engine = qemuEngine else { return }
+        switch engine.state {
+        case .running:
+            return                       // menu item is disabled here anyway
+        case .stopped:
+            launchSparcStation()
+        case .notInstalled:
+            presentInstallFlow()         // no image yet -> first-run install
+        }
+    }
+
+    @objc private func stopSparcStation(_ sender: Any?) {
+        qemuEngine?.stop()
+    }
+
+    @MainActor
+    @objc private func showSparcConsole(_ sender: Any?) {
+        ensureSparcConsole()
+        sparcConsole?.showWindow()
+    }
+
+    /// Boot the engine and bring up the console. Assumes an image is set.
+    private func launchSparcStation() {
+        ensureSparcConsole()
+        sparcConsole?.showWindow()
+        do {
+            try qemuEngine?.start()
+        } catch {
+            showLaunchError("Couldn't start SPARCstation: \(error.localizedDescription)")
+        }
+    }
+
+    /// First-run / no-image flow: a friendly hero-panel window (not the
+    /// Settings tab, not a system error alert) explaining the bundled emulator
+    /// and offering to pick an existing image or download a starter image. If
+    /// the user dismisses, nothing changes and they'll see it again next
+    /// Start. Changing the location later is done in Preferences.
+    private func presentInstallFlow() {
+        if sparcWelcome == nil {
+            sparcWelcome = SparcStationWelcomeWindowController(
+                onChooseImage: { [weak self] in self?.chooseImageThenStart() },
+                onDownload: { [weak self] in self?.downloadStarterImage() }
+            )
+        }
+        sparcWelcome?.showWindow()
+    }
+
+    /// Pick an existing qcow2, store it as the image path, and boot.
+    private func chooseImageThenStart() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Solaris Disk Image"
+        panel.prompt = "Choose"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        preferences.sparcDiskImagePath = url.path
+        rebuildSparcEngine()             // pick up the new path now, not on the async notification
+        launchSparcStation()
+    }
+
+    /// Download flow: ask where to put the image, then fetch it. The fetch
+    /// itself is Track C and not wired yet, so for now we collect the
+    /// destination and explain. When Track C lands, this downloads, verifies,
+    /// sets the path, and boots.
+    private func downloadStarterImage() {
+        let save = NSSavePanel()
+        save.title = "Download Starter Image"
+        save.prompt = "Choose Location"
+        save.message = "Choose where to save the Solaris starter image."
+        save.nameFieldStringValue = QemuEngine.diskImageFilename
+        guard save.runModal() == .OK, let url = save.url else { return }
+        let alert = NSAlert()
+        alert.messageText = "Download isn't available yet"
+        alert.informativeText = "The starter-image download is still being built. When it ships "
+            + "it will fetch the image to:\n\n\(url.path)\n\nFor now, use \u{201C}Choose Image\u{2026}\u{201D} "
+            + "to select a qcow2 you already have."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    /// Enable the SPARCstation items by engine state. Start is available
+    /// whenever not running (it triggers the install flow if no image yet);
+    /// Stop only while running. Other items fall through to enabled.
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        let state = qemuEngine?.state ?? .notInstalled
+        switch item.action {
+        case #selector(startSparcStation(_:)): return state != .running
+        case #selector(stopSparcStation(_:)):  return state == .running
+        case #selector(showSparcConsole(_:)):  return sparcConsole != nil
+        default: return true
+        }
     }
 }
 

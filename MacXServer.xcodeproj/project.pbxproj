@@ -40,6 +40,7 @@
 		2196392377C0BA66F93EC223 /* QueryColorsReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FAD63B04A2A7DD757392604 /* QueryColorsReply.swift */; };
 		21B2AB1A7087735C89A037B8 /* ChangeWindowAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA677B3680A675B37565D97F /* ChangeWindowAttributes.swift */; };
 		225AA42BE38CE43B05C091F4 /* ColormapOpcodes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57839F72E974453A096C3B78 /* ColormapOpcodes.swift */; };
+		234C8AFC02F1E9BE48F51F71 /* SparcStationWelcomeWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2919BA52AEB8B568EBADB7D /* SparcStationWelcomeWindowController.swift */; };
 		238A08408DCAFC21E29EE343 /* KeyboardOpcodes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9DA8205C0055712457E54F /* KeyboardOpcodes.swift */; };
 		2452A88712ACF4009E10E276 /* CreateGlyphCursor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79899EF3BFEA18C936A5D2A7 /* CreateGlyphCursor.swift */; };
 		251B566EEA8DD752C9165E7A /* TelnetLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 149BF1A018D63F3CDF368D84 /* TelnetLauncher.swift */; };
@@ -167,6 +168,7 @@
 		972F3EE258AC442075DFB6FE /* XkbMapPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 280F23AE470D6D904408207B /* XkbMapPayload.swift */; };
 		97505EDAD43827D812042553 /* ServerMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = C692A58FDDA47F11AD813822 /* ServerMain.swift */; };
 		98DD525D2E56702953EF468B /* GCState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1117A789AFF21E2BF317C431 /* GCState.swift */; };
+		9A48C3F777EA2702E773B9FC /* SparcPlugConsoleWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5572289CEA5A6228AAD86A49 /* SparcPlugConsoleWindowController.swift */; };
 		9B523B1A46A96772F571953E /* RemoteLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = C62F63EBF845EE60FC8C7221 /* RemoteLauncher.swift */; };
 		9BB7D3307B03A8B3CB750ECA /* DisplayConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49986E08BB1ACA19E7567D27 /* DisplayConfig.swift */; };
 		9BE4F2635B2BBF5821B8FF87 /* LauncherSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90F7590AE2D5541F11DA187C /* LauncherSyntaxHighlighter.swift */; };
@@ -204,6 +206,7 @@
 		C1511C1CC316B2A44AD82545 /* Proxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34D34B4B935E7C62AE94A994 /* Proxy.swift */; };
 		C2622B4751B8CBE07AFED29B /* XColorDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14F46AC1EF70369D1062B2C6 /* XColorDatabase.swift */; };
 		C2E023E859505144AB677B05 /* PixmapFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC9ACBCCF200EA4114DE3937 /* PixmapFormat.swift */; };
+		C3DA09C7E6DAFE597CEB9301 /* QemuEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2C27389B140F26E809375BE /* QemuEngine.swift */; };
 		C41239F3ABD02DED708EF10F /* ColorTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F832BF595210624737A573D /* ColorTable.swift */; };
 		C4548601447FFFA94372863A /* MapWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 249B65BE76E9610A9C5FD44C /* MapWindow.swift */; };
 		C56C2882B904FC72CF9D2C31 /* GetScreenSaverReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AFCE948474A6D1CAA210F61 /* GetScreenSaverReply.swift */; };
@@ -496,6 +499,7 @@
 		502251A243774C11396C7EAE /* ShmEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShmEvents.swift; sourceTree = "<group>"; };
 		5223062DC438DD6D7D28AB36 /* SimpleResourceRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleResourceRequests.swift; sourceTree = "<group>"; };
 		5360D4634580C2FB08F55E56 /* QueryExtensionReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryExtensionReply.swift; sourceTree = "<group>"; };
+		5572289CEA5A6228AAD86A49 /* SparcPlugConsoleWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparcPlugConsoleWindowController.swift; sourceTree = "<group>"; };
 		55EFA351EF159E81ED44E31A /* ReplayEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplayEngine.swift; sourceTree = "<group>"; };
 		57839F72E974453A096C3B78 /* ColormapOpcodes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColormapOpcodes.swift; sourceTree = "<group>"; };
 		5A02D2B7952B85FD0F4ECF99 /* GrabReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrabReply.swift; sourceTree = "<group>"; };
@@ -580,6 +584,7 @@
 		B0C0657F2AA6EBAD71334B12 /* ExtensionDumper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionDumper.swift; sourceTree = "<group>"; };
 		B1E38DA72875F2CB1EE5A11B /* ResourceTables.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceTables.swift; sourceTree = "<group>"; };
 		B285FD582FAF4933BADFEC56 /* SelectionMediator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionMediator.swift; sourceTree = "<group>"; };
+		B2919BA52AEB8B568EBADB7D /* SparcStationWelcomeWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparcStationWelcomeWindowController.swift; sourceTree = "<group>"; };
 		B2FD0D5ABA128A97E4429D3F /* CopyPlane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyPlane.swift; sourceTree = "<group>"; };
 		B346BF76D4A6D677D3D59128 /* AdditionalOpcodes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdditionalOpcodes.swift; sourceTree = "<group>"; };
 		B3CBEEBE7AF2170953119CAE /* SynthesizedFonts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynthesizedFonts.swift; sourceTree = "<group>"; };
@@ -630,6 +635,7 @@
 		DDD91EC43E7E4357E4A85980 /* CocoaWindowBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CocoaWindowBridge.swift; sourceTree = "<group>"; };
 		DE68EE02C86045BB80B3BC6F /* TranslateCoordinatesReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslateCoordinatesReply.swift; sourceTree = "<group>"; };
 		DF6D1CB88B92FB31EA022471 /* ListInstalledColormapsReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListInstalledColormapsReply.swift; sourceTree = "<group>"; };
+		E2C27389B140F26E809375BE /* QemuEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QemuEngine.swift; sourceTree = "<group>"; };
 		E3CF77002D6681AC47ED822F /* ChangeGC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangeGC.swift; sourceTree = "<group>"; };
 		E706E43524F684D8DD36A74F /* Keysyms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keysyms.swift; sourceTree = "<group>"; };
 		E9C7827D3BD8C37ABDB5B63A /* GetModifierMappingReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GetModifierMappingReply.swift; sourceTree = "<group>"; };
@@ -735,6 +741,7 @@
 				68F90F4DA66B7E9194001904 /* OutboundQueue.swift */,
 				FEAAC6D6AB02404456535F45 /* PixelBuffer.swift */,
 				96CD807BE28C18051D249341 /* PointerConfig.swift */,
+				E2C27389B140F26E809375BE /* QemuEngine.swift */,
 				C62F63EBF845EE60FC8C7221 /* RemoteLauncher.swift */,
 				3786DF66F0E0DC6F2B22D543 /* ResourceFile.swift */,
 				B1E38DA72875F2CB1EE5A11B /* ResourceTables.swift */,
@@ -819,6 +826,8 @@
 				9105F039F6EA455004282947 /* ResourcesWindowController.swift */,
 				C7374467A89FB169ED5220A3 /* ResourceSyntaxHighlighter.swift */,
 				D899EE8C17AAED546A288ECA /* ServerEntry.swift */,
+				5572289CEA5A6228AAD86A49 /* SparcPlugConsoleWindowController.swift */,
+				B2919BA52AEB8B568EBADB7D /* SparcStationWelcomeWindowController.swift */,
 			);
 			path = SwiftXServer;
 			sourceTree = "<group>";
@@ -1177,6 +1186,7 @@
 				0AB4543A897B93B8D71D6E72 /* Resources */,
 				24CBD1735BF2C8E7D832E03B /* Frameworks */,
 				BE2A9695DB8162C7A3DEB0B2 /* Embed Frameworks */,
+				1ECD7BE14ADD28E23270C96F /* Embed SPARCplug engine (Debug only) */,
 			);
 			buildRules = (
 			);
@@ -1307,6 +1317,28 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		1ECD7BE14ADD28E23270C96F /* Embed SPARCplug engine (Debug only) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed SPARCplug engine (Debug only)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Debug builds embed the locally-built SPARCplug engine so a dev\n# build resolves it the same way release does (release.sh does the\n# signed copy for the shipped archive). Expects the SPARCplug repo\n# cloned as a sibling with dist/ built (build-qemu.sh + packaging).\n# No-op for Release so it can't slip an unsigned engine into a ship.\n[ \"$CONFIGURATION\" = \"Debug\" ] || exit 0\nDIST=\"$SRCROOT/../SPARCplug/dist\"\nif [ ! -x \"$DIST/qemu-system-sparc\" ]; then\n  echo \"warning: SPARCplug engine not found at $DIST — SPARCstation Run will be unavailable in this dev build (build it in the SPARCplug repo)\"\n  exit 0\nfi\nAPP=\"$BUILT_PRODUCTS_DIR/$PRODUCT_NAME.app/Contents\"\nmkdir -p \"$APP/Helpers/lib\" \"$APP/Resources/qemu-firmware\"\n/bin/cp -f \"$DIST/qemu-system-sparc\" \"$APP/Helpers/\"\n/bin/cp -f \"$DIST/lib/\"*.dylib \"$APP/Helpers/lib/\"\n/bin/cp -f \"$DIST/firmware/\"* \"$APP/Resources/qemu-firmware/\"\necho \"Embedded SPARCplug engine from $DIST\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		057FDCB8C83CAF1068DB6BBE /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -1357,6 +1389,7 @@
 				CACEBA76A7907DA83D4654B0 /* OutboundQueue.swift in Sources */,
 				CE591857F0C41C97E597EE90 /* PixelBuffer.swift in Sources */,
 				528A50EAC0A4E1E29A65AB16 /* PointerConfig.swift in Sources */,
+				C3DA09C7E6DAFE597CEB9301 /* QemuEngine.swift in Sources */,
 				FF215B9CEEF7EE25F44B75A8 /* Region.swift in Sources */,
 				49D5735C4F198471DDF8CA3B /* RegionDebug.swift in Sources */,
 				94179B158905B30F50AAB39D /* RegionExtras.swift in Sources */,
@@ -1595,6 +1628,8 @@
 				47343C21C5281798EB078782 /* ResourcesWindowController.swift in Sources */,
 				2D357D8D959034DDAE7AADB5 /* ServerEntry.swift in Sources */,
 				97505EDAD43827D812042553 /* ServerMain.swift in Sources */,
+				9A48C3F777EA2702E773B9FC /* SparcPlugConsoleWindowController.swift in Sources */,
+				234C8AFC02F1E9BE48F51F71 /* SparcStationWelcomeWindowController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1675,8 +1710,6 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"@executable_path/../Frameworks",
 				);
-				CURRENT_PROJECT_VERSION = 1;
-				MARKETING_VERSION = 0.9.8;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.server;
 				PRODUCT_NAME = MacXServer;
 				SDKROOT = macosx;
@@ -1699,7 +1732,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.8;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.Framer;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1850,7 +1883,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.8;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.SwiftXServerCore;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1869,8 +1902,6 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"@executable_path/../Frameworks",
 				);
-				CURRENT_PROJECT_VERSION = 1;
-				MARKETING_VERSION = 0.9.8;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.capture;
 				PRODUCT_NAME = MacXCapture;
 				SDKROOT = macosx;
@@ -1893,7 +1924,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.8;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.SwiftXCaptureUI;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1912,8 +1943,6 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"@executable_path/../Frameworks",
 				);
-				CURRENT_PROJECT_VERSION = 1;
-				MARKETING_VERSION = 0.9.8;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.server;
 				PRODUCT_NAME = MacXServer;
 				SDKROOT = macosx;
@@ -1936,7 +1965,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.8;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.SwiftXServerCore;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1960,7 +1989,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.8;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.SwiftXCaptureCore;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1984,7 +2013,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.8;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.SwiftXCaptureCore;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -2008,7 +2037,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.8;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.SwiftXCaptureUI;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -2032,7 +2061,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.8;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.Framer;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -2051,8 +2080,6 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"@executable_path/../Frameworks",
 				);
-				CURRENT_PROJECT_VERSION = 1;
-				MARKETING_VERSION = 0.9.8;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.capture;
 				PRODUCT_NAME = MacXCapture;
 				SDKROOT = macosx;

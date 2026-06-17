@@ -103,9 +103,13 @@ and survives a clean-Mac load + notarization. Engine build already exists
   running` on `QemuEngine.State`, computed from disk-image presence + run
   state, surfaced via `onStateChange`. Wiring it to the menu label and
   launcher-entry enable is Track D.
-- [ ] **B3. Observation window.** Reuse `LaunchProgressWindowController`
-  (its `appendText` + AttributedString + autoscroll model is already a
-  streaming console). Pipe qemu `-nographic` stdout in. Read-only for v1.
+- [x] **B3. Observation window. DONE 2026-06-17.**
+  `Sources/SwiftXServer/SparcPlugConsoleWindowController.swift`, modeled on
+  `LaunchProgressWindowController` (NSPanel + SwiftUI monospaced transcript,
+  autoscroll). Read-only console with a state dot (running/stopped/no-image).
+  Wired to `QemuEngine.onConsole`. Known v1 limitation: transcript grows
+  unbounded over a long session (same as the launcher progress window); cap
+  later if it matters.
 
 ## Track C — Install the disk image (Deliverable 2)
 
@@ -120,8 +124,20 @@ and survives a clean-Mac load + notarization. Engine build already exists
 
 ## Track D — UI glue
 
-- [ ] **D1. Menu item** in the App menu (`AppDelegate.swift:155-232`),
-  label flips `Install SPARCplug → Run/Stop SPARCplug` off the B2 state.
+- [x] **D1. Menu + install flow. DONE 2026-06-17.** Top-level "SPARCstation"
+  menu in `AppDelegate.installMainMenu()`: Start / Stop / Show Console (no
+  separate Install item — Start handles the missing-image case).
+  `validateMenuItem`: Start enabled when not running, Stop when running.
+  Start with an image boots + opens the console; with no image it presents a
+  friendly hero-panel window (`SparcStationWelcomeWindowController`) — graphic
+  + explanation of the bundled emulator + Choose Image… / Download Starter
+  Image… / Cancel — not a system error alert. The disk-image path is a
+  Preferences setting (`sparcDiskImagePath`, SPARCstation tab with
+  Choose/Reveal/Clear); it's the source of truth for dev and release and
+  where the location is changed after first run. Engine config rebuilds on
+  path change. Engine binary resolves from the app bundle in release, and
+  from a Debug-only `project.yml` build phase that embeds
+  `$SRCROOT/../SPARCplug/dist` in dev.
 - [ ] **D2. Launcher enable.** The `[host:qemu-ss5]` entry with
   `display = 10.0.2.2:0` already works end-to-end (the `display` key exists
   in `LauncherEntry`). v1 just un-grays it when the engine runs.

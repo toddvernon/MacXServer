@@ -146,6 +146,27 @@ targets:
         ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS: NO
         LD_RUNPATH_SEARCH_PATHS:
           - "@executable_path/../Frameworks"
+    postBuildScripts:
+      - name: Embed SPARCplug engine (Debug only)
+        basedOnDependencyAnalysis: false
+        script: |
+          # Debug builds embed the locally-built SPARCplug engine so a dev
+          # build resolves it the same way release does (release.sh does the
+          # signed copy for the shipped archive). Expects the SPARCplug repo
+          # cloned as a sibling with dist/ built (build-qemu.sh + packaging).
+          # No-op for Release so it can't slip an unsigned engine into a ship.
+          [ "$CONFIGURATION" = "Debug" ] || exit 0
+          DIST="$SRCROOT/../SPARCplug/dist"
+          if [ ! -x "$DIST/qemu-system-sparc" ]; then
+            echo "warning: SPARCplug engine not found at $DIST — SPARCstation Run will be unavailable in this dev build (build it in the SPARCplug repo)"
+            exit 0
+          fi
+          APP="$BUILT_PRODUCTS_DIR/$PRODUCT_NAME.app/Contents"
+          mkdir -p "$APP/Helpers/lib" "$APP/Resources/qemu-firmware"
+          /bin/cp -f "$DIST/qemu-system-sparc" "$APP/Helpers/"
+          /bin/cp -f "$DIST/lib/"*.dylib "$APP/Helpers/lib/"
+          /bin/cp -f "$DIST/firmware/"* "$APP/Resources/qemu-firmware/"
+          echo "Embedded SPARCplug engine from $DIST"
 
 schemes:
 
