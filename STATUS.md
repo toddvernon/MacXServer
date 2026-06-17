@@ -1,95 +1,94 @@
-# Status 2026-06-17
+# Status 2026-06-17 (end of day)
 
-## FIRST THING on the other Mac (read before building)
+Two work sessions today across both Macs. The morning (desktop) landed the
+SparkPlug→SPARCplug rename and the bulk of the plugin v1 integration
+(QemuEngine, console window, menu, graceful shutdown). The afternoon
+(laptop) brought the engine up on the second Mac, fixed three things that
+broke a clean-checkout build, and added auto-backup on clean shutdown.
 
-The dev build now embeds the SPARCplug engine into `MacXServer.app` via a
-Debug-only build phase that copies `~/dev/SPARCplug/dist`. For the
-SPARCstation to run from an Xcode build on the other Mac, that `dist/` has
-to exist there:
+## Building the engine (now reproducible from a clean checkout)
+
+For the SPARCstation to run from an Xcode build, `~/dev/SPARCplug/dist`
+has to exist (the dev build embeds it into `MacXServer.app` via a
+Debug-only build phase). Both Macs have it built as of today. To rebuild
+from scratch:
 
 1. `git pull` both repos (`~/dev/X` and `~/dev/SPARCplug`).
-2. In `~/dev/SPARCplug`: `./build-qemu.sh`, then
+2. Build deps (one-time, homebrew): `dylibbundler ninja meson pkg-config`
+   + `glib pixman pcre2 libffi gettext`.
+3. In `~/dev/SPARCplug`: `./build-qemu.sh`, then
    `./packaging/bundle-dylibs.sh`, then
-   `IDENTITY="Developer ID Application: CarePenguin, inc (X478U667PR)" ./packaging/codesign.sh`
-   (ad-hoc `-` also runs, but only without hardened runtime; Developer ID is
-   the faithful path). That produces `dist/{qemu-system-sparc, lib/, firmware/}`.
-3. The Solaris image rides Dropbox at `~/Dropbox/dev/SPARCplug/SUN40G.qcow2`.
-   In macXserver: Preferences → SPARCstation → Choose… that file (or a copy
-   if you want to keep a pristine master; v1 boots read-write).
-4. Build/run `MacXServer` in Xcode → SPARCstation → Start.
+   `IDENTITY="Developer ID Application: CarePenguin, inc (X478U667PR)" ./packaging/codesign.sh`.
+   Produces `dist/{qemu-system-sparc, lib/, firmware/}`.
+4. The Solaris image rides Dropbox at `~/Dropbox/dev/SPARCplug/SUN40G.qcow2`.
+   In macXserver: Preferences → SPARCstation → Choose… that file (v1 boots
+   read-write).
+5. Build/run `MacXServer` in Xcode → SPARCstation → Start. If `dist/` isn't
+   built, the app still builds; the build phase logs a warning and Start
+   can't find the engine.
 
-If `dist/` isn't built, the app still builds and runs; the SPARCstation
-menu's Start just can't find the engine (the build phase logs a warning).
+## What landed today (afternoon / laptop session)
 
-## What landed today
+**Engine built + verified on the second Mac.** Live test (`QemuEngineTests`,
+`SPARCPLUG_LIVE_TEST`) boots Solaris 2.6 end to end -- boot → auto-login →
+`init 5` → clean halt -- against an APFS clone, 7/7 green. Xcode build embeds
+the signed engine into `MacXServer.app` (Helpers/ + Resources/qemu-firmware/),
+hardened runtime intact, zero homebrew leaks.
 
-**Rename: SparkPlug → SPARCplug (it's a SPARCstation, not a spark plug).**
-Swept the whole surface in one pass: the GitHub repo
-(`toddvernon/SparkPlug` → `toddvernon/SPARCplug`, renamed in place, old URL
-redirects), local dir (`~/dev/SPARCplug`), Dropbox asset dir
-(`~/Dropbox/dev/SPARCplug`), every file in the SPARCplug repo, all
-references across the macXserver repo, and memory.
+**Three clean-checkout build fixes (SPARCplug `f2fd12d`).** The build only
+worked on the Mac that did the original tarball import; a fresh git history
+failed three ways, all now fixed in the build scripts:
+- `build-qemu.sh`: `--disable-install-blobs` (meson was validating non-sparc
+  firmware blobs like `pc-bios/s390-ccw.img` that the blanket `*.img`
+  gitignore keeps out of the repo).
+- `build-qemu.sh`: build the `qemu-system-sparc` target explicitly (bare
+  `ninja` left only the unsigned binary and built the whole qtest suite).
+- `bundle-dylibs.sh`: stage `openbios-sparc32` into `dist/firmware/` -- the
+  step the punch list claimed was done but that never made it into the
+  committed script. `QemuEngine` passes `dist/firmware` as `-L`; without it
+  the engine can't boot past OpenBOOT.
 
-**Plugin v1 integration — big progress.** The living checklist is
-`PLUGIN_V1_PUNCHLIST.md` (decisions at top, Tracks A–E + a lifecycle
-section). Done and committed today:
+**Local rename finished on the laptop.** `~/dev/SparkPlug` → `~/dev/SPARCplug`
++ remote URL repointed. GitHub repo and the Dropbox asset dir were already
+renamed (the laptop pull worked via the old-URL redirect); only the local
+working tree was stale. Both Macs now match.
 
-- **Track A (engine bundling) proven.** `packaging/bundle-dylibs.sh` now
-  works end to end (fixed two real bugs: `-s` search path for the `@rpath`
-  libslirp, and an `LC_RPATH` dedupe that modern dyld was aborting on). ROM
-  staged into `dist/firmware`; the engine must launch with `-L` at it (the
-  built-in firmware path is a dead build-tree absolute). Signed with the
-  real Developer ID under hardened runtime + JIT entitlements and **booted
-  Solaris to login** loading only bundled bits. A4 reframed: dev gets the
-  engine via the Debug build phase; A5 (release.sh signed copy-in) and A6
-  (clean-Mac) remain.
-- **B1/B2: `QemuEngine`** (`Sources/SwiftXServerCore/QemuEngine.swift`) —
-  spawns the engine, streams the serial console, state machine
-  (notInstalled/stopped/running/shuttingDown), writable console.
-- **B3: console observation window** with a full-width blue **boot
-  thermometer** (grows on boot, recedes on shutdown, driven by console
-  milestones).
-- **D1: SPARCstation menu** (Start / Shut Down / Show Console / Back Up Disk
-  Image). Start with no image opens a friendly hero-panel **welcome window**
-  (Choose Image… / Download Starter Image… / Cancel), not an error alert.
-- **Disk-image location is a Preferences setting** (`sparcDiskImagePath`,
-  SPARCstation tab) — single source of truth for dev and release; the
-  release downloader will write it at download time.
-- **Graceful shutdown.** Auto-logs-in as root (image allows passwordless
-  root console — verified; also the Helios prerequisite, on by default),
-  `init 5` syncs/unmounts and powers off so qemu exits on its own. The
-  positive "safe to power off" signal is the console line
-  `syncing file systems... done` (verified empirically). Force Quit (hard
-  kill, behind a confirm) for wedged cases.
-- **Quit guard.** Quitting macXserver while the SPARCstation runs is refused
-  with a dialog (Go to Console / Cancel) so the user shuts it down cleanly
-  first — no orphaned qemu, no power-yank fsck.
-- **Back Up Disk Image** menu item (stopped only): clones the qcow2 with a
-  dated name.
+**Auto-backup on clean shutdown (macXserver `113a197`).** Default-on
+Preferences setting (SPARCstation tab; off = live dangerously). On every
+*verified clean halt* -- never a hard kill -- macXserver clones the image to
+a dated `... autobackup <date>.qcow2` sibling and prunes to the newest 5.
+Fires off `QemuEngine.onTerminated`, which now reports whether the run ended
+via the `syncing file systems` signal. Naming + rotation is the pure,
+unit-tested `SparcBackup` in SwiftXServerCore (`SparcBackupTests`, 7 tests;
+the load-bearing one pins that rotation never selects the master or a manual
+backup). Manual "Back Up Disk Image" copies use a distinct marker and are
+never auto-pruned.
 
 ## What's working / verified
 
-- macXserver app + X server: untouched core, still green (full suite 1311
-  tests pass).
-- SPARCplug engine builds, relinks clean (zero `/opt/homebrew`), signs, and
-  boots Solaris 2.6 to login under hardened runtime + JIT.
-- `QemuEngine`: unit tests + two `SPARCPLUG_LIVE_TEST`-gated live tests —
-  console streaming, and a full boot → auto-login → `init 5` → clean-halt →
-  terminate cycle (~65s, runs against an APFS clone so the master image is
-  never mutated). All pass.
-- Xcode build (`MacXServer` scheme) green; project regenerated via
-  `xcodegen generate` after the `project.yml` build-phase change.
+- macXserver app + X server: untouched core, still green.
+- SPARCplug engine: builds reproducibly from a clean checkout on both Macs,
+  relinks clean (zero `/opt/homebrew`), signs under hardened runtime + JIT,
+  boots Solaris 2.6 to login and halts cleanly via `init 5`.
+- `QemuEngine`: unit tests + two live tests (console streaming; full
+  boot→login→`init 5`→clean-halt→terminate, ~65s against an APFS clone).
+- Auto-backup: `SparcBackup` rotation/naming policy unit-tested.
+- Xcode `MacXServer` build green; engine embedded in the .app.
 
 ## What's next (still plugin v1, BEFORE Helios)
 
-1. **A5** — `release.sh`: after export, copy `dist/` into the `.app`, sign
-   inside-out (dylibs → helper with `qemu.entitlements` → re-sign the app
-   wrapper), then notarize. The signing recipe is already proven locally.
-2. **A6** — clean-Mac acceptance (fresh account, no homebrew).
-3. **Track C** — the real downloader behind "Download Starter Image…":
-   NSURLSession + sha256 + gunzip into the user-chosen location, then write
-   the path into `sparcDiskImagePath`. `manifest.json` + hosting on the
-   OldSilicon CDN is the external piece.
+1. **A5** -- `release.sh`: copy `dist/` into the `.app`, sign inside-out
+   (dylibs → helper with `qemu.entitlements` → app wrapper), notarize +
+   staple. Signing recipe proven locally on both Macs now.
+2. **A6** -- clean-Mac acceptance (fresh account, no homebrew).
+3. **Track C** -- the real downloader behind "Download Starter Image…":
+   NSURLSession + sha256 + gunzip, then write `sparcDiskImagePath`.
+   `manifest.json` + OldSilicon CDN hosting is the external piece.
+4. **Restore from Backup UI (fix before shipping).** Auto-backup captures
+   known-good copies but there's no in-app way to roll back to one yet.
+   Intended: a stopped-only "Restore from Backup…" menu item (pick newest,
+   rename current master aside, copy the chosen backup into the image path).
+   Workaround for now: swap the image file by hand. See PLUGIN_V1_PUNCHLIST.md.
 
 Helios stays talk-only until plugin v1 ships.
 
@@ -97,9 +96,8 @@ Helios stays talk-only until plugin v1 ships.
 
 - Living checklist: `PLUGIN_V1_PUNCHLIST.md`.
 - Plugin design + milestone + licensing: `SPARCSTATION_PLUGIN.md`.
-- Engine repo: `~/dev/SPARCplug` / `github.com:toddvernon/SPARCplug`
-  (private). Build: `./build-qemu.sh` then `packaging/`.
+- Engine repo: `~/dev/SPARCplug` / `github.com:toddvernon/SPARCplug` (private).
 - Assets (qcow2): `~/Dropbox/dev/SPARCplug/` (Dropbox-synced, not git).
 - Dev engine resolution honors `SPARCPLUG_ENGINE_DIR` / `SPARCPLUG_DISK_IMAGE`
-  env overrides (used by the live tests); the app normally resolves the
-  engine from the bundle and the image from the Preferences setting.
+  env overrides (used by the live tests); the app resolves the engine from
+  the bundle and the image from the Preferences setting.
