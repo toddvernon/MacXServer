@@ -40,7 +40,10 @@ final class SparcPlugConsoleWindowController: NSWindowController {
     }
 
     func setState(_ state: QemuEngine.State) {
-        if state == .running { model.safeToQuit = false }   // fresh boot
+        if state == .running, model.state != .running {
+            model.safeToQuit = false   // fresh boot
+            model.beginRun()
+        }
         model.state = state
     }
 
@@ -57,12 +60,20 @@ final class SparcPlugConsoleWindowController: NSWindowController {
 
 @MainActor
 final class SparcPlugConsoleModel: ObservableObject {
-    @Published var content = AttributedString()
+    /// Finished lines (each already terminated with "\n").
+    @Published var committed = AttributedString()
+    /// The in-progress last line, re-rendered live so CR/BS overwrites (and the
+    /// `\|/-` spinner) animate in place instead of waiting for a newline.
+    @Published var currentLine = ""
+    /// Bumped on every transcript change; the scroll view follows it.
+    @Published var revision = 0
     @Published var state: QemuEngine.State = .stopped
     /// Set once Solaris confirms filesystems are synced during shutdown.
     @Published var safeToQuit = false
     /// 0...1 boot/shutdown progress for the top thermometer.
     @Published var progress: Double = 0
+
+    private let sanitizer = ConsoleSanitizer()
 
     private let mono: AttributeContainer = {
         var c = AttributeContainer()
@@ -70,8 +81,34 @@ final class SparcPlugConsoleModel: ObservableObject {
         return c
     }()
 
+    /// What the view draws: committed lines plus the live current line.
+    var displayContent: AttributedString {
+        var c = committed
+        if !currentLine.isEmpty {
+            c.append(AttributedString(currentLine, attributes: mono))
+        }
+        return c
+    }
+
     func append(_ text: String) {
-        content.append(AttributedString(text, attributes: mono))
+        let update = sanitizer.feed(text)
+        for line in update.completedLines {
+            committed.append(AttributedString(line + "\n", attributes: mono))
+        }
+        currentLine = update.currentLine
+        revision &+= 1
+    }
+
+    /// New boot: flush any dangling partial line into history and clear the
+    /// sanitizer's parse state so a half-line from the prior run doesn't merge
+    /// into the new one. Keeps the scrollback.
+    func beginRun() {
+        if !currentLine.isEmpty {
+            committed.append(AttributedString(currentLine + "\n", attributes: mono))
+            currentLine = ""
+        }
+        sanitizer.reset()
+        revision &+= 1
     }
 }
 
@@ -120,7 +157,7 @@ struct SparcPlugConsoleView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    Text(model.content)
+                    Text(model.displayContent)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
@@ -128,7 +165,7 @@ struct SparcPlugConsoleView: View {
                 }
                 .background(Color(nsColor: .textBackgroundColor))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
-                .onChange(of: model.content.characters.count) {
+                .onChange(of: model.revision) {
                     proxy.scrollTo("console", anchor: .bottom)
                 }
             }
