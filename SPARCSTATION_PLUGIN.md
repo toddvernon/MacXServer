@@ -317,6 +317,119 @@ launcher file (u5, ss5, nuc, etc) — same fields, same shape. The
 `display = 10.0.2.2:0` is the only line per-host that the QEMU case
 needs that the LAN-Sun case doesn't.
 
+### Image-prep: bootstrapping the dev toolchain (sun26gnu.iso)
+
+The `go` script above is the day-to-day boot. For *image-prep* -- modifying
+the qcow2 to add tools -- there's a sibling
+`~/Dropbox/dev/SPARCplug/fullemu.sh` that runs the **homebrew**
+`qemu-system-sparc` (11.x) instead of the bundled engine, with two extra
+hooks: slirp's built-in TFTP server (`tftp=<dir>` on the `-nic`) and an
+optional `-cdrom` (`CDROM=... ./fullemu.sh`). We use the homebrew engine
+for prep because the bundled one is built `--disable-vmnet` and finds its
+firmware only via the app's `-L`; the homebrew build is fuller and
+self-locates firmware, so it's the friendlier hand-run engine. Prep writes
+the image in place; a dated `SUN40G autobackup ...qcow2` sibling is the undo.
+
+**Getting files INTO the guest is the hard part, because slirp.** What we
+learned the slow way (2026-06-18):
+
+- **FTP is a dead end.** Solaris 2.6's stock `ftp` client is active-only,
+  and active mode can't traverse slirp NAT -- the server has to open a data
+  connection back to the guest at `10.0.2.15`, unreachable from outside
+  slirp. Same wall both directions. A passive-capable client (wget/ncftp)
+  fixes guest-initiated pulls; nothing fixes Mac-pushes-in over FTP.
+- **slirp's built-in TFTP** (`tftp=<dir>`; guest does `tftp 10.0.2.2`,
+  `binary`, `get`) needs no host daemon and crosses no NAT, but it's
+  512-byte lockstep with an ancient client and **times out past a few MB**
+  (2.5 MB fine, 20 MB not). Good for one small bootstrap binary, useless
+  for a toolchain.
+- **Mounting an ISO via `-cdrom` is the answer** for anything big: no size
+  limit, no protocol, no dependency chase.
+
+**The dependency-hell shortcut: `sun26gnu.iso`.** A precompiled GNU set
+built *for Solaris-2.6-under-QEMU* (`archive.org/details/sun26gnu`, 274 MB)
+with an `installgnu.sh` that `pkgadd`s the whole **matched dependency
+closure** at once. That closure is the point: hand-chasing sunfreeware deps
+(wget -> openssl -> libiconv -> libintl -> libidn -> libgcc, each pulling
+more) is a multi-hour trap. vold auto-mounts the disc at `/cdrom/sun26gnu`.
+Install non-interactively:
+
+```sh
+# printf the admin file -- heredocs corrupt over the serial console
+printf 'mail=\ninstance=overwrite\npartial=nocheck\nrunlevel=nocheck\nidepend=nocheck\nrdepend=nocheck\nspace=nocheck\nsetuid=nocheck\nconflict=nocheck\naction=nocheck\nbasedir=default\n' > /tmp/noask
+cd /cdrom/sun26gnu/gnu/pkgs
+for p in * ; do pkgadd -n -a /tmp/noask -d "$p" all ; done
+```
+
+(ISO filenames mangle -- dashes become underscores, versions truncate --
+because the disc has no Rock Ridge and 2.6 `hsfs` falls back to bare
+ISO-9660. File *content* is intact, so glob `*`, not a dash pattern.)
+
+**Toolchain manifest (on SUN40G.qcow2 as of 2026-06-18):**
+
+| Tool | Version | Source |
+|---|---|---|
+| gcc | 2.95.3 | already native on the image (emits stabs) |
+| GNU make | 3.82 | already native |
+| gdb | 4.17 | ibiblio mirror, `GNUgdb.4.17.SPARC.Solaris.2.6.pkg.tgz` |
+| wget | 1.12 (+https) | sun26gnu.iso |
+| bash, vim, less, curl, rsync, sudo, screen, sed, nano | various | sun26gnu.iso |
+| openssl, libiconv, libintl, libidn, libgcc, gzip, ncurses, zlib | -- | sun26gnu.iso (the dep closure) |
+
+gdb 4.17 is the *right* version, not a compromise: gcc 2.95.3 emits stabs
+and 4.17 reads stabs natively; a newer gdb is harder to build on 2.6 and no
+better here. It ships as a `.pkg.tgz` (directory-format, not a datastream):
+`gzip -dc … | tar xf -`, then `pkgadd -d /tmp all`.
+
+**Still missing: OpenSSH/sshd** (the `scp -P 2222` path). Bigger lift than
+the rest: Solaris 2.6 has no `/dev/random`, so OpenSSH needs the **prngd**
+entropy daemon, plus host-key generation, a privsep `sshd` user + `/var/empty`,
+and an rc script. Deps (openssl/zlib/libgcc) are already on. Deferred for
+now -- wget covers guest-side pulls, and the Helios agent (not scp) is the
+production transfer path anyway.
+
+**Solaris 2.6 gotchas worth not re-learning:** `crle` does not exist
+(Solaris 8+); set library search via `/etc/profile` PATH, and the
+sunfreeware binaries carry baked-in RPATHs (`-R/usr/local/lib`,
+`-R/usr/local/ssl/lib`) so `LD_LIBRARY_PATH` is usually unnecessary.
+
+**Console + recovery gotchas (the part that actually ate the day):**
+
+- **Don't paste multi-line text into the QEMU console.** The emulated
+  serial/keyboard overruns -- the screen floods with "processor level 12
+  onboard interrupt not serviced" (the sun4m Zilog SCC interrupt) and the
+  console wedges. Heredocs are the worst (an indented terminator or a
+  dropped byte derails the whole thing); full-screen `vi` pastes scramble.
+  Deliver files via tftp or ISO; build throwaway files with `printf`, not
+  heredocs.
+- **Recover a wedged console without killing the VM:** from a second Mac
+  terminal, `telnet 127.0.0.1 2123` straight into the guest. Only the
+  serial console is flooded; the kernel and inetd are fine, so telnet gives
+  a clean shell. `sync` there before any reset.
+- **A hard kill is survivable.** Installed packages are already on the
+  qcow2; an unclean stop just triggers a routine `fsck` on next boot.
+  Relaunch with `fullemu.sh`.
+
+**Root shell setup (Bourne is grim out of the box):**
+
+- `su` with no dash reads no profile and keeps your tcsh env; **use
+  `su -`** for a real root login that reads `/.profile` (root's home is
+  `/`, not `/root`).
+- Pure Bourne `/sbin/sh` can't do a live-cwd prompt (`PS1` is static), so
+  root's `/.profile` `exec`s an interactive shell once it has a tty.
+  **tcsh** is preferred (matches the `tvernon` login, and the csh history
+  is the point) with a `/.tcshrc` (`set prompt = "[PiSPARC:[%n]:%/]# "`,
+  `set history` / `savehist`); **ksh** is the fallback, with a `/.kshrc`
+  (via `$ENV`) using `PS1='[PiSPARC:[root]:${PWD}]# '`. Keep `/sbin/sh` as
+  the *login* shell (single-user safety); the hand-off only fires once
+  `/usr/local` is up. Use `su -` (not bare `su`) so `/.profile` is read.
+- **`/etc/profile` `stty erase ^H` bug:** the legacy Bourne shell reads
+  `^` as a synonym for the pipe `|`, so `stty erase ^H` parses as
+  `stty erase | H` and prints `H: not found` on every login (the
+  `2>/dev/null` doesn't catch the shell's own message). Quote it:
+  `stty erase '^H'`. The baseline config script (`sparcstation-baseline-config.sh`)
+  should emit it quoted.
+
 ## Surprises and gotchas (lessons from the bring-up)
 
 Things that ate time today, recorded so they don't eat time again.
