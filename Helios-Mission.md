@@ -12,13 +12,24 @@
 > deliberate sequencing decision by Todd, not an oversight. Treat this
 > document as design-only background until then.
 
+> **ACCESS MODEL DECIDED 2026-06-17.** Earlier drafts used an NFS/NAS
+> file plane (the Mac as NAS, the Sun mounting it over NFS) plus command
+> submission through the terminal fd. Both are **deprecated**. The sole
+> access mechanism is now a single **Sun-side guest agent on a TCP port**
+> that proxies both command execution and filesystem access, with the
+> serial console as a secondary mix-in for boot and recovery. NFS was a
+> large infrastructure overhang for a self-contained appliance; a capable
+> agent on a port replaces it and generalizes (the same protocol reaches
+> a real Sun over its real network later). Primary target is SPARCplug,
+> the bundled emulator. Rationale in DECISIONS.md.
+
 ---
 
 ## Mission
 
-Bring Claude-driven, agentic software development to classic Sun workstations **without turning the Suns into modern machines.** The intelligence, the network, the secrets, and the editing all live on the Mac. The Sun stays exactly as period-correct as it is today and contributes the one thing only it can: executing and running native SPARC/SunOS code.
+Bring Claude-driven, agentic software development to classic Sun workstations **without turning the Suns into modern machines.** The intelligence, the network, the secrets, and the editing logic all live on the Mac. The Sun stays exactly as period-correct as it is today and contributes the one thing only it can: executing and running native SPARC/SunOS code.
 
-The agent loop runs on the Mac against the Anthropic API. The Sun is a dumb-but-capable execution target reached over a terminal session. Files live on shared NAS storage that both sides already mount, so editing and search happen on the Mac at full strength and never go through the terminal.
+The agent loop runs on the Mac against the Anthropic API. The primary target is **SPARCplug**, the bundled emulated SPARCstation -- not bare-metal Suns and not a shared NAS. The Sun is reached through a single **guest agent** running inside it, listening on a TCP port, that proxies both commands and filesystem access back to the loop. The serial console is a secondary, mixed-in channel for boot and recovery. There is no NFS and no shared mount.
 
 ---
 
@@ -32,47 +43,51 @@ Helios passes its first milestone when, **with no human intervention after the i
 4. Rebuild successfully.
 5. Run the binary and capture `Hello, world` as output.
 
-This single loop exercises the entire architecture end to end: file write (Mac→NAS), remote build (Sun), result retrieval (NAS→Mac), error comprehension, self-correction, and run. If this works, everything else is scale and polish.
+This single loop exercises the whole architecture end to end: file write (Mac -> agent -> Sun disk), remote build (Sun, via the agent), result retrieval (agent -> Mac), error comprehension, self-correction, and run. If this works, everything else is scale and polish.
 
 ---
 
-## The Solution: Two Planes
+## The Solution: One Agent, Two Channels
 
-**File plane — the Mac, over the NAS.**
-Source of truth is the NAS. The Mac mounts it; the Sun mounts it over NFS. Claude's native file tools (read / write / edit) and search (ripgrep, git) operate on the Mac side at full speed. Editing a file is a local Mac operation, not a terminal puppeteering exercise.
+**Control plane -- the guest agent on a port.** A small daemon baked into the SPARCplug image, started at boot, listening on a TCP port reached from the Mac via slirp `hostfwd` (`127.0.0.1:<port>` -> guest). It proxies two things to the Mac-side loop over one structured request/response channel:
 
-**Execution plane — the Sun, inside macXserver's own terminal.**
-macXserver *is* the terminal. It owns the window, the master fd of the session to the Sun, and the rendered cell grid — so there is no external PTY to bolt on; the tty stream and the screen are already internal state of the app. The agent submits commands (`cc`, `make`, `./a.out`, `dbx`) by writing to that fd exactly as a user's keystrokes would, and reads results from the stream (and, for bulk output, from files over NFS). The Sun does only what it alone can: compile and run native code.
+- **command execution** -- run a shell command via fork/exec, return stdout, stderr, and the real exit code;
+- **filesystem access** -- read, write, list, stat, and search files on the Sun's local disk.
 
-**Where the loop lives.**
-On the Mac, inside macXserver. It holds the API key and runs the tool-use loop. A 1990s Sun doing TLS to `api.anthropic.com` is infeasible (cipher suites, certs, CPU) and never has to — it only sees bytes on a session it already trusts.
+Because the agent runs *on* the Sun, it sees the entire local filesystem (`/etc`, `/var/adm/messages`, `/var/sadm`, the workspace) with no NFS plumbing and no visibility tradeoff. Clean text in, structured results out, no terminal escape codes.
+
+**Console plane (the mix-in) -- the serial console.** macXserver owns the serial-console fd and renders it in the observation window. It is the channel for the things the agent can't cover: boot and recovery before the agent is up (single-user, `fsck`), human observation of what's happening, and interactive prompts. It is *not* the command channel anymore.
+
+**Where the loop lives.** On the Mac, inside macXserver. It holds the API key and runs the tool-use loop, talking to the guest agent over the forwarded port. A 1990s Sun doing TLS to `api.anthropic.com` is infeasible (cipher suites, certs, CPU) and never has to -- it only runs the agent on a port it already trusts.
 
 ---
 
 ## Key Design Decisions
 
-**Built into macXserver; the terminal is not external.** Helios is part of macXserver, not a sidecar process. Because macXserver owns the terminal, the session's byte stream and cell grid are internal data structures the agent reads directly — there is no separate PTY or ssh harness to integrate. This is what makes the single-window experience possible and what unifies the "stream vs grid" question: the integrated terminal naturally has both.
+**Built into macXserver; nothing external.** Helios is part of macXserver, not a sidecar process. macXserver owns both channels as internal state: the guest-agent socket and the serial-console fd. There is no external PTY, ssh harness, or NFS mount to integrate. This is what makes the single-window experience possible.
 
-**Linear by default; the screen is not the surface.** Agentic dev is overwhelmingly line-oriented: shell, compiler, build, run, line-mode debugger. Their output is a transcript. Redirecting to a file and reading over NFS (`cmd > out.log 2>&1; echo $? > status`) is *cleaner* than reading the terminal — no escape codes, no 80-column wrapping, unlimited scrollback, and the file is simply complete when the process exits. A thin live-stream reader is kept only for interactive prompts (a build asking y/n).
+**A capable agent on a port, not a filesystem mount.** The agent *is* the filesystem interface. Claude's edit logic still runs Mac-side at full strength -- read a file through the agent, edit it in the harness, write it back through the agent -- but the bytes transit the port, not a mount. Search runs through the agent too (grep/find on the Sun, or pull-and-search on the Mac). This trades the "Mac-side ripgrep over a mount" convenience for a self-contained appliance with zero NFS infrastructure, which is the right trade for a shipping plugin and the explicit decision of 2026-06-17.
 
-**Editing moves to NFS, which retires the 2D problem.** The main reason to drive a full-screen program was to edit. The agent edits files directly on the Mac instead, so it never puppeteers cm or vi. The one job left for a 2D screen model is *observing a full-screen program the agent is itself building/testing* (e.g. developing cm). That's a later-phase instrument, not the workbench, and not needed for the MVP.
+**Linear by default; the screen is not the surface.** Agentic dev is overwhelmingly line-oriented: shell, compiler, build, run, line-mode debugger. The agent's exec returns a clean transcript and an exit code directly -- no escape codes, no 80-column wrapping, complete when the process exits. (The old `cmd > out 2>&1; echo $? > status` dance was an NFS-era workaround and is gone; the agent captures all three natively via `waitpid`.) The console's live stream is kept only for interactive prompts and human watching.
 
-**Identity is a number, not a name.** `toddvernon` on the Macs vs `tvernon` on the Unix boxes is cosmetic — NFS authorizes by numeric uid, and vintage Suns are NFSv2/v3 (no name mapping). The NAS squashes all access on the dev share to one owner (`all_squash, anonuid=<nas-uid>`), and the SMB/Mac login maps to the same NAS user. Same bytes, same owner-of-record, two labels.
+**Editing goes through the agent, which retires the 2D problem.** The main reason to drive a full-screen program was to edit. The agent reads and writes files directly, so Claude never puppeteers `cm` or `vi`. The one job left for a 2D screen model is *observing a full-screen program the agent is itself building/testing* -- and that is served by the X-side framebuffer (Phase 2), not the serial console. Later-phase instrument, not the workbench, not needed for the MVP.
 
-**The Sun's only must-have native tool is fast search — and even that is optional.** git, patch, and recursive grep stay Mac-side over NFS. The Sun-specific rules reduce to: `sh` not bash (backticks not `$()`), `nawk` not old awk, Sun `cc`/`make` quirks, `dbx` not gdb, BSD-vs-SysV flag differences. These go in the system prompt.
+**Identity is whatever the agent runs as.** With no shared filesystem there's no cross-host uid mapping to reconcile. Files the agent creates are owned by the Sun user it runs as. The old NFS uid-squashing problem simply doesn't exist.
 
-**Path translation is the one bit of bookkeeping.** The harness knows two roots — the Mac mountpoint (e.g. `/Volumes/dev`) and the Sun mountpoint (e.g. `/net/nas/dev`) — and swaps between them when handing a path to a file tool (Mac) versus a PTY command (Sun).
+**One namespace, no path translation.** Files live on the Sun's local disk and are addressed by their Sun paths through the agent. There is no parallel Mac mountpoint and no path-translation bookkeeping.
+
+**Sun-specific rules go in the system prompt.** `sh` not bash (backticks not `$()`), `nawk` not old awk, Sun `cc`/`make` quirks, `dbx` not gdb, BSD-vs-SysV flag differences. A pre-baked GNU-ish toolchain in the image (gcc/gmake/bash/gdb) dissolves most of these; see SPARCSTATION_PLUGIN.md.
 
 ---
 
 ## Tool Surface (MVP)
 
-Exposed to Claude for the milestone:
+Exposed to Claude for the milestone, all backed by the guest agent:
 
-- **Mac-native file tools over NFS** — write `hello.c`, read it, edit it. No terminal involved.
-- **`run_command(cmd)`** — submit a shell command on the Sun by writing to the integrated terminal's master fd (the same path a keystroke takes). Implementation wraps it as `cmd > <out> 2>&1; echo $? > <status>`, then reads `<out>` and `<status>` back over NFS. Returns stdout/stderr text and exit code. The command and its output remain visible in the live terminal pane.
+- **File tools** -- write `hello.c`, read it, edit it, list/stat, search. Backed by the agent's filesystem proxy; the edit logic runs Mac-side, only the bytes cross the port.
+- **`run_command(cmd)`** -- run a shell command on the Sun via the agent's exec; returns stdout, stderr, and exit code directly. The command and its output also surface in the console observation pane.
 
-Deferred (post-MVP): `send_keys` / `read_screen` for interactive programs, and the framebuffer grid for observing programs-under-test.
+Deferred (post-MVP): `send_keys` / `read_screen` over the console for interactive programs, and the X-side framebuffer grid for observing programs-under-test.
 
 ---
 
@@ -80,35 +95,35 @@ Deferred (post-MVP): `send_keys` / `read_screen` for interactive programs, and t
 
 How the hello-world test flows through the architecture:
 
-1. **Write (buggy).** Claude writes `hello.c` to the Mac mount via the file tool — `printf("Hello, world\n")` missing its semicolon.
-2. **Build.** `run_command("cc hello.c -o hello")` runs on the Sun; output → `build.log`, exit code → `build.status`.
-3. **Observe failure.** Mac reads `build.status` (nonzero) and `build.log` over NFS; Claude sees the `cc` error and its line number.
-4. **Fix.** Claude edits `hello.c` on the Mac mount, adding the semicolon.
-5. **Rebuild.** `run_command("cc hello.c -o hello")` → `build.status` now `0`.
-6. **Run.** `run_command("./hello")` → `run.out`.
-7. **Verify.** Mac reads `run.out`; **pass** iff it contains `Hello, world` and both statuses were `0`.
+1. **Write (buggy).** Claude writes `hello.c` to the Sun disk through the agent's file tool -- `printf("Hello, world\n")` missing its semicolon.
+2. **Build.** `run_command("cc hello.c -o hello")` runs on the Sun; the agent returns stderr and a nonzero exit code.
+3. **Observe failure.** Claude reads the `cc` error and its line number straight from the tool result -- no file-and-mount round trip.
+4. **Fix.** Claude edits `hello.c` through the agent, adding the semicolon.
+5. **Rebuild.** `run_command("cc hello.c -o hello")` -> exit code 0.
+6. **Run.** `run_command("./hello")` -> stdout `Hello, world`.
+7. **Verify.** **pass** iff stdout contains `Hello, world` and both the build and run returned 0.
 
 ---
 
 ## The Workbench (macXserver, the primary surface)
 
-The experience *is* macXserver. An xterm launched from the launcher can be **promoted to AI**, which splits its native Mac window:
+The experience *is* macXserver. The SPARCstation console window can be **promoted to AI**, which splits it:
 
-- **Top half — the live terminal.** The same terminal view, still rendering the Sun session. The user watches the agent's commands run and scroll in real time — full transparency into exactly what Helios is doing.
-- **Bottom half — the agent chat.** The conversation: user prompts, Claude's responses, a compact rendering of each tool call (e.g. `cc hello.c → exit 1`, expandable to the output), and an input box.
+- **Top half -- the live console.** The serial-console view, still rendering the Sun session, so the user watches in real time exactly what Helios is doing (the agent's commands and their output echo here for transparency).
+- **Bottom half -- the agent chat.** The conversation: user prompts, Claude's responses, a compact rendering of each tool call (e.g. `cc hello.c -> exit 1`, expandable to the output), and an input box.
 
-On promotion, the keyboard detaches from the shell and routes to the chat input — your typing now talks to Claude (a hint/steering channel), not the shell. A reserved **panic key** demotes instantly and hands the raw terminal back. Promotion snapshots the current screen as the agent's first observation, and a border/titlebar color marks promoted windows.
+On promotion, keyboard input routes to the chat input -- your typing now talks to Claude (a hint/steering channel), not the shell. A reserved **panic key** demotes instantly and hands the raw console back. A border/titlebar color marks promoted windows.
 
-Build order within this surface: the **terminal-integration core** (own the fd, read the stream, write commands, capture exit status) is the foundation and is what the MVP test exercises; the split-window chrome is the presentation layer over that same core.
+Build order within this surface: the **guest-agent core** (the daemon + the Mac-side client + the forwarded port: exec + file ops) is the foundation and is what the MVP test exercises; the console integration and the split-window chrome are presentation over that same core.
 
 ---
 
 ## Scope & Phases
 
-**Phase 0 — Terminal-integration core + MVP.** Inside macXserver: own the session fd, write commands, capture stream and exit status, file plane over NFS. Pass the hello-world self-correction test. Can be driven before the full UI exists, but lives in macXserver from day one.
+**Phase 0 -- Guest-agent core + MVP.** The Sun-side agent daemon (exec + filesystem ops), baked into the image and started at boot; the Mac-side client and slirp `hostfwd` wiring inside macXserver; the console observation hook. Pass the hello-world self-correction test. Drivable before the full UI exists, but lives in macXserver from day one.
 
-**Phase 1 — The split-window workbench.** Promote-to-AI, top-terminal / bottom-chat layout, keyboard-routes-to-chat, panic key, visible promotion marker.
+**Phase 1 -- The split-window workbench.** Promote-to-AI, top-console / bottom-chat layout, keyboard-routes-to-chat, panic key, visible promotion marker.
 
-**Phase 2 — Program-under-test lens.** The server-side text framebuffer (shadow cell grid fed by ImageString / CopyArea / ClearArea) so the agent can *see* full-screen programs it's developing — the path to agentically working on cm itself.
+**Phase 2 -- Program-under-test lens.** The server-side text framebuffer (shadow cell grid fed by ImageString / CopyArea / ClearArea on the X side) so the agent can *see* full-screen programs it's developing -- the path to agentically working on `cm` itself. Note this grid is X-side rendering, not serial-console terminal emulation.
 
-**Explicitly out for now:** driving editors on the Sun, RCS/SCCS on the Sun, multi-session orchestration, binary artifact management.
+**Explicitly out for now:** driving editors on the Sun, RCS/SCCS on the Sun, multi-session orchestration, binary artifact management, and NFS/NAS of any kind.

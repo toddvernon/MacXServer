@@ -866,6 +866,30 @@ The implementation lives at `CocoaWindowBridge.applyTransientForOnMain` / `resto
 
 ---
 
+## 2026-06-17: Helios access — Sun-side agent on a port; NFS/NAS deprecated
+
+**Chosen**: Helios reaches the guest through a single **Sun-side guest agent** that listens on a TCP port (reached from the Mac via slirp `hostfwd`) and proxies two things: command execution (fork/exec, returns stdout/stderr/exit code) and filesystem access (read/write/list/stat/search on the Sun's local disk). The serial console stays as a **secondary mix-in** for boot/recovery (single-user, `fsck`), human observation, and interactive prompts. The primary target is SPARCplug (the bundled emulator); the same port protocol generalizes to a real Sun over its real network. This **deprecates** the NFS/NAS file plane and the terminal-fd command channel that earlier Helios drafts assumed. Full model in `Helios-Mission.md`; the superseded NFS design is fenced off in `SPARCSTATION_PLUGIN.md`.
+
+**Alternatives considered**:
+
+1. **NFS/NAS file plane** (the prior `Helios-Mission.md` design): the Mac runs `nfsd`, the Sun mounts it over slirp, files are shared bytes; commands submitted by writing to the terminal fd.
+2. **SSH into the guest**: run `sshd` on Solaris 2.6 and drive it over ssh exec.
+3. **Terminal puppeteering**: drive everything through the serial console (and therefore a full terminal emulator).
+
+**Why this won**:
+
+- **Self-contained appliance, zero NFS overhang.** No `nfsd`/`/etc/exports`/portmapper-port-pinning/uid-squashing/`nolock` workarounds. The reachability is one slirp `hostfwd` line. NFS was a large infrastructure lift for a product whose whole pitch is "open the app, it works."
+- **Total filesystem visibility for free.** The agent runs *on* the Sun, so it reads and writes any local path. The entire "Option A/B/C boot-architecture spectrum" and the Option-B blind-spot workarounds (symlink logs into NFS, snapshot `/etc`, etc.) simply vanish.
+- **Clean structured results.** `fork`/`exec`/`waitpid` hands back stdout, stderr, and the real exit code directly — no escape codes, no 80-column wrapping, and none of the `cmd > out 2>&1; echo $? > status`-over-NFS dance (that was an NFS-era workaround).
+- **It generalizes.** The same port protocol reaches a real bare-metal Sun over its own network later; the design isn't welded to the emulator, even though SPARCplug is where it starts.
+- **The console keeps the jobs it's uniquely good at.** Boot/recovery before the agent is up (you can't run a guest agent to `fsck` the disk the agent lives on), human observation, and interactive prompts. A corollary: a full VT100 terminal *emulator* is not on the Helios critical path — Helios routes commands through the agent and full-screen observation through the X-side framebuffer (Phase 2), so the console can stay a glass TTY.
+- **Not SSH**: Solaris 2.6's `sshd` is ancient (weak ciphers, heavy to configure into the image) and still only gives a terminal channel — we'd build a structured file+exec protocol on top of it anyway. A purpose-built agent is smaller, period-correct (plain C + BSD sockets), and exposes exactly the two primitives the loop needs.
+- **Not terminal puppeteering**: screen-scraping a serial line is fragile (escape codes, wrapping, races) and forces a terminal emulator we otherwise don't need.
+
+**Trade accepted**: we lose "Mac-side ripgrep/git over a shared mount." Mitigated — Claude's edit logic still runs Mac-side (read through the agent, edit in the harness, write back through the agent; only the bytes cross the port), and search runs through the agent (grep/find on the Sun, or pull-and-search on the Mac). Todd's call: a really capable agent on a port beats the NFS overhang.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

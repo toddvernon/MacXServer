@@ -722,15 +722,27 @@ a genuinely hard redistribution question, not a GPL checklist. It lives
 with OldSilicon's distribution posture, and the NetBSD/SPARC option in
 Open Questions is the legally-unencumbered hedge.
 
-## File plane architecture (Helios enablement)
+## Control plane architecture (Helios enablement)
 
-The bundled-QEMU posture creates an opportunity Helios couldn't fully
-exploit on bare-metal Suns: the Mac IS the NAS, and the AI dev loop
-benefits from broad filesystem visibility into the guest. This section
-captures the design direction; implementation lands alongside Helios
-MVP. Background: `Helios-Mission.md`.
+> **Deprecated 2026-06-17 -- do not implement the NFS design below.**
+> This section originally specified an NFS/NAS file plane ("Mac as NAS
+> over slirp", the three boot architectures, the Option B blind-spot
+> workarounds, the NFS-mounted tools directory). That whole approach is
+> **superseded**. Helios now reaches the guest through a single
+> **Sun-side agent on a TCP port** that proxies both command execution
+> and filesystem access, with the serial console as a mix-in for
+> boot/recovery. No NFS, no NAS, no shared mount, no uid squashing;
+> reachable from the Mac via slirp `hostfwd`. Because the agent runs *on*
+> the Sun it has total local filesystem visibility, so the entire
+> boot-architecture spectrum and its blind spots evaporate -- boot from
+> the qcow2, full stop. The authoritative model is `Helios-Mission.md`;
+> the rationale is in DECISIONS.md (2026-06-17). The one piece that
+> survives the pivot is the **modern-toolchain idea** below (gcc/gmake/
+> bash/gdb on the guest), except it's baked into the qcow2 at image-prep
+> time rather than NFS-mounted. The subsections that follow are kept only
+> for historical context.
 
-### Mac as NAS over slirp
+### Mac as NAS over slirp (deprecated — historical)
 
 `Helios-Mission.md` specifies NFS as the file plane (source of truth
 on a shared mount, both sides see the same bytes). On bare-metal Suns
@@ -755,7 +767,7 @@ Mechanics:
   `all_squash, anonuid=<nas-uid>` pattern Helios specifies, just
   with macOS as the server.
 
-### Three boot architectures
+### Three boot architectures (deprecated — historical)
 
 How much of the guest's filesystem lives on NFS versus the qcow2 is
 a spectrum, not a binary.
@@ -787,7 +799,7 @@ The shipping product picks A. Helios mode picks B (with the
 workarounds below) or C. They share most of the NFS infrastructure;
 the diff is the boot path and the network mode.
 
-### Option B blind spots and workarounds
+### Option B blind spots and workarounds (deprecated — historical)
 
 What stays opaque on the qcow2 in Option B clusters into "system-
 level state" rather than "dev-level state." For Helios's MVP loop
@@ -836,7 +848,7 @@ With those four additions, Option B reaches roughly 90% of Option C's
 visibility without the vmnet/bootparamd/tftpd lift. The shipping
 posture for Helios mode is probably "Option B+" rather than B or C.
 
-### NFS-mounted tools directory
+### NFS-mounted tools directory (deprecated — toolchain now baked into the image)
 
 The same NFS plane that enables file sharing also enables tool
 extension. Sun's `/opt` convention was designed for exactly this:
