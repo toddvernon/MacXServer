@@ -29,7 +29,9 @@
 
 Bring Claude-driven, agentic software development to classic Sun workstations **without turning the Suns into modern machines.** The intelligence, the network, the secrets, and the editing logic all live on the Mac. The Sun stays exactly as period-correct as it is today and contributes the one thing only it can: executing and running native SPARC/SunOS code.
 
-The agent loop runs on the Mac against the Anthropic API. The primary target is **SPARCplug**, the bundled emulated SPARCstation -- not bare-metal Suns and not a shared NAS. The Sun is reached through a single **guest agent** running inside it, listening on a TCP port, that proxies both commands and filesystem access back to the loop. The serial console is a secondary, mixed-in channel for boot and recovery. There is no NFS and no shared mount.
+The agent loop runs on the Mac against the Anthropic API. **Development happens entirely on SPARCplug**, the bundled emulated SPARCstation -- self-contained, reproducible, no hardware required. The Sun (emulated or real) is reached through a single **guest agent** running inside it, listening on a TCP port, that proxies both commands and filesystem access back to the loop. The serial console is a secondary, mixed-in channel for boot and recovery. There is no NFS and no shared mount.
+
+**Dev on the emulator, deploy on the iron -- same agent.** Because the access mechanism is an agent on a port (not NFS, not anything emulator-specific), the exact same protocol reaches a real Sun over its real network that reaches SPARCplug over slirp. So all development happens on the emulator -- fast to spin up, identical every time, no physical Sun in the loop -- and the only thing that touches real hardware is *deployment*: a real Sun runs the same guest agent and is driven by the same macXserver, with no protocol change. Develop against the emulator, ship to the metal. That dev/deploy parity is a direct dividend of choosing the agent over NFS.
 
 ---
 
