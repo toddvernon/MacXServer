@@ -742,6 +742,15 @@ Open Questions is the legally-unencumbered hedge.
 > time rather than NFS-mounted. The subsections that follow are kept only
 > for historical context.
 
+**Near-term payoff the agent unlocks: a curated image-repair GUI.** The
+agent's file read/write also backs a Mac-side GUI that edits the ~10
+things a guest image commonly needs fixed (`/etc/vfstab`, network/DNS,
+timezone, root password, default shell, `inetd.conf` services, X/CDE
+defaults). Structured forms, no terminal, and -- because we ship the
+image -- validated against known paths and templates rather than guessed.
+This can ship before or alongside the full Helios loop and is the biggest
+reason the console can stay a glass TTY. Detail in `Helios-Mission.md`.
+
 ### Mac as NAS over slirp (deprecated — historical)
 
 `Helios-Mission.md` specifies NFS as the file plane (source of truth

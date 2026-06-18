@@ -91,6 +91,18 @@ Deferred (post-MVP): `send_keys` / `read_screen` over the console for interactiv
 
 ---
 
+## Curated image-repair GUI (the agent's first payoff)
+
+The same agent primitives that serve the dev loop unlock a near-term, shippable feature that can land **as part of, or before,** the full Helios loop: a Mac-side GUI that edits the handful of things a guest image commonly needs fixed, driven entirely through the agent's file read/write. No terminal, no agentic loop required -- just structured forms over the agent's filesystem proxy.
+
+The curated set is small and known (~10 items): `/etc/vfstab` mounts, network config (hostname, IP/netmask/gateway, `/etc/defaultrouter`), DNS (`/etc/resolv.conf`, `nsswitch.conf`), timezone, root password, default shell, NFS/automount entries, `inetd.conf` services, `/etc/system` tunables, X/CDE display defaults. Each is a Mac-side form that reads the current file through the agent, presents validated fields, and writes it back.
+
+**Because we ship the image, we can do anything we want.** We control the exact paths, formats, and sane defaults, so the GUI can validate against known templates, stage good versions, and never guess. This is the opposite of the bare-metal case where you're spelunking an unknown box over a serial line.
+
+This is also the strongest reason the console can stay a glass TTY rather than a real terminal emulator: the config-and-repair tasks that were the main argument for an interactive terminal move into structured GUI forms. The one residual terminal case is a *hard-down* boot where the filesystem is too broken for the agent to start (interactive `fsck` in single-user). Even that is ours to shrink -- because we own the image, we can arrange for the agent to be reachable in a maintenance context -- but until we do, the glass-TTY console covers it.
+
+---
+
 ## MVP Execution Trace
 
 How the hello-world test flows through the architecture:
@@ -121,6 +133,8 @@ Build order within this surface: the **guest-agent core** (the daemon + the Mac-
 ## Scope & Phases
 
 **Phase 0 -- Guest-agent core + MVP.** The Sun-side agent daemon (exec + filesystem ops), baked into the image and started at boot; the Mac-side client and slirp `hostfwd` wiring inside macXserver; the console observation hook. Pass the hello-world self-correction test. Drivable before the full UI exists, but lives in macXserver from day one.
+
+**Phase 0.5 -- Curated image-repair GUI.** Mac-side forms over the agent's file primitives for the ~10 common image fixes (see "Curated image-repair GUI" above). Needs only the agent's read/write, not the tool-use loop, so it can ship before or alongside the MVP and is a clean first user-facing payoff.
 
 **Phase 1 -- The split-window workbench.** Promote-to-AI, top-console / bottom-chat layout, keyboard-routes-to-chat, panic key, visible promotion marker.
 
