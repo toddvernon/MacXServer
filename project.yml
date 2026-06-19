@@ -166,7 +166,18 @@ targets:
           /bin/cp -f "$DIST/qemu-system-sparc" "$APP/Helpers/"
           /bin/cp -f "$DIST/lib/"*.dylib "$APP/Helpers/lib/"
           /bin/cp -f "$DIST/firmware/"* "$APP/Resources/qemu-firmware/"
-          echo "Embedded SPARCplug engine from $DIST"
+          # The dist engine is Developer-ID signed with hardened runtime
+          # (correct for the notarized release that release.sh builds). But
+          # this Debug app is ad-hoc signed, and a hardened-runtime Dev-ID
+          # binary nested in an ad-hoc bundle is an inconsistent context:
+          # AMFI SIGKILLs qemu at launch (silent exit 137, no console output,
+          # the app just shows "Stopped"). Re-sign the helper and its dylibs
+          # ad-hoc so they match the Debug app. Inside-out: dylibs first,
+          # then the helper. Release is unaffected (this whole block is
+          # Debug-only and release.sh does the signed copy).
+          /usr/bin/codesign --force --sign - "$APP/Helpers/lib/"*.dylib
+          /usr/bin/codesign --force --sign - "$APP/Helpers/qemu-system-sparc"
+          echo "Embedded + ad-hoc re-signed SPARCplug engine from $DIST"
 
 schemes:
 
