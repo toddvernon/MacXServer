@@ -430,10 +430,44 @@ sunfreeware binaries carry baked-in RPATHs (`-R/usr/local/lib`,
   `stty erase '^H'`. The baseline config script (`sparcstation-baseline-config.sh`)
   should emit it quoted.
 
+## Shared folder (TFTP) — getting files into a running guest
+
+Shipped 2026-06-19. Preferences → SPARCstation → "Use a shared folder to
+copy files into the SPARCstation" (off by default). Points slirp's built-in
+TFTP server at a Mac folder (default `~/macXserverTFTP`, created on enable);
+`QemuEngine` appends `,tftp=<dir>` to the `-nic` line. In the guest:
+
+```
+tftp 10.0.2.2          # the slirp gateway, NOT 10.0.0.2
+tftp> binary           # required, or binaries arrive corrupted
+tftp> get <file>
+tftp> quit
+```
+
+Read-only, one file at a time, no directory listing — tar a set into one
+file for a batch (`tar --format=ustar`, not pax; 2.6 chokes on pax headers).
+The setting is read only when the engine launches, so toggling it requires
+a shut-down + Run (the dialog shows a "restart to apply" note while the
+engine is running). The dev `fullemu.sh` defaults to the same folder. Gotcha
+worth knowing: with the toggle *off*, a guest `tftp get` returns "Access
+violation" (slirp answers on :69 but has no prefix to serve), not a timeout
+— a wrong address gives the timeout.
+
 ## Surprises and gotchas (lessons from the bring-up)
 
 Things that ate time today, recorded so they don't eat time again.
 
+- **Debug builds silently kill the bundled engine (code signing).** Xcode
+  ad-hoc signs the Debug `.app`, but the embedded qemu helper is
+  Developer-ID + hardened runtime. A hardened-runtime Dev-ID binary nested
+  in an ad-hoc bundle is an inconsistent context, so AMFI SIGKILLs it at
+  launch: exit 137, no console output, the SPARCstation window just sits on
+  "Stopped" with no error. Same bytes run fine from `dist/` or `/tmp` —
+  only the in-`.app` location dies. Fix: `project.yml`'s Debug-only embed
+  post-build step re-signs the helper + dylibs ad-hoc after copying. Release
+  is unaffected (uniform Dev-ID + hardened + notarized — the only correct
+  ship posture; see PLUGIN_V1_PUNCHLIST A3–A5). Diagnose with
+  `…/Contents/Helpers/qemu-system-sparc --version`: exit 137 = broken.
 - **Slirp blocks ICMP.** `ping` from inside the guest never works,
   even when TCP is fine. Don't use ping as the connectivity test;
   use `telnet 10.0.2.2 <port>` or `xdpyinfo`.

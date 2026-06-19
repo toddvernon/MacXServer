@@ -33,12 +33,19 @@ public struct QemuEngineConfig: Sendable, Equatable {
     /// product (Track C installs it there); overridable for dev.
     public var diskImage: URL
     public var memoryMB: Int
+    /// When non-nil, slirp serves this directory over its built-in TFTP server
+    /// on the guest gateway (10.0.2.2). nil = no TFTP (the `-nic` line omits
+    /// `tftp=`). The caller is responsible for the directory existing; slirp
+    /// is read-only and won't create it.
+    public var tftpDirectory: String?
 
-    public init(helper: URL, firmwareDir: URL, diskImage: URL, memoryMB: Int = 128) {
+    public init(helper: URL, firmwareDir: URL, diskImage: URL, memoryMB: Int = 128,
+                tftpDirectory: String? = nil) {
         self.helper = helper
         self.firmwareDir = firmwareDir
         self.diskImage = diskImage
         self.memoryMB = memoryMB
+        self.tftpDirectory = tftpDirectory
     }
 }
 
@@ -292,6 +299,15 @@ public final class QemuEngine: @unchecked Sendable {
     /// qemu. Mirrors the working recipe in SPARCSTATION_PLUGIN.md, with the
     /// firmware `-L` and the writable disk path filled in from the config.
     public static func buildArguments(config: QemuEngineConfig) -> [String] {
+        // slirp NAT, AMD lance NIC (Solaris le0). hostfwd opens Mac ports
+        // 2123/2222 -> guest 23/22 so the launcher can telnet in. Fixed MAC
+        // for stable guest identity across reboots. When a shared folder is
+        // configured, append slirp's built-in TFTP server pointed at it; the
+        // guest pulls files with `tftp 10.0.2.2`.
+        var nic = "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::2123-:23,hostfwd=tcp::2222-:22"
+        if let tftp = config.tftpDirectory, !tftp.isEmpty {
+            nic += ",tftp=\(tftp)"
+        }
         return [
             "-M", "SS-5",                                   // SPARCstation 5 (sun4m)
             "-m", String(config.memoryMB),                  // RAM in MB
@@ -299,10 +315,7 @@ public final class QemuEngine: @unchecked Sendable {
             "-L", config.firmwareDir.path,                  // bundled openbios-sparc32 lives here
             "-prom-env", "input-device=ttya",               // OpenBOOT console policy: serial from boot
             "-prom-env", "output-device=ttya",
-            // slirp NAT, AMD lance NIC (Solaris le0). hostfwd opens Mac ports
-            // 2123/2222 -> guest 23/22 so the launcher can telnet in. Fixed
-            // MAC for stable guest identity across reboots.
-            "-nic", "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::2123-:23,hostfwd=tcp::2222-:22",
+            "-nic", nic,
             "-drive", "file=\(config.diskImage.path),bus=0,unit=0,media=disk",
         ]
     }
@@ -353,8 +366,14 @@ public final class QemuEngine: @unchecked Sendable {
             diskImage = applicationSupportDir().appendingPathComponent(diskImageFilename)
         }
 
+        // Dev override for the shared folder, so the bundled engine can be
+        // exercised with TFTP before/independent of the Preferences toggle.
+        // The app normally sets tftpDirectory from Preferences instead.
+        let tftpDir = env["SPARCPLUG_TFTP_DIR"].flatMap { $0.isEmpty ? nil : $0 }
+
         return QemuEngineConfig(helper: helper, firmwareDir: firmwareDir,
-                                diskImage: diskImage, memoryMB: memoryMB)
+                                diskImage: diskImage, memoryMB: memoryMB,
+                                tftpDirectory: tftpDir)
     }
 
     // MARK: - I/O (all on `queue`)

@@ -32,6 +32,37 @@ final class QemuEngineTests: XCTestCase {
         ])
     }
 
+    /// A configured shared folder appends `tftp=<dir>` to the `-nic` value
+    /// and changes nothing else about the argv shape.
+    func testBuildArgumentsWithSharedFolder() {
+        var c = cfg()
+        c.tftpDirectory = "/Users/x/macXserverTFTP"
+        let args = QemuEngine.buildArguments(config: c)
+        let nic = args[args.firstIndex(of: "-nic")! + 1]
+        XCTAssertEqual(nic,
+            "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::2123-:23,hostfwd=tcp::2222-:22,tftp=/Users/x/macXserverTFTP")
+    }
+
+    /// nil and empty tftpDirectory both leave the `-nic` value without a
+    /// `tftp=` clause (empty must not produce a dangling `tftp=`).
+    func testBuildArgumentsNoSharedFolderWhenUnset() {
+        var c = cfg()
+        c.tftpDirectory = ""
+        let nic = QemuEngine.buildArguments(config: c)[
+            QemuEngine.buildArguments(config: c).firstIndex(of: "-nic")! + 1]
+        XCTAssertFalse(nic.contains("tftp="), nic)
+    }
+
+    /// SPARCPLUG_TFTP_DIR is honored as a dev override on defaultConfig.
+    func testTftpEnvOverride() {
+        withEnv(["SPARCPLUG_TFTP_DIR": "/dev/share"]) {
+            XCTAssertEqual(QemuEngine.defaultConfig().tftpDirectory, "/dev/share")
+        }
+        withEnv(["SPARCPLUG_TFTP_DIR": nil]) {
+            XCTAssertNil(QemuEngine.defaultConfig().tftpDirectory)
+        }
+    }
+
     func testMemoryIsHonored() {
         let args = QemuEngine.buildArguments(config: cfg(memoryMB: 256))
         XCTAssertEqual(args[args.firstIndex(of: "-m")! + 1], "256")

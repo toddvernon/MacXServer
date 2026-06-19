@@ -171,6 +171,42 @@ qemu. All DONE 2026-06-17.
   image is never mutated). Plus `SparcBackupTests` (7) for the auto-backup
   naming + rotation policy.
 
+## Crash / orphan safety (added 2026-06-19 — loop back here)
+
+The quit guard above stops the *clean-quit* orphan, but not the ones that
+matter most: stopping the Xcode debug session, an app crash, or a SIGKILL
+all bypass `applicationShouldTerminate` (SIGKILL can't be caught, and macOS
+has no `PR_SET_PDEATHSIG`). Result: a headless qemu keeps running, holding
+the qcow2 open, spinning at 100% CPU because its console pipe reader died
+with the parent. Hit this for real 2026-06-19 (a ~17h orphan, shut down by
+hand over the telnet hostfwd). The latent corruption risk is worse than the
+orphan: nothing stops a *second* qemu from opening the same qcow2.
+
+- [ ] **L1. Image lock file (do first, cheap).** On `QemuEngine.start()`
+  write `{pid, imagePath}` to a known file (Application Support). On launch
+  / before start, if that file names a live pid still holding our image,
+  refuse to open it a second time. Closes the double-open corruption hole
+  and gives orphan detection for free. No protocol/socket work needed.
+- [ ] **L2. Orphan detection + recovery UX.** On app launch, if the lock
+  (or a process scan matching our image + fixed MAC) shows a live orphan,
+  surface it: "A SPARCstation is already running — Reconnect / Shut Down."
+  Depends on L3 for the recovery actions to be possible.
+- [ ] **L3. Move console + control off the stdio pipe.** Today console +
+  control ride `-nographic` stdio owned by the parent's `Pipe`; when the
+  parent dies they're unreachable and qemu spins. Switch to
+  `-serial unix:console.sock,server,nowait` (re-attachable console) +
+  `-qmp unix:qmp.sock,server,nowait` (reliable liveness + hard `quit`).
+  Then L2's Reconnect re-wires the observation window and Shut Down drives
+  `init 5` over the serial socket — works even on an orphan. NB: SPARC has
+  no ACPI, so QMP `system_powerdown` won't cleanly halt Solaris; graceful
+  stays `init 5` over serial.
+- [ ] **L4. (Optional) kqueue watchdog — true prevention.** A tiny guardian
+  process spawns qemu and `kqueue`-watches the macXserver pid
+  (`EVFILT_PROC`/`NOTE_EXIT`); on parent exit by *any* means including
+  SIGKILL it drives `init 5` / SIGTERM→SIGKILL on qemu, then exits. The
+  macOS substitute for `PR_SET_PDEATHSIG` and the only thing that stops the
+  orphan existing at all. New helper binary → maintainer sign-off required.
+
 ## Track C — Install the disk image (Deliverable 2)
 
 - [ ] **C1. Downloader** (new). `NSURLSession` w/ progress → SHA256 verify

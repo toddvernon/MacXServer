@@ -139,6 +139,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if !path.isEmpty {
             config.diskImage = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
         }
+        // Shared folder (TFTP): only wire it when the toggle is on. Create the
+        // directory if it's missing so slirp (read-only, won't create it) has
+        // something to serve. Failure to create just means no shared folder
+        // this run, not a failed launch.
+        if preferences.sparcTftpEnabled {
+            let dir = (preferences.sparcTftpDirectory as NSString).expandingTildeInPath
+            try? FileManager.default.createDirectory(
+                atPath: dir, withIntermediateDirectories: true)
+            config.tftpDirectory = dir
+        }
         return config
     }
 
@@ -152,6 +162,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         engine.onStateChange { [weak self] state in
             self?.sparcConsole?.setState(state)
+            // Keep the Preferences "restart to apply" note in sync if the
+            // window is open. Running or shutting-down both mean a shared-
+            // folder change can't take effect until the next clean start.
+            self?.prefsController?.setSparcEngineRunning(
+                state == .running || state == .shuttingDown)
         }
         engine.onCleanHalt { [weak self] in
             self?.sparcConsole?.markCleanHalt()
@@ -395,7 +410,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if prefsController == nil {
             prefsController = PreferencesWindowController(preferences: preferences)
         }
-        prefsController?.showWindow()
+        // Seed the "restart to apply" note with the current engine state
+        // before showing, so it's correct the instant the window appears.
+        let state = qemuEngine?.state
+        prefsController?.setSparcEngineRunning(state == .running || state == .shuttingDown)
+        // Always land on the first tab when opened from the menu. The window
+        // controller is reused, so without this the model retains the last
+        // tab and reopening drops you wherever you were, not at the top.
+        prefsController?.showWindow(selecting: .cutPaste)
     }
 
     @MainActor

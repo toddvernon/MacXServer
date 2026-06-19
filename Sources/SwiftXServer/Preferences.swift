@@ -32,6 +32,8 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         static let xtermScrollbarThumbOverride = "xterm.scrollbarThumbOverride" // bool
         static let sparcDiskImagePath = "sparcplug.diskImagePath"   // string, "" = not installed
         static let sparcAutoBackupOnShutdown = "sparcplug.autoBackupOnShutdown" // bool
+        static let sparcTftpEnabled = "sparcplug.tftpEnabled"       // bool
+        static let sparcTftpDirectory = "sparcplug.tftpDirectory"   // string (absolute path)
     }
 
     /// Where server-side captures land when capture is enabled. /tmp is
@@ -39,6 +41,15 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
     /// accumulate invisibly, and it's a short path the user can type.
     /// See DECISIONS.md 2026-05-23 for the alternatives.
     static let defaultCaptureDirectory = "/tmp/macxcapture"
+
+    /// Default location of the SPARCstation shared (TFTP) folder. A plain
+    /// `~/macXserverTFTP` so it's easy to find in Finder. slirp serves this
+    /// dir read-only on the guest's gateway (10.0.2.2) when the toggle is on;
+    /// the guest pulls files with `tftp 10.0.2.2`. Stored as an absolute path
+    /// (the chooser returns absolute paths too), so reads never re-expand.
+    static var defaultTFTPDirectory: String {
+        (NSHomeDirectory() as NSString).appendingPathComponent("macXserverTFTP")
+    }
 
     private let defaults: UserDefaults
 
@@ -60,6 +71,8 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
             Key.xtermScrollbarThumbOverride: false,
             Key.sparcDiskImagePath: "",
             Key.sparcAutoBackupOnShutdown: true,
+            Key.sparcTftpEnabled: false,
+            Key.sparcTftpDirectory: Self.defaultTFTPDirectory,
         ])
     }
 
@@ -224,6 +237,32 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         get { defaults.bool(forKey: Key.sparcAutoBackupOnShutdown) }
         set {
             defaults.set(newValue, forKey: Key.sparcAutoBackupOnShutdown)
+            NotificationCenter.default.post(name: Self.didChange, object: self)
+        }
+    }
+
+    /// When true, the SPARCstation engine is launched with slirp's built-in
+    /// TFTP server pointed at `sparcTftpDirectory`, so the guest can pull
+    /// files off the Mac with `tftp 10.0.2.2` (no daemon on the Mac, nothing
+    /// exposed to the LAN). Off by default. Read when the engine config is
+    /// (re)built; a change while the VM is stopped takes effect on next Run.
+    var sparcTftpEnabled: Bool {
+        get { defaults.bool(forKey: Key.sparcTftpEnabled) }
+        set {
+            defaults.set(newValue, forKey: Key.sparcTftpEnabled)
+            NotificationCenter.default.post(name: Self.didChange, object: self)
+        }
+    }
+
+    /// Absolute path to the shared (TFTP) folder. Defaults to
+    /// `~/macXserverTFTP`. Only consulted when `sparcTftpEnabled` is true.
+    var sparcTftpDirectory: String {
+        get {
+            let v = defaults.string(forKey: Key.sparcTftpDirectory) ?? ""
+            return v.isEmpty ? Self.defaultTFTPDirectory : v
+        }
+        set {
+            defaults.set(newValue, forKey: Key.sparcTftpDirectory)
             NotificationCenter.default.post(name: Self.didChange, object: self)
         }
     }

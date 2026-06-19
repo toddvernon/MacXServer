@@ -1,69 +1,83 @@
-# Status 2026-06-18 (end of day)
+# Status 2026-06-19 (end of day)
 
-A full day of guest-side sysadmin: bootstrapping a real dev toolchain onto
-the SPARCplug Solaris 2.6 image (SUN40G.qcow2) and learning, the slow way,
-how to get files into a slirp-NAT'd guest. No macXserver or engine code
-changed today -- this was all image-prep on the guest, plus a new dev-only
-launch helper. Image synced + `init 0`, clean.
+Shipped the SPARCstation **shared folder (TFTP)** feature end-to-end, fixed
+a Debug-build code-signing footgun that was silently killing the bundled
+engine, and cleaned up three Preferences-dialog regressions. Engine + image
+untouched and healthy (qemu-img clean, boots fine). TFTP transfer verified
+into the live guest.
 
 ## What landed today
 
-**Dev toolchain on the image.** SUN40G.qcow2 now carries **gcc 2.95.3 +
-GNU Make 3.82** (already native) + **gdb 4.17** + **wget 1.12 (+https)**,
-on top of the full sun26gnu GNU userland (bash, vim, less, curl, rsync,
-sudo, sed, nano, screen) and the matched dependency closure (openssl,
-libiconv, libintl, libidn, libgcc, gzip, ncurses, zlib). Verified:
-`wget --version` clean, `ldd` fully resolved, `gdb --version`, gcc/make
-present.
+**Shared folder (TFTP).** New Preferences → SPARCstation toggle "Use a
+shared folder to copy files into the SPARCstation," off by default, default
+location `~/macXserverTFTP` (created on enable; Choose/Reveal to relocate).
+When on, `QemuEngine` appends `,tftp=<dir>` to the slirp `-nic` line, so the
+guest pulls files with `tftp 10.0.2.2` (binary; get). Wired
+`Preferences` → `makeSparcConfig()` → `QemuEngine.buildArguments`; dev
+override `SPARCPLUG_TFTP_DIR`. Off = byte-identical `-nic` to before (pinned
+by test). `fullemu.sh` default flipped to the same `~/macXserverTFTP` for
+dev/product parity. `guest/set-hostname.sh` (Solaris 2.6 rename script)
+added to the SPARCplug repo and dropped in the shared folder as the first
+real payload.
 
-**`fullemu.sh`** (`~/Dropbox/dev/SPARCplug/`, NOT in git). A dev-only
-image-prep launcher: runs the *homebrew* `qemu-system-sparc` (11.0.1,
-`brew install qemu` today) against SUN40G.qcow2 with slirp's built-in TFTP
-server and an optional `-cdrom` (`CDROM=... ./fullemu.sh`). The bundled
-engine stays untouched; this is the fuller engine for hand-driven prep.
+**Debug code-signing fix (the silent "Stopped" bug).** Xcode Debug ad-hoc
+signs the `.app`, but the embedded qemu helper is Developer-ID + hardened
+runtime — an inconsistent nesting that AMFI SIGKILLs at launch (exit 137,
+no console, app stuck on "Stopped"). `project.yml`'s Debug-only embed
+post-build step now re-signs the helper + dylibs ad-hoc after copying, so
+they match the ad-hoc app. Release path (`release.sh`, uniform Dev-ID +
+hardened + notarized) is unaffected — that's the posture this bug can't
+occur in. Saved to memory.
 
-**The file-injection lesson.** Getting files into a slirp guest is the hard
-part: FTP is dead (Solaris 2.6's client is active-only, can't traverse
-slirp NAT), slirp's built-in TFTP works but times out past a few MB, so the
-answer for anything big is mounting an ISO via `-cdrom`. The dependency-hell
-unlock was **sun26gnu.iso** (archive.org, 274 MB) -- a precompiled GNU set
-built for Solaris-2.6-under-QEMU whose `installgnu.sh` pkgadds the whole
-matched dep closure at once. gdb 4.17 came from the ibiblio mirror (the
-right version: gcc 2.95.3 emits stabs, 4.17 reads stabs natively).
-
-**Root shell made livable.** `/.profile` hands off to **tcsh** (csh
-history, matches the tvernon login; ksh fallback) with a live-cwd prompt
-(`su -` required; Bourne can't do dynamic prompts). Fixed the long-standing
-`/etc/profile` `stty erase ^H` bug (legacy Bourne reads `^` as a pipe ->
-`H: not found` each login; quoted it).
-
-All documented in `SPARCSTATION_PLUGIN.md` (new "Image-prep: bootstrapping
-the dev toolchain" section + console/recovery/root-shell gotchas) and saved
-to Claude memory.
+**Preferences dialog fixes.** (1) Tab bar was collapsing into a `>>`
+overflow menu — the SPARCplug iteration added a 6th tab ("SPARCstation")
+without widening the 560pt window; bumped to 720 so all six fit on top.
+(2) Opening from the menu now always lands on the first tab (Cut/Paste);
+the reused window controller had been retaining the last tab. (3) The tall
+SPARCstation tab was clipping top+bottom; wrapped it in a ScrollView and
+raised the window to 560 high. SwiftUI TabView has no per-tab auto-resize
+(AppKit's NSTabViewController does); ScrollView is the robust answer.
 
 ## What's working / verified
 
-- macXserver app + X server + bundled engine: untouched, still green.
-- SUN40G.qcow2: boots, full toolchain installed and verified, clean
-  shutdown via `sync` + `init 0`. Dated autobackup sibling intact.
-- `fullemu.sh`: homebrew qemu launch + tftp + cdrom hooks, syntax-checked.
+- macXserver app + X server + bundled engine: green. Engine boots the image
+  cleanly (verified standalone via dist/ and the re-signed bundle helper).
+- SUN40G.qcow2: `qemu-img check` clean, `corrupt: false`. Survived an
+  orphaned-qemu episode (below) with no damage.
+- Shared folder: enabled, file dropped, `tftp 10.0.2.2` get succeeded into
+  the guest. "Restart to apply" note shows live while the engine runs.
+- `swift build` + `xcodebuild` Debug both clean; QemuEngine tests pass
+  (added 3 for the tftp arg + env override).
 
-## What's next
+## What broke / lesson (the orphan episode)
 
-1. **OpenSSH on the image (deferred).** The `scp -P 2222` path. Bigger lift:
-   Solaris 2.6 has no `/dev/random`, so it needs **prngd** + host keys + a
-   privsep `sshd` user + an rc script. Deps (openssl/zlib/libgcc) already
-   installed. Off the critical path (wget covers pulls; Helios uses the
-   agent channel), so deferred.
-2. **Back to plugin v1** (the actual milestone, BEFORE Helios): **A5**
-   `release.sh` (sign inside-out + notarize + staple), **A6** clean-Mac
-   acceptance, **Track C** image downloader, **Restore-from-Backup UI**.
-   See PLUGIN_V1_PUNCHLIST.md.
+Stopping the Xcode debug session SIGKILLs the app but **orphans the child
+qemu** — it kept the master qcow2 open ~17h pegged at 100% CPU (its console
+pipe reader died with the parent). Shut it down by hand via the telnet
+hostfwd (`init 5`). No `PR_SET_PDEATHSIG` on macOS, and the
+`applicationShouldTerminate` quit guard never runs on SIGKILL/crash, so
+nothing reaps it. Worse latent risk: nothing stops a *second* qemu from
+opening the same qcow2 (corruption, not just fsck).
+
+## What to do next (agreed loop-back)
+
+1. **Image lock file.** On engine start, write pid + image path to a known
+   file; on launch, refuse to open an image a live pid already holds. Kills
+   the double-open corruption risk. Cheap, do first. (Punchlist: Lifecycle.)
+2. **Orphan detection + recovery.** Detect a live orphan on launch and offer
+   Reconnect / Shut Down. Enabled by moving console + control off the dying
+   stdio pipe onto unix sockets (`-serial unix:`, `-qmp unix:`), so a
+   recovery path can re-attach and drive `init 5` after the parent died.
+3. **(Optional) kqueue watchdog** — the only true *prevention* (survives
+   parent SIGKILL); needs a new helper, so maintainer call.
+
+Plus deferred polish: wrap all Preferences tabs in ScrollView (only
+SPARCstation done) and a final text/sizing sweep.
 
 ## Pointers
 
-- Image-prep recipe: `SPARCSTATION_PLUGIN.md`, "Image-prep" section.
+- Shared folder default: `~/macXserverTFTP`. Guest pull: `tftp 10.0.2.2`,
+  `binary`, `get <file>`.
+- Plugin v1 work: `PLUGIN_V1_PUNCHLIST.md` (orphan/lockfile under Lifecycle).
 - Dev launcher: `~/Dropbox/dev/SPARCplug/fullemu.sh` (homebrew qemu).
-- Bootstrap ISO: `~/Downloads/sun26gnu.iso` (archive.org/details/sun26gnu).
-- Plugin v1 work: `PLUGIN_V1_PUNCHLIST.md`.
 - Image + autobackup: `~/Dropbox/dev/SPARCplug/SUN40G.qcow2` (+ dated sibling).
