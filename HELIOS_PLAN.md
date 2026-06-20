@@ -66,11 +66,17 @@ is, plus the one extension `run_command` needs.
   json/b64 from current source, not a committed `.a`**; confirm cx `75b8304`
   is in the tree (`git -C ~/Dropbox/dev/cx log --oneline 75b8304 -1`). The
   real risk gate. *(In progress -- Todd validating now.)*
-- [ ] **A3. CxProcess timeout/cwd extension.** Apply the design in
-  `Tools/CX_PROCESS_TIMEOUT_AND_CWD.md` (`run(cmd, cwd, timeout_ms)` +
-  `wasTimedOut()`, fork/pipe/select, 128+signal exit mapping). Cross-platform:
-  get the 12 tests green **on the Mac** first, then confirm on 2.6 in the A2
-  environment. This is what `run_command` rides.
+- [x] **A3. CxProcess timeout/cwd extension. DONE (Mac) 2026-06-20.** Added
+  `run(cmd, cwd, timeout_ms)` + `wasTimedOut()` to `cx/process` (fork/pipe/
+  select, SIGTERM→1s→SIGKILL on the process group, 128+signal exit mapping);
+  old `run()` delegates so it's backward-compatible. New `cx_tests/cxprocess/`
+  suite (25 checks) green and wired into the cx_tests top-level; cm clean-
+  rebuilt against the new ABI. Solaris run pending (A2 env). This is what
+  `run_command` rides.
+  - **run_command verb DONE (Mac) 2026-06-20** on top of it: daemon verb #3,
+    reads cmd/cwd/timeout_ms, returns {exit_code, output, timed_out};
+    fork-per-connection child resets SIGCHLD so CxProcess's waitpid keeps the
+    real exit status. Live-verified over the socket; +12 daemon tests (51 total).
 - [ ] **A4. (Optional, non-blocking) sunfreeware additions.** Bake gdb/gawk/
   gsed/ggrep into the image via `install_sunfreeware()` in
   `Tools/sparcstation-baseline-config.sh` (`Tools/SUNFREEWARE_ADDITIONS.md`).
