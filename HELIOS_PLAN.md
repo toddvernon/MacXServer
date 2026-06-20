@@ -61,17 +61,21 @@ is, plus the one extension `run_command` needs.
   on the booted image; commit the output (e.g. `Tools/survey-<date>.txt`).
   Confirm g++/gmake/ar/ld + `-lsocket -lnsl` link sanity are green. Never run
   before.
-- [ ] **A2. Validate cx on Solaris 2.6.** Per `Tools/CX_VALIDATION_ON_SOLARIS.md`:
-  ship `cxlibs-unix.tar`, build, pass cxnet/cxjson/cxlog/cxstar. **Build
-  json/b64 from current source, not a committed `.a`**; confirm cx `75b8304`
-  is in the tree (`git -C ~/Dropbox/dev/cx log --oneline 75b8304 -1`). The
-  real risk gate. *(In progress -- Todd validating now.)*
+- [x] **A2. Validate cx on Solaris 2.6. DONE 2026-06-20.** Built cxlibs,
+  cxtests, and cxapps (the cx_apps suite, *not* heliosAgent yet) on the 2.6
+  image -- everything compiled and passed. Because cxtests includes the new
+  `cxprocess` suite, this also clears the **A3 CxProcess Solaris run** that was
+  pending below: the fork/pipe/select/signal exec primitive `run_command` rides
+  on is validated on 2.6, not just the Mac. Built json/b64 from current source;
+  cx `75b8304` (the JSON emit fix) confirmed in the tree. The real risk gate is
+  passed. heliosAgent's own daemon build on 2.6 is still pending (Phase B / B6).
 - [x] **A3. CxProcess timeout/cwd extension. DONE (Mac) 2026-06-20.** Added
   `run(cmd, cwd, timeout_ms)` + `wasTimedOut()` to `cx/process` (fork/pipe/
   select, SIGTERM→1s→SIGKILL on the process group, 128+signal exit mapping);
   old `run()` delegates so it's backward-compatible. New `cx_tests/cxprocess/`
   suite (25 checks) green and wired into the cx_tests top-level; cm clean-
-  rebuilt against the new ABI. Solaris run pending (A2 env). This is what
+  rebuilt against the new ABI. **Solaris run DONE 2026-06-20** (rode the A2 cx
+  validation -- cxtests' cxprocess suite passed on the 2.6 image). This is what
   `run_command` rides.
   - **run_command verb DONE (Mac) 2026-06-20** on top of it: daemon verb #3,
     reads cmd/cwd/timeout_ms, returns {exit_code, output, timed_out};
@@ -84,7 +88,9 @@ is, plus the one extension `run_command` needs.
 
 **Acceptance (M-A):** cx builds and its four critical tests + the new CxProcess
 tests pass on both Mac and the 2.6 image. The exec primitive exists and is
-tested.
+tested. **MET 2026-06-20** (A2/A3); A1 survey-artifact capture is the only
+loose end and it's non-blocking -- a clean cx build already proves the
+toolchain.
 
 ---
 
@@ -108,7 +114,56 @@ Build the whole daemon on the Mac against `localhost`; no qemu in the loop.
 - [ ] **B4. `run_command` verb.** On the CxProcess extension; returns stdout,
   stderr, exit code; honors cwd + timeout.
 - [ ] **B5. File verbs.** `read_file`/`write_file` (base64 content),
-  `list_dir`, `stat`, `search` (grep/find).
+  `list_dir`, `stat`, `search` (grep/find). Detailed spec below; PROTOCOL.md
+  gets the wire-level request/result shapes when each lands.
+
+  **No `edit_file` verb. Editing is reconstructed Mac-side.** The daemon is a
+  byte mover. Claude Code's Edit is whole-file under the hood (read entire file,
+  exact-string substitute in RAM, write entire file back); the "partial edit"
+  is in the *instruction*, not the disk op. So the MCP bridge implements Edit on
+  the Mac as `read_file` -> substitute (with the unique-match + read-before-edit
+  invariants) -> `write_file`. The string-substitution step must round-trip raw
+  bytes / Latin-1, **not** UTF-8, or it can corrupt a Sun source file it never
+  meant to touch. Keeping edit logic off the 2.6 box is deliberate: no escaping
+  a substitution through JSON -> sh -> ed on g++ 2.95.
+
+  **`read_file`** -- whole file as base64. Optional byte/line range for big
+  files (logs); source files are small, whole-file is the norm. Regular files
+  only: a dir/symlink/device/fifo target returns `ok:false` (use `stat` to learn
+  the type first). May echo `mode` cheaply, but the edit path does not depend on
+  it (see write preservation).
+
+  **`write_file`** -- whole file from base64, written **atomically**: temp file
+  in the target's directory, then `rename()` over the target so a crash never
+  leaves a half-file. Two non-obvious correctness rules baked in:
+  - **Preserve mode and owner on overwrite, by default.** `rename()` swaps in a
+    fresh inode, so without this every write silently resets perms to umask
+    defaults: a `0755` script comes back `0644` and won't run; an `/etc` file
+    comes back wrong-owner and `sshd`/`init` quietly reject it. Before the
+    rename, stat the existing target and re-apply its mode (and owner, when the
+    daemon runs as root) to the temp file. This is a correctness floor, not a
+    nice-to-have, and it means the bridge's Edit needs no extra round-trip to
+    carry attributes.
+  - **Do NOT preserve mtime.** A write stamps mtime to now, on purpose, so
+    `make` rebuilds after an edit. Preserving the old mtime would break the
+    compile loop.
+  - Optional explicit `mode` param for the cases preservation can't cover:
+    creating a new file, or deliberately setting perms (repair GUI making a
+    script `+x`, stamping `/etc/shadow` back to `0400`). Owner-set needs a
+    root daemon; for dev-user editing you already own the files.
+
+  **`stat` / `list_dir`** -- metadata, the verbs that carry attributes: type,
+  mode, uid, gid, size, mtime. This is what the repair GUI reads to display and
+  validate configs against known templates, and what callers use to check type
+  before a blind `read_file`.
+
+  **`search`** -- runs the Sun's native `grep`/`find` via the exec path and
+  returns structured matches. Run it where the files are; don't drag the tree to
+  the Mac. Prefer `ggrep` once baked (A4) over the primitive `/usr/bin/grep`.
+
+  **Out of scope (we aren't building an OS):** ACLs (`getfacl`/`setfacl`),
+  extended attributes, atime games, and content read/write of non-regular
+  files.
 - [~] **B6. Daemon test suite. STARTED (Mac) 2026-06-20.** Tests live WITH the
   app (`cx_apps/heliosAgent/test/`, `make test`), not in cx_tests -- it's an app,
   not a lib module, and ships as its own unit to Solaris. They drive

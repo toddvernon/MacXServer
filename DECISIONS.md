@@ -959,6 +959,32 @@ console, passwordless root console is the shipped posture.
 
 ---
 
+## 2026-06-20: Control-plane floor/ceiling -- Helios is the zero-config floor, ssh is the opt-in ceiling
+
+**Context**: We have several ways to reach the guest (Helios daemon, ssh, telnet, console), and OpenSSH now runs on the 2.6 image (06-20). The temptation is to lean on ssh for the agentic loop since it's the richer channel (PTY, streaming, interactive `dbx`). The constraint that settles the matter is the audience and the product promise: this has to "just work" for people reliving their Sun days, many of them older, who find ssh key setup a mess until it clicks. ssh keys on the critical path at first launch would lose exactly the users we're building for. So the multiple control planes get assigned by how much the user must configure, not by which is technically richest.
+
+**Chosen -- a floor/ceiling rule with three parts**:
+
+1. **Helios is the floor: the zero-config default, and the critical path may never depend on anything else.** The daemon is baked into the image, autostarts, and listens on a known hostfwd port with no key, no password, no setup. Everything customer-facing rides it: liveness/readiness detection, graceful shutdown, the image-repair GUI, and the default launcher transport. Because the daemon *is* the "it just works" promise, its unglamorous bring-up (rc seed script, autostart, liveness) is product-critical plumbing, not background plumbing.
+
+2. **ssh is the ceiling: opt-in, additive only, never gating.** Once a power user (or a dev like Todd) sets up a key, ssh buys the richer interactive channel and the agentic coding loop. But nothing on the critical path -- boot detection, shutdown, repair, app launch -- may *require* ssh. ssh unconfigured means everything core still works over Helios; ssh failing degrades to Helios, never breaks. The agentic path uses ssh today purely as a dev convenience on Todd's own Mac; if that capability ever ships to customers it rides Helios too.
+
+3. **One plane owns each job; the others are explicit, one-directional fallbacks, never co-owners.** Liveness is owned by Helios, full stop -- ssh does not also poll "is the guest up" on its own clock. Shutdown is owned by Helios. Two planes doing the same job on their own schedules is how you get races and "which one is authoritative" bugs (same class as overlapping grab routing). Assign the owner, make any fallback explicit and one-way (e.g. Helios down to telnet), and the benefit of several planes survives without the divergence.
+
+This maps onto existing structure: the launcher's `transport` field (telnet / ssh / planned `helios`) is where the tiering surfaces, and the floor-default / advanced-toggle shape is the same hardcoded-to-config-to-UI delivery philosophy used for resources.
+
+**Alternatives considered**:
+
+1. *ssh as the primary transport for the agentic loop (and maybe more).* Rejected for anything customer-facing: ssh key provisioning per customer image does not scale and breaks "it just works" at first launch. Kept as the opt-in ceiling, where its after-setup richness is a genuine win for power users and dev.
+2. *Pick one transport for everything (all-Helios or all-ssh).* All-ssh fails the zero-config floor. All-Helios is the long-run product answer but needlessly forgoes ssh's PTY/streaming for the dev loop *today*, before Helios grows a job/streaming/pty verb family.
+3. *Let any plane do any job, choose at runtime.* Rejected: co-ownership of liveness/shutdown invites races and authority ambiguity.
+
+**Why this won**: it makes the product promise ("just works" for a non-sysadmin audience) an architectural invariant rather than a hope, while still letting capable users opt into the richer channel. It also resolves the dev-vs-product seam cleanly: dev rides ssh for the richer loop, everything shipped rides keyless Helios, and the shared Mac-side tool logic (the read/substitute/write edit model) sits above the transport so the choice is reversible and per-consumer.
+
+**Trade accepted**: maintaining more than one transport (telnet legacy, ssh opt-in, Helios default) is more surface than a single channel. Bounded by the owner-per-job rule and by keeping telnet maintain-only. Builds on 2026-06-17 (agent-on-a-port access) and 2026-06-20 (console observation-only; control moves to the agent or ssh).
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
