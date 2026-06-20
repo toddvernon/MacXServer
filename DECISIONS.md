@@ -890,6 +890,50 @@ The implementation lives at `CocoaWindowBridge.applyTransientForOnMain` / `resto
 
 ---
 
+## 2026-06-20 — Console is observation-only; control moves to the agent (or ssh), drop console auto-login
+
+**Decision**: macXserver must stop using the serial console as a *control*
+channel. Today `QemuEngine` scrapes the console for `login:`, types `root`,
+and later drives graceful shutdown by writing `init 5` into that console root
+shell. That is the observation plane doing control's job. Control — starting
+with graceful shutdown — moves to a real channel: **ssh key now** (available
+as of today), and the **Helios guest agent on its port** as the end state.
+The console auto-login gets dropped; the observation window then shows the
+real `login:` prompt as the glass-TTY it's meant to be.
+
+**Trigger**: setting a root password on the guest (for ssh, before key auth
+existed) broke the console auto-login — it sends `root` with no password step
+— and therefore the console-driven `init 5` shutdown too. That's a symptom,
+not the disease: console-scraping is fragile against prompts, locale, boot
+races, and now passwords.
+
+**Why this won**:
+- It's already the architecture. Helios-Mission.md: console = observation
+  glass-TTY, agent on a port = control plane. Auto-login was always a
+  workaround pulling control back into the console.
+- Decouples macXserver from the image's password policy entirely — macXserver
+  never authenticates at the console, so passwordless-vs-password becomes a
+  pure guest concern.
+- Removes a class of brittleness (every console prompt/locale/timing change
+  is a potential auto-login break).
+
+**Migration (in order)**:
+1. *Interim (now)*: keep the shipped image's root console **passwordless** as
+   a deliberate appliance posture (local VM, network root login already off
+   via `CONSOLE`, remote access key-only). Don't set per-image root passwords.
+2. Move graceful shutdown off console-scraping onto **ssh key** (works today).
+3. *End state*: shutdown + control via the **Helios agent**; drop the console
+   auto-login code. See PLUGIN_V1_PUNCHLIST (L3) — same direction as moving
+   console+control onto unix sockets.
+
+**Trade accepted**: an ssh-shutdown path needs a macXserver-owned keypair
+provisioned into the image; a baked private key in the app is a mild smell
+(low risk for a localhost-only appliance). The agent path removes even that,
+so ssh-shutdown is the bridge, not the destination. Until control is off the
+console, passwordless root console is the shipped posture.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

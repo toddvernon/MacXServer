@@ -49,6 +49,20 @@ Helios tool inventory). Mac-side `~/.ssh/config` got a `Host sparcplug` block
 with the legacy algorithms modern macOS needs. Full writeup in
 SPARCSTATION_PLUGIN.md; recipe saved to memory.
 
+**SSH key auth + a password gotcha that became a decision.** Passwordless
+key auth now works (dedicated `~/.ssh/sparcplug_rsa`, installed into the
+guest via tftp — modern macOS `scp` *push* fails to the 2008 sshd, needs
+`-O`). `ssh sparkplug` / `scp sparkplug:/path .` are passwordless and
+verified. But setting a root password (needed earlier for ssh, before key
+auth) **broke macXserver's console auto-login** — `QemuEngine` types `root`
+with no password step, so a cold boot would stall at `Password:` and the
+console-driven `init 5` shutdown would break with it. Tactical fix:
+`passwd -d root` (passwordless console restored; verified `root::` in
+/etc/shadow over key auth). Strategic fix logged as **DECISIONS 2026-06-20**:
+the console is observation-only; control (shutdown) moves to ssh-key now /
+the Helios agent later, and the console auto-login gets dropped. Tracked as
+**L0** in the punch list. Switchover-to-the-Studio checklist saved to memory.
+
 ## What's working / verified
 
 - macXserver app + X server + bundled engine: green. `swift build` +
@@ -58,9 +72,15 @@ SPARCSTATION_PLUGIN.md; recipe saved to memory.
   into the guest. Backspace now works in `tftp>` after the seed fix.
 - Image lock: unit-tested. NOT yet exercised live (Todd to test: Run →
   stop debugger to orphan qemu → Run again → expect the orphan dialog).
+- OpenSSH: key auth (ssh + scp) verified passwordless from the Mac; root
+  console passwordless again so macXserver auto-login still works.
 
 ## What to do next (orphan-safety continued)
 
+- **L0 — drop console auto-login** (DECISIONS 2026-06-20). Move graceful
+  shutdown to ssh-key / the Helios agent; delete the `login:`-scraping so the
+  console is a pure glass-TTY. Decouples macXserver from the guest password
+  policy. Pairs with L3.
 - **L2 polish.** Progress feedback during the ~35s telnet-shutdown poll
   (currently silent), and a **Reconnect** action for a live orphan — the
   latter needs L3.

@@ -215,6 +215,13 @@ orphan: nothing stops a *second* qemu from opening the same qcow2.
   `init 5` over the serial socket — works even on an orphan. NB: SPARC has
   no ACPI, so QMP `system_powerdown` won't cleanly halt Solaris; graceful
   stays `init 5` over serial.
+- [ ] **L0. Drop console auto-login; control off the console** (DECISIONS
+  2026-06-20). `QemuEngine` currently scrapes `login:` → types `root` → drives
+  `init 5` over the console. Move graceful shutdown to ssh-key (works today)
+  or the Helios agent, then delete the auto-login so the console is a pure
+  observation glass-TTY. Decouples macXserver from the guest's password
+  policy (a root password breaks the current auto-login). Same direction as
+  L3 — do them together.
 - [ ] **L4. (Optional) kqueue watchdog — true prevention.** A tiny guardian
   process spawns qemu and `kqueue`-watches the macXserver pid
   (`EVFILT_PROC`/`NOTE_EXIT`); on parent exit by *any* means including
