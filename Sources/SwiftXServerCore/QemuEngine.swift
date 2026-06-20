@@ -212,6 +212,9 @@ public final class QemuEngine: @unchecked Sendable {
         p.terminationHandler = { [weak self] _ in
             self?.queue.async {
                 guard let self = self else { return }
+                // Release the image lock (only ours, by host) now that qemu
+                // has exited cleanly under our control.
+                ImageLockManager.release(imageURL: self.config.diskImage)
                 if let rest = try? outPipe.fileHandleForReading.readToEnd(), !rest.isEmpty {
                     self.ingest(rest)
                 }
@@ -261,6 +264,11 @@ public final class QemuEngine: @unchecked Sendable {
             throw QemuEngineError.spawnFailed(error.localizedDescription)
         }
         isRunning = true
+        // Claim the image lock with the *qemu* pid, so if macXserver dies and
+        // orphans this qemu, the next launch finds a live pid to reclaim.
+        let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev"
+        ImageLockManager.acquire(imageURL: config.diskImage,
+                                 pid: p.processIdentifier, appVersion: appVersion)
         progress = 0.05            // a visible sliver the moment qemu launches
         emitState()
         emitProgress()
@@ -304,7 +312,7 @@ public final class QemuEngine: @unchecked Sendable {
         // for stable guest identity across reboots. When a shared folder is
         // configured, append slirp's built-in TFTP server pointed at it; the
         // guest pulls files with `tftp 10.0.2.2`.
-        var nic = "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::2123-:23,hostfwd=tcp::2222-:22"
+        var nic = "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::\(telnetHostPort)-:23,hostfwd=tcp::2222-:22"
         if let tftp = config.tftpDirectory, !tftp.isEmpty {
             nic += ",tftp=\(tftp)"
         }
@@ -325,6 +333,10 @@ public final class QemuEngine: @unchecked Sendable {
     /// Canonical filename of the installed disk image in Application Support.
     /// Track C's downloader must write this name.
     public static let diskImageFilename = "solaris-2.6.qcow2"
+
+    /// Mac-side port forwarded to the guest's telnet (23). The best-effort
+    /// "shut down an orphan over telnet" path dials this.
+    public static let telnetHostPort: UInt16 = 2123
 
     /// `~/Library/Application Support/macXserver/`.
     public static func applicationSupportDir() -> URL {

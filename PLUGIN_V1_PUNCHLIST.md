@@ -182,15 +182,30 @@ with the parent. Hit this for real 2026-06-19 (a ~17h orphan, shut down by
 hand over the telnet hostfwd). The latent corruption risk is worse than the
 orphan: nothing stops a *second* qemu from opening the same qcow2.
 
-- [ ] **L1. Image lock file (do first, cheap).** On `QemuEngine.start()`
-  write `{pid, imagePath}` to a known file (Application Support). On launch
-  / before start, if that file names a live pid still holding our image,
-  refuse to open it a second time. Closes the double-open corruption hole
-  and gives orphan detection for free. No protocol/socket work needed.
-- [ ] **L2. Orphan detection + recovery UX.** On app launch, if the lock
-  (or a process scan matching our image + fixed MAC) shows a live orphan,
-  surface it: "A SPARCstation is already running — Reconnect / Shut Down."
-  Depends on L3 for the recovery actions to be possible.
+- [x] **L1. Image lock file. DONE 2026-06-20.** `ImageLock` /
+  `ImageLockManager` in SwiftXServerCore: host-aware advisory lock written
+  next to the image (so it works across the two Macs sharing the qcow2 via
+  Dropbox — a local pid is meaningless on the other machine). `QemuEngine`
+  acquires it (with the qemu pid) on start and releases on clean exit.
+  `AppDelegate.launchSparcStation` pre-flights via `evaluate()`:
+  free → boot; staleSameHost (our host, dead pid) → reclaim + boot;
+  remoteLocked (other host) → hard stop with Reveal-Lock-in-Finder (user
+  deletes it); localOrphan (our host, live pid verified as our qemu) →
+  dialog. Force Quit re-verifies it's still our qemu (via `proc_pidpath`)
+  before SIGKILL so a recycled pid is never killed. 10 unit tests pin the
+  decision tree + parse/serialize + release-by-host. Caveats accepted: lock
+  is advisory (qemu's own fcntl lock doesn't cross Dropbox) and cross-machine
+  detection is best-effort (Dropbox sync latency).
+- [~] **L2. Orphan recovery UX. PARTIAL 2026-06-20.** The localOrphan dialog
+  offers: **Try to Shut It Down** (best-effort `init 5` over the 2123 telnet
+  hostfwd via `TelnetLauncher`, success measured by polling the pid to death,
+  ~35s timeout → falls back to manual), **Force Quit** (verified SIGKILL),
+  **Show Me How** (manual telnet steps), **Cancel**. Still TODO: (a) a
+  **Reconnect** action that re-attaches the observation window to a live
+  orphan — needs L3's console socket; (b) progress feedback during the telnet
+  poll (currently silent for ~35s); (c) root-over-telnet is often refused on
+  2.6, so "Try to Shut It Down" frequently can't authenticate — Force Quit +
+  manual are the reliable paths today.
 - [ ] **L3. Move console + control off the stdio pipe.** Today console +
   control ride `-nographic` stdio owned by the parent's `Pipe`; when the
   parent dies they're unreachable and qemu spins. Switch to

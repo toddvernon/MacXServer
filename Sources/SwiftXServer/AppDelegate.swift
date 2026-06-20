@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import UniformTypeIdentifiers
 import SwiftXServerCore
 import SwiftXCaptureCore
@@ -36,6 +37,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var qemuEngine: QemuEngine?
     private var sparcConsole: SparcPlugConsoleWindowController?
     private var sparcWelcome: SparcStationWelcomeWindowController?
+    /// Retains a best-effort telnet "shut down the orphan" attempt for its
+    /// lifetime; cleared when the attempt resolves.
+    private var sparcTelnetShutdown: TelnetLauncher?
 
     /// LAN host the launcher hands to remote apps as `DISPLAY`; set by the
     /// bootstrap once the listener resolves the bind address.
@@ -810,8 +814,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sparcConsole?.showWindow()
     }
 
-    /// Boot the engine and bring up the console. Assumes an image is set.
+    /// Pre-flight the image lock, then boot. The lock guards against opening
+    /// the same qcow2 twice (corruption) — including across the two Macs that
+    /// share the image via Dropbox. See ImageLock / PLUGIN_V1_PUNCHLIST L1.
     private func launchSparcStation() {
+        let image = makeSparcConfig().diskImage
+        switch ImageLockManager.evaluate(imageURL: image) {
+        case .free:
+            proceedSparcLaunch()
+        case .staleSameHost:
+            // Leftover lock from a crash on this Mac; the process is gone.
+            ImageLockManager.forceRemove(imageURL: image)
+            proceedSparcLaunch()
+        case .localOrphan(let lock):
+            presentLocalOrphanDialog(lock: lock, image: image)
+        case .remoteLocked(let lock):
+            presentRemoteLockedDialog(lock: lock, image: image)
+        }
+    }
+
+    /// Actually boot the engine and bring up the console. Assumes the image is
+    /// set and the lock is clear.
+    private func proceedSparcLaunch() {
         ensureSparcConsole()
         sparcConsole?.showWindow()
         do {
@@ -819,6 +843,121 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         } catch {
             showLaunchError("Couldn't start SPARCstation: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Image-lock dialogs
+
+    /// Different machine holds the lock: hard stop. We can't verify a remote
+    /// pid, so the user must delete the lock if they know that Mac is idle.
+    private func presentRemoteLockedDialog(lock: ImageLock, image: URL) {
+        let lockPath = ImageLockManager.lockURL(for: image).path
+        let alert = NSAlert()
+        alert.messageText = "This disk image is in use by another Mac"
+        let since = lock.startedAt.isEmpty ? "" : " since \(friendlyDate(lock.startedAt))"
+        alert.informativeText =
+            "“\(lock.host)” is using this SPARCstation disk image\(since). Running it on two "
+            + "machines at once would corrupt the image.\n\nIf \(lock.host) isn’t actually "
+            + "running it, delete the lock file to continue:\n\(lockPath)"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Reveal Lock in Finder")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSWorkspace.shared.selectFile(lockPath, inFileViewerRootedAtPath: "")
+        }
+    }
+
+    /// Same machine, a previous qemu is still alive (the Xcode-stop / crash
+    /// orphan). Offer best-effort graceful shutdown, force quit, or manual
+    /// instructions.
+    private func presentLocalOrphanDialog(lock: ImageLock, image: URL) {
+        let alert = NSAlert()
+        alert.messageText = "A SPARCstation is already running"
+        alert.informativeText =
+            "A SPARCstation from a previous run (process \(lock.pid)) is still running on this "
+            + "Mac and holding the disk image. Starting another would corrupt it.\n\nTry to shut "
+            + "it down cleanly, or force quit it (which risks a disk check on the next boot)."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Try to Shut It Down")   // first
+        alert.addButton(withTitle: "Force Quit")            // second
+        alert.addButton(withTitle: "Show Me How")           // third
+        alert.addButton(withTitle: "Cancel")                // fourth
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:  attemptTelnetShutdown(lock: lock, image: image)
+        case .alertSecondButtonReturn: forceQuitOrphan(lock: lock, image: image)
+        case .alertThirdButtonReturn:  showManualShutdownInstructions()
+        default: break
+        }
+    }
+
+    /// SIGKILL the orphan, but only after re-verifying it's still our qemu
+    /// (so a recycled pid is never killed). Then clear the lock and boot.
+    private func forceQuitOrphan(lock: ImageLock, image: URL) {
+        if ImageLockManager.isProcessAlive(lock.pid),
+           ImageLockManager.processIsOurQemu(lock.pid) {
+            kill(lock.pid, SIGKILL)
+        }
+        // Give it a beat to die, then clear the (now-stale) lock and launch.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            ImageLockManager.forceRemove(imageURL: image)
+            self?.proceedSparcLaunch()
+        }
+    }
+
+    /// Best-effort: telnet the orphan over the 2123 hostfwd and send `init 5`,
+    /// then poll for the pid to die. No guarantee — root-over-telnet may be
+    /// refused, etc. On timeout, fall back to manual instructions.
+    private func attemptTelnetShutdown(lock: ImageLock, image: URL) {
+        let entry = LauncherEntry(
+            name: "SPARCstation shutdown", group: "", host: "127.0.0.1",
+            command: "/usr/sbin/init 5", user: "root",
+            port: QemuEngine.telnetHostPort, verbose: false,
+            shellPrompt: "#", password: nil, transport: .telnet, display: "")
+        let launcher = TelnetLauncher(entry: entry, password: "", displayString: "")
+        sparcTelnetShutdown = launcher
+        // Success is measured by the pid dying, not the launcher's result
+        // (after `init 5` there's no shell prompt to return to).
+        launcher.launch { _ in }
+        pollOrphanDeath(lock: lock, image: image, deadline: Date().addingTimeInterval(35))
+    }
+
+    private func pollOrphanDeath(lock: ImageLock, image: URL, deadline: Date) {
+        if !ImageLockManager.isProcessAlive(lock.pid) {
+            sparcTelnetShutdown?.cancel(); sparcTelnetShutdown = nil
+            ImageLockManager.forceRemove(imageURL: image)
+            proceedSparcLaunch()
+            return
+        }
+        if Date() >= deadline {
+            sparcTelnetShutdown?.cancel(); sparcTelnetShutdown = nil
+            showManualShutdownInstructions()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.pollOrphanDeath(lock: lock, image: image, deadline: deadline)
+        }
+    }
+
+    private func showManualShutdownInstructions() {
+        let alert = NSAlert()
+        alert.messageText = "Shut down the running SPARCstation by hand"
+        alert.informativeText =
+            "In Terminal, connect to the running guest and halt it:\n\n"
+            + "    telnet 127.0.0.1 \(QemuEngine.telnetHostPort)\n"
+            + "    (log in, then as root:)\n"
+            + "    init 5\n\n"
+            + "Once it powers off, start the SPARCstation again. If telnet won’t connect, use "
+            + "Force Quit instead (it risks a disk check on the next boot)."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    /// ISO-8601 lock timestamp → a short local date/time, or the raw string.
+    private func friendlyDate(_ iso: String) -> String {
+        guard let date = ISO8601DateFormatter().date(from: iso) else { return iso }
+        let out = DateFormatter()
+        out.dateStyle = .short
+        out.timeStyle = .short
+        return out.string(from: date)
     }
 
     /// First-run / no-image flow: a friendly hero-panel window (not the
