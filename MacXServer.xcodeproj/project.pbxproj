@@ -67,6 +67,7 @@
 		38E9836EDF516E6B5991BE62 /* Framer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2BBD4D4DAD4A758CA64CEF04 /* Framer.framework */; };
 		39551E418E1044994A2456CE /* GetGeometryReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = D878B80FA551ECD92ED1BD58 /* GetGeometryReply.swift */; };
 		3A1EB41FF8C63E84867BC314 /* OpenFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = 094C02A823F59A170DC8EBB9 /* OpenFont.swift */; };
+		3AF3AA0AED9093070C7F81CD /* SparcShutdownProgressWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C19C1C2C0742B8FA8C8E81C /* SparcShutdownProgressWindowController.swift */; };
 		3F0CC3CBEA92E105621DC697 /* XInputDumper.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4EBC5BAECE3AC68C05D1391 /* XInputDumper.swift */; };
 		40DAE7B9761570F2DC2A4B58 /* InputEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0F55E248A51B7A196B4FB7 /* InputEvents.swift */; };
 		41242B184A4ED29DEF85D137 /* ResourceSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7374467A89FB169ED5220A3 /* ResourceSyntaxHighlighter.swift */; };
@@ -458,6 +459,7 @@
 		2874B07E7625FA85C167308D /* PolyLine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PolyLine.swift; sourceTree = "<group>"; };
 		2A507B1DEAD91E4E1E487C0F /* ShmReplies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShmReplies.swift; sourceTree = "<group>"; };
 		2BBD4D4DAD4A758CA64CEF04 /* Framer.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Framer.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		2C19C1C2C0742B8FA8C8E81C /* SparcShutdownProgressWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparcShutdownProgressWindowController.swift; sourceTree = "<group>"; };
 		2E26C8ECD2B39B67D6438CAD /* ServerLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerLog.swift; sourceTree = "<group>"; };
 		2E3322D38DFEF093B1B6BF06 /* SetMappingReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetMappingReply.swift; sourceTree = "<group>"; };
 		2EEE2BF5DA5FE9709630C41E /* MiscRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiscRequests.swift; sourceTree = "<group>"; };
@@ -836,6 +838,7 @@
 				C7374467A89FB169ED5220A3 /* ResourceSyntaxHighlighter.swift */,
 				D899EE8C17AAED546A288ECA /* ServerEntry.swift */,
 				5572289CEA5A6228AAD86A49 /* SparcPlugConsoleWindowController.swift */,
+				2C19C1C2C0742B8FA8C8E81C /* SparcShutdownProgressWindowController.swift */,
 				B2919BA52AEB8B568EBADB7D /* SparcStationWelcomeWindowController.swift */,
 			);
 			path = SwiftXServer;
@@ -1641,6 +1644,7 @@
 				2D357D8D959034DDAE7AADB5 /* ServerEntry.swift in Sources */,
 				97505EDAD43827D812042553 /* ServerMain.swift in Sources */,
 				9A48C3F777EA2702E773B9FC /* SparcPlugConsoleWindowController.swift in Sources */,
+				3AF3AA0AED9093070C7F81CD /* SparcShutdownProgressWindowController.swift in Sources */,
 				234C8AFC02F1E9BE48F51F71 /* SparcStationWelcomeWindowController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -40,6 +40,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Retains a best-effort telnet "shut down the orphan" attempt for its
     /// lifetime; cleared when the attempt resolves.
     private var sparcTelnetShutdown: TelnetLauncher?
+    /// Live progress panel shown while we wait for an orphan to power off.
+    /// Non-nil only during an in-flight "Try to Shut It Down"; its presence is
+    /// also the poll loop's keep-going signal (cleared the instant the user
+    /// cancels or escalates).
+    private var sparcShutdownProgress: SparcShutdownProgressWindowController?
 
     /// LAN host the launcher hands to remote apps as `DISPLAY`; set by the
     /// bootstrap once the listener resolves the bind address.
@@ -904,8 +909,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// Best-effort: telnet the orphan over the 2123 hostfwd and send `init 5`,
-    /// then poll for the pid to die. No guarantee — root-over-telnet may be
-    /// refused, etc. On timeout, fall back to manual instructions.
+    /// then poll for the pid to die behind a live progress panel. No guarantee
+    /// — root-over-telnet may be refused, etc. The panel counts down the wait
+    /// and, on timeout, flips to Force Quit / Show Me How / Cancel inline so the
+    /// user is never left guessing how long to wait. See PLUGIN_V1_PUNCHLIST L2.
     private func attemptTelnetShutdown(lock: ImageLock, image: URL) {
         let entry = LauncherEntry(
             name: "SPARCstation shutdown", group: "", host: "127.0.0.1",
@@ -917,24 +924,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // Success is measured by the pid dying, not the launcher's result
         // (after `init 5` there's no shell prompt to return to).
         launcher.launch { _ in }
-        pollOrphanDeath(lock: lock, image: image, deadline: Date().addingTimeInterval(35))
+
+        let total = 35
+        let progress = SparcShutdownProgressWindowController(
+            totalSeconds: total,
+            onForceQuit: { [weak self] in self?.forceQuitFromProgress(lock: lock, image: image) },
+            onShowManual: { [weak self] in self?.showManualFromProgress() },
+            onCancel: { [weak self] in self?.cancelShutdownWait() })
+        sparcShutdownProgress = progress
+        progress.showWindow()
+
+        pollOrphanDeath(lock: lock, image: image, deadline: Date().addingTimeInterval(TimeInterval(total)))
     }
 
     private func pollOrphanDeath(lock: ImageLock, image: URL, deadline: Date) {
+        // The user cancelled or escalated; the panel is gone, so stop polling.
+        guard sparcShutdownProgress != nil else { return }
+
         if !ImageLockManager.isProcessAlive(lock.pid) {
             sparcTelnetShutdown?.cancel(); sparcTelnetShutdown = nil
             ImageLockManager.forceRemove(imageURL: image)
-            proceedSparcLaunch()
+            sparcShutdownProgress?.markSucceeded()
+            // Let the green "Powered off" state register, then dismiss + boot.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                self?.sparcShutdownProgress?.close()
+                self?.sparcShutdownProgress = nil
+                self?.proceedSparcLaunch()
+            }
             return
         }
         if Date() >= deadline {
             sparcTelnetShutdown?.cancel(); sparcTelnetShutdown = nil
-            showManualShutdownInstructions()
+            // Leave the panel up; it flips to the actionable failure state.
+            sparcShutdownProgress?.markFailed()
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+        sparcShutdownProgress?.updateRemaining(Int(deadline.timeIntervalSinceNow.rounded(.up)))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             self?.pollOrphanDeath(lock: lock, image: image, deadline: deadline)
         }
+    }
+
+    /// Force Quit chosen from the progress panel: tear the panel + telnet
+    /// attempt down, then run the verified SIGKILL path.
+    private func forceQuitFromProgress(lock: ImageLock, image: URL) {
+        sparcShutdownProgress?.close(); sparcShutdownProgress = nil
+        sparcTelnetShutdown?.cancel(); sparcTelnetShutdown = nil
+        forceQuitOrphan(lock: lock, image: image)
+    }
+
+    /// Show Me How chosen from the progress panel: tear down and show the
+    /// manual telnet steps.
+    private func showManualFromProgress() {
+        sparcShutdownProgress?.close(); sparcShutdownProgress = nil
+        sparcTelnetShutdown?.cancel(); sparcTelnetShutdown = nil
+        showManualShutdownInstructions()
+    }
+
+    /// Cancel chosen from the progress panel: stop waiting and leave the orphan
+    /// running. Clearing `sparcShutdownProgress` also halts the poll loop.
+    private func cancelShutdownWait() {
+        sparcShutdownProgress?.close(); sparcShutdownProgress = nil
+        sparcTelnetShutdown?.cancel(); sparcTelnetShutdown = nil
     }
 
     private func showManualShutdownInstructions() {

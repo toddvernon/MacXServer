@@ -196,16 +196,28 @@ orphan: nothing stops a *second* qemu from opening the same qcow2.
   decision tree + parse/serialize + release-by-host. Caveats accepted: lock
   is advisory (qemu's own fcntl lock doesn't cross Dropbox) and cross-machine
   detection is best-effort (Dropbox sync latency).
-- [~] **L2. Orphan recovery UX. PARTIAL 2026-06-20.** The localOrphan dialog
-  offers: **Try to Shut It Down** (best-effort `init 5` over the 2123 telnet
-  hostfwd via `TelnetLauncher`, success measured by polling the pid to death,
-  ~35s timeout → falls back to manual), **Force Quit** (verified SIGKILL),
-  **Show Me How** (manual telnet steps), **Cancel**. Still TODO: (a) a
-  **Reconnect** action that re-attaches the observation window to a live
-  orphan — needs L3's console socket; (b) progress feedback during the telnet
-  poll (currently silent for ~35s); (c) root-over-telnet is often refused on
-  2.6, so "Try to Shut It Down" frequently can't authenticate — Force Quit +
-  manual are the reliable paths today.
+- [~] **L2. Orphan recovery UX. PARTIAL 2026-06-20; graceful path PARKED.**
+  The localOrphan dialog offers: **Try to Shut It Down** (best-effort `init 5`
+  over the 2123 telnet hostfwd via `TelnetLauncher`, success measured by
+  polling the pid to death), **Force Quit** (verified SIGKILL), **Show Me How**
+  (manual telnet steps), **Cancel**.
+  - (b) **DONE 2026-06-20.** The silent ~35s poll is now a live panel
+    (`SparcShutdownProgressWindowController`): countdown + progress bar while
+    waiting, auto-dismiss + boot on power-off, and on timeout it flips in place
+    to an actionable failure state (Force Quit / Show Me How / Cancel). Reusable
+    UI shell the agent can drive later.
+  - (c) **The telnet mechanism is dead on this image — PARKED.** Solaris 2.6
+    *refuses root login over telnet*, so "Try to Shut It Down" can never
+    authenticate and always times out → Force Quit. We are NOT switching it to
+    ssh: `ssh sparcplug "init 5"` works on an orphan's 2222 hostfwd today, but
+    only on machines that have the per-Mac `~/.ssh/sparcplug_rsa` + config —
+    a shipped customer has neither, so it's dev-only scaffolding. The real,
+    shippable graceful-shutdown channel is the **Helios agent** (next up).
+    Until then, **Force Quit + auto-backup is the working recovery path.**
+  - (a) **Reconnect** to a live orphan — still TODO, needs L3's console socket.
+  - Footgun noted while parked: "Try to Shut It Down" is the dialog's default
+    button but can't work on this image, so a reflexive Return is a guaranteed
+    timeout. Consider making Force Quit the default until the agent lands.
 - [ ] **L3. Move console + control off the stdio pipe.** Today console +
   control ride `-nographic` stdio owned by the parent's `Pipe`; when the
   parent dies they're unreachable and qemu spins. Switch to
