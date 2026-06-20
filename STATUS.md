@@ -1,83 +1,73 @@
-# Status 2026-06-19 (end of day)
+# Status 2026-06-20 (end of day)
 
-Shipped the SPARCstation **shared folder (TFTP)** feature end-to-end, fixed
-a Debug-build code-signing footgun that was silently killing the bundled
-engine, and cleaned up three Preferences-dialog regressions. Engine + image
-untouched and healthy (qemu-img clean, boots fine). TFTP transfer verified
-into the live guest.
+Built **L1 of the orphan-safety work**: a host-aware image lock that prevents
+two qemus from opening the same qcow2 (corruption) and handles the
+Xcode-stop / crash orphan footgun. Also fixed the guest backspace mismatch
+the right way (erase `^H` in tcsh). Yesterday's shared-folder (TFTP) feature,
+Debug code-signing fix, and Preferences-dialog fixes are in and green.
 
 ## What landed today
 
-**Shared folder (TFTP).** New Preferences → SPARCstation toggle "Use a
-shared folder to copy files into the SPARCstation," off by default, default
-location `~/macXserverTFTP` (created on enable; Choose/Reveal to relocate).
-When on, `QemuEngine` appends `,tftp=<dir>` to the slirp `-nic` line, so the
-guest pulls files with `tftp 10.0.2.2` (binary; get). Wired
-`Preferences` → `makeSparcConfig()` → `QemuEngine.buildArguments`; dev
-override `SPARCPLUG_TFTP_DIR`. Off = byte-identical `-nic` to before (pinned
-by test). `fullemu.sh` default flipped to the same `~/macXserverTFTP` for
-dev/product parity. `guest/set-hostname.sh` (Solaris 2.6 rename script)
-added to the SPARCplug repo and dropped in the shared folder as the first
-real payload.
+**Image lock (PLUGIN_V1_PUNCHLIST L1).** `ImageLock` / `ImageLockManager` in
+SwiftXServerCore: an advisory, **host-aware** lock written next to the qcow2.
+It sits beside the image (not Application Support) so both Macs sharing it via
+Dropbox see the same lock, and it records the **hostname** because a pid from
+the other Mac is meaningless here. `QemuEngine` acquires it (with the qemu
+pid) on start, releases on clean exit. `AppDelegate.launchSparcStation`
+pre-flights via `evaluate()`:
 
-**Debug code-signing fix (the silent "Stopped" bug).** Xcode Debug ad-hoc
-signs the `.app`, but the embedded qemu helper is Developer-ID + hardened
-runtime — an inconsistent nesting that AMFI SIGKILLs at launch (exit 137,
-no console, app stuck on "Stopped"). `project.yml`'s Debug-only embed
-post-build step now re-signs the helper + dylibs ad-hoc after copying, so
-they match the ad-hoc app. Release path (`release.sh`, uniform Dev-ID +
-hardened + notarized) is unaffected — that's the posture this bug can't
-occur in. Saved to memory.
+- free → boot
+- staleSameHost (our host, dead pid) → reclaim + boot
+- remoteLocked (other host) → **hard stop**, Reveal-Lock-in-Finder (user
+  deletes it; we never touch another Mac's lock)
+- localOrphan (our host, live pid verified as our qemu) → dialog:
+  **Try to Shut It Down** (best-effort `init 5` over the 2123 telnet hostfwd,
+  success = the pid dying, ~35s timeout → manual fallback), **Force Quit**
+  (re-verifies `proc_pidpath` before SIGKILL so a recycled pid is never
+  killed), **Show Me How** (manual telnet steps), **Cancel**.
 
-**Preferences dialog fixes.** (1) Tab bar was collapsing into a `>>`
-overflow menu — the SPARCplug iteration added a 6th tab ("SPARCstation")
-without widening the 560pt window; bumped to 720 so all six fit on top.
-(2) Opening from the menu now always lands on the first tab (Cut/Paste);
-the reused window controller had been retaining the last tab. (3) The tall
-SPARCstation tab was clipping top+bottom; wrapped it in a ScrollView and
-raised the window to 560 high. SwiftUI TabView has no per-tab auto-resize
-(AppKit's NSTabViewController does); ScrollView is the robust answer.
+10 unit tests pin the decision tree + parse/serialize + release-by-host.
+Committed `770566c`.
+
+**Guest backspace fix (done right).** The Mac's Delete key sends `^H`; the
+guest's tty erase was stuck on the Solaris default (DEL) because **tcsh never
+reads `/etc/profile`** (where the baseline sets `erase ^H`). Fix: `stty erase
+'^H'` in the seed `tftproot/dot.tcshrc`, where tcsh actually reads it — both
+the Mac terminal and the Sun's xterm send `^H`, so no conditional needed.
+Lesson logged: two independent input layers (kernel cooked-mode tty erase vs.
+the shell's own editor), so the shell is always fine and only cooked-mode
+programs like `tftp>` need the erase char to match the key.
 
 ## What's working / verified
 
-- macXserver app + X server + bundled engine: green. Engine boots the image
-  cleanly (verified standalone via dist/ and the re-signed bundle helper).
-- SUN40G.qcow2: `qemu-img check` clean, `corrupt: false`. Survived an
-  orphaned-qemu episode (below) with no damage.
-- Shared folder: enabled, file dropped, `tftp 10.0.2.2` get succeeded into
-  the guest. "Restart to apply" note shows live while the engine runs.
-- `swift build` + `xcodebuild` Debug both clean; QemuEngine tests pass
-  (added 3 for the tftp arg + env override).
+- macXserver app + X server + bundled engine: green. `swift build` +
+  `swift test` clean (20 SwiftXServerCore tests incl. 10 new lock tests; 2
+  live engine tests skipped by design).
+- Shared folder (TFTP): verified moving `set-hostname.sh` and the dotfiles
+  into the guest. Backspace now works in `tftp>` after the seed fix.
+- Image lock: unit-tested. NOT yet exercised live (Todd to test: Run →
+  stop debugger to orphan qemu → Run again → expect the orphan dialog).
 
-## What broke / lesson (the orphan episode)
+## What to do next (orphan-safety continued)
 
-Stopping the Xcode debug session SIGKILLs the app but **orphans the child
-qemu** — it kept the master qcow2 open ~17h pegged at 100% CPU (its console
-pipe reader died with the parent). Shut it down by hand via the telnet
-hostfwd (`init 5`). No `PR_SET_PDEATHSIG` on macOS, and the
-`applicationShouldTerminate` quit guard never runs on SIGKILL/crash, so
-nothing reaps it. Worse latent risk: nothing stops a *second* qemu from
-opening the same qcow2 (corruption, not just fsck).
-
-## What to do next (agreed loop-back)
-
-1. **Image lock file.** On engine start, write pid + image path to a known
-   file; on launch, refuse to open an image a live pid already holds. Kills
-   the double-open corruption risk. Cheap, do first. (Punchlist: Lifecycle.)
-2. **Orphan detection + recovery.** Detect a live orphan on launch and offer
-   Reconnect / Shut Down. Enabled by moving console + control off the dying
-   stdio pipe onto unix sockets (`-serial unix:`, `-qmp unix:`), so a
-   recovery path can re-attach and drive `init 5` after the parent died.
-3. **(Optional) kqueue watchdog** — the only true *prevention* (survives
-   parent SIGKILL); needs a new helper, so maintainer call.
+- **L2 polish.** Progress feedback during the ~35s telnet-shutdown poll
+  (currently silent), and a **Reconnect** action for a live orphan — the
+  latter needs L3.
+- **L3 — console + control on unix sockets.** Move off the `-nographic`
+  stdio pipe (`-serial unix:`, `-qmp unix:`) so a relaunch can re-attach an
+  orphan's console and drive `init 5` reliably (telnet often can't auth root
+  on 2.6). Unlocks L2's Reconnect.
+- **L4 (optional) — kqueue watchdog.** True prevention of the orphan
+  (survives parent SIGKILL); new helper binary, needs maintainer sign-off.
 
 Plus deferred polish: wrap all Preferences tabs in ScrollView (only
-SPARCstation done) and a final text/sizing sweep.
+SPARCstation done); final text/sizing sweep; `tvernon`'s `.tcshrc` still
+needs the `stty erase '^H'` line if Todd admins from that account.
 
 ## Pointers
 
+- Orphan-safety tracker: `PLUGIN_V1_PUNCHLIST.md` (Lifecycle → L1–L4).
+- Lock file lives at `<image>.macxserver-lock`, next to the qcow2 (Dropbox).
 - Shared folder default: `~/macXserverTFTP`. Guest pull: `tftp 10.0.2.2`,
   `binary`, `get <file>`.
-- Plugin v1 work: `PLUGIN_V1_PUNCHLIST.md` (orphan/lockfile under Lifecycle).
-- Dev launcher: `~/Dropbox/dev/SPARCplug/fullemu.sh` (homebrew qemu).
 - Image + autobackup: `~/Dropbox/dev/SPARCplug/SUN40G.qcow2` (+ dated sibling).
