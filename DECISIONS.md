@@ -934,6 +934,31 @@ console, passwordless root console is the shipped posture.
 
 ---
 
+## 2026-06-20: Helios mission refinement -- control-first, daemon-as-mechanism (Mac-first), Claude Code + MCP (not an in-app loop)
+
+**Context**: The 2026-06-17 access-model decision (Sun-side agent on a port) stands. What changed is everything *around* it, driven by the SPARCplug control holes we hit on 06-19/20 (the orphan/lock/shutdown work), which postdate the original `Helios-Mission.md` (06-16). Three linked decisions:
+
+**1. Priorities inverted to control-first.** The guest agent's first job is to plug macXserver's *control* gaps -- graceful shutdown (the dead telnet path and the console-scrape `init 5` both retire onto a daemon `shutdown` verb that also works on an orphan), a real liveness signal (replaces console `login:`-scraping), orphan recovery, and the image-repair GUI -- not the agentic-coding hello-world loop. The earlier doc made the agentic MVP "Phase 0"; that is now Phase C. The **SPARCplug release is parked behind having the control plane in place** (Todd, 06-20: want agent capability before a release).
+
+**2. The daemon is pure mechanism, built Mac-first.** One daemon (exec + file + liveness), knowing nothing about control policy or LLMs; both the control plane and the agentic loop are *clients* over it. Because it is plain POSIX C++ on cx (cross-platform), the daemon + its test suite are built and proven **on the Mac** (localhost, no qemu), and Solaris becomes a *validation* step, not a dev environment. Extends the project's dev/deploy parity to: dev on Mac -> validate on emulator -> deploy on iron, same code.
+
+**3. The agentic client is Claude Code + a SPARCplug MCP server, NOT an in-app loop.** We expose the daemon verbs through an MCP server (a CLI shim is the smaller intermediate form) and let the **Claude Code app (or Claude Desktop)** drive it. We build the bridge; Claude Code's mature agent loop is the workbench. This **supersedes** the "promote-to-AI" split-window chat + Anthropic-loop-inside-macXserver from earlier drafts. That in-app chat demotes to a possible later feature for end-users who don't run Claude Code; the deterministic repair GUI already covers most of their needs.
+
+**Alternatives considered**:
+
+1. *Keep the agentic MVP as Phase 0* (original doc). Rejected: the control holes are more urgent, lower-risk, and gate the release; and building control first builds the agentic substrate for free.
+2. *Build the Anthropic loop + chat UI inside macXserver* (original "Workbench"). Rejected: far more code to write and maintain, and it would be strictly less capable than Claude Code, which Todd already uses daily.
+
+**Why this won**:
+- **Less code, more capability.** Claude Code's loop beats anything we'd build; macXserver's job shrinks to lifecycle + deterministic control + repair GUI + shipping the daemon.
+- **One daemon, two clients, clean layering.** Control and agentic use cases share the exact verb set; the daemon stays policy-free.
+- **Same MCP server reaches emulated and real Suns**, so Claude Code is the constant operator across all three deploy rungs.
+- **Cheap self-hosting bootstrap.** Once the bridge exposes run_command + file ops, Claude Code does the Solaris-side grind itself (validate cx, fix configs). This week's image-lock + auto-backup + control verbs are the safety floor that makes letting the agent mutate the real image sane.
+
+**Trade accepted**: an MCP/CLI bridge is a new (small) artifact to build and version, and the agentic experience requires the user to have Claude Code/Desktop. For Todd's own use and for proving the thesis that is exactly right; the in-app chat remains available later as the no-Claude-Code fallback. Full model in `Helios-Mission.md` (rewritten 2026-06-20). Protocol/codec specifics (newline-JSON + base64 content, cx json fix `75b8304`) noted there and in the cx repo.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

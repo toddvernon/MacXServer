@@ -163,17 +163,26 @@ and hardened runtime makes it ignore any `DYLD_*` override. The audit
 is `otool -L` showing zero `/opt/homebrew` or `/usr/local` paths,
 verified on a clean account with no homebrew.
 
-## Next milestone: shippable plugin v1 (do this BEFORE Helios)
+## Next milestone: shippable plugin v1
 
-This is the agreed next batch of work, decided 2026-06-16. It comes
-before any Helios work. Helios (`Helios-Mission.md`) sits on top of this
-substrate and is explicitly NOT started until plugin v1 ships; a future
-session may discuss Helios but should not implement any of it until the
-three deliverables below are done.
+> **RESEQUENCED 2026-06-20.** The original framing ("do this BEFORE Helios,
+> Helios not started until v1 ships") is **superseded**. The control holes we
+> hit building v1 (orphan/lock/shutdown, 06-19/20) showed that the right
+> shippable control channel *is* the Helios guest agent -- so Helios's first
+> use case (the **control plane**: graceful shutdown, liveness, orphan
+> recovery, image-repair GUI) now comes *before* the release, not after. The
+> SPARCplug release is parked behind the control plane. The agentic-coding
+> use case (Claude Code + a SPARCplug MCP server) is still later. See
+> `Helios-Mission.md` (rewritten 06-20) and DECISIONS 2026-06-20. The three
+> deliverables below remain valid v1 packaging work; they just no longer gate
+> all Helios work, and the daemon's control verbs now interleave with them.
+
+This is the agreed next batch of work, decided 2026-06-16 (resequenced
+2026-06-20 per the banner above).
 
 Plugin v1 is the first end-to-end shippable form: a user downloads one
 app, installs the disk image from a menu, and boots a working
-SPARCstation with the console visible. No AI, no Helios.
+SPARCstation with the console visible.
 
 **Deliverable 1: a shippable app binary with the engine built in, no
 disk image.** Bundle SPARCplug's `qemu-system-sparc` + glib dylibs into

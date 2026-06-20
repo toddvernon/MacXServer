@@ -182,6 +182,16 @@ with the parent. Hit this for real 2026-06-19 (a ~17h orphan, shut down by
 hand over the telnet hostfwd). The latent corruption risk is worse than the
 orphan: nothing stops a *second* qemu from opening the same qcow2.
 
+**Strategic resolution (DECISIONS 2026-06-20): the Helios control-plane daemon
+is the destination for all of this.** A guest-side agent on a port gives a real
+`shutdown` verb (graceful `init 5` that also works on an orphan, since the
+daemon outlives the parent) and a real liveness signal -- the shippable control
+channel that L0/L2/L3 were all reaching toward. So the SPARCplug release is now
+parked behind the control plane, and the items below are interim: L1 (lock) +
+Force Quit + auto-backup are the safety floor *today*; the daemon supersedes the
+telnet/ssh/console-scrape shutdown paths once it lands. See `Helios-Mission.md`
+(control plane = use case 1) and DECISIONS 2026-06-20 (mission refinement).
+
 - [x] **L1. Image lock file. DONE 2026-06-20.** `ImageLock` /
   `ImageLockManager` in SwiftXServerCore: host-aware advisory lock written
   next to the image (so it works across the two Macs sharing the qcow2 via
@@ -226,7 +236,11 @@ orphan: nothing stops a *second* qemu from opening the same qcow2.
   Then L2's Reconnect re-wires the observation window and Shut Down drives
   `init 5` over the serial socket — works even on an orphan. NB: SPARC has
   no ACPI, so QMP `system_powerdown` won't cleanly halt Solaris; graceful
-  stays `init 5` over serial.
+  stays `init 5` over serial. **Mostly superseded by the daemon (06-20):**
+  the *control* half (liveness + shutdown, incl. orphans) comes from the
+  Helios `shutdown`/`hello` verbs, not QMP/serial. The only residual reason
+  for the serial socket is re-attaching the *console view* to an orphan
+  (L2's Reconnect); reassess whether that's worth it once the daemon is in.
 - [ ] **L0. Drop console auto-login; control off the console** (DECISIONS
   2026-06-20). `QemuEngine` currently scrapes `login:` → types `root` → drives
   `init 5` over the console. Move graceful shutdown to ssh-key (works today)

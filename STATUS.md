@@ -1,104 +1,87 @@
 # Status 2026-06-20 (end of day)
 
-Built **L1 of the orphan-safety work**: a host-aware image lock that prevents
-two qemus from opening the same qcow2 (corruption) and handles the
-Xcode-stop / crash orphan footgun. Also fixed the guest backspace mismatch
-the right way (erase `^H` in tcsh). Yesterday's shared-folder (TFTP) feature,
-Debug code-signing fix, and Preferences-dialog fixes are in and green.
+Two things today: finished the orphan-safety UX (live shutdown panel) and set
+up SSH on the Studio, then a long design session that **refined the Helios
+mission** and rewrote the docs around it. The headline is the design shift, not
+the code.
 
-## What landed today
+## The big shift: Helios mission refined (docs rewritten)
 
-**Image lock (PLUGIN_V1_PUNCHLIST L1).** `ImageLock` / `ImageLockManager` in
-SwiftXServerCore: an advisory, **host-aware** lock written next to the qcow2.
-It sits beside the image (not Application Support) so both Macs sharing it via
-Dropbox see the same lock, and it records the **hostname** because a pid from
-the other Mac is meaningless here. `QemuEngine` acquires it (with the qemu
-pid) on start, releases on clean exit. `AppDelegate.launchSparcStation`
-pre-flights via `evaluate()`:
+We worked out the agent's shape and reprioritized. Three linked decisions
+(DECISIONS 2026-06-20; full model in the rewritten `Helios-Mission.md`):
 
-- free → boot
-- staleSameHost (our host, dead pid) → reclaim + boot
-- remoteLocked (other host) → **hard stop**, Reveal-Lock-in-Finder (user
-  deletes it; we never touch another Mac's lock)
-- localOrphan (our host, live pid verified as our qemu) → dialog:
-  **Try to Shut It Down** (best-effort `init 5` over the 2123 telnet hostfwd,
-  success = the pid dying, ~35s timeout → manual fallback), **Force Quit**
-  (re-verifies `proc_pidpath` before SIGKILL so a recycled pid is never
-  killed), **Show Me How** (manual telnet steps), **Cancel**.
+1. **Control-first.** The guest agent's first job is to plug macXserver's
+   *control* holes (graceful shutdown, liveness, orphan recovery, image-repair
+   GUI), not the agentic-coding loop. The **SPARCplug release is now parked
+   behind having that control plane in place.**
+2. **The daemon is pure mechanism, built Mac-first.** One daemon (exec + file +
+   liveness) on cx, knowing nothing about control policy or LLMs. Because cx is
+   cross-platform, the daemon + test suite get built and proven **on the Mac**;
+   Solaris 2.6 becomes a validation step, not a dev environment.
+3. **The agentic client is Claude Code + a SPARCplug MCP server, not an in-app
+   loop.** We build the MCP bridge; Claude Code is the workbench. The old
+   "promote-to-AI" in-app chat is superseded (demoted to a maybe-later feature
+   for end-users without Claude Code). This also makes the self-hosting
+   bootstrap cheap: once the bridge exposes run_command + file ops, Claude Code
+   does the Solaris grind itself.
 
-10 unit tests pin the decision tree + parse/serialize + release-by-host.
-Committed `770566c`.
+Docs reconciled to this: `Helios-Mission.md` (full rewrite), `DECISIONS.md`
+(new 06-20 entry), `PLUGIN_V1_PUNCHLIST.md` (orphan section + L3), and
+`SPARCSTATION_PLUGIN.md` (milestone resequenced). **Not yet committed** --
+review the doc changes before committing.
 
-**Guest backspace fix (done right).** The Mac's Delete key sends `^H`; the
-guest's tty erase was stuck on the Solaris default (DEL) because **tcsh never
-reads `/etc/profile`** (where the baseline sets `erase ^H`). Fix: `stty erase
-'^H'` in the seed `tftproot/dot.tcshrc`, where tcsh actually reads it — both
-the Mac terminal and the Sun's xterm send `^H`, so no conditional needed.
-Lesson logged: two independent input layers (kernel cooked-mode tty erase vs.
-the shell's own editor), so the shell is always fine and only cooked-mode
-programs like `tftp>` need the erase char to match the key.
+## What landed today (code)
 
-**OpenSSH on the 2.6 image.** Got OpenSSH 5.1p1 running on SUN40G.qcow2 ->
-`scp -P 2222` file-out (retires the FTP-volume workaround) + remote shell.
-Verified from the Mac: `SSH-2.0-OpenSSH_5.1` banner, full crypto
-negotiation, sshd offering auth. The fiddly parts are scripted in `guest/`:
-`get-openssh.sh` (wget the matched set on the guest), `add-openssl098-libs.sh`
-(coexist the required 0.9.8 libs beside the installed OpenSSL 1.0.0 -- soname
-trap), `sshd-init.sh` (prngd + sshd boot rc), plus `check-tools.sh` (the
-Helios tool inventory). Mac-side `~/.ssh/config` got a `Host sparcplug` block
-with the legacy algorithms modern macOS needs. Full writeup in
-SPARCSTATION_PLUGIN.md; recipe saved to memory.
+- **Orphan recovery UX (L2b) -- DONE, committed `2e98817`.** New
+  `SparcShutdownProgressWindowController`: the silent ~35s "Try to Shut It Down"
+  poll is now a live countdown panel that auto-boots on power-off or flips
+  in-place to Force Quit / Show Me How / Cancel on timeout. `swift build` +
+  1347 tests green; Xcode project regenerated for the new file.
+- **L1 (image lock) verified live** by Todd (orphan dialog fires as intended).
+- **SSH on the Studio (desktop) -- working.** Generated `~/.ssh/sparcplug_rsa`,
+  added the `Host sparcplug` config block, installed the Studio pubkey into the
+  guest via tftp. `ssh sparcplug` is passwordless from both Macs now. Switching-
+  Macs memory updated.
+- **Telnet graceful shutdown PARKED** (committed in `2e98817`): Solaris 2.6
+  refuses root telnet login, so "Try to Shut It Down" always times out. Not
+  switching to ssh (dev-only). The daemon `shutdown` verb is the real fix.
 
-**SSH key auth + a password gotcha that became a decision.** Passwordless
-key auth now works (dedicated `~/.ssh/sparcplug_rsa`, installed into the
-guest via tftp — modern macOS `scp` *push* fails to the 2008 sshd, needs
-`-O`). `ssh sparkplug` / `scp sparkplug:/path .` are passwordless and
-verified. But setting a root password (needed earlier for ssh, before key
-auth) **broke macXserver's console auto-login** — `QemuEngine` types `root`
-with no password step, so a cold boot would stall at `Password:` and the
-console-driven `init 5` shutdown would break with it. Tactical fix:
-`passwd -d root` (passwordless console restored; verified `root::` in
-/etc/shadow over key auth). Strategic fix logged as **DECISIONS 2026-06-20**:
-the console is observation-only; control (shutdown) moves to ssh-key now /
-the Helios agent later, and the console auto-login gets dropped. Tracked as
-**L0** in the punch list. Switchover-to-the-Studio checklist saved to memory.
+## Prior work still green (earlier 06-20, pre-session)
 
-## What's working / verified
+- Image lock L1 (host-aware, 10 unit tests), guest backspace fix, OpenSSH on
+  the image, auto-backup on clean shutdown.
+- macXserver app + X server + bundled engine: `swift build` / `swift test`
+  clean (1347 tests, 29 skipped by design).
 
-- macXserver app + X server + bundled engine: green. `swift build` +
-  `swift test` clean (20 SwiftXServerCore tests incl. 10 new lock tests; 2
-  live engine tests skipped by design).
-- Shared folder (TFTP): verified moving `set-hostname.sh` and the dotfiles
-  into the guest. Backspace now works in `tftp>` after the seed fix.
-- Image lock: unit-tested. NOT yet exercised live (Todd to test: Run →
-  stop debugger to orphan qemu → Run again → expect the orphan dialog).
-- OpenSSH: key auth (ssh + scp) verified passwordless from the Mac; root
-  console passwordless again so macXserver auto-login still works.
+## What to do next (Helios, control-first, Mac-first)
 
-## What to do next (orphan-safety continued)
+Build order from `Helios-Mission.md` "Priorities and build order":
 
-- **L0 — drop console auto-login** (DECISIONS 2026-06-20). Move graceful
-  shutdown to ssh-key / the Helios agent; delete the `login:`-scraping so the
-  console is a pure glass-TTY. Decouples macXserver from the guest password
-  policy. Pairs with L3.
-- **L2 polish.** Progress feedback during the ~35s telnet-shutdown poll
-  (currently silent), and a **Reconnect** action for a live orphan — the
-  latter needs L3.
-- **L3 — console + control on unix sockets.** Move off the `-nographic`
-  stdio pipe (`-serial unix:`, `-qmp unix:`) so a relaunch can re-attach an
-  orphan's console and drive `init 5` reliably (telnet often can't auth root
-  on 2.6). Unlocks L2's Reconnect.
-- **L4 (optional) — kqueue watchdog.** True prevention of the orphan
-  (survives parent SIGKILL); new helper binary, needs maintainer sign-off.
+- **Phase A -- substrate.** (1) run `Tools/helios-tool-survey.sh` on the image,
+  capture results; (2) **validate cx on Solaris 2.6** -- Todd is doing this now
+  (the real risk gate, never run before); (3) apply the `CxProcess` timeout/cwd
+  extension (designed in `Tools/CX_PROCESS_TIMEOUT_AND_CWD.md`, 12 tests, not
+  yet applied) -- cross-platform, build/test on Mac.
+- **Phase B -- daemon + control plane.** Daemon protocol + verbs 1-3 (liveness,
+  shutdown, run_command) on the Mac; Swift `HeliosClient`; wire macXserver's
+  control consumer (un-parks graceful shutdown, deletes console auto-login);
+  boot integration + Solaris validation; file verbs + repair GUI.
+- **Phase C -- agentic.** SPARCplug MCP server (or CLI shim) -> Claude Code ->
+  hello-world MVP -> the agent does its own grind.
 
-Plus deferred polish: wrap all Preferences tabs in ScrollView (only
-SPARCstation done); final text/sizing sweep; `tvernon`'s `.tcshrc` still
-needs the `stty erase '^H'` line if Todd admins from that account.
+Open: confirm cx commit `75b8304` (the json code-transfer fix) is in the tree
+shipped to the image; build cx json/b64 from source, not a stale `.a`.
+
+Deferred v1 polish (unchanged): Restore-from-Backup UI, Track C downloader,
+A4-A6 bundling + clean-Mac acceptance, wrap remaining Preferences tabs in
+ScrollView.
 
 ## Pointers
 
-- Orphan-safety tracker: `PLUGIN_V1_PUNCHLIST.md` (Lifecycle → L1–L4).
-- Lock file lives at `<image>.macxserver-lock`, next to the qcow2 (Dropbox).
-- Shared folder default: `~/macXserverTFTP`. Guest pull: `tftp 10.0.2.2`,
-  `binary`, `get <file>`.
+- Mission + build order: `Helios-Mission.md`. Decision record: DECISIONS
+  2026-06-20. Orphan tracker: `PLUGIN_V1_PUNCHLIST.md` (Lifecycle L1-L4).
+- cx libs: `~/Dropbox/dev/cx` (base/net/json/log/process/b64). Validation
+  plan: `Tools/CX_VALIDATION_ON_SOLARIS.md`. cx MCP precedent: the `cm` app.
+- Wire protocol: newline-JSON + base64 content (cx json fixed in `75b8304`).
 - Image + autobackup: `~/Dropbox/dev/SPARCplug/SUN40G.qcow2` (+ dated sibling).
+- Lock file: `<image>.macxserver-lock`, next to the qcow2 (Dropbox).
