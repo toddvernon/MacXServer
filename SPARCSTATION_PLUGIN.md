@@ -453,6 +453,47 @@ worth knowing: with the toggle *off*, a guest `tftp get` returns "Access
 violation" (slirp answers on :69 but has no prefix to serve), not a timeout
 — a wrong address gives the timeout.
 
+## OpenSSH on the image (2026-06-20)
+
+Got OpenSSH 5.1p1 running on the 2.6 image, which gives `scp -P 2222`
+file-out (retiring the FTP-volume workaround) and a clean remote shell.
+It's a fiddly bring-up; the `guest/` scripts automate it:
+
+- **Source.** The sunfreeware Solaris 2.6 SPARC tree is mirrored (live) at
+  `http://download.nust.na/pub3/solaris/sunfreeware/pub/unixpackages/sparc/5.6/`
+  (plain HTTP — important, you can't TLS-fetch the SSL libs you don't have
+  yet). `guest/get-openssh.sh` wgets the matched set straight onto the guest
+  over slirp NAT (avoids tftp's few-MB ceiling).
+- **The OpenSSL soname trap.** The only 2.6 OpenSSH builds are from 2008 and
+  link `libcrypto.so.0.9.8`. The image already had OpenSSL **1.0.0**
+  (`SMCossl`), and `pkgadd` won't install a second `SMCossl`. Fix without
+  disturbing 1.0.0: `guest/add-openssl098-libs.sh` extracts just the 0.9.8
+  runtime `.so` files (via `pkgtrans`, no install) into `/usr/local/ssl/lib`
+  alongside the 1.0.0 set. The loader picks each by soname, so wget/curl keep
+  1.0.0 and sshd gets 0.9.8. The unversioned compile-time symlinks stay on
+  1.0.0.
+- **Privilege-separation user.** 2.6 has no `sshd` user. Create it +
+  `/var/empty` (755 root:sys) or sshd exits with "Privilege separation user
+  sshd does not exist".
+- **Host keys** live in `/usr/local/etc/` (`ssh_host_rsa_key`,
+  `ssh_host_dsa_key`); generate once with `ssh-keygen`. Skip the v1
+  `ssh_host_key` — sshd just disables protocol 1.
+- **Entropy.** No `/dev/random` on 2.6, so `prngd` feeds OpenSSH via
+  `/dev/egd-pool`. Seed it from `/var/adm/messages`.
+- **Boot persistence.** `guest/sshd-init.sh` -> `/etc/init.d/sshd` with
+  `S98sshd`/`K30sshd` rc links brings prngd + sshd up on every reboot (it
+  sets `LD_LIBRARY_PATH=/usr/local/ssl/lib:/usr/local/lib` since there's no
+  `crle` on 2.6, and avoids `pkill`, which 2.6 lacks).
+- **Connecting from a modern Mac.** macOS ssh disables the vintage
+  algorithms (and removed `ssh-dss` entirely). The working client options
+  are baked into a `Host sparcplug` block in `~/.ssh/config`:
+  `HostKeyAlgorithms +ssh-rsa`, `KexAlgorithms +diffie-hellman-group1-sha1,
+  diffie-hellman-group14-sha1`, `Ciphers +aes128-cbc,3des-cbc`. Then
+  `ssh sparcplug` / `scp file sparcplug:` just work.
+
+Still off the Helios critical path (the agent uses its own port), but the
+file-out and shell convenience is real.
+
 ## Surprises and gotchas (lessons from the bring-up)
 
 Things that ate time today, recorded so they don't eat time again.

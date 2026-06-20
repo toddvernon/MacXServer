@@ -38,6 +38,17 @@ Lesson logged: two independent input layers (kernel cooked-mode tty erase vs.
 the shell's own editor), so the shell is always fine and only cooked-mode
 programs like `tftp>` need the erase char to match the key.
 
+**OpenSSH on the 2.6 image.** Got OpenSSH 5.1p1 running on SUN40G.qcow2 ->
+`scp -P 2222` file-out (retires the FTP-volume workaround) + remote shell.
+Verified from the Mac: `SSH-2.0-OpenSSH_5.1` banner, full crypto
+negotiation, sshd offering auth. The fiddly parts are scripted in `guest/`:
+`get-openssh.sh` (wget the matched set on the guest), `add-openssl098-libs.sh`
+(coexist the required 0.9.8 libs beside the installed OpenSSL 1.0.0 -- soname
+trap), `sshd-init.sh` (prngd + sshd boot rc), plus `check-tools.sh` (the
+Helios tool inventory). Mac-side `~/.ssh/config` got a `Host sparcplug` block
+with the legacy algorithms modern macOS needs. Full writeup in
+SPARCSTATION_PLUGIN.md; recipe saved to memory.
+
 ## What's working / verified
 
 - macXserver app + X server + bundled engine: green. `swift build` +
