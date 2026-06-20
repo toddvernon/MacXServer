@@ -113,9 +113,14 @@ Build the whole daemon on the Mac against `localhost`; no qemu in the loop.
   version, protocol, hostname, daemon uptime. Verified via nc.
 - [ ] **B4. `run_command` verb.** On the CxProcess extension; returns stdout,
   stderr, exit code; honors cwd + timeout.
-- [ ] **B5. File verbs.** `read_file`/`write_file` (base64 content),
-  `list_dir`, `stat`, `search` (grep/find). Detailed spec below; PROTOCOL.md
-  gets the wire-level request/result shapes when each lands.
+- [~] **B5. File verbs. read_file/write_file DONE (Mac) 2026-06-20.**
+  `read_file`/`write_file` (base64 content) implemented on cx (b64 + raw POSIX
+  for the byte-exact + atomic-rename + perm-preservation mechanics), live-
+  verified over the socket; +28 daemon tests (79 total) covering byte-exact
+  round-trip with NUL/high-bytes, mode preservation on overwrite, default-0644
+  new files, and the regular-file-only guards. PROTOCOL.md updated with the
+  wire shapes. Remaining: `list_dir`, `stat`, `search` (grep/find). Detailed
+  spec below.
 
   **No `edit_file` verb. Editing is reconstructed Mac-side.** The daemon is a
   byte mover. Claude Code's Edit is whole-file under the hood (read entire file,
