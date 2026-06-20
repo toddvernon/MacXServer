@@ -263,6 +263,7 @@
 		EEDCA9526628FC5E5FBF85CE /* RenderDumper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 354798A85C6A4F490DF63864 /* RenderDumper.swift */; };
 		EF378037B61BA968E84608F0 /* Keysyms.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = C699A39EBC7E23302EB6F085 /* Keysyms.generated.swift */; };
 		F1CEA663AD02884E5632397E /* MotifFramePreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A18A4B2252A9B93DCC98D850 /* MotifFramePreferences.swift */; };
+		F2029F5D956074EB4B49EE1A /* ImageLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72417D022F2F31889B53A1F9 /* ImageLock.swift */; };
 		F2D74A450633B677254DF9BC /* ConsoleSanitizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63A6363F35BA08B4DFCC8BCB /* ConsoleSanitizer.swift */; };
 		F2DC869401878E504F795B5A /* Direction.swift in Sources */ = {isa = PBXBuildFile; fileRef = A278A53900E1093DFAB6717B /* Direction.swift */; };
 		F31D8534313763FE1C2B0B2E /* ServerCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C35304A784B8148466A55CB /* ServerCoordinator.swift */; };
@@ -533,6 +534,7 @@
 		6BDF02BBA9F2D1A1948961B8 /* FontResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontResolver.swift; sourceTree = "<group>"; };
 		6BF6DEE9FEFA41D7E7FDF6B0 /* Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preferences.swift; sourceTree = "<group>"; };
 		6D7F5F989DC183873905FFA9 /* RenderGlyphPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderGlyphPayload.swift; sourceTree = "<group>"; };
+		72417D022F2F31889B53A1F9 /* ImageLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLock.swift; sourceTree = "<group>"; };
 		73D88FEB83C29D484A115494 /* CaptureEditorController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureEditorController.swift; sourceTree = "<group>"; };
 		73E5D73EEB22199AA3ABA989 /* ServerMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerMessage.swift; sourceTree = "<group>"; };
 		74181E9F09A99474693C608A /* XInputRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XInputRequests.swift; sourceTree = "<group>"; };
@@ -738,6 +740,7 @@
 				C245C796403A892C281F8DC0 /* FontMappingTokenizer.swift */,
 				6BDF02BBA9F2D1A1948961B8 /* FontResolver.swift */,
 				1117A789AFF21E2BF317C431 /* GCState.swift */,
+				72417D022F2F31889B53A1F9 /* ImageLock.swift */,
 				045B0FB16AE69F9D052CDE0C /* KeychainHelper.swift */,
 				C9F771FDFB6E892C7CB0786F /* LauncherFile.swift */,
 				5F9918385314A5EB136A0019 /* LauncherTokenizer.swift */,
@@ -1384,6 +1387,7 @@
 				DF1D6BC9D72CE6DEB1D22709 /* FontMappingTokenizer.swift in Sources */,
 				7569630E54BF6D661AC5F2E2 /* FontResolver.swift in Sources */,
 				98DD525D2E56702953EF468B /* GCState.swift in Sources */,
+				F2029F5D956074EB4B49EE1A /* ImageLock.swift in Sources */,
 				8D69CCDE6FD24C38B19B3AAA /* KeychainHelper.swift in Sources */,
 				75F844E86AF97F78E13CA685 /* LauncherFile.swift in Sources */,
 				481D2B89D4AD850C4E9A294B /* LauncherTokenizer.swift in Sources */,

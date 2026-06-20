@@ -175,7 +175,8 @@ public enum ImageLockManager {
         var buf = [CChar](repeating: 0, count: 4096) // PROC_PIDPATHINFO_MAXSIZE
         let n = proc_pidpath(pid, &buf, UInt32(buf.count))
         guard n > 0 else { return false }
-        return String(cString: buf).hasSuffix("qemu-system-sparc")
+        let path = buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+        return path.hasSuffix("qemu-system-sparc")
         #else
         return false
         #endif
@@ -198,7 +199,7 @@ public enum ImageLockManager {
             var hostBuf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             guard getnameinfo(sa, socklen_t(sa.pointee.sa_len), &hostBuf,
                               socklen_t(hostBuf.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
-            let ip = String(cString: hostBuf)
+            let ip = hostBuf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
             let ifname = String(cString: p.pointee.ifa_name)
             if ifname == "en0" { return ip }   // prefer the primary interface
             if best == nil { best = ip }
