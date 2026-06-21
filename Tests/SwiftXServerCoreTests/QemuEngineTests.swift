@@ -27,7 +27,7 @@ final class QemuEngineTests: XCTestCase {
             "-L", "/Apps/MacXServer.app/Contents/Resources/qemu-firmware",
             "-prom-env", "input-device=ttya",
             "-prom-env", "output-device=ttya",
-            "-nic", "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::2123-:23,hostfwd=tcp::2222-:22",
+            "-nic", "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::2123-:23,hostfwd=tcp::2222-:22,hostfwd=tcp::2125-:2125",
             "-drive", "file=/Users/x/Library/Application Support/macXserver/solaris-2.6.qcow2,bus=0,unit=0,media=disk",
         ])
     }
@@ -40,7 +40,7 @@ final class QemuEngineTests: XCTestCase {
         let args = QemuEngine.buildArguments(config: c)
         let nic = args[args.firstIndex(of: "-nic")! + 1]
         XCTAssertEqual(nic,
-            "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::2123-:23,hostfwd=tcp::2222-:22,tftp=/Users/x/macXserverTFTP")
+            "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::2123-:23,hostfwd=tcp::2222-:22,hostfwd=tcp::2125-:2125,tftp=/Users/x/macXserverTFTP")
     }
 
     /// nil and empty tftpDirectory both leave the `-nic` value without a

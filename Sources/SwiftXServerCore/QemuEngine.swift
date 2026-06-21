@@ -308,11 +308,12 @@ public final class QemuEngine: @unchecked Sendable {
     /// firmware `-L` and the writable disk path filled in from the config.
     public static func buildArguments(config: QemuEngineConfig) -> [String] {
         // slirp NAT, AMD lance NIC (Solaris le0). hostfwd opens Mac ports
-        // 2123/2222 -> guest 23/22 so the launcher can telnet in. Fixed MAC
-        // for stable guest identity across reboots. When a shared folder is
+        // 2123/2222/2125 -> guest 23/22/2125 so the launcher can telnet/ssh in
+        // and the Mac reaches the Helios daemon directly (no ssh tunnel). Fixed
+        // MAC for stable guest identity across reboots. When a shared folder is
         // configured, append slirp's built-in TFTP server pointed at it; the
         // guest pulls files with `tftp 10.0.2.2`.
-        var nic = "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::\(telnetHostPort)-:23,hostfwd=tcp::2222-:22"
+        var nic = "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::\(telnetHostPort)-:23,hostfwd=tcp::2222-:22,hostfwd=tcp::\(heliosHostPort)-:2125"
         if let tftp = config.tftpDirectory, !tftp.isEmpty {
             nic += ",tftp=\(tftp)"
         }
@@ -337,6 +338,12 @@ public final class QemuEngine: @unchecked Sendable {
     /// Mac-side port forwarded to the guest's telnet (23). The best-effort
     /// "shut down an orphan over telnet" path dials this.
     public static let telnetHostPort: UInt16 = 2123
+
+    /// Mac-side port forwarded to the guest's Helios daemon (2125). Both clients
+    /// -- macXserver's HeliosClient and Claude Code's bridge -- connect here
+    /// directly over loopback, no ssh tunnel. (DECISIONS 2026-06-21: macXserver
+    /// owns the network path; advertising this port is the discovery follow-up.)
+    public static let heliosHostPort: UInt16 = 2125
 
     /// `~/Library/Application Support/macXserver/`.
     public static func applicationSupportDir() -> URL {
