@@ -61,17 +61,21 @@ is, plus the one extension `run_command` needs.
   on the booted image; commit the output (e.g. `Tools/survey-<date>.txt`).
   Confirm g++/gmake/ar/ld + `-lsocket -lnsl` link sanity are green. Never run
   before.
-- [ ] **A2. Validate cx on Solaris 2.6.** Per `Tools/CX_VALIDATION_ON_SOLARIS.md`:
-  ship `cxlibs-unix.tar`, build, pass cxnet/cxjson/cxlog/cxstar. **Build
-  json/b64 from current source, not a committed `.a`**; confirm cx `75b8304`
-  is in the tree (`git -C ~/Dropbox/dev/cx log --oneline 75b8304 -1`). The
-  real risk gate. *(In progress -- Todd validating now.)*
+- [x] **A2. Validate cx on Solaris 2.6. DONE 2026-06-20.** Built cxlibs,
+  cxtests, and cxapps (the cx_apps suite, *not* heliosAgent yet) on the 2.6
+  image -- everything compiled and passed. Because cxtests includes the new
+  `cxprocess` suite, this also clears the **A3 CxProcess Solaris run** that was
+  pending below: the fork/pipe/select/signal exec primitive `run_command` rides
+  on is validated on 2.6, not just the Mac. Built json/b64 from current source;
+  cx `75b8304` (the JSON emit fix) confirmed in the tree. The real risk gate is
+  passed. heliosAgent's own daemon build on 2.6 is still pending (Phase B / B6).
 - [x] **A3. CxProcess timeout/cwd extension. DONE (Mac) 2026-06-20.** Added
   `run(cmd, cwd, timeout_ms)` + `wasTimedOut()` to `cx/process` (fork/pipe/
   select, SIGTERM→1s→SIGKILL on the process group, 128+signal exit mapping);
   old `run()` delegates so it's backward-compatible. New `cx_tests/cxprocess/`
   suite (25 checks) green and wired into the cx_tests top-level; cm clean-
-  rebuilt against the new ABI. Solaris run pending (A2 env). This is what
+  rebuilt against the new ABI. **Solaris run DONE 2026-06-20** (rode the A2 cx
+  validation -- cxtests' cxprocess suite passed on the 2.6 image). This is what
   `run_command` rides.
   - **run_command verb DONE (Mac) 2026-06-20** on top of it: daemon verb #3,
     reads cmd/cwd/timeout_ms, returns {exit_code, output, timed_out};
@@ -87,7 +91,9 @@ is, plus the one extension `run_command` needs.
 
 **Acceptance (M-A):** cx builds and its four critical tests + the new CxProcess
 tests pass on both Mac and the 2.6 image. The exec primitive exists and is
-tested.
+tested. **MET 2026-06-20** (A2/A3); A1 survey-artifact capture is the only
+loose end and it's non-blocking -- a clean cx build already proves the
+toolchain.
 
 ---
 
@@ -111,28 +117,97 @@ Build the whole daemon on the Mac against `localhost`; no qemu in the loop.
 - [x] **B4. `run_command` verb. DONE + Solaris-verified 2026-06-21.** On the
   CxProcess extension; returns stdout, stderr, exit code; honors cwd + timeout.
   Ran `uname -a` / `cc -V` by hand over telnet on the 2.6 image, clean exit codes.
-- [x] **B5. File verbs. Solaris-verified 2026-06-21.** All implemented and
-  exercised on the 2.6 image: `read_file`/`stat`/`list_dir`/`search` by hand,
-  then `write_file` via the new CLI after a clean-shutdown image backup —
-  round-trip byte-exact, new-file 0644, and **mode-preservation on overwrite
-  confirmed** (chmod 600 -> overwrite -> stat still 0600, the atomic-rename
-  re-apply path). `search` needed GNU grep -rHn; installed grep 2.7 + pcre 8.10
-  (see A4). **All 8 verbs now Solaris-green:** `shutdown` validated 2026-06-21 --
-  a real `init 5` as root brought the daemon + OS down gracefully (ACK then
-  ConnectionRefused), proving the orphan-graceful-shutdown path for Phase C. The
-  daemon must run as root for `shutdown` (and for `write_file` to `/etc`), which
-  matches the production rc2.d posture.
-- [~] **B6. Daemon test suite. STARTED (Mac) 2026-06-20.** Tests live WITH the
+- [x] **B5. File verbs. DONE (Mac) 2026-06-20.** All five landed on cx (b64 +
+  raw POSIX for byte-exact I/O, atomic rename, perm preservation; CxJSONArray
+  for listings; native grep via CxProcess for search). `read_file`/`write_file`
+  (base64, atomic, mode/owner-preserving), `stat`/`list_dir` (lstat metadata,
+  symlink-truthful + target), `search` (shell-quoted native grep -rHn,
+  structured file/line/text matches, stderr discarded, `truncated` flag, no
+  silent caps). All live-verified over the socket incl. a shell-injection
+  attempt that did NOT execute. +63 daemon tests (114 total). PROTOCOL.md has
+  the wire shapes. **All 8 v1 verbs now implemented.** Detailed spec below.
+  Solaris note: `search` needs GNU/xpg4 grep (A4), not stock /usr/bin/grep.
+
+  **No `edit_file` verb. Editing is reconstructed Mac-side.** The daemon is a
+  byte mover. Claude Code's Edit is whole-file under the hood (read entire file,
+  exact-string substitute in RAM, write entire file back); the "partial edit"
+  is in the *instruction*, not the disk op. So the MCP bridge implements Edit on
+  the Mac as `read_file` -> substitute (with the unique-match + read-before-edit
+  invariants) -> `write_file`. The string-substitution step must round-trip raw
+  bytes / Latin-1, **not** UTF-8, or it can corrupt a Sun source file it never
+  meant to touch. Keeping edit logic off the 2.6 box is deliberate: no escaping
+  a substitution through JSON -> sh -> ed on g++ 2.95.
+
+  **`read_file`** -- whole file as base64. Optional byte/line range for big
+  files (logs); source files are small, whole-file is the norm. Regular files
+  only: a dir/symlink/device/fifo target returns `ok:false` (use `stat` to learn
+  the type first). May echo `mode` cheaply, but the edit path does not depend on
+  it (see write preservation).
+
+  **`write_file`** -- whole file from base64, written **atomically**: temp file
+  in the target's directory, then `rename()` over the target so a crash never
+  leaves a half-file. Two non-obvious correctness rules baked in:
+  - **Preserve mode and owner on overwrite, by default.** `rename()` swaps in a
+    fresh inode, so without this every write silently resets perms to umask
+    defaults: a `0755` script comes back `0644` and won't run; an `/etc` file
+    comes back wrong-owner and `sshd`/`init` quietly reject it. Before the
+    rename, stat the existing target and re-apply its mode (and owner, when the
+    daemon runs as root) to the temp file. This is a correctness floor, not a
+    nice-to-have, and it means the bridge's Edit needs no extra round-trip to
+    carry attributes.
+  - **Do NOT preserve mtime.** A write stamps mtime to now, on purpose, so
+    `make` rebuilds after an edit. Preserving the old mtime would break the
+    compile loop.
+  - Optional explicit `mode` param for the cases preservation can't cover:
+    creating a new file, or deliberately setting perms (repair GUI making a
+    script `+x`, stamping `/etc/shadow` back to `0400`). Owner-set needs a
+    root daemon; for dev-user editing you already own the files.
+
+  **`stat` / `list_dir`** -- metadata, the verbs that carry attributes: type,
+  mode, uid, gid, size, mtime. This is what the repair GUI reads to display and
+  validate configs against known templates, and what callers use to check type
+  before a blind `read_file`.
+
+  **`search`** -- runs the Sun's native `grep`/`find` via the exec path and
+  returns structured matches. Run it where the files are; don't drag the tree to
+  the Mac. Prefer `ggrep` once baked (A4) over the primitive `/usr/bin/grep`.
+
+  **Out of scope (we aren't building an OS):** ACLs (`getfacl`/`setfacl`),
+  extended attributes, atime games, and content read/write of non-regular
+  files.
+
+  **Solaris-validated 2026-06-21.** All five exercised on the real 2.6 image:
+  `read_file`/`stat`/`list_dir`/`search` by hand, then `write_file` via the Mac
+  CLI after a clean-shutdown image backup -- byte-exact round-trip, new-file
+  0644, and mode-preservation on overwrite confirmed (chmod 600 -> overwrite ->
+  still 0600). `search` needed GNU grep -rHn (grep 2.7 + pcre 8.10 installed,
+  A4). With `shutdown` (real root `init 5`, see C4 / the 2026-06-21 STATUS) that
+  makes **all 8 verbs Solaris-green**.
+- [~] **B6. Daemon test suite. GROWN (Mac) 2026-06-20.** Tests live WITH the
   app (`cx_apps/heliosAgent/test/`, `make test`), not in cx_tests -- it's an app,
   not a lib module, and ships as its own unit to Solaris. They drive
-  `heliosDispatch()` directly (no socket): 29 checks green on Mac covering hello,
-  unknown/planned/missing verb, bad JSON, default id, and response escaping
-  (proves the cx 75b8304 emit fix in our path). Grow as verbs land; Solaris run
-  pending (with the daemon's own tarball, not cxtests-unix.tar).
-- [ ] **B7. Config + bind posture.** Port, bind address (127.0.0.1 for the
-  emulator via hostfwd; configurable for a real Sun later), workspace root.
-  Note: no auth in v1 -- localhost-only via hostfwd. Auth for the bare-metal
-  network case is a documented later concern.
+  `heliosDispatch()` directly (no socket): **114 checks green on Mac** across all
+  eight verbs -- hello, run_command, read_file/write_file (byte-exact round-trip,
+  perm preservation), stat/list_dir (incl. symlink truthfulness), search (incl.
+  shell-injection guard), shutdown, plus unknown/missing-verb, bad JSON, default
+  id, and response escaping (proves the cx 75b8304 emit fix in our path).
+  Solaris run pending (with the daemon's own tarball, not cxtests-unix.tar).
+- [~] **B7. Config + bind posture + init readiness. MOSTLY DONE (Mac)
+  2026-06-21.** The daemon now drops into Solaris init: getopt flags (`-d`
+  daemonize via double-fork/setsid/stdio-redirect, `-p` port, `-l` CxLogFile
+  logfile with pid+timestamp per line, `-P` pidfile), SIGTERM clean-stop
+  (removes pidfile), and **SO_REUSEADDR** (new `CxSocket::setReuseAddr` in the
+  cx net layer) so restarts don't hit TIME_WAIT. Bind/listen failure now exits
+  1 with a message instead of aborting on an uncaught CxSocketException. Shipped
+  `init/heliosAgent` SVR4 init script (start/stop/restart/status off the
+  pidfile). All live-verified on Mac (daemonize, logging, immediate same-port
+  restart, clean bind-conflict exit, SIGTERM). Shipped `deploy.sh` too: run as
+  root on the Sun after `make`, it installs the binary + init script, wires the
+  rc symlinks, and (re)starts -- idempotent, so it's also the upgrade path.
+  **Still open:** bind address is INADDR_ANY (correct for hostfwd; making it
+  configurable for a real Sun is the remaining bit), workspace-root confinement,
+  and auth -- all deferred (no auth in v1, localhost-only via hostfwd). Baking
+  the rc symlinks into the *image* (vs running deploy.sh by hand) is Phase C/C2.
 
 **Acceptance (M-B):** the daemon passes its suite on Mac and on the 2.6 image,
 and every verb is drivable by hand (nc or the CLI shim).
