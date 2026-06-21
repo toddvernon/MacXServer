@@ -77,10 +77,13 @@ is, plus the one extension `run_command` needs.
     reads cmd/cwd/timeout_ms, returns {exit_code, output, timed_out};
     fork-per-connection child resets SIGCHLD so CxProcess's waitpid keeps the
     real exit status. Live-verified over the socket; +12 daemon tests (51 total).
-- [ ] **A4. (Optional, non-blocking) sunfreeware additions.** Bake gdb/gawk/
-  gsed/ggrep into the image via `install_sunfreeware()` in
-  `Tools/sparcstation-baseline-config.sh` (`Tools/SUNFREEWARE_ADDITIONS.md`).
-  Agent ergonomics, not a daemon dependency.
+- [~] **A4. sunfreeware additions.** GNU grep 2.7 + pcre 8.10 **installed
+  2026-06-21** from the NUST sunfreeware mirror (libiconv/libintl/libgcc were
+  already on from the sun26gnu set) — this is NOT optional, it's the backend the
+  `search` verb shells (`grep -rHn`). Helper: `~/dev/SPARCplug/guest/get-grep.sh`.
+  Remaining ergonomics (gdb/gawk/gsed) are still optional; bake the lot via
+  `install_sunfreeware()` in `Tools/sparcstation-baseline-config.sh`
+  (`Tools/SUNFREEWARE_ADDITIONS.md`) when convenient.
 
 **Acceptance (M-A):** cx builds and its four critical tests + the new CxProcess
 tests pass on both Mac and the 2.6 image. The exec primitive exists and is
@@ -105,10 +108,17 @@ Build the whole daemon on the Mac against `localhost`; no qemu in the loop.
   never drop the connection. Builds and runs on macOS; smoke-tested with nc.
 - [x] **B3. `hello` / liveness verb. DONE (Mac) 2026-06-20.** Returns agent,
   version, protocol, hostname, daemon uptime. Verified via nc.
-- [ ] **B4. `run_command` verb.** On the CxProcess extension; returns stdout,
-  stderr, exit code; honors cwd + timeout.
-- [ ] **B5. File verbs.** `read_file`/`write_file` (base64 content),
-  `list_dir`, `stat`, `search` (grep/find).
+- [x] **B4. `run_command` verb. DONE + Solaris-verified 2026-06-21.** On the
+  CxProcess extension; returns stdout, stderr, exit code; honors cwd + timeout.
+  Ran `uname -a` / `cc -V` by hand over telnet on the 2.6 image, clean exit codes.
+- [x] **B5. File verbs. Solaris-verified 2026-06-21.** All implemented and
+  exercised on the 2.6 image: `read_file`/`stat`/`list_dir`/`search` by hand,
+  then `write_file` via the new CLI after a clean-shutdown image backup —
+  round-trip byte-exact, new-file 0644, and **mode-preservation on overwrite
+  confirmed** (chmod 600 -> overwrite -> stat still 0600, the atomic-rename
+  re-apply path). `search` needed GNU grep -rHn; installed grep 2.7 + pcre 8.10
+  (see A4). 7 of 8 verbs now Solaris-green; only `shutdown` (deliberate VM-down)
+  is unrun.
 - [~] **B6. Daemon test suite. STARTED (Mac) 2026-06-20.** Tests live WITH the
   app (`cx_apps/heliosAgent/test/`, `make test`), not in cx_tests -- it's an app,
   not a lib module, and ships as its own unit to Solaris. They drive
@@ -175,9 +185,21 @@ Tracks A/C/E).
 The vision, built cheaply on the proven daemon. We build the bridge, not a
 loop.
 
-- [ ] **D1. `helios` CLI shim.** `helios run/read/write/ls/stat/search` over
-  the protocol. Smallest bridge; Claude Code drives it via Bash *today*.
-  Enables early dogfooding before the MCP server exists.
+- [x] **D1. `helios` CLI shim. DONE 2026-06-21.** `~/dev/SPARCplug/helios/`:
+  `helios_client.py` (stdlib protocol client) + `helios` CLI
+  (hello/run/read/write/ls/stat/search) + `helios-survey` (read-only toolchain
+  walk → Markdown) + README. Mac reaches the guest daemon via an ssh
+  local-forward over the existing 2222 hostfwd
+  (`ssh -N -f -L 2125:127.0.0.1:2125 sparcplug`). Claude Code drives all 7
+  working verbs over Bash *today*; ran a full image survey + the write_file
+  round-trip through it. This is the substrate the MCP server (D2) wraps next.
+  - **Hardening TODO (from the survey run):** a fork-per-connection child can
+    orphan if the client vanishes mid-request without EOF (seen once when a
+    no-`timeout_ms` command hung and the client's read-timeout fired). Mitigated
+    by convention (client always sends `timeout_ms` < its own read timeout, so
+    the daemon answers first). Real fix: child should detect a dead client
+    (SO_KEEPALIVE / recv timeout) instead of trusting EOF. Matters at agentic
+    command volume.
 - [ ] **D2. SPARCplug MCP server.** Expose the verbs as MCP tools; bridge
   MCP <-> Helios protocol. Lift the pattern from cx's `cm`
   (`MCPHandler.cpp`/`mcp_bridge.cpp`).
