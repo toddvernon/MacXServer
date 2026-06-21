@@ -160,10 +160,20 @@ pays off a parked punchlist item (L0/L2/L3).
 - [ ] **C5. Delete console auto-login (L0).** Remove the `login:`-scrape ->
   type-`root` -> console-`init 5` path entirely; console becomes a pure
   observation glass-TTY. Decouples macXserver from the guest password policy.
-- [ ] **C6. Image-repair GUI (Phase 0.5).** Mac-side forms over
-  `read_file`/`write_file` for the ~10 curated config items (vfstab, network,
-  DNS, timezone, root pw, shell, NFS/automount, inetd, /etc/system, X/CDE).
-  Validate against known templates; never guess. No AI loop needed.
+- [ ] **C6. Guided sysadmin GUI (Phase 0.5).** Not just *repair* a broken image
+  -- make a 1998 Solaris box approachable to someone who's never touched one.
+  Mac-side Settings dialogs that run curated, deterministic recipes over the
+  daemon's verbs for the common admin tasks (DNS, add-a-user, timezone/hostname,
+  NFS/automount shares, plus the repair items: vfstab, network, root pw, shell,
+  inetd, /etc/system, X/CDE). Two recipe styles: **tool-driven** where a Solaris
+  tool exists (`useradd`/`passwd` via `run_command` -- never hand-edit
+  `/etc/passwd`), **template-driven validated file edits** otherwise (DNS =
+  read/transform/write `/etc/resolv.conf` + the `hosts: files dns` line in
+  `/etc/nsswitch.conf`). Rules: validate against known templates, never guess,
+  **snapshot the image first**, idempotent + reversible, **no LLM in the dialog
+  path** (frozen recipes; the agent is for open-ended work). Pipeline: agent
+  works a task out once on the real image, the validated sequence hardens into a
+  dialog. See DECISIONS 2026-06-21.
 - [ ] **C7. Launcher transport over Helios (least-brittle X-client launch).**
   macXserver's remote app launcher today shells X clients onto the Sun over
   **telnet** (brittle: expect/password/prompt-scraping, tcsh mangling) with

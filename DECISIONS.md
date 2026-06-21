@@ -959,6 +959,26 @@ console, passwordless root console is the shipped posture.
 
 ---
 
+## 2026-06-21: Helios access topology -- peer clients, not a hub; macXserver owns the path, not the protocol
+
+**Context**: With all 8 daemon verbs validated on the real 2.6 image and a Mac-side CLI bridge working, the topology question got concrete: when Claude Code drives the guest, does it route *through* macXserver, or straight to the daemon? This pins down the "one mechanism, two clients" shape from 2026-06-20.
+
+**Decision**: macXserver and Claude Code are **co-equal clients of the one daemon**, each opening its own connection. Neither proxies the other. macXserver owns the **network path** to the emulator's daemon (its qemu adds `hostfwd=tcp::2125-:2125`, C2) and **discovery** (it advertises the port + liveness), but it **never brokers the protocol** -- Claude's MCP server connects directly to `localhost:2125` (the ssh `-L` tunnel used during bring-up was a stopgap until the hostfwd lands). macXserver-as-a-client (Swift `HeliosClient`, C1) covers liveness, graceful shutdown, the launcher-over-Helios transport (C7), and the guided-admin GUI (C6).
+
+**Consequence -- guided sysadmin surface (expands C6)**: because the daemon exposes pure mechanism (`run_command` + file verbs), macXserver can offer *curated, deterministic recipes* for common Solaris admin tasks as Settings dialogs -- set up DNS, add a user, set timezone/hostname, NFS shares -- so a novice does them without knowing Solaris. Two styles: **tool-driven** where a Solaris tool exists (add-user = `useradd`/`passwd` via `run_command`, let the OS keep passwd/shadow/group consistent -- never hand-edit `/etc/passwd`), and **template-driven validated file edits** otherwise (DNS = read/transform/write `/etc/resolv.conf` + the `hosts: files dns` line in `/etc/nsswitch.conf`). Rules: validate against known templates, never guess, **snapshot the image first** (the image-lock + auto-backup floor), idempotent + reversible, and **no LLM in the dialog path** (these are frozen recipes; the agent is for open-ended work). Nice pipeline: the agent works out a tricky task once on the real image, the validated sequence then *hardens* into a macXserver dialog.
+
+**Alternatives considered**:
+1. *macXserver as the hub* -- Claude routes through macXserver, which brokers to the daemon. Tempting for the emulator because macXserver owns the qemu process and port-forward. Rejected.
+
+**Why this won**:
+- **The real-Sun case breaks the hub.** Displaying X apps from actual vintage Suns is the whole project; that box's daemon is on the LAN and macXserver isn't hosting it. Peer-model is the only one architecture that works across emulator *and* iron -- the deploy-parity line is load-bearing.
+- **Keeps the GUI out of the agentic hot path.** A build/fix loop is potentially thousands of verb calls; routing them through macXserver's event loop adds a hop and couples agent throughput to GUI-app health for zero gain. The daemon's fork-per-connection + stateless verbs already serialize cleanly.
+- **Different concerns, different cadence.** Lifecycle (macXserver) and the inner dev loop (Claude) shouldn't entangle.
+
+**Trade accepted**: two genuine coordination seams stay, handled as thin side-channels, never as a proxy. (1) *Discovery* -- Claude needs the port; macXserver advertises it (a small local file/endpoint) rather than Claude hardcoding 2125 (matters once there are two guests). (2) *VM-up dependency* -- a down box gives Claude `ConnectionRefused`; v1 assumes the user has macXserver up with the VM running, and "agent asks macXserver to boot it" is a later thin coordination, not a data path. I/O contention on the shared box (a user's xterm launch vs. the agent's `make`) is just normal multi-user Unix.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
