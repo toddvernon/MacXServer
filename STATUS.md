@@ -69,15 +69,33 @@ Two items for the hardening list (both in HELIOS_PLAN D1):
   Fix: check `euid == 0` at startup (or pre-flight the shutdown command) and log
   the command's exit status, so a misconfigured deploy doesn't read as healthy.
 
+## Architecture settled (DECISIONS 2026-06-21)
+
+**Helios access topology: peer clients, not a hub.** macXserver and Claude Code
+are co-equal clients of the one daemon, each its own connection; macXserver owns
+the network path (qemu `hostfwd=tcp::2125-:2125`, C2) + discovery, but never
+brokers the protocol. Decided by the real-Sun case, deploy parity, and keeping
+the GUI out of the agentic hot path. The ssh `-L` tunnel was bring-up scaffolding;
+the real path is a dedicated hostfwd -> direct `localhost:2125`.
+
+**C6 widened from image-repair to a guided sysadmin GUI** -- curated,
+deterministic recipes (DNS, add-user, timezone, NFS, ...) so novices do Solaris
+admin via Settings dialogs. Tool-driven where a Solaris tool exists, else
+template-driven validated file edits; snapshot-first, no LLM in the dialog path.
+Pipeline: agent works a task out once, the validated sequence hardens into a
+dialog.
+
 ## What's committed
 
-- swift-x `be39250` (HELIOS_PLAN: file verbs + write_file Solaris-verified, D1),
-  `8d34465` (STATUS roll), + this end-of-day roll.
-- SPARCplug `4915beb` (helios/ bridge + guest/get-grep.sh), + the `shutdown`
-  CLI subcommand.
+- swift-x: `be39250` (file verbs + write_file Solaris-verified, D1), `8d34465`
+  (STATUS roll), `81859b5` (shutdown 8/8 + 2 hardening items), `cc42619`
+  (topology decision + C6 expansion), + this end-of-day roll.
+- SPARCplug: `4915beb` (helios/ bridge + guest/get-grep.sh), `b0c2953`
+  (shutdown CLI subcommand).
 - Clean image backup `SUN40G backup 2026-06-21.qcow2` (1.8G, made via
   macXserver's backup button after a clean shutdown, before the write_file test).
 - Memory updated (Dropbox): `project_helios_daemon_solaris_validated`.
+- All pushed to origin/main at end of day.
 
 ## What to do next
 
