@@ -40,12 +40,28 @@ live-verified over the socket.
 - All live-verified on Mac: daemonize, logging, same-port restart, clean
   bind-conflict exit, SIGTERM cleanup.
 
+## Packaging / tooling (also today)
+
+- **Mac tarballs are now Solaris-clean.** The top-level `make cx*_unix.tar`
+  targets write plain **ustar** with `COPYFILE_DISABLE=1 --no-xattrs` and exclude
+  `.DS_Store`, so they no longer carry macOS pax/xattr cruft (PaxHeader,
+  SCHILY.xattr, `._*`) that old Solaris tar chokes on. **Build the tars on the
+  Mac now -- no more Linux detour.** heliosAgent added to `cxapps_unix.tar`.
+- **New umbrella repo `toddvernon/cx-build`** (private) at `~/Dropbox/dev/cx`:
+  tracks just the top-level build glue (the distribution makefile, README,
+  shared Xcode workspace); `.gitignore` keeps the component repos + ARCHIVE/lib
+  out. This is where the top-level makefile lives now (it spans cx/cx_tests/
+  heliosAgent, so it belonged in none of them).
+
 ## What's committed (all pushed)
 
 - **cx** (`412b68a`) -- `CxSocket::setReuseAddr` (net layer).
 - **heliosAgent** (`a7c72e3`) -- daemon hardening + init/heliosAgent + deploy.sh.
-- **swift-x / X** (`5f09710`) -- HELIOS_PLAN B5 complete + B7 mostly-done.
-- SPARCplug clean (no changes). All three repos clean; cx rides Dropbox + GitHub.
+- **swift-x / X** (`5f09710` + this STATUS roll) -- HELIOS_PLAN B5 done + B7 mostly.
+- **cx-build** (`f24f4f6`) -- new umbrella repo (makefile clean-tar fix + helios
+  in cxapps tar).
+- SPARCplug clean (no changes). All repos clean + pushed; cx tree rides Dropbox
+  + GitHub.
 
 ## What to do next
 
