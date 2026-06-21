@@ -117,8 +117,11 @@ Build the whole daemon on the Mac against `localhost`; no qemu in the loop.
   round-trip byte-exact, new-file 0644, and **mode-preservation on overwrite
   confirmed** (chmod 600 -> overwrite -> stat still 0600, the atomic-rename
   re-apply path). `search` needed GNU grep -rHn; installed grep 2.7 + pcre 8.10
-  (see A4). 7 of 8 verbs now Solaris-green; only `shutdown` (deliberate VM-down)
-  is unrun.
+  (see A4). **All 8 verbs now Solaris-green:** `shutdown` validated 2026-06-21 --
+  a real `init 5` as root brought the daemon + OS down gracefully (ACK then
+  ConnectionRefused), proving the orphan-graceful-shutdown path for Phase C. The
+  daemon must run as root for `shutdown` (and for `write_file` to `/etc`), which
+  matches the production rc2.d posture.
 - [~] **B6. Daemon test suite. STARTED (Mac) 2026-06-20.** Tests live WITH the
   app (`cx_apps/heliosAgent/test/`, `make test`), not in cx_tests -- it's an app,
   not a lib module, and ships as its own unit to Solaris. They drive
@@ -193,13 +196,18 @@ loop.
   (`ssh -N -f -L 2125:127.0.0.1:2125 sparcplug`). Claude Code drives all 7
   working verbs over Bash *today*; ran a full image survey + the write_file
   round-trip through it. This is the substrate the MCP server (D2) wraps next.
-  - **Hardening TODO (from the survey run):** a fork-per-connection child can
-    orphan if the client vanishes mid-request without EOF (seen once when a
-    no-`timeout_ms` command hung and the client's read-timeout fired). Mitigated
-    by convention (client always sends `timeout_ms` < its own read timeout, so
-    the daemon answers first). Real fix: child should detect a dead client
-    (SO_KEEPALIVE / recv timeout) instead of trusting EOF. Matters at agentic
-    command volume.
+  - **Hardening TODO (1) orphan-reap:** a fork-per-connection child can orphan if
+    the client vanishes mid-request without EOF (seen once when a no-`timeout_ms`
+    command hung and the client's read-timeout fired). Mitigated by convention
+    (client always sends `timeout_ms` < its own read timeout, so the daemon
+    answers first). Real fix: child should detect a dead client (SO_KEEPALIVE /
+    recv timeout) instead of trusting EOF. Matters at agentic command volume.
+  - **Hardening TODO (2) shutdown ACK is optimistic:** the verb ACKs `{status:
+    shutting down}` before running the command and never reports its exit status,
+    so a failed `init 5` (non-root, missing binary) is indistinguishable from a
+    successful one (found 2026-06-21 running the daemon as a non-root user). Fix:
+    check `euid == 0` at startup (or pre-flight the shutdown command) and log the
+    command's exit status, so a misconfigured deploy doesn't read as healthy.
 - [ ] **D2. SPARCplug MCP server.** Expose the verbs as MCP tools; bridge
   MCP <-> Helios protocol. Lift the pattern from cx's `cm`
   (`MCPHandler.cpp`/`mcp_bridge.cpp`).
