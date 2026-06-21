@@ -180,10 +180,22 @@ Build the whole daemon on the Mac against `localhost`; no qemu in the loop.
   shell-injection guard), shutdown, plus unknown/missing-verb, bad JSON, default
   id, and response escaping (proves the cx 75b8304 emit fix in our path).
   Solaris run pending (with the daemon's own tarball, not cxtests-unix.tar).
-- [ ] **B7. Config + bind posture.** Port, bind address (127.0.0.1 for the
-  emulator via hostfwd; configurable for a real Sun later), workspace root.
-  Note: no auth in v1 -- localhost-only via hostfwd. Auth for the bare-metal
-  network case is a documented later concern.
+- [~] **B7. Config + bind posture + init readiness. MOSTLY DONE (Mac)
+  2026-06-21.** The daemon now drops into Solaris init: getopt flags (`-d`
+  daemonize via double-fork/setsid/stdio-redirect, `-p` port, `-l` CxLogFile
+  logfile with pid+timestamp per line, `-P` pidfile), SIGTERM clean-stop
+  (removes pidfile), and **SO_REUSEADDR** (new `CxSocket::setReuseAddr` in the
+  cx net layer) so restarts don't hit TIME_WAIT. Bind/listen failure now exits
+  1 with a message instead of aborting on an uncaught CxSocketException. Shipped
+  `init/heliosAgent` SVR4 init script (start/stop/restart/status off the
+  pidfile). All live-verified on Mac (daemonize, logging, immediate same-port
+  restart, clean bind-conflict exit, SIGTERM). Shipped `deploy.sh` too: run as
+  root on the Sun after `make`, it installs the binary + init script, wires the
+  rc symlinks, and (re)starts -- idempotent, so it's also the upgrade path.
+  **Still open:** bind address is INADDR_ANY (correct for hostfwd; making it
+  configurable for a real Sun is the remaining bit), workspace-root confinement,
+  and auth -- all deferred (no auth in v1, localhost-only via hostfwd). Baking
+  the rc symlinks into the *image* (vs running deploy.sh by hand) is Phase C/C2.
 
 **Acceptance (M-B):** the daemon passes its suite on Mac and on the 2.6 image,
 and every verb is drivable by hand (nc or the CLI shim).
