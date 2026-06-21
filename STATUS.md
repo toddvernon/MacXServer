@@ -1,77 +1,95 @@
-# Status 2026-06-20 (end of day)
+# Status 2026-06-21 (end of day)
 
-Big day. The morning was orphan-safety + SSH; the afternoon refocused the Helios
-mission and built the guest agent from zero to **three working verbs**. The
-daemon now does liveness, graceful shutdown, and command execution -- all built
-and tested on the Mac.
+The day the Helios daemon stopped being a Mac-only thing. It now **runs on the
+real SPARCplug Solaris 2.6 image**, 7 of its 8 verbs are validated there, and
+there's a Mac-side CLI bridge so **Claude Code drives the guest over the wire** --
+no console typing. We went from "compiles on the Mac" to "I can walk around
+inside the image and edit files" in one session.
 
-## Headline: the Helios daemon exists and works (on the Mac)
+## Headline: Helios is live on real Solaris, and Claude can drive it
 
-New repo **github.com/toddvernon/heliosAgent** (public, a cx app like cm). It's a
-fork-per-connection TCP daemon speaking newline-JSON, built on cx so it'll
-recompile unchanged on Solaris later.
+- **Built + ran on the 2.6 image.** The cx app `cx_apps/heliosAgent` compiled
+  under g++ 2.95.3 and ran on SUN40G.qcow2. The listener / accept-fork /
+  newline-JSON framing / dispatch and the cx `75b8304` emit fix all work on SPARC.
+- **7 of 8 verbs Solaris-validated:** `hello`, `run_command`, `stat`, `list_dir`,
+  `read_file`, `search` by hand, then `write_file` via the new CLI. `write_file`
+  round-trip is byte-exact, new files come out 0644, and **mode-preservation on
+  overwrite is confirmed** (chmod 600 -> overwrite -> still 0600; the
+  atomic-rename re-apply path). Only `shutdown` (real VM-down) is unrun -- see
+  below, it's mid-test.
+- **`run_command` execs `/bin/sh -c`** (`process.cpp:118`), so pipes, `$PATH`,
+  globs and redirects all work; stdout+stderr come back combined.
 
-- **hello** -- liveness (agent/version/protocol/host/uptime).
-- **shutdown** -- graceful `init 5`; ACK-first, dev-safe via `HELIOS_SHUTDOWN_CMD`;
-  outlives macXserver so it covers the orphan case the telnet path couldn't.
-- **run_command** -- fork/exec with cwd + timeout; returns {exit_code, output,
-  timed_out}. The dev-loop engine and the future launcher transport.
-- **Concurrency**: fork-per-connection from the start (parent only accepts/forks;
-  SIGCHLD reaping; the connection child resets SIGCHLD so CxProcess keeps the
-  real exit status). Verified concurrent + clean (no zombies).
-- **Tests**: 51 checks in `test/` (`make test`), all green; verbs also
-  live-verified over the socket with nc.
+## The Mac-side bridge (Phase D1, DONE)
 
-## Also landed today
+`~/dev/SPARCplug/helios/` (committed): `helios_client.py` (stdlib protocol
+client), `helios` CLI (hello/run/read/write/ls/stat/search/shutdown),
+`helios-survey` (read-only toolchain walk -> Markdown), README.
 
-- **Mission refocused (DECISIONS 2026-06-20).** Control-first; daemon = pure
-  mechanism built Mac-first; agentic client = **Claude Code + a SPARCplug MCP
-  server**, NOT an in-app loop. Docs rewritten: `Helios-Mission.md`,
-  `HELIOS_PLAN.md` (new tracker), DECISIONS, PLUGIN_V1_PUNCHLIST,
-  SPARCSTATION_PLUGIN. Release parked behind the control plane.
-- **cx A3 (pushed to cx + cx_tests).** `CxProcess::run(cmd, cwd, timeout_ms)` +
-  `wasTimedOut()` (fork/pipe/select, SIGTERM->1s->SIGKILL, 128+signal); old
-  `run()` delegates (backward-compatible). New `cx_tests/cxprocess/` (25 checks).
-  cm clean-rebuilt against the new ABI.
-- **macXserver.** L2b orphan shutdown-progress panel
-  (`SparcShutdownProgressWindowController`) committed `2e98817`; L1 image lock
-  verified live; telnet graceful-shutdown path parked (2.6 refuses root telnet).
-- **SSH on the Studio.** `~/.ssh/sparcplug_rsa` + config + guest authorized_keys;
-  `ssh sparcplug` passwordless from both Macs now.
+- **The seam:** the daemon listens on guest:2125 but macXserver's qemu only
+  forwards 2123/2222, so reach it via an ssh local-forward over the 2222 hostfwd:
+  `ssh -N -f -L 2125:127.0.0.1:2125 sparcplug`. Then everything talks to
+  127.0.0.1:2125. Tunnel is independent of the daemon, survives a daemon restart.
+- Ran a full **image survey** through it (SunOS 5.6 sun4m, gcc 2.95.3 / gmake 3.82
+  / gdb 4.17 / grep 2.7 / OpenSSH 5.1p1 / vim 7.3 / bash 4.1; perl + python
+  ABSENT; 259 entries in /usr/local/bin) and the write_file round-trip.
+
+## GNU grep for the `search` verb
+
+`search` shells `grep -rHn`, which stock Solaris grep can't do. Installed **GNU
+grep 2.7 + pcre 8.10** from the free NUST sunfreeware mirror
+(`download.nust.na/.../unixpackages/sparc/5.6`); libiconv/libintl/libgcc were
+already on from the sun26gnu set. Helper: `~/dev/SPARCplug/guest/get-grep.sh`
+(checks pkginfo, wgets the gap over slirp, pkgadds, ldd-verifies). Lands at
+`/usr/local/bin/grep`; the daemon's PATH already prefers `/usr/local/bin`.
+
+## shutdown test -- IN PROGRESS (resume here)
+
+Two-stage. **Stage 1 done:** with the dev `HELIOS_SHUTDOWN_CMD='echo
+would-shutdown'` override active, the verb ACK'd `{status: shutting down}` and the
+VM stayed up -- proves the verb fires and ACKs *before* acting. **Stage 2 not
+done:** the real `init 5`. Needs the daemon relaunched WITHOUT the override
+(`sunos_*/heliosAgent -p 2125`, no env), then `./helios shutdown` -> graceful
+guest halt. This is the Phase C orphan-graceful-shutdown unlock.
+
+## Daemon hardening item (surfaced today)
+
+A fork-per-connection child can orphan if the client vanishes mid-request without
+EOF (a no-`timeout_ms` hung `--version` probe + the client's read-timeout firing
+left one idle child; killed by hand). Mitigated by the always-send-`timeout_ms`
+convention (daemon answers first, child reaps normally). Real fix: child-side
+dead-client detection (SO_KEEPALIVE / recv timeout). Matters at agentic volume.
+Logged in HELIOS_PLAN D1.
 
 ## What's committed
 
-All five repos clean. Pushed: swift-x (`cdf2718`), cx (`fa56882`),
-cx_tests (`43d775c`). heliosAgent (`18c3116`) pushed to its new remote. SPARCplug
-clean (no changes today). Memory updated (Dropbox).
+- swift-x `be39250` (HELIOS_PLAN: file verbs + write_file Solaris-verified, D1).
+- SPARCplug `4915beb` (helios/ bridge + guest/get-grep.sh).
+- **Uncommitted:** the `shutdown` subcommand added to the helios CLI (commit it
+  with the Stage-2 result).
+- Clean image backup `SUN40G backup 2026-06-21.qcow2` (1.8G, made via
+  macXserver's backup button after a clean shutdown, before the write_file test).
+- Memory updated (Dropbox): `project_helios_daemon_solaris_validated`.
 
 ## What to do next
 
-- **Daemon file verbs:** `read_file`/`write_file` (base64 content),
-  then `list_dir`/`stat`/`search`. Unlocks the image-repair GUI + the agent edit
-  cycle. (HELIOS_PLAN Phase B / verb ranking.)
-- **Solaris validation (never run yet):** build cx + the daemon on the 2.6 image,
-  run cxprocess + helios tests there (HELIOS_PLAN A2/B6). The real risk gate.
-- **macXserver Phase C wiring:** Swift `HeliosClient`, boot integration (rc +
-  hostfwd), liveness->readiness, shutdown verb, delete console auto-login,
+- **Finish the `shutdown` Stage-2 test** (relaunch daemon w/o override, fire it),
+  then commit the CLI shutdown subcommand.
+- **Survey polish:** collapse the ~80 round-trips into one guest-side shell loop
+  (chatty + buffer-floods the console now).
+- **Close M-B:** the daemon's own `make test` on Solaris (B6) and cx's four
+  critical tests (A2) -- shipped over as their own tarballs and run on the image.
+- **Phase C wiring** (the release-gating win): Swift `HeliosClient`, boot
+  integration, liveness->readiness, shutdown verb, delete console auto-login,
   image-repair GUI, launcher-over-Helios transport (C1-C7).
-
-## Switching to the laptop (do before leaving)
-
-- **Shut down the orphan VM cleanly** (see below) so the lock releases and the
-  laptop doesn't see `remoteLocked`.
-- **Let Dropbox finish syncing** the qcow2 + lock removal, AND the cx tree
-  (`~/Dropbox/dev/cx` -- heliosAgent + the cx/cxtests changes ride Dropbox to the
-  laptop). `git pull` X + SPARCplug on the laptop (cx also has GitHub remotes if
-  you prefer pull over Dropbox).
-- Per the switching-Macs memory: macXserver Preferences (disk image path, shared
-  folder) are per-Mac; the laptop already has its ssh key set up.
+- **D2 MCP server** later -- the CLI already gives ~90% of the value; hold D2
+  until shelling the CLI gets annoying.
 
 ## Pointers
 
-- Daemon: `~/Dropbox/dev/cx/cx_apps/heliosAgent` (PROTOCOL.md, test/). cx change:
-  `cx/process`. Tests: `cx_tests/cxprocess`.
-- Plan/tracker: `HELIOS_PLAN.md`. Why: `Helios-Mission.md`. Decisions: DECISIONS
-  2026-06-17 (access model) + 2026-06-20 (mission refinement).
-- Image + autobackup: `~/Dropbox/dev/SPARCplug/SUN40G.qcow2`. Lock:
-  `<image>.macxserver-lock`.
+- Daemon: `~/Dropbox/dev/cx/cx_apps/heliosAgent` (PROTOCOL.md, test/).
+- Mac bridge: `~/dev/SPARCplug/helios/` (README has the tunnel command).
+- grep installer: `~/dev/SPARCplug/guest/get-grep.sh`.
+- Plan/tracker: `HELIOS_PLAN.md`. Why: `Helios-Mission.md`.
+- Image + backup: `~/Dropbox/dev/SPARCplug/SUN40G.qcow2` (+ `SUN40G backup
+  2026-06-21.qcow2`). Lock: `<image>.macxserver-lock`.
