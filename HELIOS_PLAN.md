@@ -113,14 +113,16 @@ Build the whole daemon on the Mac against `localhost`; no qemu in the loop.
   version, protocol, hostname, daemon uptime. Verified via nc.
 - [ ] **B4. `run_command` verb.** On the CxProcess extension; returns stdout,
   stderr, exit code; honors cwd + timeout.
-- [~] **B5. File verbs. read_file/write_file DONE (Mac) 2026-06-20.**
-  `read_file`/`write_file` (base64 content) implemented on cx (b64 + raw POSIX
-  for the byte-exact + atomic-rename + perm-preservation mechanics), live-
-  verified over the socket; +28 daemon tests (79 total) covering byte-exact
-  round-trip with NUL/high-bytes, mode preservation on overwrite, default-0644
-  new files, and the regular-file-only guards. PROTOCOL.md updated with the
-  wire shapes. Remaining: `list_dir`, `stat`, `search` (grep/find). Detailed
-  spec below.
+- [x] **B5. File verbs. DONE (Mac) 2026-06-20.** All five landed on cx (b64 +
+  raw POSIX for byte-exact I/O, atomic rename, perm preservation; CxJSONArray
+  for listings; native grep via CxProcess for search). `read_file`/`write_file`
+  (base64, atomic, mode/owner-preserving), `stat`/`list_dir` (lstat metadata,
+  symlink-truthful + target), `search` (shell-quoted native grep -rHn,
+  structured file/line/text matches, stderr discarded, `truncated` flag, no
+  silent caps). All live-verified over the socket incl. a shell-injection
+  attempt that did NOT execute. +63 daemon tests (114 total). PROTOCOL.md has
+  the wire shapes. **All 8 v1 verbs now implemented.** Detailed spec below.
+  Solaris note: `search` needs GNU/xpg4 grep (A4), not stock /usr/bin/grep.
 
   **No `edit_file` verb. Editing is reconstructed Mac-side.** The daemon is a
   byte mover. Claude Code's Edit is whole-file under the hood (read entire file,
@@ -169,13 +171,15 @@ Build the whole daemon on the Mac against `localhost`; no qemu in the loop.
   **Out of scope (we aren't building an OS):** ACLs (`getfacl`/`setfacl`),
   extended attributes, atime games, and content read/write of non-regular
   files.
-- [~] **B6. Daemon test suite. STARTED (Mac) 2026-06-20.** Tests live WITH the
+- [~] **B6. Daemon test suite. GROWN (Mac) 2026-06-20.** Tests live WITH the
   app (`cx_apps/heliosAgent/test/`, `make test`), not in cx_tests -- it's an app,
   not a lib module, and ships as its own unit to Solaris. They drive
-  `heliosDispatch()` directly (no socket): 29 checks green on Mac covering hello,
-  unknown/planned/missing verb, bad JSON, default id, and response escaping
-  (proves the cx 75b8304 emit fix in our path). Grow as verbs land; Solaris run
-  pending (with the daemon's own tarball, not cxtests-unix.tar).
+  `heliosDispatch()` directly (no socket): **114 checks green on Mac** across all
+  eight verbs -- hello, run_command, read_file/write_file (byte-exact round-trip,
+  perm preservation), stat/list_dir (incl. symlink truthfulness), search (incl.
+  shell-injection guard), shutdown, plus unknown/missing-verb, bad JSON, default
+  id, and response escaping (proves the cx 75b8304 emit fix in our path).
+  Solaris run pending (with the daemon's own tarball, not cxtests-unix.tar).
 - [ ] **B7. Config + bind posture.** Port, bind address (127.0.0.1 for the
   emulator via hostfwd; configurable for a real Sun later), workspace root.
   Note: no auth in v1 -- localhost-only via hostfwd. Auth for the bare-metal
