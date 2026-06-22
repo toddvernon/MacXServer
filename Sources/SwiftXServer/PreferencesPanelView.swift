@@ -420,6 +420,15 @@ private struct SparcStationTab: View {
 
             Divider()
 
+            Toggle("Claude development", isOn: $model.sparcClaudeDevelopment)
+
+            Text("Writes the running SPARCstation\u{2019}s Helios control-daemon key to /tmp/sparkplug (owner-only) each launch, so Claude Code can drive the guest for agentic development. Leave off unless you\u{2019}re doing that \u{2014} it exposes the key to anything on this Mac that can read the file.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
             Toggle("Use a shared folder to copy files into the SPARCstation",
                    isOn: $model.sparcTftpEnabled)
 
@@ -632,6 +641,14 @@ final class PreferencesPanelModel: ObservableObject {
         }
     }
 
+    @Published var sparcClaudeDevelopment: Bool {
+        didSet {
+            if sparcClaudeDevelopment != prefs.sparcClaudeDevelopment {
+                prefs.sparcClaudeDevelopment = sparcClaudeDevelopment
+            }
+        }
+    }
+
     @Published var sparcTftpEnabled: Bool {
         didSet {
             if sparcTftpEnabled != prefs.sparcTftpEnabled {
@@ -676,6 +693,7 @@ final class PreferencesPanelModel: ObservableObject {
         self.xtermScrollbarThumbOverride = preferences.xtermScrollbarThumbOverride
         self.sparcDiskImagePath = preferences.sparcDiskImagePath
         self.sparcAutoBackupOnShutdown = preferences.sparcAutoBackupOnShutdown
+        self.sparcClaudeDevelopment = preferences.sparcClaudeDevelopment
         self.sparcTftpEnabled = preferences.sparcTftpEnabled
         self.sparcTftpDirectory = preferences.sparcTftpDirectory
     }

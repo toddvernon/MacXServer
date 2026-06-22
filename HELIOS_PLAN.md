@@ -219,22 +219,69 @@ and every verb is drivable by hand (nc or the CLI shim).
 Wire the daemon into macXserver and retire the control debt. Each step here
 pays off a parked punchlist item (L0/L2/L3).
 
-- [ ] **C1. Swift `HeliosClient`.** Socket + newline-JSON codec + base64
-  helpers, in `SwiftXServerCore`. Unit-tested against a loopback/mock daemon.
+- [x] **C1. Swift `HeliosClient`. DONE 2026-06-21.**
+  `Sources/SwiftXServerCore/HeliosClient.swift`: blocking POSIX-socket client
+  (Darwin sockets, matching `Listener.swift`), newline-JSON framing, all 8 verbs
+  with typed Codable results, base64 read/write helpers, bounded connect (poll)
+  + read/write timeouts (SO_RCVTIMEO) so a hung guest surfaces as `.timedOut`.
+  16 tests in `HeliosClientTests.swift` drive a real in-process mock daemon over
+  loopback (round-trip every verb, byte-exact base64 incl. NUL/high bytes,
+  optional-field omission, persistent multi-call, `ok:false` -> `.protocolError`,
+  EOF -> `.connectionClosed`, refused connect). Not thread-safe by design (one
+  request in flight); consumers drive it from their own queue. Next: C3/C4/C7
+  build on it.
 - [ ] **C2. Boot integration.** `/etc/init.d/helios-seed` + rc symlink
   (`S98`/`K30`-style, pattern from `guest/sshd-init.sh`), baked via
   `sparcstation-baseline-config.sh`. Add the daemon-port `hostfwd` to
   `QemuEngine` launch args.
-- [ ] **C3. Liveness drives readiness.** Replace the console `login:`-scrape
-  "guest is up" detection with `hello`; drive the boot thermometer / ready
-  state from it. Detects a hung guest too.
-- [ ] **C4. Graceful shutdown via the daemon.** `shutdown` verb replaces the
-  telnet/console `init 5`. Works on an orphan (daemon outlives the parent), so
-  this **un-parks L2(c)** and gives L2's Reconnect-and-shutdown. Update the
-  orphan dialog to use it.
-- [ ] **C5. Delete console auto-login (L0).** Remove the `login:`-scrape ->
-  type-`root` -> console-`init 5` path entirely; console becomes a pure
-  observation glass-TTY. Decouples macXserver from the guest password policy.
+  - **C2-follow-on (deferred, do next time we touch the daemon init/deploy):**
+    (1) the heliosAgent init script (or the daemon at startup) should echo a
+    `heliosAgent started` line to the boot console -- it doubles as a reliable
+    late-stage boot marker that coincides with when `hello` starts answering.
+    Daemon-side change in the cx tree (`cx_apps/heliosAgent/init/` + `deploy.sh`).
+    (2) **Optional own-the-markers play:** replace C3's scraped Solaris-version
+    boot strings with our own markers -- a single tiny boot-marker rc script with
+    symlinks at a few S-numbers (S05/S40/S70), each echoing its stage to
+    `/dev/msglog` (console, not syslog -- must be visible pre-daemon). Gives a
+    monotonic progress bar decoupled from 2.6's exact console text; matters more
+    once we target the real box. Cosmetic only (hello is the authoritative ready
+    signal), so it's polish, not correctness. Bake into the image the same way as
+    the daemon init script.
+- [x] **C3. Liveness drives readiness. DONE 2026-06-21.** `QemuEngine` polls
+  `hello` every 2s after launch (one-shot connect = the liveness probe, off
+  `queue` so console ingest keeps flowing); first success fires `onReady`, drives
+  progress to the authoritative 1.0, and stops the poll. Boot milestones are now
+  cosmetic only (top out at 0.90; the old `console login:` -> 1.0 readiness proxy
+  is gone). A ~240s budget without an answer, OR the `RUN fsck MANUALLY`
+  maintenance-drop phrase appearing in the console (preempts the budget), fires
+  `onBootStalled(reason)` -- the console window flips to "Booting…" -> "Ready" /
+  "Boot stalled" with the reason and Force Quit. Layered signal, no `State` enum
+  churn (per the design call). Report-only: launcher gating deferred to C7. Pure
+  helpers (`indicatesFsckStall`, `bootProgress`) unit-tested; the poll loop /
+  timeout is live-verified on the image. Next: C5 deletes the now-unused console
+  auto-login + `login:` scrape.
+- [x] **C4. Graceful shutdown via the daemon. DONE 2026-06-21.** `QemuEngine.shutDown()`
+  now calls `HeliosClient.shutdown()` (off `queue`, so console ingest / clean-halt
+  detection keeps flowing) and fell back to writing `init 5` to the console if the
+  daemon was unreachable (that fallback later removed by C5); which path ran is surfaced in the observation
+  console via `emitDiagnostic`. The orphan dialog's "Try to Shut It Down" is now
+  `attemptHeliosShutdown` (was `attemptTelnetShutdown`): it dials the daemon on
+  the 2125 hostfwd instead of telnet-as-root (refused on 2.6), and the progress
+  panel flips to the failure buttons fast on a daemon-unreachable error
+  (`orphanShutdownFailed`) instead of waiting out the 35s countdown. Success is
+  still pid-death, not the ACK. `TelnetLauncher` stays for the remote app
+  launcher; only the orphan-shutdown use of it was removed. **Un-parks L2(c).**
+  Needs live verification on the image (network glue, not unit-testable without a
+  guest); `HeliosClient` itself is covered by C1's 16 tests.
+- [x] **C5. Delete console auto-login (L0). DONE 2026-06-21.** Removed the
+  `login:`-scrape -> type-`root` block, the `loginPrompt`/`loginUser` constants,
+  the `loggedIn` flag, the C4 console-`init 5` fallback, and the now-unused
+  `writeConsole`/`sendConsole`. The serial console is observation-only: nothing
+  writes to qemu's stdin (the pipe is held open but silent so qemu doesn't hit
+  EOF). Shutdown is daemon-only -- if the daemon is unreachable we revert to
+  `.running` and tell the user to Force Quit (honest, vs. a fake console
+  fallback that couldn't work anyway once auto-login was gone). Decouples
+  macXserver from the guest password policy. 1367 tests green.
 - [ ] **C6. Guided sysadmin GUI (Phase 0.5).** Not just *repair* a broken image
   -- make a 1998 Solaris box approachable to someone who's never touched one.
   Mac-side Settings dialogs that run curated, deterministic recipes over the
@@ -249,17 +296,44 @@ pays off a parked punchlist item (L0/L2/L3).
   path** (frozen recipes; the agent is for open-ended work). Pipeline: agent
   works a task out once on the real image, the validated sequence hardens into a
   dialog. See DECISIONS 2026-06-21.
-- [ ] **C7. Launcher transport over Helios (least-brittle X-client launch).**
-  macXserver's remote app launcher today shells X clients onto the Sun over
-  **telnet** (brittle: expect/password/prompt-scraping, tcsh mangling) with
-  **ssh** as the second transport. Add a third `LauncherEntry` transport,
-  `helios`, that sets `DISPLAY` and execs the X client via the daemon's
-  `run_command` -- no prompt-scraping, clean exit codes, the least-brittle path.
-  Keep telnet (maintain) and ssh (expand); helios becomes the preferred
-  transport once the daemon ships. Needs `run_command` (verb 3) + `HeliosClient`
-  (C1). Touches `LauncherEntry.transport` (parser + seed + Todd's dotfile -- see
-  the launcher-file-format memory) and `SSHLauncher`/`TelnetLauncher` siblings.
-
+- [x] **C7. Launcher transport over Helios. DONE 2026-06-21.** Added a third
+  `LauncherTransport.helios` (parser default port 2125) + `HeliosLauncher`
+  (`RemoteLauncher`): connects `HeliosClient` to `entry.host:entry.port` and
+  execs the X client via `run_command` with the `DISPLAY=...; nohup ... &` wrapper
+  (returns at once, client keeps running). No password/Keychain (AppDelegate
+  skips it like ssh), no prompt-scraping, clean exit code, and the daemon's
+  /bin/sh sidesteps the csh login-shell trap. **Runs as `entry.user`** via the
+  daemon's run-as-validated-user (2026-06-22, see below) -- not root. Seed doc +
+  a live `[host:SPARCplug-helios]` entry in Todd's dotfile point at
+  127.0.0.1:2125 / display 10.0.2.2:0. Tests: `HeliosLauncherTests` +
+  `LauncherFileTests` helios parse. Needs a live launch to confirm end-to-end.
+- [x] **Run-as-validated-user (daemon). DONE + DEPLOYED + live-validated 2026-06-22.**
+  `run_command` gained an optional `user` field: the daemon (root)
+  `getpwnam`-validates it (unknown user -> ok:false) and `CxProcess` drops
+  privileges in the child before exec -- `initgroups`+`setgid`+`setuid` + a
+  login-ish HOME/USER/LOGNAME/SHELL env, failed drop exits 127 (never falls
+  through to root). Portable LCD calls (getpwnam/initgroups/setgid/setuid/putenv),
+  no `#ifdef`. Absent user = root (admin tasks). `HeliosLauncher` passes
+  `user=entry.user`, dropped the temp-file/su stopgap. **Built clean under g++
+  2.95 on the real 2.6 image and validated live: `run id --user tvernon` ->
+  `uid=1000(tvernon)`.** Swift 1369 + 117 daemon tests green (the 117 now also
+  pass on Solaris -- B6 closed). See DECISIONS 2026-06-22.
+- [x] **Streaming file transfer (put_file / get_file). DONE + DEPLOYED 2026-06-22.**
+  `write_file`/`read_file` (base64 in one JSON line) choked moving a 4.7MB tar
+  (write_file timed out at 55s) -- so added two streaming verbs: a JSON header
+  (`path`,`bytes`) then a raw length-prefixed body streamed straight to/from disk
+  in 64KB chunks, no base64, no full-file buffering. The one place the protocol
+  carries a raw body; framing is clean because `recvUntil` reads byte-at-a-time
+  (no read-ahead). Handled in the connection loop (`heliosHandleStreaming`) since
+  the verbs need the socket. Validated live: **4.7MB put + get round-trip,
+  byte-identical, ~0.2s each** (vs the 55s timeout). Python CLI `put`/`get`,
+  PROTOCOL.md updated. write_file/read_file stay the small-file/base64 path.
+- [x] **Daemon self-deploy proven 2026-06-22.** Bootstrapped the first deploy
+  over scp (the new verbs didn't exist on the running daemon yet), then
+  **redeployed using ONLY helios**: `put_file` the cxapps tar (7.3MB, 0.28s),
+  then `run_command` drove untar + clean rebuild + deploy.sh -- the daemon shipped
+  its own replacement and self-restarted (the forked connection-child outlives
+  the restart and returns the deploy log). No ssh/scp in the loop.
 **Acceptance (M-C, release-gating):** macXserver boots SPARCplug, detects
 readiness via the daemon, shuts down gracefully via the daemon (including an
 orphan), with zero console scraping; the repair GUI edits configs. **This
@@ -338,5 +412,24 @@ can do real build/fix work on the image.
 - Code layout sign-off (see above) before Phase B.
 - Daemon language detail: straight cx C++ app vs. a cx `cx_apps`-style app.
 - MCP server host language (reuse cx's C++ bridge vs. a small Swift/other).
-- Real-Sun auth posture for the daemon port (deferred; localhost-only for now).
+- [x] **Daemon auth (shared secret) — DONE + live-validated 2026-06-22 (B7 closed).**
+  Every request must carry a matching `auth` string, checked at the dispatch
+  layer (`Dispatch.cpp`, both the line and streaming paths) before verb routing,
+  constant-time compare, reject with `ok:false "unauthorized"`. **Require-if-
+  configured:** no secret set -> open (dev/`make test`); secret set -> enforced.
+  **Key distribution is Todd's firmware trick (validated 2026-06-22):** macXserver
+  generates a fresh random secret each launch (`QemuEngine.generateHeliosSecret`),
+  passes it to the guest via qemu `-prom-env 'helios-secret=S'` (a custom OBP
+  NVRAM var — confirmed readable by Solaris `eeprom helios-secret`, and confirmed
+  **runtime-only: never persists to the qcow2**, so it's disk-free). The daemon's
+  init script reads it (`eeprom helios-secret`) and passes `-s`; macXserver's own
+  daemon calls + the launcher present it; the **"Claude development"** Preferences
+  checkbox (off by default) writes it `0600` to `/tmp/sparkplug` so Claude Code's
+  CLI/client can authenticate (`HELIOS_SECRET` env or that file). Never echoed to
+  the boot console (no capture leak). 122 daemon tests; live on real Solaris:
+  no-auth/wrong-auth -> `unauthorized`, correct -> ok. **Honest scope:** a
+  plaintext secret on the cleartext channel is a speed-bump (kills
+  unauthenticated/cross-VM/port-scan; solid on loopback), NOT crypto — HMAC/TLS
+  is the LAN-case upgrade. Emulator-specific (prom-env); a real Sun would provision
+  the secret another way (manual `eeprom`/config). See DECISIONS 2026-06-22.
 - Daemon-port discovery: fixed hostfwd port vs. macXserver advertising it.

@@ -226,6 +226,14 @@ final class LauncherFileTests: XCTestCase {
 
         [linux-alt/xterm]
         command = xterm
+
+        [host:sparc]
+        host = 127.0.0.1
+        user = root
+        transport = helios
+
+        [sparc/xterm]
+        command = xterm
         """)
         let byKey = Dictionary(uniqueKeysWithValues: file.entries.map {
             ("\($0.group)/\($0.name)", $0)
@@ -236,6 +244,8 @@ final class LauncherFileTests: XCTestCase {
         XCTAssertEqual(byKey["linux/firefox"]?.port, 22, "ssh default port is 22")
         XCTAssertEqual(byKey["linux-alt/xterm"]?.transport, .ssh)
         XCTAssertEqual(byKey["linux-alt/xterm"]?.port, 2222, "explicit port wins")
+        XCTAssertEqual(byKey["sparc/xterm"]?.transport, .helios)
+        XCTAssertEqual(byKey["sparc/xterm"]?.port, 2125, "helios default port is the daemon port")
     }
 
     // Mixing transport=ssh with a password set is a config mistake (ssh is

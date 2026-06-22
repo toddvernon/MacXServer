@@ -222,6 +222,56 @@ final class QemuEngineTests: XCTestCase {
         XCTAssertEqual(engine.state, .stopped)
     }
 
+    // MARK: - C3 readiness helpers
+
+    /// The fsck maintenance drop is detected on its failure phrase, and a
+    /// routine clean-boot preen ("fsck" alone) does NOT trip it -- otherwise the
+    /// stall warning would fire on every healthy boot.
+    func testFsckStallDetection() {
+        XCTAssertTrue(QemuEngine.indicatesFsckStall(
+            "/dev/rdsk/c0t0d0s0: UNEXPECTED INCONSISTENCY; RUN fsck MANUALLY."))
+        XCTAssertTrue(QemuEngine.indicatesFsckStall(
+            "lots of boot text\nRUN fsck MANUALLY\nEnter maintenance mode"))
+        XCTAssertFalse(QemuEngine.indicatesFsckStall(
+            "/dev/rdsk/c0t0d0s0: is clean\nThe / file system (/dev/...) was checked with fsck"))
+        XCTAssertFalse(QemuEngine.indicatesFsckStall("Booting...\nThe system is ready"))
+    }
+
+    /// Boot progress is cosmetic and tops out below 1.0 -- the authoritative
+    /// 1.0 comes from the first `hello`, not a console string. The old
+    /// `console login:` -> 1.0 proxy is gone.
+    func testBootProgressTopsOutBelowReady() {
+        XCTAssertEqual(QemuEngine.bootProgress(in: ""), 0.0)
+        XCTAssertEqual(QemuEngine.bootProgress(in: "OpenBIOS"), 0.12, accuracy: 0.0001)
+        // The highest milestone present wins (monotonic via max).
+        XCTAssertEqual(QemuEngine.bootProgress(in:
+            "OpenBIOS ... SunOS Release ... The system is ready"), 0.90, accuracy: 0.0001)
+        // Reaching the login prompt no longer implies fully ready (1.0).
+        XCTAssertLessThan(QemuEngine.bootProgress(in:
+            "The system is ready\nconsole login:"), 1.0)
+    }
+
+    /// The slirp packet-send line is recognized; real qemu errors are not (they
+    /// get shown verbatim as [qemu] ...).
+    func testSlirpWaitDetection() {
+        XCTAssertTrue(QemuEngine.isSlirpWaitLine(
+            "qemu-system-sparc: Slirp: Failed to send packet, ret: -1"))
+        XCTAssertFalse(QemuEngine.isSlirpWaitLine(
+            "qemu-system-sparc: Could not open disk image: Permission denied"))
+        XCTAssertFalse(QemuEngine.isSlirpWaitLine("Invalid FCode start byte"))
+    }
+
+    /// The three slirp waits escalate, and a 4th+ clamps to the last line.
+    func testSlirpWaitBanterEscalates() {
+        XCTAssertEqual(QemuEngine.slirpWaitMessage(1),
+                       "[macXserver] guest network not up yet, waiting\u{2026}")
+        XCTAssertEqual(QemuEngine.slirpWaitMessage(2),
+                       "[macXserver] waiting some more \u{2014} love these old machines\u{2026}")
+        XCTAssertEqual(QemuEngine.slirpWaitMessage(3),
+                       "[macXserver] waiting\u{2026} err, c\u{2019}mon baby\u{2026}")
+        XCTAssertEqual(QemuEngine.slirpWaitMessage(4), QemuEngine.slirpWaitMessage(3))
+    }
+
     // MARK: - helpers
 
     /// Set/clear env vars around a block. A nil value unsets the var.

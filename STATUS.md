@@ -1,90 +1,90 @@
-# Status 2026-06-21 (end of day)
+# Status 2026-06-22 (end of day)
 
-The Helios daemon went from "validated but inert" to **installed, always-on, and
-directly reachable from the Mac with no ssh in the chain.** It now autostarts as
-a root boot service on the SPARCplug guest, and the Mac tool talks straight to it
-over a qemu hostfwd. That's the simplification we were after: **Mac tool ->
-daemon**, nothing in between. (Earlier today: two Macs converged on the
-daemon being Mac-complete + Solaris-validated + a CLI bridge -- see the history
-below.)
+Big day on Helios. The whole macXserver control plane (Phase C) is done, and
+the daemon grew three real capabilities -- run-as-user, streaming bulk
+transfer, and shared-secret auth -- all built under g++ 2.95 and validated live
+on the real Solaris 2.6 image. The daemon can now ship its own replacement over
+its own protocol.
 
-## Headline: the daemon is active and the chain is collapsed
+## Headline: Phase C complete + daemon hardened
 
-- **Installed via `deploy.sh`** (run as root on the guest): binary ->
-  `/usr/local/bin/heliosAgent`, init script -> `/etc/init.d/heliosAgent`, rc
-  symlinks (`S98` start at multiuser, `K30` stop). It autostarts on boot --
-  **proved it**: after a fresh VM relaunch the daemon came up on its own
-  (`uptime` ~50s on a box "up 1 min", nobody started it), running as root.
-- **Direct path live.** Added `hostfwd=tcp::2125-:2125` to macXserver's qemu args
-  (`QemuEngine.swift`, new `heliosHostPort` constant). After rebuild + relaunch,
-  `./helios hello` answers straight through `localhost:2125` with **no ssh
-  tunnel**. The ssh `-L` scaffolding is retired.
-- **Net effect:** the guest now has an always-on, root, directly-reachable
-  control surface. I can read/write its configs and run commands with zero
-  scaffolding -- the "help yourself on SPARCplug" capability is live.
-- **`deploy.sh` fix:** the makefile names the Solaris build dir `sunos_` (ARCH
-  comes out empty -- known make quirk), but deploy.sh expected `sunos_sun4m`. Now
-  it globs `${OS}_*/heliosAgent`, so it works regardless. Patched on the Mac and
-  the guest.
+- **Phase C (control plane) done:** C1 `HeliosClient` (Swift), C3 readiness via
+  `hello` poll (+ fsck-stall detection), C4 graceful shutdown via the daemon, C5
+  console is observation-only (auto-login deleted), C7 `helios` launcher
+  transport. C2 (bake into the image build) + C6 (guided sysadmin GUI) remain.
+- **Run-as-validated-user:** `run_command` gained a `user` field; the daemon
+  (root) `getpwnam`-validates and drops privileges in the child
+  (`initgroups`+`setgid`+`setuid`, failed drop exits 127). `HeliosLauncher` runs
+  X clients as `entry.user`, not root. Live: `id --user tvernon` -> tvernon.
+- **Streaming put_file / get_file:** `write_file` choked on a 4.7MB tar (55s
+  timeout); new verbs stream a raw length-prefixed body to/from disk, no base64,
+  no buffering. Live: 4.7MB round-trip byte-identical, ~0.2s each.
+- **Shared-secret auth (B7 closed):** every request needs a matching `auth`
+  (dispatch-layer, constant-time, require-if-configured). Key delivery is the
+  firmware trick: macXserver picks a random secret per launch, passes it via
+  qemu `-prom-env 'helios-secret=S'`; the guest reads it with `eeprom`, the
+  daemon requires it. Validated: the custom OBP var is readable AND never
+  persists to the qcow2 (disk-free). "Claude development" pref writes the key
+  0600 to /tmp/sparkplug for agentic access.
+- **B6 closed:** the 122-test daemon suite passes on Solaris under g++ 2.95.
 
-## Also new this session: /sos and /eos skills
+## What's working
 
-Two project skills in `.claude/skills/` (ride Dropbox, so both Macs get them).
-`/sos` = start of session: memory-symlink check, fetch + ff-pull every repo,
-**stop on divergence/dirty** instead of plowing ahead, reorient from STATUS.
-`/eos` = end of session (this): roll STATUS, selective commit + push every repo,
-verify sync, Dropbox reminder, offer VM shutdown. Built because today's two-Mac
-divergence came from starting work without pulling first.
+- macXserver: Phase C green; `helios` launcher runs X clients as the user.
+- Daemon on the guest (auth build) is installed + running (open this boot, since
+  macXserver hasn't passed a secret yet -- require-if-configured).
+- `~/dev/SPARCplug/helios` CLI: `put`/`get` (streaming), `run --user`, auto-auth
+  from `HELIOS_SECRET` env or /tmp/sparkplug.
+- Daemon self-deploy proven: scp-bootstrapped the first build, then redeployed
+  via helios (`put_file` + `run_command` + deploy.sh, surviving its own restart).
+- sshd boot warning fixed (Protocol 2 on the image; get-openssh.sh carries it).
 
-## Where the daemon stands (cumulative)
+## What's broken / rough edges
 
-- **All 8 verbs** implemented, 114 Mac tests, and validated on the real 2.6
-  image (incl. write_file mode-preservation and a real root `init 5` shutdown).
-- **Mac bridge** `~/dev/SPARCplug/helios/` (CLI + survey + client).
-- **GNU grep 2.7 + pcre 8.10** installed for the `search` verb.
-- **Architecture decided** (DECISIONS 2026-06-20 floor/ceiling, 2026-06-21
-  topology peer-not-hub + C6 guided-admin GUI).
-
-## What's committed (this roll pushes the last two)
-
-- `~/dev/X`: `QemuEngine.swift` + test (2125 hostfwd) + this STATUS.
-- cx tree `heliosAgent`: `deploy.sh` glob fix.
-- Earlier today (already pushed): the merge `1167269`, shutdown 8/8, D1 bridge,
-  topology decision; SPARCplug `26891c9`; cx `412b68a` / heliosAgent `a7c72e3` /
-  cx-build `f24f4f6`.
-- The install is baked into the working qcow2 (survived the reboot). Image rides
-  Dropbox, so it syncs to the laptop.
+- Self-deploy's final "done" ACK can be lost when the daemon restarts itself
+  (the connection-child doesn't always survive to reply). The deploy completes;
+  verify with a fresh `hello` after. Cosmetic, noted.
+- Auth's plaintext-secret-on-the-wire is a speed-bump, not crypto -- fine on the
+  loopback hostfwd, sniffable on a real LAN. HMAC/TLS is the documented upgrade.
 
 ## What's next
 
-- **macXserver cleanup pass (Phase C) -- the next focus.** Now that there's a
-  clean always-on daemon, retire the brittle bits: telnet/expect xterm launches
-  (-> launcher-over-Helios, C7), console-scrape readiness (-> liveness, C3),
-  console/telnet `init 5` shutdown (-> shutdown verb, C4), delete console
-  auto-login (C5). Plus Swift `HeliosClient` (C1) over the same hostfwd.
-- **Bake the install into the image *build*** (C2) so shipped copies have it,
-  not just this working image.
-- **Close M-B:** run the 114-test suite on the image (B6).
-- **Two daemon hardening items** (HELIOS_PLAN D1): orphan-reap; shutdown
-  euid-check + exit-status logging.
+- **Todd: close the auth loop.** Rebuild macXserver in Xcode, turn ON "Claude
+  development" (SPARCstation prefs), relaunch the VM. That boot passes a real
+  per-boot secret -> daemon locks -> key written to /tmp/sparkplug -> my CLI
+  reads it. Then re-verify end-to-end with the live secret. NOTE: with the daemon
+  locked, agentic access needs "Claude development" left ON (that's the key file).
+- **C2:** bake the daemon install + boot integration into the image *build* (not
+  just the working qcow2), plus the deferred boot-marker / self-announce items.
+- **C6:** the guided-sysadmin GUI (Phase 0.5).
+- Real-Sun secret provisioning (prom-env is emulator-only) -- later.
 
-## Switching to the laptop (do before leaving)
+## What's committed (this roll)
 
-- **Shut the VM down cleanly** so the image lock releases (laptop won't see
-  `remoteLocked`) -- and so the qcow2 with the fresh daemon install flushes.
-- **Let Dropbox finish syncing**: the modified **qcow2** (now has the daemon
-  installed), the cx tree, and memory. The image sync is the big one.
-- On the laptop, `/sos` first -- it'll pull X + the cx tree (heliosAgent's
-  deploy.sh fix) before you start.
+- `~/dev/X`: HeliosClient + HeliosLauncher (+ tests), QemuEngine (readiness,
+  fsck, shutdown-via-daemon, secret-gen + prom-env), C3/C5 console changes,
+  helios launcher transport + Preferences "Claude development", DECISIONS +
+  HELIOS_PLAN + SHORTCUTS.
+- `cx/cx`: `CxProcess` run-as-user (additive 4-arg `run`, portable LCD drop).
+- `cx/heliosAgent`: `user` field, streaming put_file/get_file, shared-secret
+  auth, PROTOCOL.md, init script (eeprom read), 122 tests.
+- `~/dev/SPARCplug`: `helios` CLI (`put`/`get`/`run --user`/auto-auth),
+  get-openssh.sh (Protocol 2).
+- NOT in git (intentionally): `~/.macxserver-launchers` (Todd's dotfile, edited
+  this session -- SPARCplug + SPARCplug-helios entries).
+
+## Switching to the laptop
+
+- The guest daemon source/build tree lives at `/export/home/tvernon/cx` ON THE
+  IMAGE (built there with g++ 2.95). The auth-daemon binary is baked into the
+  working qcow2, which rides Dropbox -- let the image finish syncing.
+- Let Dropbox finish syncing the cx tree + memory before opening the laptop.
+- On the laptop, `/sos` first.
 
 ## Pointers
 
-- Daemon source: `~/Dropbox/dev/cx/cx_apps/heliosAgent` (PROTOCOL.md, test/,
-  init/, deploy.sh). Installed on the guest at `/usr/local/bin/heliosAgent`,
-  logs `/var/log/heliosAgent.log`, pid `/var/run/heliosAgent.pid`.
-- Mac bridge: `~/dev/SPARCplug/helios/` -- `./helios hello` now works with no
-  tunnel once the VM is up.
-- qemu hostfwd: `QemuEngine.swift` (`heliosHostPort = 2125`).
-- Plan: `HELIOS_PLAN.md`. Decisions: DECISIONS 2026-06-17 / 06-20 / 06-21.
-- Image + backup: `~/Dropbox/dev/SPARCplug/SUN40G.qcow2` (+ `SUN40G backup
-  2026-06-21.qcow2`). Lock: `<image>.macxserver-lock`.
+- Daemon: `~/Dropbox/dev/cx/cx_apps/heliosAgent` (PROTOCOL.md, init/, deploy.sh).
+  Built on the guest at `/export/home/tvernon/cx`; installed `/usr/local/bin/heliosAgent`.
+- Mac bridge: `~/dev/SPARCplug/helios/` (`./helios put|get|run --user|hello`).
+- Decisions: DECISIONS.md 2026-06-22 (run-as-user, streaming, auth/firmware-secret).
+- Plan: HELIOS_PLAN.md (Phase C, B6/B7 closed).

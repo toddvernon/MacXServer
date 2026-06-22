@@ -39,7 +39,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var sparcWelcome: SparcStationWelcomeWindowController?
     /// Retains a best-effort telnet "shut down the orphan" attempt for its
     /// lifetime; cleared when the attempt resolves.
-    private var sparcTelnetShutdown: TelnetLauncher?
+    /// Set when an orphan's Helios shutdown call fails fast (refused/timed out),
+    /// so the poll loop can flip the panel to its failure state without waiting
+    /// out the full countdown. Reset at the start of each attempt.
+    private var orphanShutdownFailed = false
     /// Live progress panel shown while we wait for an orphan to power off.
     /// Non-nil only during an in-flight "Try to Shut It Down"; its presence is
     /// also the poll loop's keep-going signal (cleared the instant the user
@@ -183,8 +186,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         engine.onProgress { [weak self] value in
             self?.sparcConsole?.setProgress(value)
         }
+        engine.onReady { [weak self] in
+            self?.sparcConsole?.markReady()
+        }
+        engine.onBootStalled { [weak self] reason in
+            // Wedged guest -- make sure the user sees it and can Force Quit.
+            self?.ensureSparcConsole()
+            self?.sparcConsole?.showWindow()
+            self?.sparcConsole?.markBootStalled(reason)
+        }
         engine.onTerminated { [weak self] wasCleanHalt in
             self?.autoBackupAfterCleanShutdown(wasCleanHalt: wasCleanHalt)
+            // The per-launch secret died with the guest; don't leave it on disk.
+            try? FileManager.default.removeItem(atPath: AppDelegate.claudeDevSecretPath)
         }
         self.qemuEngine = engine
         self.sparcConsole?.setState(engine.state)
@@ -591,9 +605,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard let key = sender.representedObject as? String,
               let entry = currentLauncherFile?.entries.first(where: { "\($0.group)/\($0.name)" == key })
         else { return }
-        // ssh path is keys-only: no password prompt, no Keychain lookup.
-        // The launcher's password field (if set) is ignored for ssh entries.
-        if entry.transport == .ssh {
+        // ssh (keys-only) and helios (daemon, no auth) need no password: skip
+        // the prompt and Keychain entirely. Any password field is ignored.
+        if entry.transport == .ssh || entry.transport == .helios {
             executeLaunch(entry: entry, password: "")
             return
         }
@@ -637,6 +651,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             launcher = TelnetLauncher(entry: entry, password: password, displayString: display)
         case .ssh:
             launcher = SSHLauncher(entry: entry, displayString: display)
+        case .helios:
+            launcher = HeliosLauncher(entry: entry, displayString: display,
+                                      secret: qemuEngine?.currentSecret)
         }
         activeLauncher = launcher
 
@@ -845,9 +862,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sparcConsole?.showWindow()
         do {
             try qemuEngine?.start()
+            writeClaudeDevSecretFile()
         } catch {
             showLaunchError("Couldn't start SPARCstation: \(error.localizedDescription)")
         }
+    }
+
+    /// Path the "Claude development" secret is written to (per Todd's design).
+    private static let claudeDevSecretPath = "/tmp/sparkplug"
+
+    /// When "Claude development" is on, write the just-launched guest's Helios
+    /// secret to a 0600 file so Claude Code can authenticate to the daemon.
+    /// Otherwise make sure no stale secret lingers. Best-effort.
+    private func writeClaudeDevSecretFile() {
+        let path = Self.claudeDevSecretPath
+        guard preferences.sparcClaudeDevelopment, let secret = qemuEngine?.currentSecret else {
+            try? FileManager.default.removeItem(atPath: path)
+            return
+        }
+        // Create 0600 up front so the secret is never briefly world-readable.
+        FileManager.default.createFile(
+            atPath: path,
+            contents: Data(secret.utf8),
+            attributes: [.posixPermissions: 0o600])
     }
 
     // MARK: - Image-lock dialogs
@@ -887,7 +924,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         alert.addButton(withTitle: "Show Me How")           // third
         alert.addButton(withTitle: "Cancel")                // fourth
         switch alert.runModal() {
-        case .alertFirstButtonReturn:  attemptTelnetShutdown(lock: lock, image: image)
+        case .alertFirstButtonReturn:  attemptHeliosShutdown(lock: lock, image: image)
         case .alertSecondButtonReturn: forceQuitOrphan(lock: lock, image: image)
         case .alertThirdButtonReturn:  showManualShutdownInstructions()
         default: break
@@ -908,22 +945,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    /// Best-effort: telnet the orphan over the 2123 hostfwd and send `init 5`,
-    /// then poll for the pid to die behind a live progress panel. No guarantee
-    /// — root-over-telnet may be refused, etc. The panel counts down the wait
-    /// and, on timeout, flips to Force Quit / Show Me How / Cancel inline so the
-    /// user is never left guessing how long to wait. See PLUGIN_V1_PUNCHLIST L2.
-    private func attemptTelnetShutdown(lock: ImageLock, image: URL) {
-        let entry = LauncherEntry(
-            name: "SPARCstation shutdown", group: "", host: "127.0.0.1",
-            command: "/usr/sbin/init 5", user: "root",
-            port: QemuEngine.telnetHostPort, verbose: false,
-            shellPrompt: "#", password: nil, transport: .telnet, display: "")
-        let launcher = TelnetLauncher(entry: entry, password: "", displayString: "")
-        sparcTelnetShutdown = launcher
-        // Success is measured by the pid dying, not the launcher's result
-        // (after `init 5` there's no shell prompt to return to).
-        launcher.launch { _ in }
+    /// Ask the orphan's Helios daemon to `init 5` over the 2125 hostfwd, then
+    /// poll for the pid to die behind a live progress panel. This is the C4
+    /// replacement for the old telnet path: the daemon runs as root and answers
+    /// on the hostfwd even for an orphan (the forwarded port belongs to that
+    /// still-running qemu), so it sidesteps the root-over-telnet refusal that
+    /// made the old path unreliable on 2.6. Success is measured by the pid
+    /// dying, not the call's ACK (the daemon ACKs before the guest goes down).
+    /// On a fast daemon failure the poll loop flips the panel to Force Quit /
+    /// Show Me How / Cancel. See PLUGIN_V1_PUNCHLIST L2.
+    private func attemptHeliosShutdown(lock: ImageLock, image: URL) {
+        orphanShutdownFailed = false
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let client = HeliosClient(timeout: 8)
+            defer { client.close() }
+            do {
+                try client.connect()
+                _ = try client.shutdown()
+            } catch {
+                DispatchQueue.main.async { self?.orphanShutdownFailed = true }
+            }
+        }
 
         let total = 35
         let progress = SparcShutdownProgressWindowController(
@@ -942,7 +984,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard sparcShutdownProgress != nil else { return }
 
         if !ImageLockManager.isProcessAlive(lock.pid) {
-            sparcTelnetShutdown?.cancel(); sparcTelnetShutdown = nil
             ImageLockManager.forceRemove(imageURL: image)
             sparcShutdownProgress?.markSucceeded()
             // Let the green "Powered off" state register, then dismiss + boot.
@@ -953,8 +994,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             return
         }
-        if Date() >= deadline {
-            sparcTelnetShutdown?.cancel(); sparcTelnetShutdown = nil
+        // Daemon couldn't be reached -- no point waiting out the countdown.
+        if orphanShutdownFailed || Date() >= deadline {
             // Leave the panel up; it flips to the actionable failure state.
             sparcShutdownProgress?.markFailed()
             return
@@ -965,11 +1006,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    /// Force Quit chosen from the progress panel: tear the panel + telnet
-    /// attempt down, then run the verified SIGKILL path.
+    /// Force Quit chosen from the progress panel: tear the panel down, then run
+    /// the verified SIGKILL path. The Helios shutdown call is one-shot and needs
+    /// no cancellation -- the poll loop stops once the panel is gone.
     private func forceQuitFromProgress(lock: ImageLock, image: URL) {
         sparcShutdownProgress?.close(); sparcShutdownProgress = nil
-        sparcTelnetShutdown?.cancel(); sparcTelnetShutdown = nil
         forceQuitOrphan(lock: lock, image: image)
     }
 
@@ -977,7 +1018,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// manual telnet steps.
     private func showManualFromProgress() {
         sparcShutdownProgress?.close(); sparcShutdownProgress = nil
-        sparcTelnetShutdown?.cancel(); sparcTelnetShutdown = nil
         showManualShutdownInstructions()
     }
 
@@ -985,7 +1025,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// running. Clearing `sparcShutdownProgress` also halts the poll loop.
     private func cancelShutdownWait() {
         sparcShutdownProgress?.close(); sparcShutdownProgress = nil
-        sparcTelnetShutdown?.cancel(); sparcTelnetShutdown = nil
     }
 
     private func showManualShutdownInstructions() {

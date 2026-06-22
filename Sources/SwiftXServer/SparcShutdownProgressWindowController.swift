@@ -1,10 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// Live feedback for the "Try to Shut It Down" orphan-recovery path. The old
-/// flow fired `init 5` over telnet and then polled the pid silently for ~35s,
-/// so the user had no idea whether to wait, force quit, or give up. This panel
-/// shows a countdown while we wait for the orphan to power off, then either
+/// Live feedback for the "Try to Shut It Down" orphan-recovery path. We ask the
+/// guest's Helios daemon to `init 5` (C4) and then poll the pid; this panel
+/// shows a countdown while we wait for the orphan to power off, so the user
+/// isn't left guessing whether to wait, force quit, or give up. It then either
 /// auto-dismisses and boots (success) or flips to an actionable failure state
 /// with Force Quit / Show Me How / Cancel. See PLUGIN_V1_PUNCHLIST L2(b).
 final class SparcShutdownProgressWindowController: NSWindowController {
@@ -51,7 +51,7 @@ final class SparcShutdownProgressWindowController: NSWindowController {
     /// after a beat and boots.
     func markSucceeded() { model.phase = .succeeded }
 
-    /// The wait timed out (telnet root login is often refused on 2.6). Surface
+    /// The wait timed out, or the Helios daemon couldn't be reached. Surface
     /// the escalation buttons.
     func markFailed() { model.phase = .failed }
 }

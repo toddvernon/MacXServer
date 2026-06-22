@@ -3,9 +3,12 @@ import Foundation
 /// Which remote-shell protocol the launcher drives. Telnet (the original
 /// path) runs the IAC negotiation + login/password state machine in
 /// TelnetLauncher; SSH (added 2026-06-12 for modern Linux/BSD boxes) just
-/// spawns `/usr/bin/ssh` and lets it handle the protocol, key auth only.
+/// spawns `/usr/bin/ssh` and lets it handle the protocol, key auth only;
+/// Helios (added 2026-06-21, C7) runs the client via the Helios daemon's
+/// `run_command` -- no prompt-scraping, no login-shell quirks, a clean exit
+/// code, and no auth to manage. The least-brittle path once the daemon is up.
 public enum LauncherTransport: String, Equatable, Sendable {
-    case telnet, ssh
+    case telnet, ssh, helios
 }
 
 /// One launchable command parsed from `~/.macxserver-launchers`: a remote
@@ -174,7 +177,7 @@ public struct LauncherFile: Sendable {
             let transport = LauncherTransport(rawValue: merged["transport"]?.lowercased() ?? "")
                 ?? .telnet
             let port = merged["port"].flatMap { UInt16($0) }
-                ?? (transport == .ssh ? 22 : 23)
+                ?? (transport == .ssh ? 22 : transport == .helios ? 2125 : 23)
             let verbose = ["true", "yes", "1"].contains(merged["verbose"]?.lowercased() ?? "")
             if transport == .ssh, let pw = merged["password"], !pw.isEmpty {
                 warnings.append("'\(group)/\(name)' has transport=ssh and a "

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		00A55B61291A33B86AF9D899 /* HeliosLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27688847AABCA828671B5564 /* HeliosLauncher.swift */; };
 		01A0A5D1B178F7E2198F5883 /* CopyGC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 403CABF157A10D9A67EF2893 /* CopyGC.swift */; };
 		0244CBF1918B1D271F5087E7 /* AllocColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E07E250EA3F50C6700F00C4 /* AllocColor.swift */; };
 		02A3D85524B2428388E8A09B /* AllowEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79EA8765D448F503846DF6EB /* AllowEvents.swift */; };
@@ -91,6 +92,7 @@
 		4FCE78B59023498DFDA48216 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFA6328DA36A5A04C713B7DA /* SyntaxHighlighter.swift */; };
 		50C2987BA7EFE3F73D71450A /* SiblingChain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DF3816F21F8223631A5A34F /* SiblingChain.swift */; };
 		524BCFD2085230BAB71EB3A2 /* Listener.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F1158F5435634F1A10649BF /* Listener.swift */; };
+		524FF377489F25AA621755AB /* HeliosClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34AE12DBBBB2FA9C63CB7B79 /* HeliosClient.swift */; };
 		528A50EAC0A4E1E29A65AB16 /* PointerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96CD807BE28C18051D249341 /* PointerConfig.swift */; };
 		541EC48DE5F4E66F7F9A2EA5 /* GetFontPathReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40C14A707F420C54AC079064 /* GetFontPathReply.swift */; };
 		55F6DA0112422D7E6D770AC5 /* PutImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65C28CD0E0C9A94E47B4B759 /* PutImage.swift */; };
@@ -455,6 +457,7 @@
 		24C3F64CBB1DECCF198D7C6A /* Screen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Screen.swift; sourceTree = "<group>"; };
 		26A6DB349FED3AF919909A38 /* ByteOrder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteOrder.swift; sourceTree = "<group>"; };
 		270DDAF90379577868C75505 /* BigRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BigRequests.swift; sourceTree = "<group>"; };
+		27688847AABCA828671B5564 /* HeliosLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeliosLauncher.swift; sourceTree = "<group>"; };
 		280F23AE470D6D904408207B /* XkbMapPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XkbMapPayload.swift; sourceTree = "<group>"; };
 		2874B07E7625FA85C167308D /* PolyLine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PolyLine.swift; sourceTree = "<group>"; };
 		2A507B1DEAD91E4E1E487C0F /* ShmReplies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShmReplies.swift; sourceTree = "<group>"; };
@@ -466,6 +469,7 @@
 		2FC5075EA0046A1E7C2B91E4 /* RecordView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordView.swift; sourceTree = "<group>"; };
 		32FD915019AF7F9E20514201 /* GetPointerMappingReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GetPointerMappingReply.swift; sourceTree = "<group>"; };
 		3314A110446CF6CF19916688 /* ByteReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteReader.swift; sourceTree = "<group>"; };
+		34AE12DBBBB2FA9C63CB7B79 /* HeliosClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeliosClient.swift; sourceTree = "<group>"; };
 		34D34B4B935E7C62AE94A994 /* Proxy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Proxy.swift; sourceTree = "<group>"; };
 		354798A85C6A4F490DF63864 /* RenderDumper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderDumper.swift; sourceTree = "<group>"; };
 		36D9057C0BC47A4577684D07 /* XkbDumper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XkbDumper.swift; sourceTree = "<group>"; };
@@ -742,6 +746,8 @@
 				C245C796403A892C281F8DC0 /* FontMappingTokenizer.swift */,
 				6BDF02BBA9F2D1A1948961B8 /* FontResolver.swift */,
 				1117A789AFF21E2BF317C431 /* GCState.swift */,
+				34AE12DBBBB2FA9C63CB7B79 /* HeliosClient.swift */,
+				27688847AABCA828671B5564 /* HeliosLauncher.swift */,
 				72417D022F2F31889B53A1F9 /* ImageLock.swift */,
 				045B0FB16AE69F9D052CDE0C /* KeychainHelper.swift */,
 				C9F771FDFB6E892C7CB0786F /* LauncherFile.swift */,
@@ -1390,6 +1396,8 @@
 				DF1D6BC9D72CE6DEB1D22709 /* FontMappingTokenizer.swift in Sources */,
 				7569630E54BF6D661AC5F2E2 /* FontResolver.swift in Sources */,
 				98DD525D2E56702953EF468B /* GCState.swift in Sources */,
+				524FF377489F25AA621755AB /* HeliosClient.swift in Sources */,
+				00A55B61291A33B86AF9D899 /* HeliosLauncher.swift in Sources */,
 				F2029F5D956074EB4B49EE1A /* ImageLock.swift in Sources */,
 				8D69CCDE6FD24C38B19B3AAA /* KeychainHelper.swift in Sources */,
 				75F844E86AF97F78E13CA685 /* LauncherFile.swift in Sources */,

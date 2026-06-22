@@ -21,9 +21,10 @@ public enum DefaultLaunchers {
         #   host      = hostname or IP           (required on the host block)
         #   user      = login username           (required on the host block)
         #   command   = X app to launch          (required on the item)
-        #   transport = telnet | ssh             (optional, default telnet)
+        #   transport = telnet | ssh | helios    (optional, default telnet)
         #   port      = remote port              (optional, default 23 for
-        #                                        telnet, 22 for ssh)
+        #                                        telnet, 22 for ssh, 2125 for
+        #                                        helios)
         #   verbose   = true/false               (optional, default false)
         #   login_prompt    = substring          (default: ogin:, telnet only)
         #   password_prompt = substring          (default: assword:, telnet only)
@@ -52,6 +53,14 @@ public enum DefaultLaunchers {
         #     We do NOT use ssh's X11 forwarding -- the X traffic still goes
         #     direct to our server, same as telnet, so the remote sshd
         #     doesn't need `X11Forwarding yes`.
+        #   - helios: runs the X client via the Helios daemon (the bundled
+        #     SPARCstation, or any box running heliosAgent). No password, no
+        #     keys, no prompt-scraping -- the daemon execs the command and
+        #     returns a clean exit code. `host`/`port` point at the daemon
+        #     (127.0.0.1:2125 for the bundled emulator over the qemu hostfwd).
+        #     The client runs as `user` -- the daemon (root) drops privileges to
+        #     that user per request. The least-brittle transport once the daemon
+        #     is up.
         #
         # If you omit `password` on a telnet entry, it's read from the macOS
         # Keychain; on first use you're prompted once and it's stored there.
@@ -110,6 +119,18 @@ public enum DefaultLaunchers {
         #
         # [nuc/firefox]
         # command = firefox
+        #
+        # # The bundled SPARCstation over the Helios daemon. host/port point at
+        # # the daemon (127.0.0.1:2125 via the qemu hostfwd), and display is the
+        # # slirp view of the Mac (10.0.2.2:0). No password or keys needed.
+        # [host:sparc]
+        # host = 127.0.0.1
+        # user = root
+        # transport = helios
+        # display = 10.0.2.2:0
+        #
+        # [sparc/xterm]
+        # command = xterm -fn 10x20 -bg black -fg green
         #
         # Legacy flat sections (no `host:` prefix, no `/` in the name) still
         # parse: they're grouped automatically under the short form of their

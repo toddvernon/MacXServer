@@ -34,6 +34,7 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         static let sparcAutoBackupOnShutdown = "sparcplug.autoBackupOnShutdown" // bool
         static let sparcTftpEnabled = "sparcplug.tftpEnabled"       // bool
         static let sparcTftpDirectory = "sparcplug.tftpDirectory"   // string (absolute path)
+        static let sparcClaudeDevelopment = "sparcplug.claudeDevelopment" // bool
     }
 
     /// Where server-side captures land when capture is enabled. /tmp is
@@ -73,6 +74,7 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
             Key.sparcAutoBackupOnShutdown: true,
             Key.sparcTftpEnabled: false,
             Key.sparcTftpDirectory: Self.defaultTFTPDirectory,
+            Key.sparcClaudeDevelopment: false,
         ])
     }
 
@@ -237,6 +239,18 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         get { defaults.bool(forKey: Key.sparcAutoBackupOnShutdown) }
         set {
             defaults.set(newValue, forKey: Key.sparcAutoBackupOnShutdown)
+            NotificationCenter.default.post(name: Self.didChange, object: self)
+        }
+    }
+
+    /// "Claude development" mode. When on, macXserver writes the running guest's
+    /// per-launch Helios secret to `/tmp/sparkplug` (0600) so Claude Code can
+    /// authenticate to the daemon for agentic work. Off by default: it
+    /// deliberately exposes the guest key to anything that can read the file.
+    var sparcClaudeDevelopment: Bool {
+        get { defaults.bool(forKey: Key.sparcClaudeDevelopment) }
+        set {
+            defaults.set(newValue, forKey: Key.sparcClaudeDevelopment)
             NotificationCenter.default.post(name: Self.didChange, object: self)
         }
     }

@@ -42,6 +42,8 @@ final class SparcPlugConsoleWindowController: NSWindowController {
     func setState(_ state: QemuEngine.State) {
         if state == .running, model.state != .running {
             model.safeToQuit = false   // fresh boot
+            model.ready = false
+            model.bootStalledReason = nil
             model.beginRun()
         }
         model.state = state
@@ -55,6 +57,16 @@ final class SparcPlugConsoleWindowController: NSWindowController {
     /// Solaris reported filesystems synced -- show the positive safe signal.
     func markCleanHalt() {
         model.safeToQuit = true
+    }
+
+    /// The guest answered `hello` -- it's up and serving (C3).
+    func markReady() {
+        model.ready = true
+    }
+
+    /// The boot won't complete (fsck maintenance drop, or readiness timed out).
+    func markBootStalled(_ reason: String) {
+        model.bootStalledReason = reason
     }
 }
 
@@ -70,6 +82,11 @@ final class SparcPlugConsoleModel: ObservableObject {
     @Published var state: QemuEngine.State = .stopped
     /// Set once Solaris confirms filesystems are synced during shutdown.
     @Published var safeToQuit = false
+    /// Set once the guest answers `hello` -- the authoritative "ready" signal.
+    @Published var ready = false
+    /// Non-nil when the boot stalled (fsck maintenance drop or readiness
+    /// timeout); the value is a short human reason.
+    @Published var bootStalledReason: String?
     /// 0...1 boot/shutdown progress for the top thermometer.
     @Published var progress: Double = 0
 
@@ -182,6 +199,11 @@ struct SparcPlugConsoleView: View {
                         .font(.caption)
                         .foregroundStyle(.green)
                 }
+                if let reason = model.bootStalledReason {
+                    Label(reason, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
                 Spacer()
                 controls
             }
@@ -206,8 +228,9 @@ struct SparcPlugConsoleView: View {
     }
 
     private var statusColor: Color {
+        if model.bootStalledReason != nil { return .orange }
         switch model.state {
-        case .running: return .green
+        case .running: return model.ready ? .green : .blue
         case .shuttingDown: return .orange
         case .stopped: return .secondary
         case .notInstalled: return .orange
@@ -215,8 +238,10 @@ struct SparcPlugConsoleView: View {
     }
 
     private var statusText: String {
+        if model.bootStalledReason != nil { return "Boot stalled" }
         switch model.state {
-        case .running: return "Running"
+        // Process alive but the guest hasn't answered Helios yet vs. up and serving.
+        case .running: return model.ready ? "Ready" : "Booting\u{2026}"
         case .shuttingDown: return "Shutting down\u{2026}"
         case .stopped: return "Stopped"
         case .notInstalled: return "No disk image installed"

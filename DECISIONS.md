@@ -1005,6 +1005,44 @@ This maps onto existing structure: the launcher's `transport` field (telnet / ss
 
 ---
 
+## 2026-06-22: Helios daemon drops privileges to a validated user per request (not run-everything-as-root)
+
+**Context**: C7 (launcher-over-Helios) shipped the X client running as **root**, because `run_command` inherits the daemon's root uid. That surfaced immediately — an xterm came up with root's shell instead of the user's. The deeper issue is permissions: the daemon does everything as root, and an unauthenticated-but-root control surface that runs arbitrary commands is not a posture to ship. Todd's call: implement proper "run as a validated user," don't skate it with a `su`-shell hack.
+
+**Chosen**: `run_command` gains an optional `user` field. The daemon stays root (it must — only root can `setuid` to an arbitrary user, and shutdown/system-config writes need it), but when `user` is set it **drops privileges in the forked child before exec**: `getpwnam`-validate (unknown user → `ok:false`), then `initgroups` + `setgid` + `setuid` (groups/gid while still root, uid last and irreversible), plus a login-ish `HOME`/`USER`/`LOGNAME`/`SHELL` env. A failed drop `_exit(127)`s — it can never fall through to running as root. The drop lives in shared `CxProcess` (additive 4-arg overload; existing callers unchanged). Absent `user` = root, reserved for explicit admin tasks; user-facing work (the launcher, and the future agent) always names a user. `HeliosLauncher` passes `user=entry.user`, which also let it drop the temp-file/`su` stopgap (the daemon's /bin/sh + setuid gives both the right user AND Bourne syntax, dodging the tcsh login-shell trap).
+
+**Portability**: deliberately uses only lowest-common-denominator calls — `getpwnam` (NOT `getpwnam_r`, whose signature differs Solaris-vs-POSIX; safe because single-threaded post-fork), `initgroups`, `setgid`, `setuid`, `putenv` (NOT `setenv`, absent on Solaris 2.6). Compiles with no `#ifdef` across Solaris 2.6 / SunOS 4 / BSD / Linux / macOS / Irix — matching the deploy-parity goal (same daemon reaches the emulator and a real Sun/any Unix).
+
+**Trade accepted**: the daemon process is still root (standard privsep model, like sshd/inetd — start root, drop per request). Validation is "getpwnam resolves" only for now; a uid-floor/allowlist (refuse system accounts) is noted as later hardening. Builds on 2026-06-20/21 (Helios as the control plane). Pairs with the deferred daemon-auth (shared secret) work (HELIOS_PLAN open questions). **Built + deployed + live-validated on the real 2.6 image 2026-06-22** (`run id --user tvernon` → `uid=1000(tvernon)`; the 117 daemon tests now also pass on Solaris under g++ 2.95).
+
+---
+
+## 2026-06-22: Helios bulk transfer is a streaming raw body (put_file / get_file), not base64-in-JSON
+
+**Context**: `write_file`/`read_file` carry content as base64 in one newline-JSON line — fine for a config, but moving a 4.7MB build tar that way **timed out at 55s** (the daemon buffers a ~6MB line and hands a ~6MB string to the JSON parser). FTP/scp move the same bytes in seconds because they stream raw straight to disk. The daemon needed the same for bulk.
+
+**Chosen**: two new verbs, `put_file` (upload) and `get_file` (download), carrying a **length-prefixed raw body** after the JSON header — streamed to/from disk in 64KB chunks, no base64, no full-file buffering. This is the **one place the protocol deviates from one-JSON-object-per-line**; everything else stays pure line-JSON (still telnet-debuggable). Framing is clean because `CxSocketImpl::recvUntil` reads one byte at a time, so the byte after the header's `\n` is body byte 0 — no read-ahead to reconcile. Handled in the connection loop (`heliosHandleStreaming`), not the line-only `heliosDispatch`, because the verbs need the socket; a header with no usable `bytes` closes the connection (unframeable), a recoverable error drains the body to stay framed. `write_file`/`read_file` stay the small-file/base64 path (deliberately two tiers).
+
+**Considered + rejected**: (a) a *new* verb that still sends one base64 line — fixes nothing. (b) chunked-append to write_file — keeps pure line-JSON but pays base64's 33% + many round-trips; fine for moderate files, not the bulk answer. (c) "just use scp" — the daemon shouldn't depend on sshd being present (a locked-down or real-Sun box may lack it), and the control plane owning its own transfer is the point.
+
+**Validated 2026-06-22**: 4.7MB put+get round-trip byte-identical at ~0.2s each (vs the 55s timeout). Capstone — the daemon **redeployed itself using only helios** (`put_file` the 7.3MB tar in 0.28s, `run_command` to build + deploy.sh, surviving its own restart because the forked connection-child outlives it). The first deploy bootstrapped over scp since the verbs didn't exist on the running daemon yet. Trade accepted: a second framing mode in the connection loop and a not-telnet-pokeable payload for these two verbs — worth it for bulk; HMAC/TLS for the untrusted-LAN case stays the documented later concern alongside the deferred shared-secret auth.
+
+---
+
+## 2026-06-22: Helios auth = per-boot random secret delivered through OpenBoot firmware (-prom-env), not a config file
+
+**Context**: with run-as-user and bulk transfer landed, the daemon does privilege-sensitive work, and an unauthenticated root-capable control socket is not shippable. The deferred plan was a static secret in a root-only config file generated at install. Todd proposed a better key-distribution: have macXserver pick a **random secret each launch** and pass it to the guest through the qemu/OpenBIOS boot channel, so the daemon learns it without it ever being baked into the image.
+
+**Chosen**: macXserver generates a fresh 128-bit secret per launch (`QemuEngine.generateHeliosSecret`) and passes it via qemu **`-prom-env 'helios-secret=S'`** (a custom OpenBoot NVRAM variable). The daemon's init script reads it back with **`eeprom helios-secret`** and starts the daemon with `-s S`; the daemon then requires a matching `auth` field on every request (dispatch-layer, constant-time compare, `ok:false "unauthorized"`), **require-if-configured** (no secret -> open, for dev/`make test`). macXserver's own daemon calls + the launcher present S; a **"Claude development"** Preferences checkbox (off by default) writes S `0600` to `/tmp/sparkplug` so Claude Code can authenticate for agentic work.
+
+**Why this beats the config-file secret**: it's per-boot (no long-lived credential) and, crucially, **never touches the guest disk** — validated 2026-06-22 that `-prom-env` is *runtime-only*: a custom OBP var is readable via Solaris `eeprom` while set, and is **gone on the next boot that doesn't pass it** (does not persist to the qcow2 NVRAM). So a stolen image leaks no key. Deliberately **not echoed to the boot console** (the console is captured to `.xtap`/logs — printing it would defeat the disk-free property; macXserver already knows S and the guest reads it from OBP, so nothing needs the echo).
+
+**Honest scope (unchanged from the earlier note)**: a plaintext secret over the cleartext newline-JSON channel is a speed-bump — kills unauthenticated / cross-VM / port-scan access and is solid on the loopback hostfwd, but is sniffable + replayable on a real LAN. NOT crypto. HMAC-over-a-nonce or TLS stays the documented upgrade if the untrusted-LAN case becomes real. **Emulator-specific**: `-prom-env` is the qemu/OpenBIOS channel; a real bare-metal Sun has no such injection and would provision the secret another way (manual `eeprom`, or a config file) — scoped out for now (the bundled emulator is the shipping product).
+
+**Validated 2026-06-22 on the real 2.6 image**: custom OBP var surfaces in `eeprom` and does not persist; the daemon enforces auth live (no-auth/wrong -> `unauthorized`, correct -> ok); 122 daemon tests pass on Solaris under g++ 2.95. Built on the run-as-user + streaming work the same day; the daemon self-deployed the auth build over helios (`put_file` + `run_command`).
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
