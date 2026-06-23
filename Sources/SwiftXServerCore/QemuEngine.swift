@@ -133,27 +133,14 @@ public final class QemuEngine: @unchecked Sendable {
     private var readyCallback: (() -> Void)?
     private var bootStalledCallback: ((String) -> Void)?
 
-    /// Console substrings mapped to a boot-progress fraction. The highest
-    /// match present in the recent console wins (monotonic via max()). These
-    /// are cosmetic only and top out below 1.0: the authoritative "ready" 1.0
-    /// comes from the first successful `hello` (C3), not a console string. The
-    /// old `console login:` -> 1.0 entry was the pre-C3 readiness proxy and is
-    /// gone -- readiness no longer derives from the console at all.
-    private static let bootMilestones: [(String, Double)] = [
-        ("OpenBIOS", 0.12),
-        ("SunOS Release", 0.30),
-        ("configuring network interfaces", 0.50),
-        ("syslog service starting", 0.70),
-        ("The system is ready", 0.90),
-    ]
-    /// Console substrings mapped to a shutdown-progress fraction. The lowest
-    /// match present wins (monotonic recede via min()).
-    private static let shutdownMilestones: [(String, Double)] = [
-        ("The system is coming down", 0.70),
-        ("System services are now being stopped", 0.45),
-        ("The system is down", 0.20),
-        (cleanHaltMarker, 0.10),
-    ]
+    // Boot/shutdown progress milestones are derived from real console
+    // transcripts (see ProgressReference) rather than a hand-tuned table:
+    // landmark lines spread evenly across the bar, matched by substring. Boot
+    // takes the highest match (monotonic max), shutdown the lowest (monotonic
+    // recede via min). Both are cosmetic and stop short of the ends -- boot's
+    // 1.0 comes from the first `hello` (C3), shutdown's 0 from pid-death.
+    private static let bootMilestones: [(String, Double)] = ProgressReference.boot
+    private static let shutdownMilestones: [(String, Double)] = ProgressReference.shutdown
 
     public init(config: QemuEngineConfig) {
         self.config = config

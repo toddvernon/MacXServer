@@ -14,17 +14,22 @@ final class SparcPlugConsoleWindowController: NSWindowController {
     init(onShutDown: @escaping () -> Void, onForceQuit: @escaping () -> Void) {
         let hostingView = NSHostingView(rootView: SparcPlugConsoleView(
             model: model, shutDown: onShutDown, forceQuit: onForceQuit))
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 520),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .utilityWindow],
+        // First-class NSWindow (not an NSPanel/.utilityWindow): a utility panel
+        // hides whenever macXserver isn't the foreground app, which is annoying
+        // for a console you want to keep watching while you work elsewhere. A
+        // plain window stays put on deactivate. Taller default than wide -- a
+        // serial console reads as a long scroll of lines.
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 780),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false
         )
-        panel.title = "SPARCstation Console"
-        panel.contentView = hostingView
-        panel.isReleasedWhenClosed = false
-        panel.minSize = NSSize(width: 480, height: 240)
-        panel.center()
-        super.init(window: panel)
+        window.title = "SPARCstation Console"
+        window.contentView = hostingView
+        window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 480, height: 240)
+        window.center()
+        super.init(window: window)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
@@ -142,26 +147,33 @@ struct SparcPlugConsoleView: View {
         .frame(minWidth: 480, minHeight: 240)
     }
 
-    /// Full-width blue thermometer: grows as the guest boots, recedes as it
-    /// shuts down. Driven by QemuEngine progress milestones.
+    /// Full-width thermometer: grows as the guest boots, recedes as it shuts
+    /// down. Driven by QemuEngine progress milestones. Blue while in motion
+    /// (booting or unbooting); flips to green once the box is up and serving
+    /// (state == .running and `ready`, i.e. Helios answered).
     private var bootBar: some View {
-        GeometryReader { geo in
+        let accent: Color = (model.state == .running && model.ready) ? .green : .blue
+        return GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Rectangle().fill(Color.blue.opacity(0.15))
-                Rectangle().fill(Color.blue)
+                Rectangle().fill(accent.opacity(0.15))
+                Rectangle().fill(accent)
                     .frame(width: geo.size.width * model.progress)
             }
         }
         .frame(height: 5)
         .animation(.easeInOut(duration: 0.45), value: model.progress)
+        .animation(.easeInOut(duration: 0.3), value: model.ready)
     }
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center, spacing: 12) {
-                Image(systemName: "desktopcomputer")
-                    .font(.system(size: 28, weight: .regular))
-                    .foregroundStyle(.secondary)
+                // Tiny SPARCstation 5 bezel where the generic desktop icon was.
+                Image("SparcStation5Panel")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(height: 30)
+                    .accessibilityLabel("Sun SPARCstation 5")
                 VStack(alignment: .leading, spacing: 2) {
                     Text("SPARCstation 5 — Solaris 2.6")
                         .font(.title2)

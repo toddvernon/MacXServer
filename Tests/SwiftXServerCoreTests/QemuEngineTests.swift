@@ -241,14 +241,23 @@ final class QemuEngineTests: XCTestCase {
     /// 1.0 comes from the first `hello`, not a console string. The old
     /// `console login:` -> 1.0 proxy is gone.
     func testBootProgressTopsOutBelowReady() {
+        // Milestones are derived from the real boot transcript (ProgressReference),
+        // so assert behavior against that table rather than brittle constants.
+        let marks = ProgressReference.boot
+        let first = marks.first!
+        let last = marks.last!
+
         XCTAssertEqual(QemuEngine.bootProgress(in: ""), 0.0)
-        XCTAssertEqual(QemuEngine.bootProgress(in: "OpenBIOS"), 0.12, accuracy: 0.0001)
-        // The highest milestone present wins (monotonic via max).
-        XCTAssertEqual(QemuEngine.bootProgress(in:
-            "OpenBIOS ... SunOS Release ... The system is ready"), 0.90, accuracy: 0.0001)
-        // Reaching the login prompt no longer implies fully ready (1.0).
-        XCTAssertLessThan(QemuEngine.bootProgress(in:
-            "The system is ready\nconsole login:"), 1.0)
+        // A recognized early landmark gives its (small, positive) fraction.
+        XCTAssertEqual(QemuEngine.bootProgress(in: first.0), first.1, accuracy: 0.0001)
+        XCTAssertGreaterThan(first.1, 0.0)
+        // The highest landmark present wins (monotonic via max): an early plus a
+        // late line resolves to the late line's fraction.
+        XCTAssertEqual(QemuEngine.bootProgress(in: first.0 + "\n" + last.0),
+                       last.1, accuracy: 0.0001)
+        XCTAssertGreaterThan(last.1, first.1)
+        // Even the last console landmark stays below 1.0 -- `hello` owns ready.
+        XCTAssertLessThan(last.1, 1.0)
     }
 
     /// The slirp packet-send line is recognized; real qemu errors are not (they

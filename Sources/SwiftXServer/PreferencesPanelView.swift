@@ -2,16 +2,16 @@ import SwiftUI
 import AppKit
 import SwiftXServerCore
 
-// SwiftUI Preferences panel. Tabs: Cut/Paste (real), Capture (real),
-// Display (placeholder), Network (placeholder). Hero-panel layout
-// inside each tab — SF Symbol header + .title2 + caption — same
-// vocabulary as the Resources editor so the two windows feel like
-// they belong to the same app.
+// SwiftUI Preferences panel. Tabs: Cut/Paste, Capture, Mouse, Display, and a
+// Network placeholder. Hero-panel layout inside each tab — SF Symbol header +
+// .title2 + caption — same vocabulary as the Resources editor so the two
+// windows feel like they belong to the same app. (SPARCstation settings used
+// to be a tab here; they're now SPARCstation > Config menu windows.)
 
 /// Identifies the Preferences tabs so callers (e.g. the SPARCstation menu's
 /// Install action) can open the window to a specific tab.
 enum PreferencesTab: Hashable {
-    case cutPaste, capture, mouse, display, sparcStation, network
+    case cutPaste, capture, mouse, display, network
 }
 
 struct PreferencesPanelView: View {
@@ -44,11 +44,6 @@ struct PreferencesPanelView: View {
                     Label("Display", systemImage: "display")
                 }
                 .tag(PreferencesTab.display)
-            SparcStationTab(model: model)
-                .tabItem {
-                    Label("SPARCstation", systemImage: "desktopcomputer")
-                }
-                .tag(PreferencesTab.sparcStation)
             PlaceholderTab(
                 icon: "network",
                 title: "Network",
@@ -59,7 +54,7 @@ struct PreferencesPanelView: View {
                 }
                 .tag(PreferencesTab.network)
         }
-        // minWidth must keep all six tabs on one row; below ~610pt macOS
+        // minWidth must keep all five tabs on one row; below ~520pt macOS
         // collapses the tab bar into a ">>" overflow menu (see the window
         // controller's contentRect note).
         .frame(minWidth: 700, minHeight: 400)
@@ -362,126 +357,6 @@ private struct DisplayTab: View {
     }
 }
 
-// MARK: - SPARCstation tab
-
-private struct SparcStationTab: View {
-    @ObservedObject var model: PreferencesPanelModel
-
-    var body: some View {
-        // Scrollable so this (tall) tab never clips: the window is one fixed
-        // height shared by every tab — SwiftUI's TabView has no per-tab
-        // auto-resize — and SPARCstation is the tallest. ScrollView lets the
-        // content overflow gracefully instead of being cut off top and bottom.
-        ScrollView {
-        VStack(alignment: .leading, spacing: 18) {
-            PanelHeader(
-                icon: "desktopcomputer",
-                title: "SPARCstation",
-                caption: "The bundled SPARCstation 5 running Solaris 2.6."
-            )
-
-            Text("Disk image:")
-                .foregroundStyle(.secondary)
-
-            Text(model.sparcDiskImagePath.isEmpty
-                 ? "No disk image selected" : model.sparcDiskImagePath)
-                .font(.callout)
-                .foregroundStyle(model.sparcDiskImagePath.isEmpty ? .secondary : .primary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-
-            HStack {
-                Button("Choose\u{2026}") { model.chooseSparcDiskImage() }
-                if !model.sparcDiskImagePath.isEmpty {
-                    Button("Reveal in Finder") { model.revealSparcDiskImage() }
-                    Button("Clear") { model.sparcDiskImagePath = "" }
-                }
-                Spacer()
-            }
-
-            Text("Point this at a Solaris qcow2 disk image; the SPARCstation \u{203A} Run command boots it. Until the in-app downloader ships, this is how you select the image. Booting writes to the image (the VM persists its own state), so use a copy if you want to keep a pristine master.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Divider()
-
-            Toggle("Back up the disk image after each clean shutdown",
-                   isOn: $model.sparcAutoBackupOnShutdown)
-
-            Text("Keeps a dated \u{201C}last known good\u{201D} copy next to the image whenever the SPARCstation shuts down cleanly, so you can roll back if a later session corrupts it. Only the most recent few are kept. Turn this off to skip the automatic copies.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Divider()
-
-            Toggle("Claude development", isOn: $model.sparcClaudeDevelopment)
-
-            Text("Writes the running SPARCstation\u{2019}s Helios control-daemon key to /tmp/sparkplug (owner-only) each launch, so Claude Code can drive the guest for agentic development. Leave off unless you\u{2019}re doing that \u{2014} it exposes the key to anything on this Mac that can read the file.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Divider()
-
-            Toggle("Use a shared folder to copy files into the SPARCstation",
-                   isOn: $model.sparcTftpEnabled)
-
-            if model.sparcEngineRunning {
-                Label("The SPARCstation is running. Shut it down and start it again to apply a change to the shared folder.",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Text(model.sparcTftpDirectory)
-                .font(.callout)
-                .foregroundStyle(model.sparcTftpEnabled ? .primary : .secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-
-            HStack {
-                Button("Choose\u{2026}") { model.chooseSparcTftpDirectory() }
-                Button("Reveal in Finder") { model.revealSparcTftpDirectory() }
-                Spacer()
-            }
-            .disabled(!model.sparcTftpEnabled)
-
-            Text("Drop files in this folder, then on the SPARCstation pull them over with the built-in TFTP client (the folder is served read-only on the gateway, 10.0.2.2):")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("tftp 10.0.2.2\nbinary\nget filename\nquit")
-                .font(.system(.callout, design: .monospaced))
-                .textSelection(.enabled)
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-
-            Text("TFTP moves one file at a time and can't list the folder, so tar up a set first. \u{2018}binary\u{2019} is required or binaries arrive corrupted. Takes effect on the next Run.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-        }
-        .padding(24)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-    }
-}
-
 // MARK: - Placeholder tab
 
 private struct PlaceholderTab: View {
@@ -508,7 +383,7 @@ private struct PlaceholderTab: View {
 
 // MARK: - Shared header
 
-private struct PanelHeader: View {
+struct PanelHeader: View {
     let icon: String
     let title: String
     let caption: String
@@ -537,13 +412,6 @@ final class PreferencesPanelModel: ObservableObject {
     /// Which tab is showing. Driven by the tab bar, and set programmatically
     /// when a caller opens Preferences to a specific tab.
     @Published var selectedTab: PreferencesTab = .cutPaste
-
-    /// Live mirror of whether the SPARCstation engine is currently running
-    /// (or shutting down). The SPARCstation tab uses it to show a "restart to
-    /// apply" note for settings that are only read when the engine launches
-    /// (the shared folder). Pushed in by the AppDelegate's engine state
-    /// observer so it updates while the window is open.
-    @Published var sparcEngineRunning: Bool = false
 
     @Published var clipboardEnabled: Bool {
         didSet {
@@ -625,50 +493,6 @@ final class PreferencesPanelModel: ObservableObject {
         }
     }
 
-    @Published var sparcDiskImagePath: String {
-        didSet {
-            if sparcDiskImagePath != prefs.sparcDiskImagePath {
-                prefs.sparcDiskImagePath = sparcDiskImagePath
-            }
-        }
-    }
-
-    @Published var sparcAutoBackupOnShutdown: Bool {
-        didSet {
-            if sparcAutoBackupOnShutdown != prefs.sparcAutoBackupOnShutdown {
-                prefs.sparcAutoBackupOnShutdown = sparcAutoBackupOnShutdown
-            }
-        }
-    }
-
-    @Published var sparcClaudeDevelopment: Bool {
-        didSet {
-            if sparcClaudeDevelopment != prefs.sparcClaudeDevelopment {
-                prefs.sparcClaudeDevelopment = sparcClaudeDevelopment
-            }
-        }
-    }
-
-    @Published var sparcTftpEnabled: Bool {
-        didSet {
-            if sparcTftpEnabled != prefs.sparcTftpEnabled {
-                prefs.sparcTftpEnabled = sparcTftpEnabled
-                // Create the folder the moment the user turns the feature on,
-                // so "Reveal in Finder" works immediately and slirp has a dir
-                // to serve on next Run.
-                if sparcTftpEnabled { ensureSparcTftpDirectoryExists() }
-            }
-        }
-    }
-
-    @Published var sparcTftpDirectory: String {
-        didSet {
-            if sparcTftpDirectory != prefs.sparcTftpDirectory {
-                prefs.sparcTftpDirectory = sparcTftpDirectory
-            }
-        }
-    }
-
     var captureDirectory: String { prefs.captureDirectory }
 
     /// Path of the user-editable resources file. Same path the resources
@@ -691,66 +515,6 @@ final class PreferencesPanelModel: ObservableObject {
         self.pointerWheelClick = preferences.pointerWheelClick
         self.pointerRightClick = preferences.pointerRightClick
         self.xtermScrollbarThumbOverride = preferences.xtermScrollbarThumbOverride
-        self.sparcDiskImagePath = preferences.sparcDiskImagePath
-        self.sparcAutoBackupOnShutdown = preferences.sparcAutoBackupOnShutdown
-        self.sparcClaudeDevelopment = preferences.sparcClaudeDevelopment
-        self.sparcTftpEnabled = preferences.sparcTftpEnabled
-        self.sparcTftpDirectory = preferences.sparcTftpDirectory
-    }
-
-    /// Pick a Solaris disk image with an open panel and store its path.
-    func chooseSparcDiskImage() {
-        let panel = NSOpenPanel()
-        panel.title = "Choose Solaris Disk Image"
-        panel.prompt = "Choose"
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        if !sparcDiskImagePath.isEmpty {
-            panel.directoryURL = URL(fileURLWithPath: sparcDiskImagePath).deletingLastPathComponent()
-        }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        sparcDiskImagePath = url.path
-    }
-
-    /// Reveal the selected disk image in Finder.
-    func revealSparcDiskImage() {
-        guard !sparcDiskImagePath.isEmpty else { return }
-        NSWorkspace.shared.selectFile(sparcDiskImagePath, inFileViewerRootedAtPath: "")
-    }
-
-    /// Pick the shared (TFTP) folder with an open panel.
-    func chooseSparcTftpDirectory() {
-        let panel = NSOpenPanel()
-        panel.title = "Choose Shared Folder"
-        panel.prompt = "Choose"
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        let current = (sparcTftpDirectory as NSString).expandingTildeInPath
-        if FileManager.default.fileExists(atPath: current) {
-            panel.directoryURL = URL(fileURLWithPath: current)
-        }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        sparcTftpDirectory = url.path
-        ensureSparcTftpDirectoryExists()
-    }
-
-    /// Reveal the shared folder in Finder, creating it first so the reveal
-    /// always succeeds (same pattern as the captures folder).
-    func revealSparcTftpDirectory() {
-        ensureSparcTftpDirectoryExists()
-        let path = (sparcTftpDirectory as NSString).expandingTildeInPath
-        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
-    }
-
-    /// `mkdir -p` the shared folder. Best-effort: slirp serves it read-only
-    /// and won't create it, so we create it on enable / choose / reveal.
-    func ensureSparcTftpDirectoryExists() {
-        let path = (sparcTftpDirectory as NSString).expandingTildeInPath
-        try? FileManager.default.createDirectory(
-            atPath: path, withIntermediateDirectories: true)
     }
 
     /// Reseed the user resources file from the bundled defaults. Same

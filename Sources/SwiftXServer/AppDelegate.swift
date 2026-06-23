@@ -24,9 +24,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var resourcesController: ResourcesWindowController?
     private var fontMappingsController: FontMappingsWindowController?
     private var dnsAdminController: DnsAdminWindowController?
-    /// The SPARCstation "Admin" submenu parent; enabled only while the guest
-    /// is running (its tasks talk to the Helios daemon, which answers then).
+    /// The SPARCstation "Admin" submenu parent; enabled only once the guest is
+    /// fully booted (its tasks talk to the Helios daemon, which only answers
+    /// then), gated on `sparcReady` -- NOT mere `.running`, which is true the
+    /// instant the qemu process launches, long before the daemon is up.
     private var adminMenuItem: NSMenuItem?
+    /// True once the guest answered `hello` this run (the authoritative
+    /// daemon-is-up signal). Set in onReady, cleared the moment state leaves
+    /// `.running` (so shutdown dims Admin immediately, and a fresh boot starts
+    /// dimmed until the daemon actually answers).
+    private var sparcReady = false
+    /// Shared model for the SPARCstation > Config windows (disk image, shared
+    /// folder, Claude development). Created lazily; all Config windows bind to
+    /// the one instance so they stay consistent. Writes flow to Preferences.
+    private var sparcConfigModel: SparcConfigModel?
+    /// One reused window controller per Config section.
+    private var sparcConfigWindows: [SparcConfigSection: SparcConfigWindowController] = [:]
     private var launchersController: LaunchersWindowController?
     /// Open capture-viewer windows. The viewer supports multiple windows so
     /// several captures can be compared; each removes itself here on close.
@@ -185,9 +198,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // Keep the Preferences "restart to apply" note in sync if the
             // window is open. Running or shutting-down both mean a shared-
             // folder change can't take effect until the next clean start.
-            self?.prefsController?.setSparcEngineRunning(
-                state == .running || state == .shuttingDown)
-            self?.adminMenuItem?.isEnabled = (state == .running)
+            self?.sparcConfigModel?.sparcEngineRunning =
+                (state == .running || state == .shuttingDown)
+            // Anything other than steady .running (boot-in-progress counts as
+            // .running too, but shutdown/stop don't) means the daemon isn't
+            // answering -- drop readiness so Admin dims. onReady re-enables it.
+            if state != .running { self?.sparcReady = false }
+            self?.adminMenuItem?.isEnabled = (self?.sparcReady ?? false)
         }
         engine.onCleanHalt { [weak self] in
             self?.sparcConsole?.markCleanHalt()
@@ -197,6 +214,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         engine.onReady { [weak self] in
             self?.sparcConsole?.markReady()
+            // Daemon answered -- the guest is fully up. Unlock Admin now (not
+            // at process launch).
+            self?.sparcReady = true
+            self?.adminMenuItem?.isEnabled = true
         }
         engine.onBootStalled { [weak self] reason in
             // Wedged guest -- make sure the user sees it and can Force Quit.
@@ -420,6 +441,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         backup.target = self
         sparcMenu.addItem(backup)
         sparcMenu.addItem(.separator())
+        // Config submenu -- the bundled-SPARCstation setup that used to be the
+        // Preferences "SPARCstation" tab, one window per task. Available
+        // whether or not the guest is running (these are launch-time settings).
+        let configItem = NSMenuItem(title: "Config", action: nil, keyEquivalent: "")
+        let configMenu = NSMenu(title: "Config")
+        for section in [SparcConfigSection.diskImage, .sharedFolder, .claudeDev] {
+            let item = NSMenuItem(title: section.menuTitle,
+                                  action: #selector(openSparcConfig(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = section
+            configMenu.addItem(item)
+        }
+        configItem.submenu = configMenu
+        sparcMenu.addItem(configItem)
         // Admin submenu -- guided sysadmin tasks run over the Helios daemon.
         // The daemon only answers while the guest is up, so the DNS item gates
         // on state == .running in validateMenuItem and the parent grays out
@@ -431,7 +466,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         dns.target = self
         adminMenu.addItem(dns)
         adminItem.submenu = adminMenu
-        adminItem.isEnabled = (qemuEngine?.state == .running)
+        adminItem.isEnabled = sparcReady   // false until the daemon answers
         self.adminMenuItem = adminItem
         sparcMenu.addItem(adminItem)
         sparcMenuItem.submenu = sparcMenu
@@ -464,10 +499,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if prefsController == nil {
             prefsController = PreferencesWindowController(preferences: preferences)
         }
-        // Seed the "restart to apply" note with the current engine state
-        // before showing, so it's correct the instant the window appears.
-        let state = qemuEngine?.state
-        prefsController?.setSparcEngineRunning(state == .running || state == .shuttingDown)
         // Always land on the first tab when opened from the menu. The window
         // controller is reused, so without this the model retains the last
         // tab and reopening drops you wherever you were, not at the top.
@@ -480,6 +511,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             resourcesController = ResourcesWindowController()
         }
         resourcesController?.showWindow()
+    }
+
+    /// Shared Config model, created on first use and seeded with the current
+    /// engine-running state so the Shared Folder window's "restart to apply"
+    /// note is correct the instant it opens.
+    @MainActor
+    private func ensureSparcConfigModel() -> SparcConfigModel {
+        if let model = sparcConfigModel { return model }
+        let running = qemuEngine?.state == .running || qemuEngine?.state == .shuttingDown
+        let model = SparcConfigModel(preferences: preferences, engineRunning: running)
+        sparcConfigModel = model
+        return model
+    }
+
+    @MainActor
+    @objc private func openSparcConfig(_ sender: Any?) {
+        guard let section = (sender as? NSMenuItem)?.representedObject as? SparcConfigSection else { return }
+        let model = ensureSparcConfigModel()
+        let controller = sparcConfigWindows[section]
+            ?? SparcConfigWindowController(section: section, model: model)
+        sparcConfigWindows[section] = controller
+        controller.showWindow()
     }
 
     @MainActor
@@ -1157,7 +1210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case #selector(shutDownSparcStation(_:)): return state == .running
         case #selector(showSparcConsole(_:)):     return sparcConsole != nil
         case #selector(backUpDiskImage(_:)):      return state == .stopped
-        case #selector(openDnsAdmin(_:)):         return state == .running
+        case #selector(openDnsAdmin(_:)):         return sparcReady
         default: return true
         }
     }

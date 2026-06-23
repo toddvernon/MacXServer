@@ -18,10 +18,10 @@ final class PreferencesWindowController: NSWindowController {
         self.model = model
         let hostingView = NSHostingView(rootView: PreferencesPanelView(model: model))
 
-        // Width must fit all six tab labels across the top, or macOS SwiftUI
-        // collapses the whole tab bar into a ">>" overflow menu. The
-        // "SPARCstation" tab (added later) pushed the total past the old
-        // 560pt; 720 leaves comfortable room. Revisit if tabs are added.
+        // Width must fit all five tab labels across the top, or macOS SwiftUI
+        // collapses the whole tab bar into a ">>" overflow menu. 720 leaves
+        // comfortable room. Revisit if tabs are added. (SPARCstation settings
+        // moved out to SPARCstation > Config menu windows.)
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 720, height: 560),
             styleMask: [.titled, .closable, .miniaturizable, .utilityWindow],
@@ -44,11 +44,5 @@ final class PreferencesWindowController: NSWindowController {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-    }
-
-    /// Mirror the SPARCstation engine's running state into the model so the
-    /// SPARCstation tab can show its "restart to apply" note live.
-    func setSparcEngineRunning(_ running: Bool) {
-        model.sparcEngineRunning = running
     }
 }
