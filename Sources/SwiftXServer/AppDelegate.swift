@@ -114,6 +114,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Installs the status-bar item and main menu, and starts watching the
     /// launchers file for changes.
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Wipe any dev-secret file left by a prior crashed session before we do
+        // anything -- it's stale (a new guest gets a new secret) and shouldn't
+        // outlive the session that wrote it.
+        clearClaudeDevSecretFile()
         installStatusItem()
         installMainMenu()
         setupSparcEngine()
@@ -198,10 +202,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         engine.onTerminated { [weak self] wasCleanHalt in
             self?.autoBackupAfterCleanShutdown(wasCleanHalt: wasCleanHalt)
             // The per-launch secret died with the guest; don't leave it on disk.
-            try? FileManager.default.removeItem(atPath: AppDelegate.claudeDevSecretPath)
+            self?.clearClaudeDevSecretFile()
         }
         self.qemuEngine = engine
         self.sparcConsole?.setState(engine.state)
+    }
+
+    /// Last gasp on a graceful quit: make sure the dev-secret file doesn't
+    /// outlive the app. (The guest-exit path usually clears it first, since we
+    /// block quitting while the VM runs; this covers the rest.)
+    func applicationWillTerminate(_ notification: Notification) {
+        clearClaudeDevSecretFile()
     }
 
     /// Returns false so the status-bar app keeps running with no X windows open.
@@ -875,16 +886,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// secret to a 0600 file so Claude Code can authenticate to the daemon.
     /// Otherwise make sure no stale secret lingers. Best-effort.
     private func writeClaudeDevSecretFile() {
-        let path = Self.claudeDevSecretPath
         guard preferences.sparcClaudeDevelopment, let secret = qemuEngine?.currentSecret else {
-            try? FileManager.default.removeItem(atPath: path)
+            clearClaudeDevSecretFile()
             return
         }
         // Create 0600 up front so the secret is never briefly world-readable.
         FileManager.default.createFile(
-            atPath: path,
+            atPath: Self.claudeDevSecretPath,
             contents: Data(secret.utf8),
             attributes: [.posixPermissions: 0o600])
+    }
+
+    /// Remove the dev-secret file. Called everywhere the secret could go stale:
+    /// app launch (wipe a prior crash's leftover), guest exit, and app quit. We
+    /// can't catch a kill -9, but this guarantees the file never survives into a
+    /// new app session, and a dead secret is never left readable on disk.
+    private func clearClaudeDevSecretFile() {
+        try? FileManager.default.removeItem(atPath: Self.claudeDevSecretPath)
     }
 
     // MARK: - Image-lock dialogs
