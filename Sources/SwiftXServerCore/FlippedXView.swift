@@ -103,6 +103,13 @@ public final class FlippedXView: NSView {
     /// pushes the result to NSPasteboard.
     public var copyHandler: (() -> Void)?
 
+    /// True when this top-level is an xterm (its session's WM_CLASS class
+    /// == "XTerm"), set by the bridge when the owning session identifies
+    /// itself. Gates the server-side xterm right-click Copy/Paste menu so
+    /// the menu never hijacks button 3 in Motif/CDE clients, which use it
+    /// for their own popup menus.
+    public var isXtermWindow: Bool = false
+
     /// CGBitmapContext sized at `logicalWidth * scale × logicalHeight * scale`.
     /// The CGContext has a pre-applied transform so callers can issue draw
     /// commands in logical coordinates — the transform handles the scale-up
@@ -245,9 +252,53 @@ public final class FlippedXView: NSView {
     @objc public func paste(_ sender: Any?) { handlePaste() }
     @objc public func copy(_ sender: Any?)  { handleCopy() }
 
+    /// Build and pop the xterm right-click Copy/Paste menu at the click
+    /// location. Copy routes to the same selection roundtrip as Cmd-C
+    /// (current X PRIMARY selection → NSPasteboard); Paste routes to the
+    /// same path as Cmd-V (NSPasteboard → synthesized keystrokes into the
+    /// client). Paste is disabled when the Mac clipboard has no text.
+    private func presentXtermContextMenu(for event: NSEvent) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        let copyItem = NSMenuItem(
+            title: "Copy", action: #selector(xtermMenuCopy), keyEquivalent: "")
+        copyItem.target = self
+        menu.addItem(copyItem)
+
+        let pasteItem = NSMenuItem(
+            title: "Paste", action: #selector(xtermMenuPaste), keyEquivalent: "")
+        pasteItem.target = self
+        pasteItem.isEnabled =
+            NSPasteboard.general.string(forType: .string)?.isEmpty == false
+        menu.addItem(pasteItem)
+
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    @objc private func xtermMenuCopy()  { handleCopy() }
+    @objc private func xtermMenuPaste() { handlePaste() }
+
     public override func mouseDown(with event: NSEvent)        { dispatchMouse(event, button: 1, isDown: true) }
     public override func mouseUp(with event: NSEvent)          { dispatchMouse(event, button: 1, isDown: false) }
-    public override func rightMouseDown(with event: NSEvent)   { dispatchMouse(event, button: 3, isDown: true) }
+    public override func rightMouseDown(with event: NSEvent) {
+        // Server-side xterm hack (sibling of the scrollbar-thumb override):
+        // on an xterm, a right-click pops a native Copy/Paste menu — the
+        // iTerm2 pattern — instead of sending wire button 3. Gated on the
+        // per-window xterm flag AND the Preferences toggle, so it's off by
+        // default and never fires for Motif/CDE clients (button 3 = their
+        // own popup menus) or for any non-xterm window. Left-button text
+        // selection in the xterm content area is untouched.
+        //
+        // popUpContextMenu runs its own modal tracking loop and consumes
+        // the matching right-mouse-up, so we never dispatch a button-3
+        // press/release pair to the client on this path.
+        if isXtermWindow, PointerConfig.current.xtermRightClickMenu {
+            presentXtermContextMenu(for: event)
+            return
+        }
+        dispatchMouse(event, button: 3, isDown: true)
+    }
     public override func rightMouseUp(with event: NSEvent)     { dispatchMouse(event, button: 3, isDown: false) }
     public override func otherMouseDown(with event: NSEvent)   { dispatchMouse(event, button: 2, isDown: true) }
     public override func otherMouseUp(with event: NSEvent)     { dispatchMouse(event, button: 2, isDown: false) }

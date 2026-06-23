@@ -5518,6 +5518,10 @@ public final class ServerSession: @unchecked Sendable {
                     identificationSource = .wmClass
                     log?.log("WM_CLASS: instance=\"\(inst)\" class=\"\(parts.cls ?? "")\"")
                     onIdentified?(inst, parts.cls ?? "")
+                    // Tag the view so the server-side xterm right-click
+                    // Copy/Paste menu only fires on xterm windows. xterm sets
+                    // WM_CLASS class "XTerm" on its VT100 top-level.
+                    bridge?.setTopLevelXterm(id: r.window, isXterm: parts.cls == "XTerm")
                     // Re-emit the title for this window if it already has
                     // a WM_NAME stored — apply the new [instance] prefix.
                     if let nameEntry = properties.get(window: r.window, property: 39) {

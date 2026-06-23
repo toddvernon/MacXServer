@@ -159,7 +159,9 @@ private struct CaptureTab: View {
 private enum XButtonRole: UInt8, CaseIterable, Identifiable {
     case primary   = 1     // content: select / activate
     case middle    = 2     // content: paste in xterm, drag in Motif
-    case secondary = 3     // content: extend selection in xterm, pop menu in Motif
+    case secondary = 3     // content: "Menu" — pops a menu (Copy/Paste on
+                           // xterm via the server, the app's own menu on
+                           // Motif/CDE via button 3)
 
     var id: UInt8 { rawValue }
 
@@ -167,7 +169,7 @@ private enum XButtonRole: UInt8, CaseIterable, Identifiable {
         switch self {
         case .primary:   return "Select text"
         case .middle:    return "Paste selection"
-        case .secondary: return "Extend selection / open menu"
+        case .secondary: return "Menu"
         }
     }
 }
@@ -213,7 +215,7 @@ private struct MouseTab: View {
             }
             .padding(.leading, 4)
 
-            Text("Scroll wheel rotation always emits scroll events. Modern xterm reads them natively; vintage xterm needs `<Btn4Down>: scroll-back(1,line)` / `<Btn5Down>: scroll-forw(1,line)` in `~/.Xdefaults`.")
+            Text("With Right click set to \u{201C}Menu,\u{201D} right-clicking an xterm pops a native Copy / Paste menu (the iTerm2 pattern): select text with the left button, then right-click for Copy (selection \u{2192} Mac clipboard) and Paste (clipboard \u{2192} xterm). Motif and CDE still get button 3 for their own menus.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -221,7 +223,7 @@ private struct MouseTab: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Scrollbar")
+                Text("xterm")
                     .font(.headline)
                 Toggle("On an xterm scrollbar, any mouse button grabs the thumb",
                        isOn: $model.xtermScrollbarThumbOverride)

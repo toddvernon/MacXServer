@@ -158,6 +158,38 @@ final class WMNameFallbackIdentificationTests: XCTestCase {
         XCTAssertEqual(fired.count, 0, "WM_ICON_NAME must not fire identification")
     }
 
+    func testWMClassXTermTagsWindowAsXterm() throws {
+        // WM_CLASS class "XTerm" tags the view so the server-side xterm
+        // right-click Copy/Paste menu hack can fire on it.
+        let bridge = MockWindowBridge()
+        let session = ServerSession(bridge: bridge)
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        _ = session.outbound.drain()
+        let wid: UInt32 = ServerConfig.default.resourceIdBase + 1
+        createTopLevel(session, wid: wid)
+
+        let wmClassData: [UInt8] = Array("xterm".utf8) + [0] + Array("XTerm".utf8) + [0]
+        sendChangeProperty(session, wid: wid, property: Self.wmClassAtom, data: wmClassData)
+
+        XCTAssertEqual(bridge.xtermFlags[wid], true, "XTerm WM_CLASS should tag the window as xterm")
+    }
+
+    func testWMClassNonXTermTagsWindowNotXterm() throws {
+        // A non-xterm client (e.g. a Motif app) must NOT be tagged, so the
+        // right-click menu hack leaves its button-3 popup menus alone.
+        let bridge = MockWindowBridge()
+        let session = ServerSession(bridge: bridge)
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+        _ = session.outbound.drain()
+        let wid: UInt32 = ServerConfig.default.resourceIdBase + 1
+        createTopLevel(session, wid: wid)
+
+        let wmClassData: [UInt8] = Array("dtterm".utf8) + [0] + Array("Dtterm".utf8) + [0]
+        sendChangeProperty(session, wid: wid, property: Self.wmClassAtom, data: wmClassData)
+
+        XCTAssertEqual(bridge.xtermFlags[wid], false, "non-XTerm WM_CLASS must tag the window as not-xterm")
+    }
+
     func testEmptyWMNameDoesNotFire() throws {
         // Some Xt apps write an empty string to WM_NAME during init
         // before the real title is set. Sanitize would collapse to ""

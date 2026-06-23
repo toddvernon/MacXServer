@@ -18,6 +18,7 @@ public final class MockWindowBridge: WindowBridge, @unchecked Sendable {
     public private(set) var unmapped: [UInt32] = []
     public private(set) var destroyed: [UInt32] = []
     public private(set) var titles: [UInt32: String] = [:]
+    public private(set) var xtermFlags: [UInt32: Bool] = [:]
     public private(set) var descendantsMapped: [UInt32] = []
 
     /// Magic synthetic parent ID that ReparentNotify reports. Real Cocoa bridge
@@ -83,6 +84,10 @@ public final class MockWindowBridge: WindowBridge, @unchecked Sendable {
 
     public func setTopLevelTitle(id: UInt32, title: String) {
         titles[id] = title
+    }
+
+    public func setTopLevelXterm(id: UInt32, isXterm: Bool) {
+        xtermFlags[id] = isXterm
     }
 
     /// X11 ExposureMask bit per xproto X.h.

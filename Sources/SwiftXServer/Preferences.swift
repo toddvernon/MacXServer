@@ -67,9 +67,9 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
             Key.motifFrameButtonStyle: "motif",
             Key.displayScale: "auto",
             Key.pointerLeftClick: 1,
-            Key.pointerWheelClick: 2,
+            Key.pointerWheelClick: 1,
             Key.pointerRightClick: 3,
-            Key.xtermScrollbarThumbOverride: false,
+            Key.xtermScrollbarThumbOverride: true,
             Key.sparcDiskImagePath: "",
             Key.sparcAutoBackupOnShutdown: true,
             Key.sparcTftpEnabled: false,
@@ -183,7 +183,7 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
 
     /// X wire-button number for the Mac wheel/middle button.
     var pointerWheelClick: UInt8 {
-        get { Self.clampedButton(defaults.integer(forKey: Key.pointerWheelClick), fallback: 2) }
+        get { Self.clampedButton(defaults.integer(forKey: Key.pointerWheelClick), fallback: 1) }
         set {
             defaults.set(Int(newValue), forKey: Key.pointerWheelClick)
             NotificationCenter.default.post(name: Self.didChange, object: self)
@@ -290,7 +290,12 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
             leftClickWireButton: pointerLeftClick,
             wheelClickWireButton: pointerWheelClick,
             rightClickWireButton: pointerRightClick,
-            xtermScrollbarThumbOverride: xtermScrollbarThumbOverride
+            xtermScrollbarThumbOverride: xtermScrollbarThumbOverride,
+            // The xterm right-click Copy/Paste menu is a consequence of the
+            // right-click role being "Menu" (button 3): on xterm we pop the
+            // native menu; non-xterm clients still get button 3 for their own.
+            // Derived, not a separate setting, so the two can't drift.
+            xtermRightClickMenu: pointerRightClick == 3
         ))
     }
 

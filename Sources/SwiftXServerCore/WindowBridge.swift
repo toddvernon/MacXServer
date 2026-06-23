@@ -152,6 +152,11 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// WM_NAME or WM_ICON_NAME changed; bridge updates the NSWindow title.
     func setTopLevelTitle(id: UInt32, title: String)
 
+    /// WM_CLASS identified the owning client; bridge tags the top-level's
+    /// view as an xterm (or not) so the server-side xterm right-click
+    /// Copy/Paste menu only fires on xterm windows.
+    func setTopLevelXterm(id: UInt32, isXterm: Bool)
+
     /// WM_NORMAL_HINTS changed; apply min/max/resize-inc/aspect to the
     /// matching NSWindow's constraint API. nil = clear all constraints
     /// (property was deleted or unparseable).
@@ -846,6 +851,7 @@ public extension WindowBridge {
     func readDepth1MaskDevicePixels(pixmapId: UInt32) -> (pixels: [UInt32], width: Int, height: Int)? { nil }
     func setCursor(topLevel: UInt32, glyph: UInt16?) {}
     func setTopLevelWindowBackground(id: UInt32, color: RGB16) {}
+    func setTopLevelXterm(id: UInt32, isXterm: Bool) {}
     func reconfigureTopLevel(id: UInt32, geometry: TopLevelGeometry) {}
     func applySizeHints(id: UInt32, hints: WMSizeHints?) {}
     func applyMotifDecorations(id: UInt32, hints: MotifWMHints?) {}

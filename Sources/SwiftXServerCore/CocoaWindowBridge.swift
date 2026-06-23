@@ -33,6 +33,11 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         /// can be re-applied if the transient is remapped or if the
         /// property arrived before the parent NSWindow existed.
         var transientForParent: UInt32?
+        /// WM_CLASS class == "XTerm". Cached on the slot because WM_CLASS
+        /// routinely arrives between CreateWindow and MapWindow — after the
+        /// slot exists but before the view does — so mapTopLevel applies it
+        /// to the view once the view is created (mirrors sizeHints/motifHints).
+        var isXterm: Bool = false
         var window: NSWindow?
         var view: FlippedXView?
         var delegate: XWindowDelegate?
@@ -872,6 +877,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             self.slots[id]?.window = win
             self.slots[id]?.view = view
             self.slots[id]?.delegate = delegate
+            // Apply the cached xterm tag (WM_CLASS may have arrived before
+            // the view existed) so the right-click Copy/Paste menu hack works
+            // on the first map, not just after a property re-arrival.
+            view.isXtermWindow = self.slots[id]?.isXterm ?? false
             let pendingSize = self.slots[id]?.sizeHints
             let pendingMotif = self.slots[id]?.motifHints
             let pendingTransientParent = self.slots[id]?.transientForParent
@@ -1022,6 +1031,23 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
                 // to display win.title in).
                 (win as? MotifWindow)?.windowTitle = title
             }
+        }
+    }
+
+    /// Tag a top-level's view as an xterm (per WM_CLASS) so the right-click
+    /// Copy/Paste menu hack only fires there. Safe to call before the view
+    /// exists — re-applied is cheap and the flag defaults to false.
+    public func setTopLevelXterm(id: UInt32, isXterm: Bool) {
+        lock.lock()
+        // Cache on the slot so a view created later (the common case —
+        // WM_CLASS arrives before MapWindow) picks it up in mapTopLevel.
+        slots[id]?.isXterm = isXterm
+        let view = slots[id]?.view
+        lock.unlock()
+        // If the view already exists (WM_CLASS re-arrival, or a client that
+        // maps before setting WM_CLASS), update it live too.
+        if let view = view {
+            DispatchQueue.main.async { view.isXtermWindow = isXterm }
         }
     }
 

@@ -35,16 +35,26 @@ public struct PointerConfig: Sendable {
     /// without distorting button semantics anywhere else.
     public var xtermScrollbarThumbOverride: Bool
 
+    /// XTERM EXTENSION (sibling of the scrollbar override). When true, a
+    /// right-click on an xterm window pops a native Copy/Paste menu (the
+    /// iTerm2 pattern) instead of sending wire button 3 to the client.
+    /// Gated on the per-window xterm flag in `FlippedXView`, so Motif/CDE
+    /// clients — which use button 3 for their own menus — are untouched,
+    /// and left-button text selection in xterm is unaffected.
+    public var xtermRightClickMenu: Bool
+
     public init(
         leftClickWireButton: UInt8 = 1,
         wheelClickWireButton: UInt8 = 2,
         rightClickWireButton: UInt8 = 3,
-        xtermScrollbarThumbOverride: Bool = false
+        xtermScrollbarThumbOverride: Bool = false,
+        xtermRightClickMenu: Bool = false
     ) {
         self.leftClickWireButton = leftClickWireButton
         self.wheelClickWireButton = wheelClickWireButton
         self.rightClickWireButton = rightClickWireButton
         self.xtermScrollbarThumbOverride = xtermScrollbarThumbOverride
+        self.xtermRightClickMenu = xtermRightClickMenu
     }
 
     public static let `default` = PointerConfig()
