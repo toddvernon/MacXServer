@@ -230,15 +230,26 @@ pays off a parked punchlist item (L0/L2/L3).
   EOF -> `.connectionClosed`, refused connect). Not thread-safe by design (one
   request in flight); consumers drive it from their own queue. Next: C3/C4/C7
   build on it.
-- [ ] **C2. Boot integration.** `/etc/init.d/helios-seed` + rc symlink
-  (`S98`/`K30`-style, pattern from `guest/sshd-init.sh`), baked via
-  `sparcstation-baseline-config.sh`. Add the daemon-port `hostfwd` to
-  `QemuEngine` launch args.
+- [x] **C2. Boot integration. DONE 2026-06-23.** The QEMU side was already
+  in place (`QemuEngine` adds the `hostfwd=tcp::2125-:2125` + the `-prom-env`
+  secret). The guest/baking side is now `guest/get-helios.sh`: a Mac-side
+  orchestrator that builds the cx source tars (top-level cx makefile's
+  `cxlibs_unix.tar` / `cxapps_unix.tar`), ships them to the guest (helios
+  `put_file` if the daemon's up, else `scp`), builds the cx libs + heliosAgent
+  on the guest under g++ 2.95, and runs `deploy.sh` (binary + `S98`/`K30` rc
+  links + restart). Builds/installs over `ssh sparcplug`, not helios, so the
+  daemon's self-restart can't sever the connection. Validated end-to-end on the
+  live image (all four phases green, daemon re-locked + enforcing). The rc
+  wiring lives in `deploy.sh` (not a separate `helios-seed`); the init script
+  reads the per-boot secret via `eeprom`. **Gotcha baked into the script:**
+  the deploy-time PATH must include `/usr/sbin` or the restart can't find
+  `eeprom` and the daemon silently comes up unlocked. See SPARCSTATION_PLUGIN.md
+  "Helios daemon on the image" for the full sequence + gotchas.
+  - **C2-follow-on (1) DONE 2026-06-23:** the heliosAgent init script now echoes
+    `heliosAgent started` to the boot console on a successful start (`&&` after
+    the `-d` launch, which only fires once bound+listening). Reliable late-boot
+    marker coinciding with when `hello` answers. (`cx_apps/heliosAgent/init/`.)
   - **C2-follow-on (deferred, do next time we touch the daemon init/deploy):**
-    (1) the heliosAgent init script (or the daemon at startup) should echo a
-    `heliosAgent started` line to the boot console -- it doubles as a reliable
-    late-stage boot marker that coincides with when `hello` starts answering.
-    Daemon-side change in the cx tree (`cx_apps/heliosAgent/init/` + `deploy.sh`).
     (2) **Optional own-the-markers play:** replace C3's scraped Solaris-version
     boot strings with our own markers -- a single tiny boot-marker rc script with
     symlinks at a few S-numbers (S05/S40/S70), each echoing its stage to

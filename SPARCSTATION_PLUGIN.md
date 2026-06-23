@@ -503,6 +503,52 @@ It's a fiddly bring-up; the `guest/` scripts automate it:
 Still off the Helios critical path (the agent uses its own port), but the
 file-out and shell convenience is real.
 
+## Helios daemon on the image (2026-06-23)
+
+Baking the Helios control daemon into the image (the C2 step). Unlike the
+sunfreeware bring-ups above, the daemon isn't on a mirror — it's the cx tree
+on this Mac — so `guest/get-helios.sh` runs **on the Mac** and ships the
+source up, rather than wgetting it down on the guest. The flow:
+
+1. **Build source tars.** The top-level cx makefile already has the targets:
+   `make cxlibs_unix.tar cxapps_unix.tar` (ustar, no .o/.a, into `cx/ARCHIVE`).
+2. **Transfer.** helios `put_file` if the daemon's already up (the upgrade
+   path), else `scp` to the guest (the from-scratch bootstrap). Both land the
+   tars under `$ROOT` (default `/export/home/tvernon`).
+3. **Build on the guest** (g++ 2.95): the daemon links the cx static libs, so
+   the cx libs build first (`cd cx && make`), then the agent
+   (`cd cx_apps/heliosAgent && make`). `cx/`, `cx_apps/`, and the built `lib/`
+   have to be siblings under `$ROOT` (the makefile's `../../lib` / `-I../..`
+   are relative to `cx_apps/heliosAgent`). The cx makefile is platform-aware —
+   it builds every lib but skips what g++ 2.95 can't compile (tz/cctz), so a
+   plain `make` is correct; no manual lib subset. **`make clean` before each
+   build** (libs, then agent): the untarred source carries its Mac mtime, often
+   older than a prior run's `.o` on the guest, so without the clean `make`
+   would think nothing changed and redeploy a stale binary. A fresh image has
+   no `.o` so it only bites the re-run/upgrade path, but the clean makes every
+   run deterministic.
+4. **Install.** `cx_apps/heliosAgent/deploy.sh` drops the binary, wires the
+   `S98`/`K30` rc links (start at multiuser, kill on the way down), restarts.
+
+The build + install run over `ssh sparcplug`, not over helios — deploy.sh
+restarts the daemon, which would sever a helios connection mid-step. Only the
+transfer uses helios.
+
+- **The `eeprom`-on-PATH gotcha (cost us once).** The init script reads the
+  per-boot secret with `eeprom` (`/usr/sbin/eeprom`). If the PATH used to run
+  `deploy.sh` omits `/usr/sbin`, the restart silently comes up with **no
+  secret — an unlocked daemon** — and nothing errors except a one-line
+  `eeprom: not found`. `get-helios.sh` exports `/usr/sbin:/sbin` for exactly
+  this reason. The boot rc environment has them, so a real reboot is fine; it's
+  only the deploy-time restart that needs the explicit PATH.
+- **Boot marker.** The init script echoes `heliosAgent started` to the console
+  on a successful start (it's this script's stdout during rc2) — a reliable
+  late-boot landmark that coincides with when `hello` first answers.
+- **Real-Sun caveat.** On emulated SPARCplug the build is tolerable because a
+  fast modern host CPU is doing the work. On a *real* SPARCstation the same
+  clean-rebuild will be far slower (it's genuinely a mid-90s CPU). Fine as a
+  one-time prep step, but don't expect SPARCplug timings on iron.
+
 ## Surprises and gotchas (lessons from the bring-up)
 
 Things that ate time today, recorded so they don't eat time again.
