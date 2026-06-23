@@ -23,6 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var prefsController: PreferencesWindowController?
     private var resourcesController: ResourcesWindowController?
     private var fontMappingsController: FontMappingsWindowController?
+    private var dnsAdminController: DnsAdminWindowController?
+    /// The SPARCstation "Admin" submenu parent; enabled only while the guest
+    /// is running (its tasks talk to the Helios daemon, which answers then).
+    private var adminMenuItem: NSMenuItem?
     private var launchersController: LaunchersWindowController?
     /// Open capture-viewer windows. The viewer supports multiple windows so
     /// several captures can be compared; each removes itself here on close.
@@ -183,6 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // folder change can't take effect until the next clean start.
             self?.prefsController?.setSparcEngineRunning(
                 state == .running || state == .shuttingDown)
+            self?.adminMenuItem?.isEnabled = (state == .running)
         }
         engine.onCleanHalt { [weak self] in
             self?.sparcConsole?.markCleanHalt()
@@ -414,6 +419,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                 action: #selector(backUpDiskImage(_:)), keyEquivalent: "")
         backup.target = self
         sparcMenu.addItem(backup)
+        sparcMenu.addItem(.separator())
+        // Admin submenu -- guided sysadmin tasks run over the Helios daemon.
+        // The daemon only answers while the guest is up, so the DNS item gates
+        // on state == .running in validateMenuItem and the parent grays out
+        // when stopped (kept in sync in onStateChange below).
+        let adminItem = NSMenuItem(title: "Admin", action: nil, keyEquivalent: "")
+        let adminMenu = NSMenu(title: "Admin")
+        let dns = NSMenuItem(title: "DNS (/etc/resolv.conf)\u{2026}",
+                             action: #selector(openDnsAdmin(_:)), keyEquivalent: "")
+        dns.target = self
+        adminMenu.addItem(dns)
+        adminItem.submenu = adminMenu
+        adminItem.isEnabled = (qemuEngine?.state == .running)
+        self.adminMenuItem = adminItem
+        sparcMenu.addItem(adminItem)
         sparcMenuItem.submenu = sparcMenu
         main.addItem(sparcMenuItem)
 
@@ -460,6 +480,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             resourcesController = ResourcesWindowController()
         }
         resourcesController?.showWindow()
+    }
+
+    @MainActor
+    @objc private func openDnsAdmin(_ sender: Any?) {
+        if dnsAdminController == nil {
+            dnsAdminController = DnsAdminWindowController(
+                secretProvider: { [weak self] in self?.qemuEngine?.currentSecret })
+        }
+        dnsAdminController?.showWindow()
     }
 
     @MainActor
@@ -1128,6 +1157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case #selector(shutDownSparcStation(_:)): return state == .running
         case #selector(showSparcConsole(_:)):     return sparcConsole != nil
         case #selector(backUpDiskImage(_:)):      return state == .stopped
+        case #selector(openDnsAdmin(_:)):         return state == .running
         default: return true
         }
     }

@@ -42,6 +42,7 @@
 		21B2AB1A7087735C89A037B8 /* ChangeWindowAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA677B3680A675B37565D97F /* ChangeWindowAttributes.swift */; };
 		225AA42BE38CE43B05C091F4 /* ColormapOpcodes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57839F72E974453A096C3B78 /* ColormapOpcodes.swift */; };
 		234C8AFC02F1E9BE48F51F71 /* SparcStationWelcomeWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2919BA52AEB8B568EBADB7D /* SparcStationWelcomeWindowController.swift */; };
+		236BB1AE5A38AA507E59B1FC /* ResolvConfSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33B808ACA8D2CA0E7DB5848 /* ResolvConfSyntaxHighlighter.swift */; };
 		238A08408DCAFC21E29EE343 /* KeyboardOpcodes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9DA8205C0055712457E54F /* KeyboardOpcodes.swift */; };
 		2452A88712ACF4009E10E276 /* CreateGlyphCursor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79899EF3BFEA18C936A5D2A7 /* CreateGlyphCursor.swift */; };
 		251B566EEA8DD752C9165E7A /* TelnetLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 149BF1A018D63F3CDF368D84 /* TelnetLauncher.swift */; };
@@ -141,6 +142,7 @@
 		7E821B9EC4131FDE0BE1A265 /* SetupAccepted.swift in Sources */ = {isa = PBXBuildFile; fileRef = C450B34A08BE2FC8AC2A9510 /* SetupAccepted.swift */; };
 		7F2941824B3AF384A7951908 /* SwiftXCaptureUI.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 08FC1E8C330E95BC28022D41 /* SwiftXCaptureUI.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		7F4D07B422D14F33CEF69270 /* MotifWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A78C184A5F79BDA28979DA60 /* MotifWindow.swift */; };
+		807EFD492D36DAC9C0A16E66 /* DnsAdminWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C614300F6CCE005F1E1A8679 /* DnsAdminWindowController.swift */; };
 		80EFE39F4A132AB4882AC30F /* DrawTarget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8691A06AF61F8A1AAD3C9122 /* DrawTarget.swift */; };
 		810B96D8D70620F2E25B5E92 /* QueryFontReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6107BA030C0CDE6D81E8D627 /* QueryFontReply.swift */; };
 		8182361CBD7463CA1F39D39E /* CreateGC.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4A99D791F23241E9A33233F /* CreateGC.swift */; };
@@ -202,6 +204,7 @@
 		B592299962B5A89F6F970628 /* GrabReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A02D2B7952B85FD0F4ECF99 /* GrabReply.swift */; };
 		B7BE2E06677E2D2AEE1CB3F1 /* PropertyListOpcodes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E65B4DCB2590BFA8831CE16 /* PropertyListOpcodes.swift */; };
 		B8EB593ABD9F9E31FD4B32BB /* ServerSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 397C1DB799237FC342A95BB7 /* ServerSession.swift */; };
+		B8EF374160A61C646F65B55B /* DnsAdminPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB63974F52A5D72CE6236173 /* DnsAdminPanelView.swift */; };
 		B99E056BA859A551A97D5CB4 /* Dumper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06314C8D76CFD19A97AD74B7 /* Dumper.swift */; };
 		BAE5542A30F0B17951604127 /* MiscRequests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EEE2BF5DA5FE9709630C41E /* MiscRequests.swift */; };
 		BBF4AF2857C85A998D5602D3 /* FontMappingFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C4116D63A2C390CDA11C0E6 /* FontMappingFile.swift */; };
@@ -611,11 +614,13 @@
 		C119D24A49FD7C1637E62A3C /* ClearArea.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClearArea.swift; sourceTree = "<group>"; };
 		C1E218A99811405CD791C7E7 /* DefaultLaunchers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultLaunchers.swift; sourceTree = "<group>"; };
 		C245C796403A892C281F8DC0 /* FontMappingTokenizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontMappingTokenizer.swift; sourceTree = "<group>"; };
+		C33B808ACA8D2CA0E7DB5848 /* ResolvConfSyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolvConfSyntaxHighlighter.swift; sourceTree = "<group>"; };
 		C3648F99980A96688B37AF56 /* MockWindowBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockWindowBridge.swift; sourceTree = "<group>"; };
 		C450B34A08BE2FC8AC2A9510 /* SetupAccepted.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupAccepted.swift; sourceTree = "<group>"; };
 		C454C4D8B6F5C18502884BF2 /* XInputEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XInputEvents.swift; sourceTree = "<group>"; };
 		C46AAD7BCDE790C11DD4C3A9 /* CaptureAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = CaptureAssets.xcassets; sourceTree = "<group>"; };
 		C4A99D791F23241E9A33233F /* CreateGC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGC.swift; sourceTree = "<group>"; };
+		C614300F6CCE005F1E1A8679 /* DnsAdminWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DnsAdminWindowController.swift; sourceTree = "<group>"; };
 		C62F63EBF845EE60FC8C7221 /* RemoteLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLauncher.swift; sourceTree = "<group>"; };
 		C692A58FDDA47F11AD813822 /* ServerMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerMain.swift; sourceTree = "<group>"; };
 		C699A39EBC7E23302EB6F085 /* Keysyms.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keysyms.generated.swift; sourceTree = "<group>"; };
@@ -623,6 +628,7 @@
 		C7374467A89FB169ED5220A3 /* ResourceSyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceSyntaxHighlighter.swift; sourceTree = "<group>"; };
 		C7A616C20EEA3CAD2D9FED95 /* HeaderOnlyRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeaderOnlyRequests.swift; sourceTree = "<group>"; };
 		C9F771FDFB6E892C7CB0786F /* LauncherFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherFile.swift; sourceTree = "<group>"; };
+		CB63974F52A5D72CE6236173 /* DnsAdminPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DnsAdminPanelView.swift; sourceTree = "<group>"; };
 		CBD7E512E41311E9DB831229 /* NetworkInterfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkInterfaces.swift; sourceTree = "<group>"; };
 		CBE4AC747DCEF1D5F6CD5460 /* GetPointerControlReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GetPointerControlReply.swift; sourceTree = "<group>"; };
 		CC70683836ABB9630D476F12 /* Text16Requests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Text16Requests.swift; sourceTree = "<group>"; };
@@ -829,6 +835,8 @@
 			isa = PBXGroup;
 			children = (
 				EA59B9723B98DBA33C9A52E9 /* AppDelegate.swift */,
+				CB63974F52A5D72CE6236173 /* DnsAdminPanelView.swift */,
+				C614300F6CCE005F1E1A8679 /* DnsAdminWindowController.swift */,
 				800EAF3DF38A3331010EBCEF /* FontMappingsPanelView.swift */,
 				AEFF605BCF9A3DD6DE699A8C /* FontMappingsWindowController.swift */,
 				5E8D016741559664DDE33E25 /* FontMappingSyntaxHighlighter.swift */,
@@ -839,6 +847,7 @@
 				6BF6DEE9FEFA41D7E7FDF6B0 /* Preferences.swift */,
 				A0F363025B07FE2D36AC27E3 /* PreferencesPanelView.swift */,
 				391EA317E2DA038D717C5080 /* PreferencesWindowController.swift */,
+				C33B808ACA8D2CA0E7DB5848 /* ResolvConfSyntaxHighlighter.swift */,
 				9D8CF306EEFA6C0D4B55F875 /* ResourcesPanelView.swift */,
 				9105F039F6EA455004282947 /* ResourcesWindowController.swift */,
 				C7374467A89FB169ED5220A3 /* ResourceSyntaxHighlighter.swift */,
@@ -1636,6 +1645,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				855D5C96B247907D25F2E066 /* AppDelegate.swift in Sources */,
+				B8EF374160A61C646F65B55B /* DnsAdminPanelView.swift in Sources */,
+				807EFD492D36DAC9C0A16E66 /* DnsAdminWindowController.swift in Sources */,
 				6E52B4D8B95C5CE47D5BC99C /* FontMappingSyntaxHighlighter.swift in Sources */,
 				87A1DD9EB10D2164474F1FE8 /* FontMappingsPanelView.swift in Sources */,
 				D4D553D0E4374B73B34236E1 /* FontMappingsWindowController.swift in Sources */,
@@ -1646,6 +1657,7 @@
 				56315B7804BF724D4B3756B7 /* Preferences.swift in Sources */,
 				FFF54155AA31D610309C2145 /* PreferencesPanelView.swift in Sources */,
 				A84C057C6D06F21BC74016DE /* PreferencesWindowController.swift in Sources */,
+				236BB1AE5A38AA507E59B1FC /* ResolvConfSyntaxHighlighter.swift in Sources */,
 				41242B184A4ED29DEF85D137 /* ResourceSyntaxHighlighter.swift in Sources */,
 				F37795F15CEB16896F0E7A1B /* ResourcesPanelView.swift in Sources */,
 				47343C21C5281798EB078782 /* ResourcesWindowController.swift in Sources */,
