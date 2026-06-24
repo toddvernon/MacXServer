@@ -144,9 +144,11 @@ struct SparcShutdownProgressView: View {
         case .succeeded:
             return "Starting your SPARCstation…"
         case .failed:
-            return "Telnet root login is often refused on Solaris 2.6, so the "
-                + "guest may never have gotten the command. Force quit it (risks "
-                + "a disk check on the next boot), or shut it down by hand."
+            return "The guest's Helios agent didn't answer, so it may never have "
+                + "gotten the command — most likely it's from another session "
+                + "(or the other Mac) whose key this app doesn't have, or it's "
+                + "still booting. Force quit it (risks a disk check on the next "
+                + "boot), or shut it down by hand."
         }
     }
 

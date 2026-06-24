@@ -1,95 +1,121 @@
-# Status 2026-06-23 (end of day, session 2)
+# Status 2026-06-24 (end of day)
 
-xterm-hacks day on the macXserver side. Built out the "server-side knows it's
-hosting xterm" family of quality-of-life hacks: a right-click Copy/Paste menu
-and a full Motif reskin of the xterm scrollbar (trough + slider + 3D stepper
-arrows + moderate stepping). Helios/SPARCstation work from earlier today is
-unchanged and still the larger ongoing thread.
+Built a new feature end to end and then hardened it against everything the live
+test surfaced: a **per-launcher Helios file browser** for the bundled
+SPARCstation. A launcher entry with `filebrowser = true` (helios transport)
+becomes a "Files…" menu item that opens a single-pane browser of that launcher
+`user`'s home directory on the Sun, with drag-to/from-Finder transfer. All
+browse + transfer runs AS the launcher's user, not root.
+
+Live-tested today: browse + both-way transfer work. The remaining open item is
+the **daemon redeploy to the live Solaris image** -- the file-verb run-as change
+is built + tested on the Mac but not yet rebuilt on the running guest.
 
 ## Headline (this session)
 
-- **xterm right-click Copy/Paste menu** (commit b31bb6e). Right-clicking an
-  xterm pops a native Copy/Paste menu (iTerm2 pattern) instead of sending
-  button 3. Exposed through the existing Right-click role picker as the "Menu"
-  option (derived: `xtermRightClickMenu = pointerRightClick == 3`, no separate
-  setting). Copy/Paste reuse the existing PRIMARY<->NSPasteboard plumbing.
-  Gated per-window on WM_CLASS == "XTerm" so Motif/CDE keep button 3 for their
-  own menus. Defaults rebaked to match Todd's actual config (wheel = Select
-  text, right = Menu, scrollbar-thumb override on) for fresh installs only.
+- **File browser shipped** (`FileBrowserWindowController`/`PanelView`/`Model`,
+  DNS-editor shape). Single remote pane: folder/doc icons, dirs-first, `..` row,
+  double-click navigation, path header, busy/error banner. Drag a file row out
+  to Finder = lazy `get_file` download (file-promise callback); drag files in =
+  `put_file` upload into the current dir. Opens at the user's `$HOME` (resolved
+  via `run_command echo $HOME`). Menu wiring in `AppDelegate` (one cached window
+  per launcher key).
 
-- **Motif-skin the xterm scrollbar** (commit 1de1139; default now derived from
-  the Motif frame setting). When the Motif window frame is on, the xterm
-  scrollbar automatically gets the Motif look -- derived from `motifFrameEnabled`
-  in applyPointerConfig, no separate toggle (the Mouse-tab xterm section just
-  carries a note pointing at the Display tab). When on, the server takes over
-  the scrollbar window's rendering: suppresses xterm's
-  gray-stipple Athena thumb and draws a Motif XmScrollBar look colored from the
-  live frame palette -- recessed trough, raised beveled slider, and 3D stepper
-  arrows at top/bottom. Bevel thickness pulled from `MotifTheme.bevelWidth` (the
-  same surfaced standard the window frame uses), so it matches the frame weight.
-  Arrow clicks do a page-relative 15% step (Btn2 "move thumb" relocated from the
-  current thumb position, snapping to the terminal line within a step of an
-  end) -- xterm's own native action, no .Xdefaults needed.
+- **Daemon: run-as-user on every file verb.** Lifted `run_command`'s privilege
+  drop into `read_file`/`write_file`/`stat`/`list_dir`/`get_file`/`put_file` via
+  a scoped `HeliosPrivGuard` (reversible `seteuid`/`setegid` + `initgroups`,
+  restore root after). fork-per-connection makes the process-wide euid change
+  safe. Fails closed -- unknown user or an incomplete drop is `ok:false`, never
+  silently root. So a browse sees the user's own view and an upload lands owned
+  by the user. `PROTOCOL.md` + `Verbs.h` updated. **131 daemon tests pass.**
+
+- **HeliosClient: streaming transfer + user passthrough.** Swift
+  `getFile(_:toLocalURL:user:)` / `putFile(fromLocalURL:toRemotePath:mode:user:)`
+  mirroring the python streaming protocol (raw 64KB chunks), plus optional
+  `user` on the line verbs. Factored `call()` into `sendRequest`/`readEnvelope`.
+
+- **Launcher `filebrowser = true` flag.** New `LauncherEntry.fileBrowser`; a
+  filebrowser entry needs no `command` (its item opens the browser). Three-edit
+  rule done (parser + seed doc + Todd's dotfile).
+
+### Fixes from the live test (same session)
+
+- **Crash opening the browser** (`_dispatch_assert_queue_fail`): the pure static
+  helpers (`sorted`/`join`/`parent`/`describe`) on the `@MainActor` model were
+  called off-main from `load()`/`uploadAll()`. Marked them `nonisolated`.
+- **Orphan "shutdown tried telnet to root":** it didn't -- both shutdown paths
+  use Helios -- but the orphan call passed **no secret** (failed auth on the
+  authed daemon) and the failure panel's copy still said "telnet root login."
+  Fixes: **persist the per-boot secret in the lock file** (`ImageLock.secret`,
+  backward-compatible) so a later process / the other Mac can authenticate to an
+  orphan's daemon over Helios; reworded the panel + by-hand instructions (telnet
+  as a user then `su`, since 2.6 refuses root telnet).
+- **Upload overwrite warning:** dragging in now checks the in-memory listing and
+  prompts Replace / Skip Existing / Cancel before clobbering. (Download stays
+  Finder-native: Finder auto-renames to "file 2", never overwrites -- which is
+  the safe behavior, left as-is.)
+- **Solaris filename munge on upload:** `SolarisFilename.sanitize` maps spaces /
+  shell metacharacters / non-ASCII to `_`, defuses a leading `-`, caps at 255.
+  Banner reports renames ("Uploaded \u{201C}my file.txt\u{201D} as
+  \u{201C}my_file.txt\u{201D}").
+- **filebrowser on a non-helios key** (e.g. a `[u5/Files]` under telnet) used to
+  silently fall through to a bogus empty-command telnet launch. Now it always
+  wires to the browser action, and on a non-helios transport shows a clear
+  wrong-transport config-error dialog (per-key; a sibling helios launcher
+  doesn't make a telnet key browsable). Message is honest about real-box Helios
+  being a future capability, not a bundle-only limit.
 
 ## What's working
 
-- Both features build clean (swift build + xcodegen) and the full suite is
-  green: **1381 tests, 0 failures**. New: `MotifScrollbarRenderer.swift`,
-  `XtermScrollbarSkinTests.swift`, `WMNameFallbackIdentificationTests` got the
-  WM_CLASS->xterm-flag coverage.
-- Right-click menu: validated live on Todd's xterm (works).
-- Scrollbar skin: validated live -- trough/slider/arrows look right, bevel
-  width matches the frame, arrow stepping feels good including the end-snap.
+- `swift build` clean; **full suite green: 1395 tests, 0 failures** (was 1381).
+- Daemon builds clean on the Mac (`darwin_arm64`), 131 tests pass.
+- Browser + both-way transfer validated live today.
+- Xcode project regenerated (`xcodegen`) -- the new files are in the `.app` build.
 
-## What's broken / rough edges
+## What's broken / not yet verified
 
-- Scrollbar arrow stepping assumes xterm's Btn2 MoveThumb sets the thumb *top*
-  to the pointer y. Held up live, but if a future xterm build centers the thumb
-  instead, the step math in `motifScrollbarArrowStepTarget` is the one spot to
-  adjust.
-- Occupancy model assumes xterm only draws the thumb (fills) + trough-clears
-  into the scrollbar window. True for the Athena scrollbar; the live Solaris
-  xterm is the real test (held up so far).
+- **Daemon not yet redeployed to the live Solaris image.** The file-verb run-as
+  change is Mac-only. Until `get-helios.sh` rebuilds + redeploys to the running
+  guest, the live daemon still has root-only file verbs, so a real upload there
+  would land root-owned / show root's view. **This is the next step.**
+- v1 scope (deliberate): files only (no folder download/upload), no in-place ops
+  (rename/delete/mkdir/chmod).
+- Real-box Helios (a real Sun running the agent) is captured as **HELIOS_PLAN
+  C9** -- blocked on a static per-launcher secret field + agent deployment to a
+  real box. Not started.
 
 ## What's next
 
-- macXserver: optional -- tune the 15% step fraction or arrow rendering if
-  Todd wants. (Scrollbar skin now auto-follows the Motif frame setting.)
-- **Helios (the larger thread, unchanged from session 1):**
-  - **C6:** more guided-sysadmin tasks (add-a-user, hostname/timezone, NFS,
-    repair items). DNS editor is the reusable template.
-  - **B6:** daemon `make test` on Solaris; 2 hardening items (orphan-reap,
-    shutdown euid/exit-status).
-  - Optional: bake the root-prompt + boot markers into the image build, not
-    just the live qcow2.
+- **Boot the VM, redeploy the daemon** (`~/dev/SPARCplug/guest/get-helios.sh`),
+  then live-test the run-as path (upload lands user-owned, permission errors).
+  Closes HELIOS_PLAN C8.
+- Optional follow-ons: in-place file ops, a size/permission column, folder
+  download (tar-on-the-fly).
+- HELIOS_PLAN C9 (real-box Helios) and B6 hardening remain open.
 
 ## What's committed (recent)
 
-- `~/dev/X`:
-  - fbda39c -- scrollbar Motif skin now derived from the Motif frame setting
-    (dropped the standalone toggle).
-  - 1de1139 -- Motif-skin the xterm scrollbar (renderer + arrows + bevel-width
-    + page-relative steppers + 11 tests).
-  - b31bb6e -- xterm right-click Copy/Paste menu, exposed as the "Menu" role +
-    defaults rebaked.
-  - 5cc8411 -- earlier-today STATUS roll (Helios C2 + auth + UI + C6 DNS).
-- All pushed; `~/dev/X` ahead 0 / behind 0.
-- `~/dev/SPARCplug` and cx tree unchanged this session.
+- `~/dev/X`: file browser + daemon run-as (Swift side) + all the live-test
+  fixes, STATUS, HELIOS_PLAN C8/C9. See the eos commit below.
+- `~/Dropbox/dev/cx` (`cx_apps/heliosAgent`): file-verb run-as drop
+  (`Verbs.cpp`/`Verbs.h`), `PROTOCOL.md`, daemon test. See the eos commit below.
+- `~/dev/SPARCplug`: unchanged this session.
 
 ## Switching to the other Mac
 
-- Let Dropbox finish syncing the memory dir before opening the other Mac (the
-  qcow2 didn't change this session).
-- `git pull` X (SPARCplug / cx tree unchanged but pull anyway).
-- VM is shut down, no image lock.
+- Let Dropbox finish syncing the memory dir + the cx tree before opening the
+  other Mac (the qcow2 didn't change this session).
+- `git pull` X **and** the cx tree (heliosAgent changed this session).
+- VM is shut down, no image lock held by a live process.
 - `/sos` first.
 
 ## Pointers
 
-- xterm hacks: `Sources/SwiftXServerCore/PointerConfig.swift` (the knobs read in
-  core), `FlippedXView.rightMouseDown` (menu), `MotifScrollbarRenderer.swift`
-  (scrollbar look), `ServerSession` `isMotifSkinnedScrollbar` /
-  `repaintScrollbarSkin` / `motifScrollbarArrowStepTarget` (skin + steppers),
-  `windowBackground` (trough substitution). UI in `PreferencesPanelView` Mouse
-  tab.
-- Helios: HELIOS_PLAN.md C6 (open); image-bake `~/dev/SPARCplug/guest/get-helios.sh`.
+- Browser: `FileBrowserPanelModel.swift` (I/O + drag/drop + overwrite +
+  filename munge), `FileBrowserPanelView.swift`, `FileBrowserWindowController.swift`,
+  `AppDelegate.openFileBrowser` + `launcherMenuItem` + `validateMenuItem`.
+- Daemon run-as: `cx_apps/heliosAgent/Verbs.cpp` (`HeliosPrivGuard` +
+  `parseUserField`). Redeploy: `guest/get-helios.sh`.
+- Swift transfer: `HeliosClient.swift` (`getFile`/`putFile`/`readBody`).
+- Filename munge: `SolarisFilename.swift`. Lock secret: `ImageLock.swift`.
+- Flag: `LauncherEntry.fileBrowser`, parsed in `LauncherFile.parse`.

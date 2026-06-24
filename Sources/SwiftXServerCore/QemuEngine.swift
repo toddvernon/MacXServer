@@ -316,8 +316,12 @@ public final class QemuEngine: @unchecked Sendable {
         // Claim the image lock with the *qemu* pid, so if macXserver dies and
         // orphans this qemu, the next launch finds a live pid to reclaim.
         let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev"
+        // Persist the per-launch secret in the lock so a later process (this Mac
+        // after a crash, or the other Mac) can authenticate to this qemu's daemon
+        // and shut it down via Helios if it's ever orphaned.
         ImageLockManager.acquire(imageURL: config.diskImage,
-                                 pid: p.processIdentifier, appVersion: appVersion)
+                                 pid: p.processIdentifier, appVersion: appVersion,
+                                 secret: self.currentSecret)
         progress = 0.05            // a visible sliver the moment qemu launches
         emitState()
         emitProgress()
@@ -528,8 +532,9 @@ public final class QemuEngine: @unchecked Sendable {
     /// Track C's downloader must write this name.
     public static let diskImageFilename = "solaris-2.6.qcow2"
 
-    /// Mac-side port forwarded to the guest's telnet (23). The best-effort
-    /// "shut down an orphan over telnet" path dials this.
+    /// Mac-side port forwarded to the guest's telnet (23). Used by launchers
+    /// with `transport = telnet` and by the by-hand shutdown instructions
+    /// (orphan shutdown itself goes over Helios, not telnet).
     public static let telnetHostPort: UInt16 = 2123
 
     /// Mac-side port forwarded to the guest's Helios daemon (2125). Both clients

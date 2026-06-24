@@ -26,6 +26,12 @@ public enum DefaultLaunchers {
         #                                        telnet, 22 for ssh, 2125 for
         #                                        helios)
         #   verbose   = true/false               (optional, default false)
+        #   filebrowser = true/false             (optional, default false;
+        #                                         helios only. Adds a "Files…"
+        #                                         item that browses `user`'s
+        #                                         home on the SPARCstation and
+        #                                         drag-copies files to/from
+        #                                         Finder.)
         #   login_prompt    = substring          (default: ogin:, telnet only)
         #   password_prompt = substring          (default: assword:, telnet only)
         #   shell_prompt    = substring          (default: "$ ", telnet only)
@@ -131,6 +137,14 @@ public enum DefaultLaunchers {
         #
         # [sparc/xterm]
         # command = xterm -fn 10x20 -bg black -fg green
+        #
+        # # filebrowser=true makes this entry a "Files" browser instead of an
+        # # app launcher: clicking it opens a browser of `user`'s home dir on
+        # # the SPARCstation. Drag a file out to Finder to download it, drag one
+        # # in to upload. No `command` needed; browse/transfer runs AS `user`
+        # # over the Helios daemon.
+        # [sparc/Files]
+        # filebrowser = true
         #
         # Legacy flat sections (no `host:` prefix, no `/` in the name) still
         # parse: they're grouped automatically under the short form of their

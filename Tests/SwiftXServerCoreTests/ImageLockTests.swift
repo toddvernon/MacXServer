@@ -39,6 +39,22 @@ final class ImageLockTests: XCTestCase {
         XCTAssertNotNil(ImageLock.parse("host: MacA\npid: 7"))       // minimal ok
     }
 
+    // The per-boot Helios secret round-trips so an orphan shutdown can authenticate.
+    func testSecretRoundTripsAndIsOptional() {
+        let withSecret = ImageLock(host: "MacA", pid: 7, imagePath: image.path,
+                                   startedAt: "2026-06-24T19:00:00Z", appVersion: "dev",
+                                   secret: "deadbeefcafe")
+        let reparsed = ImageLock.parse(withSecret.serialized())
+        XCTAssertEqual(reparsed?.secret, "deadbeefcafe")
+        XCTAssertEqual(reparsed, withSecret)
+
+        // No secret: the line is omitted, and an older secret-less lock parses to nil.
+        let noSecret = ImageLock(host: "MacA", pid: 7, imagePath: image.path,
+                                 startedAt: "2026-06-24T19:00:00Z", appVersion: "dev")
+        XCTAssertFalse(noSecret.serialized().contains("secret:"))
+        XCTAssertNil(ImageLock.parse("host: MacA\npid: 7")?.secret)
+    }
+
     /// A lock written by a different machine is a hard stop regardless of the
     /// recorded pid (we can't verify a remote pid).
     func testRemoteHostLocked() {

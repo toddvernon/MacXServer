@@ -24,6 +24,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var resourcesController: ResourcesWindowController?
     private var fontMappingsController: FontMappingsWindowController?
     private var dnsAdminController: DnsAdminWindowController?
+    /// Helios file-browser windows, one per filebrowser launcher entry, keyed by
+    /// "group/name" so reopening reuses the window (and its current folder).
+    private var fileBrowserControllers: [String: FileBrowserWindowController] = [:]
     /// The SPARCstation "Admin" submenu parent; enabled only once the guest is
     /// fully booted (its tasks talk to the Helios daemon, which only answers
     /// then), gated on `sparcReady` -- NOT mere `.running`, which is true the
@@ -54,11 +57,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var qemuEngine: QemuEngine?
     private var sparcConsole: SparcPlugConsoleWindowController?
     private var sparcWelcome: SparcStationWelcomeWindowController?
-    /// Retains a best-effort telnet "shut down the orphan" attempt for its
-    /// lifetime; cleared when the attempt resolves.
-    /// Set when an orphan's Helios shutdown call fails fast (refused/timed out),
-    /// so the poll loop can flip the panel to its failure state without waiting
-    /// out the full countdown. Reset at the start of each attempt.
+    /// Set when an orphan's Helios shutdown call fails fast (connection refused,
+    /// timed out, or auth rejected), so the poll loop can flip the panel to its
+    /// failure state without waiting out the full countdown. Reset at the start
+    /// of each attempt.
     private var orphanShutdownFailed = false
     /// Live progress panel shown while we wait for an orphan to power off.
     /// Non-nil only during an in-flight "Try to Shut It Down"; its presence is
@@ -671,14 +673,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func launcherMenuItem(for entry: LauncherEntry) -> NSMenuItem {
-        let item = NSMenuItem(title: entry.name,
-                              action: #selector(launchRemoteApp(_:)),
+        // A filebrowser entry isn't an app launcher: its menu item opens the
+        // Helios file browser, never runs a command. It has no `command`, so it
+        // must NOT fall through to launchRemoteApp even on a non-helios host
+        // (that would silently telnet in and run an empty line). It wires to
+        // openFileBrowser regardless of transport; the handler explains the
+        // requirement if the transport isn't helios.
+        let item = NSMenuItem(title: entry.fileBrowser ? "\(entry.name)\u{2026}" : entry.name,
+                              action: entry.fileBrowser ? #selector(openFileBrowser(_:))
+                                                        : #selector(launchRemoteApp(_:)),
                               keyEquivalent: "")
         item.target = self
         // group/name disambiguates same-named items across hosts
         // ("xterm cyan" can live under both u5 and ss2).
         item.representedObject = "\(entry.group)/\(entry.name)" as NSString
         return item
+    }
+
+    @MainActor
+    @objc private func openFileBrowser(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String,
+              let entry = currentLauncherFile?.entries.first(where: { "\($0.group)/\($0.name)" == key }),
+              entry.fileBrowser
+        else { return }
+
+        // The browser speaks the Helios protocol, so this key must use
+        // transport = helios. filebrowser=true on a telnet/ssh key is a config
+        // error -- it's under the wrong transport. This is per-key: a sibling
+        // helios launcher on the same host doesn't make THIS key browsable.
+        // (A correctly-transported key whose box has no agent is a different
+        // failure -- the browser window opens and reports the connection error.)
+        guard entry.transport == .helios else {
+            let alert = NSAlert()
+            alert.messageText = "The file browser needs a Helios transport"
+            alert.informativeText =
+                "\u{201C}\(entry.group)/\(entry.name)\u{201D} has filebrowser = true but "
+                + "transport = \(entry.transport.rawValue). The browser moves files over the "
+                + "Helios agent, so this key needs transport = helios pointing at a machine "
+                + "that has the agent installed. (At present the bundled SPARCstation is the "
+                + "only machine set up with the Helios agent.)"
+            alert.runModal()
+            return
+        }
+
+        if fileBrowserControllers[key] == nil {
+            let config = HeliosFileBrowserConfig(
+                host: entry.host, port: entry.port, user: entry.user,
+                label: "\(entry.group): \(entry.user)",
+                secretProvider: { [weak self] in self?.qemuEngine?.currentSecret })
+            fileBrowserControllers[key] = FileBrowserWindowController(config: config)
+        }
+        fileBrowserControllers[key]?.showWindow()
     }
 
     @objc private func launchersFileChanged(_ note: Notification) {
@@ -1056,8 +1101,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Show Me How / Cancel. See PLUGIN_V1_PUNCHLIST L2.
     private func attemptHeliosShutdown(lock: ImageLock, image: URL) {
         orphanShutdownFailed = false
+        // The orphan's daemon requires the secret it was launched with. The lock
+        // records it (persisted at acquire time); fall back to this session's
+        // current secret for the same-session case where the lock predates the
+        // field. Without a matching secret an authed daemon rejects the call.
+        let secret = lock.secret ?? qemuEngine?.currentSecret
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let client = HeliosClient(timeout: 8)
+            let client = HeliosClient(timeout: 8, secret: secret)
             defer { client.close() }
             do {
                 try client.connect()
@@ -1131,9 +1181,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let alert = NSAlert()
         alert.messageText = "Shut down the running SPARCstation by hand"
         alert.informativeText =
-            "In Terminal, connect to the running guest and halt it:\n\n"
+            "In Terminal, connect to the running guest and halt it. Solaris 2.6 "
+            + "refuses a direct root telnet login, so log in as a normal user and "
+            + "then su to root:\n\n"
             + "    telnet 127.0.0.1 \(QemuEngine.telnetHostPort)\n"
-            + "    (log in, then as root:)\n"
+            + "    (log in as a user, then:)\n"
+            + "    su -\n"
             + "    init 5\n\n"
             + "Once it powers off, start the SPARCstation again. If telnet won’t connect, use "
             + "Force Quit instead (it risks a disk check on the next boot)."
@@ -1211,6 +1264,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case #selector(showSparcConsole(_:)):     return sparcConsole != nil
         case #selector(backUpDiskImage(_:)):      return state == .stopped
         case #selector(openDnsAdmin(_:)):         return sparcReady
+        case #selector(openFileBrowser(_:)):
+            // Helios filebrowser keys gate on the bundled guest being up. A
+            // mis-transported one stays enabled so clicking surfaces the config
+            // error (it points at no bundled guest, so sparcReady is irrelevant).
+            let key = item.representedObject as? String
+            let entry = currentLauncherFile?.entries.first { "\($0.group)/\($0.name)" == key }
+            return entry?.transport == .helios ? sparcReady : true
         default: return true
         }
     }

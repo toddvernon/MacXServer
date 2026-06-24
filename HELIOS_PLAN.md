@@ -345,6 +345,46 @@ pays off a parked punchlist item (L0/L2/L3).
   then `run_command` drove untar + clean rebuild + deploy.sh -- the daemon shipped
   its own replacement and self-restarted (the forked connection-child outlives
   the restart and returns the deploy log). No ssh/scp in the loop.
+- [x] **C8. Per-launcher Helios file browser. CODE DONE 2026-06-24; needs
+  daemon redeploy + live test.** A `filebrowser = true` launcher entry (helios
+  transport only) becomes a "Files…" menu item that opens a single-pane browser
+  of `user`'s home dir on the SPARCstation. Folder/doc icons, double-click to
+  enter / `..` to go up; drag a file row out to Finder to download (lazy
+  `get_file` in the file-promise callback), drag files in from Finder to upload
+  (`put_file` into the current dir). Everything runs AS `user`.
+  **Daemon (Mac-built, redeploy pending):** extended the run-as drop from
+  `run_command` to every file verb (`read_file`/`write_file`/`stat`/`list_dir`/
+  `get_file`/`put_file`) -- optional `user`, reversible `seteuid`/`setegid` +
+  `initgroups` around the op (fork-per-connection makes the process-wide euid
+  change safe), fails closed (ok:false) if the drop can't complete, never runs
+  as root. So a browse sees the user's view and an upload lands user-owned.
+  **Swift:** `HeliosClient` gained streaming `getFile`/`putFile` + `user` on the
+  file verbs; new `FileBrowserWindowController`/`PanelView`/`Model` (DNS-editor
+  shape). Tests: daemon run-as (131 cpp), HeliosClient streaming + user (5),
+  launcher `filebrowser` parse (1). **Open: rebuild+redeploy the daemon to
+  Solaris (get-helios.sh) and live-test browse/up/down/permission-error.**
+- [ ] **C9. Helios on a *real* SPARCstation (not just the bundled emulator).**
+  Nothing in the daemon or the protocol is emulator-specific -- it's plain cx
+  over TCP -- so a real Sun running heliosAgent should work as a helios-transport
+  launcher (incl. the file browser) the same way the bundled box does. Two gaps
+  block it today, both on the macXserver side, not the daemon:
+  - **Static secret in the launcher config.** A helios launcher's secret
+    currently comes from `qemuEngine.currentSecret` -- the *bundled* guest's
+    per-boot secret, regenerated every launch and meaningless to any other box.
+    A real Sun would run its agent with a fixed secret, which there's no way to
+    express today. Add a per-entry secret to `LauncherEntry` (a `secret` field,
+    or better a Keychain reference like the telnet password) and feed it into the
+    helios secret provider (`HeliosLauncher` + `HeliosFileBrowserConfig`) instead
+    of the bundled-guest secret. Until then, the menu's wrong-transport dialog is
+    honest ("the bundled SPARCstation is the only machine set up with the agent")
+    but a real-box helios key would fail auth even with the agent installed.
+  - **Agent deployment to a real box.** `get-helios.sh` builds + deploys to the
+    bundled qcow2 over the daemon itself; a real Sun needs a bootstrap path
+    (build from cx on the box, or cross-build + scp/ftp the binary + init
+    script). The daemon already builds clean under g++ 2.95 on 2.6, so this is
+    packaging, not porting.
+  Once both land, a real-box helios key that can't reach an agent fails the
+  normal way: the browser window opens and banners the connection error.
 **Acceptance (M-C, release-gating):** macXserver boots SPARCplug, detects
 readiness via the daemon, shuts down gracefully via the daemon (including an
 orphan), with zero console scraping; the repair GUI edits configs. **This

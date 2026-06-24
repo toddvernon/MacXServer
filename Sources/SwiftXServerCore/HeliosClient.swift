@@ -121,9 +121,13 @@ public final class HeliosClient {
     }
 
     /// Read a whole regular file. Content arrives base64 and is decoded here, so
-    /// the returned `Data` is byte-exact.
-    public func readFile(_ path: String) throws -> FileContent {
-        let raw = try call("read_file", ["path": path], as: ReadResultRaw.self)
+    /// the returned `Data` is byte-exact. `user` (optional) reads as that user
+    /// (the daemon runs as root; absent/nil = root). For bulk files prefer
+    /// `getFile`, which streams to disk instead of base64-buffering in memory.
+    public func readFile(_ path: String, user: String? = nil) throws -> FileContent {
+        var fields: [String: Any] = ["path": path]
+        if let user { fields["user"] = user }
+        let raw = try call("read_file", fields, as: ReadResultRaw.self)
         guard let data = Data(base64Encoded: raw.content) else {
             throw HeliosError.malformedResponse("read_file content was not valid base64")
         }
@@ -133,19 +137,93 @@ public final class HeliosClient {
     /// Write a whole regular file atomically. `data` is base64-encoded on the
     /// wire. An explicit `mode` wins; omitting it preserves an existing file's
     /// mode (and owner, when the daemon runs as root) or defaults a new file to 0644.
+    /// `user` (optional) writes as that user, so a new file is owned by them.
     @discardableResult
-    public func writeFile(_ path: String, data: Data, mode: Int? = nil) throws -> WriteResult {
+    public func writeFile(_ path: String, data: Data, mode: Int? = nil, user: String? = nil) throws -> WriteResult {
         var fields: [String: Any] = ["path": path, "content": data.base64EncodedString()]
         if let mode { fields["mode"] = mode }
+        if let user { fields["user"] = user }
         return try call("write_file", fields, as: WriteResult.self)
     }
 
-    public func stat(_ path: String) throws -> StatResult {
-        try call("stat", ["path": path], as: StatResult.self)
+    public func stat(_ path: String, user: String? = nil) throws -> StatResult {
+        var fields: [String: Any] = ["path": path]
+        if let user { fields["user"] = user }
+        return try call("stat", fields, as: StatResult.self)
     }
 
-    public func listDir(_ path: String) throws -> ListResult {
-        try call("list_dir", ["path": path], as: ListResult.self)
+    public func listDir(_ path: String, user: String? = nil) throws -> ListResult {
+        var fields: [String: Any] = ["path": path]
+        if let user { fields["user"] = user }
+        return try call("list_dir", fields, as: ListResult.self)
+    }
+
+    /// Streaming file download: the daemon replies with a `{ bytes, mode }`
+    /// header then sends that many raw bytes, which we write straight to
+    /// `localURL` (no base64, no full-file buffering in memory). The mirror of
+    /// `getFile` on the python side. `user` reads as that user. Returns the
+    /// header (path/bytes/mode). The file is created/overwritten at `localURL`.
+    /// A daemon `ok:false` (missing/non-regular path, permission denied) throws
+    /// `.protocolError` with no local file written.
+    @discardableResult
+    public func getFile(_ remotePath: String, toLocalURL localURL: URL, user: String? = nil) throws -> GetResult {
+        var fields: [String: Any] = ["path": remotePath]
+        if let user { fields["user"] = user }
+        try sendRequest("get_file", fields)
+
+        // The header line IS the response envelope; the raw body follows it.
+        let header: GetResult = try readEnvelope(as: GetResult.self)
+
+        // Create (truncate) the destination, then stream the body to it. Any
+        // bytes already buffered past the header newline are the body's start.
+        FileManager.default.createFile(atPath: localURL.path, contents: nil)
+        guard let handle = try? FileHandle(forWritingTo: localURL) else {
+            throw HeliosError.connectionFailed("cannot open local file for writing: \(localURL.path)")
+        }
+        defer { try? handle.close() }
+        try readBody(count: header.bytes) { chunk in
+            handle.write(Data(chunk))
+        }
+        return header
+    }
+
+    /// Streaming file upload: send a `{ path, bytes, mode? }` header then the
+    /// file's raw bytes straight from `localURL` (no base64, no full-file
+    /// buffer). The mirror of `putFile` on the python side. `user` writes as that
+    /// user, so the uploaded file lands owned by them. Mode policy matches
+    /// `writeFile`. Returns the daemon's write result.
+    @discardableResult
+    public func putFile(fromLocalURL localURL: URL, toRemotePath remotePath: String,
+                        mode: Int? = nil, user: String? = nil) throws -> WriteResult {
+        let attrs = try FileManager.default.attributesOfItem(atPath: localURL.path)
+        guard let size = (attrs[.size] as? NSNumber)?.intValue else {
+            throw HeliosError.connectionFailed("cannot size local file: \(localURL.path)")
+        }
+        guard let handle = try? FileHandle(forReadingFrom: localURL) else {
+            throw HeliosError.connectionFailed("cannot open local file for reading: \(localURL.path)")
+        }
+        defer { try? handle.close() }
+
+        var fields: [String: Any] = ["path": remotePath, "bytes": size]
+        if let mode { fields["mode"] = mode }
+        if let user { fields["user"] = user }
+        try sendRequest("put_file", fields)
+
+        // Stream the body in bounded chunks. The daemon always consumes exactly
+        // `size` bytes (it drains on its own errors), so we always send them all,
+        // then read the one response envelope.
+        var sent = 0
+        while sent < size {
+            let chunk = handle.readData(ofLength: min(65536, size - sent))
+            if chunk.isEmpty { break }   // file shrank under us; daemon still expects `size`
+            try writeAll(chunk)
+            sent += chunk.count
+        }
+        // If the file shrank, pad so framing stays intact (daemon reads `size`).
+        if sent < size {
+            try writeAll(Data(count: size - sent))
+        }
+        return try readEnvelope(as: WriteResult.self)
     }
 
     public func search(_ pattern: String,
@@ -168,6 +246,14 @@ public final class HeliosClient {
     private func call<R: Decodable>(_ verb: String,
                                     _ fields: [String: Any] = [:],
                                     as _: R.Type) throws -> R {
+        try sendRequest(verb, fields)
+        return try readEnvelope(as: R.self)
+    }
+
+    /// Write one request line (verb + auto-incrementing id + auth + fields). The
+    /// streaming verbs reuse this for their JSON header, then handle the raw body
+    /// themselves rather than going through `readEnvelope`.
+    private func sendRequest(_ verb: String, _ fields: [String: Any]) throws {
         guard fd >= 0 else { throw HeliosError.notConnected }
         nextID += 1
         var object: [String: Any] = ["verb": verb, "id": nextID]
@@ -177,7 +263,11 @@ public final class HeliosClient {
         var line = try JSONSerialization.data(withJSONObject: object)
         line.append(0x0A) // '\n'
         try writeAll(line)
+    }
 
+    /// Read one response line and decode its `result` into `R`. Throws on a
+    /// malformed line or an `ok:false` daemon response.
+    private func readEnvelope<R: Decodable>(as _: R.Type) throws -> R {
         let responseLine = try readLine()
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -194,6 +284,39 @@ public final class HeliosClient {
             throw HeliosError.malformedResponse("ok:true but no result field")
         }
         return result
+    }
+
+    /// Read exactly `count` raw body bytes (after a streaming header) and hand
+    /// them to `sink` in chunks. Bytes already buffered past the header newline
+    /// are consumed first, then the rest comes off the socket. A short read
+    /// before `count` (daemon dropped mid-body) throws `.connectionClosed`.
+    private func readBody(count: Int, sink: ([UInt8]) -> Void) throws {
+        var remaining = count
+
+        // First, anything readLine() over-read past the header's newline.
+        if !readBuffer.isEmpty && remaining > 0 {
+            let take = min(remaining, readBuffer.count)
+            sink(Array(readBuffer[..<take]))
+            readBuffer.removeSubrange(..<take)
+            remaining -= take
+        }
+
+        var chunk = [UInt8](repeating: 0, count: 65536)
+        while remaining > 0 {
+            let want = min(remaining, chunk.count)
+            let n = chunk.withUnsafeMutableBufferPointer { ptr -> Int in
+                Darwin.read(fd, ptr.baseAddress, want)
+            }
+            if n > 0 {
+                sink(Array(chunk[0..<n]))
+                remaining -= n
+                continue
+            }
+            if n == 0 { throw HeliosError.connectionClosed }
+            if errno == EINTR { continue }
+            if errno == EAGAIN || errno == EWOULDBLOCK { throw HeliosError.timedOut }
+            throw HeliosError.connectionFailed("read(): errno \(errno)")
+        }
     }
 
     // MARK: - Socket I/O (Darwin POSIX, matching Listener.swift's house style)
@@ -351,6 +474,15 @@ public struct WriteResult: Decodable, Equatable, Sendable {
     public let bytesWritten: Int
     public let mode: Int
     public let created: Bool
+}
+
+/// The `get_file` streaming header: the daemon sends this envelope, then `bytes`
+/// raw bytes of the file follow it on the wire.
+public struct GetResult: Decodable, Equatable, Sendable {
+    public let path: String
+    public let bytes: Int
+    /// Low 12 permission bits, decimal.
+    public let mode: Int
 }
 
 public struct StatResult: Decodable, Equatable, Sendable {

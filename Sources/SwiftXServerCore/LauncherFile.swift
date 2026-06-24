@@ -31,6 +31,11 @@ public struct LauncherEntry: Equatable, Sendable {
     public let port: UInt16
     /// Show the per-launch progress window with the session transcript.
     public let verbose: Bool
+    /// Add a "Files…" item next to this launcher that opens a Helios file
+    /// browser scoped to `user`'s home directory. Only meaningful for
+    /// `transport = helios` (the daemon is the file-transfer mechanism); the
+    /// parser warns and the menu ignores it on telnet/ssh launchers.
+    public let fileBrowser: Bool
     /// Substring the telnet flow waits for before sending the username. (Unused for ssh.)
     public let loginPrompt: String
     /// Substring the telnet flow waits for before sending the password. (Unused for ssh.)
@@ -59,7 +64,7 @@ public struct LauncherEntry: Equatable, Sendable {
 
     /// Build an entry. Prompts and port carry the documented defaults when omitted.
     public init(name: String, group: String, host: String, command: String, user: String,
-                port: UInt16 = 23, verbose: Bool = false,
+                port: UInt16 = 23, verbose: Bool = false, fileBrowser: Bool = false,
                 loginPrompt: String = "ogin:",
                 passwordPrompt: String = "assword:",
                 shellPrompt: String = "$ ",
@@ -69,6 +74,7 @@ public struct LauncherEntry: Equatable, Sendable {
         self.name = name; self.group = group
         self.host = host; self.command = command
         self.user = user; self.port = port; self.verbose = verbose
+        self.fileBrowser = fileBrowser
         self.loginPrompt = loginPrompt; self.passwordPrompt = passwordPrompt
         self.shellPrompt = shellPrompt; self.password = password
         self.transport = transport
@@ -170,9 +176,13 @@ public struct LauncherFile: Sendable {
                 group = host.split(separator: ".").first.map(String.init) ?? host
             }
 
-            guard let host = merged["host"],
-                  let user = merged["user"],
-                  let command = merged["command"] else { continue }
+            // A normal launcher needs a command; a filebrowser entry doesn't (its
+            // menu item opens the browser, it doesn't launch anything), so we let
+            // it omit command and default to "".
+            let fileBrowser = ["true", "yes", "1"].contains(merged["filebrowser"]?.lowercased() ?? "")
+            guard let host = merged["host"], let user = merged["user"] else { continue }
+            let command = merged["command"] ?? ""
+            if command.isEmpty && !fileBrowser { continue }
 
             let transport = LauncherTransport(rawValue: merged["transport"]?.lowercased() ?? "")
                 ?? .telnet
@@ -183,10 +193,15 @@ public struct LauncherFile: Sendable {
                 warnings.append("'\(group)/\(name)' has transport=ssh and a "
                     + "password set; ssh is keys-only here, password ignored")
             }
+            if fileBrowser && transport != .helios {
+                warnings.append("'\(group)/\(name)' has filebrowser=true but "
+                    + "transport=\(transport.rawValue); the file browser only works over "
+                    + "transport=helios, so this key can't browse (wrong transport)")
+            }
             entries.append(LauncherEntry(
                 name: name, group: group,
                 host: host, command: command, user: user,
-                port: port, verbose: verbose,
+                port: port, verbose: verbose, fileBrowser: fileBrowser,
                 loginPrompt: merged["login_prompt"] ?? "ogin:",
                 passwordPrompt: merged["password_prompt"] ?? "assword:",
                 shellPrompt: merged["shell_prompt"] ?? "$ ",

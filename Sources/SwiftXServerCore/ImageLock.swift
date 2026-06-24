@@ -28,25 +28,39 @@ public struct ImageLock: Equatable, Sendable {
     /// ISO-8601, for the "in use since …" message.
     public let startedAt: String
     public let appVersion: String
+    /// The per-boot Helios secret the qemu holding this image was launched
+    /// with. Persisted so a LATER macXserver process -- this Mac after a crash,
+    /// or the other Mac via the Dropbox-synced lock -- can authenticate to that
+    /// orphan's daemon and shut it down via Helios (the daemon requires this
+    /// secret; without it the orphan-shutdown call fails auth). It's a
+    /// loopback-only hostfwd token, regenerated every boot and useless once that
+    /// qemu exits, so persisting it next to the image is low-risk. nil for locks
+    /// written before this field existed (or by an unauthed launch).
+    public let secret: String?
 
     public init(host: String, pid: Int32, imagePath: String,
-                startedAt: String, appVersion: String) {
+                startedAt: String, appVersion: String, secret: String? = nil) {
         self.host = host
         self.pid = pid
         self.imagePath = imagePath
         self.startedAt = startedAt
         self.appVersion = appVersion
+        self.secret = secret
     }
 
-    /// Simple `key: value` lines, stable order, so a human can read it.
+    /// Simple `key: value` lines, stable order, so a human can read it. The
+    /// secret line is only emitted when present, so unauthed launches and the
+    /// older format stay clean.
     public func serialized() -> String {
-        """
-        host: \(host)
-        pid: \(pid)
-        image: \(imagePath)
-        started: \(startedAt)
-        appVersion: \(appVersion)
-        """
+        var lines = [
+            "host: \(host)",
+            "pid: \(pid)",
+            "image: \(imagePath)",
+            "started: \(startedAt)",
+            "appVersion: \(appVersion)",
+        ]
+        if let secret, !secret.isEmpty { lines.append("secret: \(secret)") }
+        return lines.joined(separator: "\n")
     }
 
     /// Parse the `key: value` format. Tolerant of unknown/missing optional
@@ -67,7 +81,8 @@ public struct ImageLock: Equatable, Sendable {
             pid: pid,
             imagePath: fields["image"] ?? "",
             startedAt: fields["started"] ?? "",
-            appVersion: fields["appVersion"] ?? "")
+            appVersion: fields["appVersion"] ?? "",
+            secret: fields["secret"].flatMap { $0.isEmpty ? nil : $0 })
     }
 }
 
@@ -125,12 +140,12 @@ public enum ImageLockManager {
     /// Write our lock next to the image. `pid` is the qemu pid.
     @discardableResult
     public static func acquire(
-        imageURL: URL, pid: Int32, appVersion: String,
+        imageURL: URL, pid: Int32, appVersion: String, secret: String? = nil,
         host: String = currentHost(), now: Date = Date()
     ) -> ImageLock {
         let stamp = ISO8601DateFormatter().string(from: now)
         let lock = ImageLock(host: host, pid: pid, imagePath: imageURL.path,
-                             startedAt: stamp, appVersion: appVersion)
+                             startedAt: stamp, appVersion: appVersion, secret: secret)
         try? lock.serialized().write(to: lockURL(for: imageURL),
                                      atomically: true, encoding: .utf8)
         return lock

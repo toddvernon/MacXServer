@@ -283,6 +283,44 @@ final class LauncherFileTests: XCTestCase {
         XCTAssertTrue(clean.warnings.isEmpty)
     }
 
+    // filebrowser=true parses, defaults false, and warns (but still parses)
+    // when set on a non-helios transport since the browser needs the daemon.
+    func testFileBrowserFlag() {
+        let file = LauncherFile.parse("""
+        [host:sparc]
+        host = 127.0.0.1
+        user = tvernon
+        transport = helios
+
+        [sparc/xterm]
+        command = xterm
+
+        [sparc/Files]
+        filebrowser = true
+        """)
+        let byKey = Dictionary(uniqueKeysWithValues: file.entries.map {
+            ("\($0.group)/\($0.name)", $0)
+        })
+        XCTAssertEqual(byKey["sparc/Files"]?.fileBrowser, true, "filebrowser=true parses without a command")
+        XCTAssertEqual(byKey["sparc/xterm"]?.fileBrowser, false, "defaults false when absent")
+        XCTAssertTrue(file.warnings.isEmpty, "helios+filebrowser is the supported case, no warning")
+
+        // filebrowser on a telnet launcher: still parses, but warns it's ignored.
+        let nonHelios = LauncherFile.parse("""
+        [host:u5]
+        host = u5.example.com
+        user = alice
+
+        [u5/Files]
+        command = xterm
+        filebrowser = true
+        """)
+        XCTAssertEqual(nonHelios.entries.first?.fileBrowser, true, "flag still parses")
+        XCTAssertEqual(nonHelios.warnings.count, 1)
+        XCTAssertTrue(nonHelios.warnings[0].contains("filebrowser"))
+        XCTAssertTrue(nonHelios.warnings[0].contains("transport=helios"))
+    }
+
     // An item can override its host-block's transport (rare, but the merge
     // table allows it for any field).
     func testTransportItemOverride() {

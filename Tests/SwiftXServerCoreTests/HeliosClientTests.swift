@@ -243,6 +243,122 @@ final class HeliosClientTests: XCTestCase {
         XCTAssertEqual(server.requests[0]["max"] as? Int, 1)
     }
 
+    // MARK: streaming get_file / put_file
+
+    func testGetFileStreamsBodyToDiskByteExact() throws {
+        // Bytes a JSON string can't carry: NUL + high bytes. Stream path is raw,
+        // so it must round-trip exactly.
+        let payload = Data([0x00, 0x01, 0xFF, 0x41, 0x42, 0x0A, 0x80, 0x00, 0x7F])
+        let server = try MockHeliosServer { req, id in
+            XCTAssertEqual(req["verb"] as? String, "get_file")
+            return ["id": id, "ok": true, "result": [
+                "path": "/src/blob", "bytes": payload.count, "mode": 420,
+            ]]
+        }
+        server.downloadBody = payload
+        defer { server.stop() }
+        server.start()
+
+        let client = HeliosClient(host: "127.0.0.1", port: server.port, timeout: 5)
+        try client.connect()
+        defer { client.close() }
+
+        let dest = FileManager.default.temporaryDirectory
+            .appendingPathComponent("helios-get-\(UUID().uuidString).bin")
+        defer { try? FileManager.default.removeItem(at: dest) }
+
+        let header = try client.getFile("/src/blob", toLocalURL: dest)
+        XCTAssertEqual(header, GetResult(path: "/src/blob", bytes: payload.count, mode: 420))
+        XCTAssertEqual(try Data(contentsOf: dest), payload, "downloaded bytes must be byte-exact")
+    }
+
+    func testGetFileForwardsUserAndPermissionErrorThrows() throws {
+        let server = try MockHeliosServer { req, id in
+            XCTAssertEqual(req["user"] as? String, "alice")
+            return ["id": id, "ok": false, "error": "get_file: Permission denied: /root/secret"]
+        }
+        defer { server.stop() }
+        server.start()
+
+        let client = HeliosClient(host: "127.0.0.1", port: server.port, timeout: 5)
+        try client.connect()
+        defer { client.close() }
+
+        let dest = FileManager.default.temporaryDirectory
+            .appendingPathComponent("helios-get-\(UUID().uuidString).bin")
+        defer { try? FileManager.default.removeItem(at: dest) }
+
+        XCTAssertThrowsError(try client.getFile("/root/secret", toLocalURL: dest, user: "alice")) { error in
+            guard case .protocolError = (error as? HeliosClient.HeliosError) else {
+                return XCTFail("expected .protocolError, got \(error)")
+            }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dest.path),
+                       "no local file should be created when the daemon refuses")
+    }
+
+    func testPutFileStreamsBodyFromDiskAndForwardsUser() throws {
+        let payload = Data([0x00, 0x9F, 0x10, 0x44, 0xFF, 0x00, 0x41])
+        let src = FileManager.default.temporaryDirectory
+            .appendingPathComponent("helios-put-\(UUID().uuidString).bin")
+        try payload.write(to: src)
+        defer { try? FileManager.default.removeItem(at: src) }
+
+        let server = try MockHeliosServer { req, id in
+            XCTAssertEqual(req["verb"] as? String, "put_file")
+            return ["id": id, "ok": true, "result": [
+                "path": "/home/alice/blob", "bytes_written": payload.count,
+                "mode": 420, "created": true,
+            ]]
+        }
+        defer { server.stop() }
+        server.start()
+
+        let client = HeliosClient(host: "127.0.0.1", port: server.port, timeout: 5)
+        try client.connect()
+        defer { client.close() }
+
+        let result = try client.putFile(fromLocalURL: src, toRemotePath: "/home/alice/blob",
+                                        mode: 0o644, user: "alice")
+        XCTAssertEqual(result, WriteResult(path: "/home/alice/blob", bytesWritten: payload.count,
+                                           mode: 420, created: true))
+        XCTAssertEqual(server.uploadedBody, payload, "uploaded bytes must be byte-exact")
+
+        let req = server.requests[0]
+        XCTAssertEqual(req["bytes"] as? Int, payload.count)
+        XCTAssertEqual(req["mode"] as? Int, 420)
+        XCTAssertEqual(req["user"] as? String, "alice")
+    }
+
+    // MARK: user passthrough on the line verbs
+
+    func testFileVerbsForwardUserAndOmitWhenNil() throws {
+        let server = try MockHeliosServer { req, id in
+            switch req["verb"] as? String {
+            case "list_dir":
+                return ["id": id, "ok": true, "result": ["path": "/h", "count": 0, "entries": []]]
+            case "stat":
+                return ["id": id, "ok": true, "result": [
+                    "path": "/h", "type": "dir", "size": 0, "mode": 493,
+                    "uid": 1, "gid": 1, "mtime": 0]]
+            default:
+                return ["id": id, "ok": false, "error": "unexpected"]
+            }
+        }
+        defer { server.stop() }
+        server.start()
+
+        let client = HeliosClient(host: "127.0.0.1", port: server.port, timeout: 5)
+        try client.connect()
+        defer { client.close() }
+
+        _ = try client.listDir("/h", user: "bob")
+        _ = try client.stat("/h")   // nil user
+
+        XCTAssertEqual(server.requests[0]["user"] as? String, "bob", "user must reach the wire")
+        XCTAssertNil(server.requests[1]["user"], "nil user must be omitted")
+    }
+
     // MARK: persistence -- many requests on one connection
 
     func testMultipleCallsOnOnePersistentConnection() throws {
@@ -352,6 +468,16 @@ final class MockHeliosServer: @unchecked Sendable {
     /// Returning an empty dictionary drops the connection (EOF) instead.
     private let responder: ([String: Any], Int) -> [String: Any]
 
+    /// Streaming support. `downloadBody` (set before `start()`) is the raw body
+    /// the mock writes after a `get_file` response header. `uploadedBody` is the
+    /// raw body the mock consumed after a `put_file` header, for assertions.
+    var downloadBody: Data?
+    private var _uploadedBody = Data()
+    var uploadedBody: Data {
+        lock.lock(); defer { lock.unlock() }
+        return _uploadedBody
+    }
+
     init(responder: @escaping ([String: Any], Int) -> [String: Any]) throws {
         self.responder = responder
 
@@ -407,6 +533,26 @@ final class MockHeliosServer: @unchecked Sendable {
 
         var buffer: [UInt8] = []
         var chunk = [UInt8](repeating: 0, count: 4096)
+
+        // Pull exactly `count` raw bytes: leftover line buffer first, then the
+        // socket. nil if the peer closes early. Used for a put_file body.
+        func readExact(_ count: Int) -> Data? {
+            var out = Data()
+            if !buffer.isEmpty {
+                let take = min(count, buffer.count)
+                out.append(contentsOf: buffer[..<take])
+                buffer.removeSubrange(..<take)
+            }
+            while out.count < count {
+                let n = chunk.withUnsafeMutableBufferPointer {
+                    Darwin.read(cfd, $0.baseAddress, Swift.min($0.count, count - out.count))
+                }
+                if n <= 0 { return nil }
+                out.append(contentsOf: chunk[0..<n])
+            }
+            return out
+        }
+
         while true {
             if let nl = buffer.firstIndex(of: 0x0A) {
                 let lineBytes = Array(buffer[..<nl])
@@ -416,6 +562,16 @@ final class MockHeliosServer: @unchecked Sendable {
                 }
                 lock.lock(); _requests.append(obj); lock.unlock()
                 let id = obj["id"] as? Int ?? 0
+                let verb = obj["verb"] as? String
+
+                // put_file: the raw body follows the header on the wire. Consume
+                // it before answering (the client writes header+body, then reads).
+                if verb == "put_file", let bytes = obj["bytes"] as? Int {
+                    if let body = readExact(bytes) {
+                        lock.lock(); _uploadedBody = body; lock.unlock()
+                    }
+                }
+
                 let response = responder(obj, id)
                 if response.isEmpty {
                     Darwin.close(cfd)
@@ -424,6 +580,11 @@ final class MockHeliosServer: @unchecked Sendable {
                 var data = (try? JSONSerialization.data(withJSONObject: response)) ?? Data()
                 data.append(0x0A)
                 _ = data.withUnsafeBytes { Darwin.write(cfd, $0.baseAddress, data.count) }
+
+                // get_file: the raw body follows our header response. Send it now.
+                if verb == "get_file", let body = downloadBody {
+                    _ = body.withUnsafeBytes { Darwin.write(cfd, $0.baseAddress, body.count) }
+                }
                 continue
             }
             let n = chunk.withUnsafeMutableBufferPointer { Darwin.read(cfd, $0.baseAddress, $0.count) }
