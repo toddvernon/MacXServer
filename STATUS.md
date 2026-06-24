@@ -7,9 +7,10 @@ becomes a "Files…" menu item that opens a single-pane browser of that launcher
 `user`'s home directory on the Sun, with drag-to/from-Finder transfer. All
 browse + transfer runs AS the launcher's user, not root.
 
-Live-tested today: browse + both-way transfer work. The remaining open item is
-the **daemon redeploy to the live Solaris image** -- the file-verb run-as change
-is built + tested on the Mac but not yet rebuilt on the running guest.
+Live-tested today: browse + both-way transfer work, and the daemon with the
+file-verb run-as change is **deployed to the live Solaris image and verified** --
+a `write_file` as tvernon landed owned by tvernon (uid 1000), not root, and a
+file verb with a bogus user is rejected ("unknown user"). C8 is done.
 
 ## Headline (this session)
 
@@ -74,10 +75,7 @@ is built + tested on the Mac but not yet rebuilt on the running guest.
 
 ## What's broken / not yet verified
 
-- **Daemon not yet redeployed to the live Solaris image.** The file-verb run-as
-  change is Mac-only. Until `get-helios.sh` rebuilds + redeploys to the running
-  guest, the live daemon still has root-only file verbs, so a real upload there
-  would land root-owned / show root's view. **This is the next step.**
+- (Daemon redeploy DONE + verified live -- see above. No longer an open item.)
 - v1 scope (deliberate): files only (no folder download/upload), no in-place ops
   (rename/delete/mkdir/chmod).
 - Real-box Helios (a real Sun running the agent) is captured as **HELIOS_PLAN
@@ -86,12 +84,10 @@ is built + tested on the Mac but not yet rebuilt on the running guest.
 
 ## What's next
 
-- **Boot the VM, redeploy the daemon** (`~/dev/SPARCplug/guest/get-helios.sh`),
-  then live-test the run-as path (upload lands user-owned, permission errors).
-  Closes HELIOS_PLAN C8.
-- Optional follow-ons: in-place file ops, a size/permission column, folder
-  download (tar-on-the-fly).
-- HELIOS_PLAN C9 (real-box Helios) and B6 hardening remain open.
+- Optional follow-ons: in-place file ops (rename/delete/mkdir/chmod), a
+  size/permission column, folder download (tar-on-the-fly).
+- HELIOS_PLAN C9 (real-box Helios: static launcher secret + agent deploy) and
+  B6 hardening remain open.
 
 ## What's committed (recent)
 

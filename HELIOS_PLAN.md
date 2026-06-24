@@ -345,8 +345,8 @@ pays off a parked punchlist item (L0/L2/L3).
   then `run_command` drove untar + clean rebuild + deploy.sh -- the daemon shipped
   its own replacement and self-restarted (the forked connection-child outlives
   the restart and returns the deploy log). No ssh/scp in the loop.
-- [x] **C8. Per-launcher Helios file browser. CODE DONE 2026-06-24; needs
-  daemon redeploy + live test.** A `filebrowser = true` launcher entry (helios
+- [x] **C8. Per-launcher Helios file browser. DONE + DEPLOYED + verified
+  2026-06-24.** A `filebrowser = true` launcher entry (helios
   transport only) becomes a "Files…" menu item that opens a single-pane browser
   of `user`'s home dir on the SPARCstation. Folder/doc icons, double-click to
   enter / `..` to go up; drag a file row out to Finder to download (lazy
@@ -361,8 +361,9 @@ pays off a parked punchlist item (L0/L2/L3).
   **Swift:** `HeliosClient` gained streaming `getFile`/`putFile` + `user` on the
   file verbs; new `FileBrowserWindowController`/`PanelView`/`Model` (DNS-editor
   shape). Tests: daemon run-as (131 cpp), HeliosClient streaming + user (5),
-  launcher `filebrowser` parse (1). **Open: rebuild+redeploy the daemon to
-  Solaris (get-helios.sh) and live-test browse/up/down/permission-error.**
+  launcher `filebrowser` parse (1). **Deployed to the live 2.6 image via
+  get-helios.sh and verified: write_file as tvernon lands owned by tvernon
+  (uid 1000) not root, and a file verb with a bogus user is rejected.**
 - [ ] **C9. Helios on a *real* SPARCstation (not just the bundled emulator).**
   Nothing in the daemon or the protocol is emulator-specific -- it's plain cx
   over TCP -- so a real Sun running heliosAgent should work as a helios-transport
