@@ -66,6 +66,8 @@ unchanged and still the larger ongoing thread.
 ## What's committed (recent)
 
 - `~/dev/X`:
+  - fbda39c -- scrollbar Motif skin now derived from the Motif frame setting
+    (dropped the standalone toggle).
   - 1de1139 -- Motif-skin the xterm scrollbar (renderer + arrows + bevel-width
     + page-relative steppers + 11 tests).
   - b31bb6e -- xterm right-click Copy/Paste menu, exposed as the "Menu" role +
