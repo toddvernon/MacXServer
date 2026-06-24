@@ -369,23 +369,44 @@ pays off a parked punchlist item (L0/L2/L3).
   over TCP -- so a real Sun running heliosAgent should work as a helios-transport
   launcher (incl. the file browser) the same way the bundled box does. Two gaps
   block it today, both on the macXserver side, not the daemon:
-  - **Static secret in the launcher config.** A helios launcher's secret
-    currently comes from `qemuEngine.currentSecret` -- the *bundled* guest's
-    per-boot secret, regenerated every launch and meaningless to any other box.
-    A real Sun would run its agent with a fixed secret, which there's no way to
-    express today. Add a per-entry secret to `LauncherEntry` (a `secret` field,
-    or better a Keychain reference like the telnet password) and feed it into the
-    helios secret provider (`HeliosLauncher` + `HeliosFileBrowserConfig`) instead
-    of the bundled-guest secret. Until then, the menu's wrong-transport dialog is
-    honest ("the bundled SPARCstation is the only machine set up with the agent")
-    but a real-box helios key would fail auth even with the agent installed.
+  - **Auth on a real box -- the secret hack doesn't port.** The emulator's
+    per-boot secret works because macXserver owns *both* the boot and the
+    transport: it mints a fresh secret each launch, injects it via
+    `-prom-env helios-secret=` (the init script reads it from OBP and hands it to
+    the daemon), and it's almost ceremonial anyway because the channel is
+    loopback only macXserver can reach. On real iron you lose both: macXserver
+    doesn't boot the box (no per-session injection point -- you'd be setting an
+    `eeprom` var by hand), and the transport is the LAN, so the secret stops being
+    ceremonial and becomes the only thing guarding the agent.
+    - **Preferred path: let the transport carry the trust (ssh tunnel, no
+      load-bearing secret).** You almost always already have ssh to a real Sun.
+      Run Helios over an `ssh -L`-forward to 2125 (exactly how the original
+      python client was designed to reach it), bind the daemon loopback-only on
+      the box, and ssh has already authenticated + encrypted the channel. The
+      Helios secret goes back to ceremonial *for the same reason it is in the
+      emulator* -- the transport is trusted -- so it's defense-in-depth, not the
+      gate. This keeps the auth posture in how the client reaches the box (the
+      C9-era principle), not in the daemon. Work: teach the helios launcher /
+      `HeliosFileBrowserConfig` to optionally stand up an ssh local-forward (reuse
+      the ssh-transport plumbing) and dial 127.0.0.1:<localport> instead of the
+      box directly.
+    - **Fallback: static secret in the launcher config** (for "I don't want ssh
+      in the loop"). Add a per-entry secret to `LauncherEntry` -- a Keychain
+      reference, like the telnet password, not cleartext -- and feed it into the
+      helios secret provider (`HeliosLauncher` + `HeliosFileBrowserConfig`)
+      instead of `qemuEngine.currentSecret` (the bundled guest's per-boot secret,
+      meaningless to any other box). Then the box runs its agent with that fixed
+      secret on its own LAN bind.
+    Until either lands, the menu's wrong-transport dialog is honest ("the bundled
+    SPARCstation is the only machine set up with the agent") and a real-box helios
+    key would fail to connect/auth even with the agent installed.
   - **Agent deployment to a real box.** `get-helios.sh` builds + deploys to the
     bundled qcow2 over the daemon itself; a real Sun needs a bootstrap path
     (build from cx on the box, or cross-build + scp/ftp the binary + init
     script). The daemon already builds clean under g++ 2.95 on 2.6, so this is
     packaging, not porting.
-  Once both land, a real-box helios key that can't reach an agent fails the
-  normal way: the browser window opens and banners the connection error.
+  Once auth + deploy land, a real-box helios key that can't reach an agent fails
+  the normal way: the browser window opens and banners the connection error.
 **Acceptance (M-C, release-gating):** macXserver boots SPARCplug, detects
 readiness via the daemon, shuts down gracefully via the daemon (including an
 orphan), with zero console scraping; the repair GUI edits configs. **This
