@@ -90,6 +90,18 @@ public final class MockWindowBridge: WindowBridge, @unchecked Sendable {
         xtermFlags[id] = isXterm
     }
 
+    /// Last Motif-scrollbar paint recorded (window rect + thumb extent), for
+    /// the xterm-scrollbar-skin tests.
+    public private(set) var lastScrollbarWindowRect: Framer.Rectangle?
+    public private(set) var lastScrollbarThumbTop: Int32?
+    public private(set) var lastScrollbarThumbHeight: Int32?
+    public func paintMotifScrollbar(target: DrawTarget, windowRect: Framer.Rectangle,
+                                    thumbTop: Int32, thumbHeight: Int32) {
+        lastScrollbarWindowRect = windowRect
+        lastScrollbarThumbTop = thumbTop
+        lastScrollbarThumbHeight = thumbHeight
+    }
+
     /// X11 ExposureMask bit per xproto X.h.
     public static let exposureMask: UInt32 = 1 << 15
 

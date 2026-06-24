@@ -192,6 +192,7 @@
 		A6266AC0AC52C35A23267900 /* ExtensionDumper.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0C0657F2AA6EBAD71334B12 /* ExtensionDumper.swift */; };
 		A66844BB25F9C25212498A01 /* ResourceTokenizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CCC075B9924815E3DCE9E28 /* ResourceTokenizer.swift */; };
 		A6B93A6913B98839D57EA387 /* SelectionEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0757BE18DD417740468C179C /* SelectionEvents.swift */; };
+		A7355EE6E7C0075964F1B752 /* MotifScrollbarRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35E631FB3999016E44FEE23D /* MotifScrollbarRenderer.swift */; };
 		A84C057C6D06F21BC74016DE /* PreferencesWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 391EA317E2DA038D717C5080 /* PreferencesWindowController.swift */; };
 		A867B26922E86FA1CDCD8249 /* ListPropertiesReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12540CA8528DF457B9408028 /* ListPropertiesReply.swift */; };
 		A91862D4D01FD4A69E6551F7 /* DrawingRequests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBEE8801A44DE32056042B3A /* DrawingRequests.swift */; };
@@ -478,6 +479,7 @@
 		34AE12DBBBB2FA9C63CB7B79 /* HeliosClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeliosClient.swift; sourceTree = "<group>"; };
 		34D34B4B935E7C62AE94A994 /* Proxy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Proxy.swift; sourceTree = "<group>"; };
 		354798A85C6A4F490DF63864 /* RenderDumper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderDumper.swift; sourceTree = "<group>"; };
+		35E631FB3999016E44FEE23D /* MotifScrollbarRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotifScrollbarRenderer.swift; sourceTree = "<group>"; };
 		36D9057C0BC47A4577684D07 /* XkbDumper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XkbDumper.swift; sourceTree = "<group>"; };
 		3786DF66F0E0DC6F2B22D543 /* ResourceFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceFile.swift; sourceTree = "<group>"; };
 		391EA317E2DA038D717C5080 /* PreferencesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindowController.swift; sourceTree = "<group>"; };
@@ -940,6 +942,7 @@
 			children = (
 				A18A4B2252A9B93DCC98D850 /* MotifFramePreferences.swift */,
 				67A7989C7129436FEFB4069E /* MotifFrameView.swift */,
+				35E631FB3999016E44FEE23D /* MotifScrollbarRenderer.swift */,
 				42E8BAC0AD7C1060A2BD86A1 /* MotifTheme.swift */,
 				A78C184A5F79BDA28979DA60 /* MotifWindow.swift */,
 			);
@@ -1425,6 +1428,7 @@
 				8C62FCFFB10118172A0D5E7F /* MockWindowBridge.swift in Sources */,
 				F1CEA663AD02884E5632397E /* MotifFramePreferences.swift in Sources */,
 				49B85DF14B69671D744BC4A4 /* MotifFrameView.swift in Sources */,
+				A7355EE6E7C0075964F1B752 /* MotifScrollbarRenderer.swift in Sources */,
 				FD205DD17AEBBEAF56C8C97E /* MotifTheme.swift in Sources */,
 				7F4D07B422D14F33CEF69270 /* MotifWindow.swift in Sources */,
 				CACEBA76A7907DA83D4654B0 /* OutboundQueue.swift in Sources */,

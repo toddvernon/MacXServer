@@ -157,6 +157,15 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// Copy/Paste menu only fires on xterm windows.
     func setTopLevelXterm(id: UInt32, isXterm: Bool)
 
+    /// Reskin an xterm scrollbar in Motif style: stepper arrows at each end, a
+    /// recessed trough between them, and a raised slider over the thumb extent.
+    /// `windowRect` is the scrollbar window (top-level-local logical coords);
+    /// `thumbTop`/`thumbHeight` are the thumb extent in window-local coords
+    /// against the full window height (thumbHeight == 0 → no thumb). Used by
+    /// the xterm-scrollbar-Motif-skin hack in place of the client's stipple.
+    func paintMotifScrollbar(target: DrawTarget, windowRect: Rectangle,
+                             thumbTop: Int32, thumbHeight: Int32)
+
     /// WM_NORMAL_HINTS changed; apply min/max/resize-inc/aspect to the
     /// matching NSWindow's constraint API. nil = clear all constraints
     /// (property was deleted or unparseable).
@@ -852,6 +861,8 @@ public extension WindowBridge {
     func setCursor(topLevel: UInt32, glyph: UInt16?) {}
     func setTopLevelWindowBackground(id: UInt32, color: RGB16) {}
     func setTopLevelXterm(id: UInt32, isXterm: Bool) {}
+    func paintMotifScrollbar(target: DrawTarget, windowRect: Rectangle,
+                             thumbTop: Int32, thumbHeight: Int32) {}
     func reconfigureTopLevel(id: UInt32, geometry: TopLevelGeometry) {}
     func applySizeHints(id: UInt32, hints: WMSizeHints?) {}
     func applyMotifDecorations(id: UInt32, hints: MotifWMHints?) {}

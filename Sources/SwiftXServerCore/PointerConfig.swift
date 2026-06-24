@@ -43,18 +43,27 @@ public struct PointerConfig: Sendable {
     /// and left-button text selection in xterm is unaffected.
     public var xtermRightClickMenu: Bool
 
+    /// XTERM EXTENSION (rendering). When true, the server reskins the xterm
+    /// scrollbar: it suppresses xterm's gray-stipple thumb and flat trough and
+    /// draws a Motif XmScrollBar look (recessed trough + raised beveled slider)
+    /// in the same window, colored from the live Motif frame palette. Read in
+    /// core at draw time (ServerSession), like the thumb override.
+    public var xtermScrollbarMotifSkin: Bool
+
     public init(
         leftClickWireButton: UInt8 = 1,
         wheelClickWireButton: UInt8 = 2,
         rightClickWireButton: UInt8 = 3,
         xtermScrollbarThumbOverride: Bool = false,
-        xtermRightClickMenu: Bool = false
+        xtermRightClickMenu: Bool = false,
+        xtermScrollbarMotifSkin: Bool = false
     ) {
         self.leftClickWireButton = leftClickWireButton
         self.wheelClickWireButton = wheelClickWireButton
         self.rightClickWireButton = rightClickWireButton
         self.xtermScrollbarThumbOverride = xtermScrollbarThumbOverride
         self.xtermRightClickMenu = xtermRightClickMenu
+        self.xtermScrollbarMotifSkin = xtermScrollbarMotifSkin
     }
 
     public static let `default` = PointerConfig()

@@ -1051,6 +1051,28 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         }
     }
 
+    /// Reskin an xterm scrollbar with Motif chrome. Opens the scrollbar
+    /// window's draw context (window clip + logical->device CTM applied) and
+    /// renders the recessed trough + raised slider. Colors come from the live
+    /// Motif frame palette so the scrollbar matches the window frame.
+    public func paintMotifScrollbar(target: DrawTarget, windowRect: Rectangle,
+                                    thumbTop: Int32, thumbHeight: Int32) {
+        // Snapshot the theme once so the scrollbar's colors AND bevel width
+        // come from the same source the window frame uses — keeping the
+        // scrollbar chrome consistent with the frame's bevel thickness.
+        let theme = MotifTheme.current
+        let colors = theme.activeColors
+        let bevelWidth = Int(theme.bevelWidth)
+        let rect = CGRect(x: CGFloat(windowRect.x), y: CGFloat(windowRect.y),
+                          width: CGFloat(windowRect.width), height: CGFloat(windowRect.height))
+        withDrawContext(target, clipRectangles: nil) { ctx in
+            MotifScrollbarRenderer.paint(ctx, windowRect: rect,
+                                         thumbTop: CGFloat(thumbTop),
+                                         thumbHeight: CGFloat(thumbHeight),
+                                         colors: colors, bevelWidth: bevelWidth)
+        }
+    }
+
     /// M3 hook for a resized descendant window. Currently a no-op.
     public func descendantResized(id: UInt32, parent: UInt32, geometry: TopLevelGeometry) {
         // M3 hook — mark the NSView's region for that descendant as needing

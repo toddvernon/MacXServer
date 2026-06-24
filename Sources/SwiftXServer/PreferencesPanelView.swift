@@ -233,6 +233,14 @@ private struct MouseTab: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 20)
+                Toggle("Give the xterm scrollbar a Motif look",
+                       isOn: $model.xtermScrollbarMotifSkin)
+                    .toggleStyle(.checkbox)
+                Text("Replaces xterm\u{2019}s gray-stipple scrollbar with a Motif-style recessed trough and raised, beveled slider, colored to match the window frame. The slider tracks the same scroll position and proportion xterm draws.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 20)
             }
 
             Spacer()
@@ -495,6 +503,14 @@ final class PreferencesPanelModel: ObservableObject {
         }
     }
 
+    @Published var xtermScrollbarMotifSkin: Bool {
+        didSet {
+            if xtermScrollbarMotifSkin != prefs.xtermScrollbarMotifSkin {
+                prefs.xtermScrollbarMotifSkin = xtermScrollbarMotifSkin
+            }
+        }
+    }
+
     var captureDirectory: String { prefs.captureDirectory }
 
     /// Path of the user-editable resources file. Same path the resources
@@ -517,6 +533,7 @@ final class PreferencesPanelModel: ObservableObject {
         self.pointerWheelClick = preferences.pointerWheelClick
         self.pointerRightClick = preferences.pointerRightClick
         self.xtermScrollbarThumbOverride = preferences.xtermScrollbarThumbOverride
+        self.xtermScrollbarMotifSkin = preferences.xtermScrollbarMotifSkin
     }
 
     /// Reseed the user resources file from the bundled defaults. Same

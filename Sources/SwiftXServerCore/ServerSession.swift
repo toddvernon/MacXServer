@@ -276,6 +276,21 @@ public final class ServerSession: @unchecked Sendable {
     /// Tiny map (1-3 entries) — three Mac buttons max.
     private var pendingButtonOverrides: [UInt8: UInt8] = [:]
 
+    /// Press→release relocation for the Motif-skin scrollbar arrow steppers.
+    /// An arrow click is rewritten to a Btn2 "move thumb" at a relocated y
+    /// (the page-relative step target); the matching release reuses the same y
+    /// so EndScroll doesn't move the thumb somewhere else. Keyed by the
+    /// physical Mac button, same as pendingButtonOverrides.
+    private var pendingArrowTargetY: [UInt8: Int16] = [:]
+
+    /// Per-scrollbar-window thumb occupancy for the xterm Motif-skin hack.
+    /// Indexed by window-local logical row (one Bool per pixel of scrollbar
+    /// height): true where xterm has filled the thumb. xterm draws the thumb
+    /// incrementally (fill new strips, clear vacated strips), so we accumulate
+    /// fills/clears here and reconstruct the full thumb extent (first..last
+    /// true row) to draw one clean Motif slider. Keyed by scrollbar window id.
+    private var scrollbarThumbOccupancy: [UInt32: [Bool]] = [:]
+
     /// Current X keyboard focus window, set via SetInputFocus. nil = no
     /// explicit focus (KeyPress falls back to keyTarget — the shallowest
     /// descendant with KeyPressMask, then the top-level). Motif sets focus
@@ -1024,6 +1039,111 @@ public final class ServerSession: @unchecked Sendable {
         return isLeftEdge || isRightEdge
     }
 
+    // MARK: - xterm scrollbar Motif skin (rendering hack)
+
+    /// True when this window is an xterm scrollbar AND the Motif-skin hack is
+    /// on for this (xterm) session. Gates the rendering takeover so the trough
+    /// substitution + slider draw only fire on a real xterm scrollbar.
+    func isMotifSkinnedScrollbar(_ id: UInt32) -> Bool {
+        return PointerConfig.current.xtermScrollbarMotifSkin
+            && wmClass == "XTerm"
+            && isXtermScrollbarWindow(id)
+    }
+
+    /// Record that xterm filled (`filled=true`) or cleared (`filled=false`) the
+    /// row range [y, y+height) of the scrollbar thumb, in window-local logical
+    /// coords. Lazily sizes the occupancy buffer to the window height.
+    private func markScrollbarThumb(window id: UInt32, y: Int, height: Int, filled: Bool) {
+        guard let win = windows.get(id) else { return }
+        let h = Int(win.height)
+        guard h > 0 else { return }
+        var occ = scrollbarThumbOccupancy[id] ?? Array(repeating: false, count: h)
+        if occ.count != h { occ = Array(repeating: false, count: h) }  // resized
+        let lo = max(0, y)
+        let hi = min(h, y + height)
+        if lo < hi {
+            for row in lo..<hi { occ[row] = filled }
+        }
+        scrollbarThumbOccupancy[id] = occ
+    }
+
+    /// Repaint the whole Motif-skinned scrollbar: recessed trough over the
+    /// window, raised slider over the reconstructed thumb extent. Drives the
+    /// bridge's paintMotifScrollbar with top-level-local logical rects.
+    private func repaintScrollbarSkin(_ id: UInt32) {
+        guard let bridge = bridge,
+              let win = windows.get(id),
+              let (top, dx, dy) = topLevelAndOffset(for: id) else { return }
+        let target = DrawTarget.window(id: id, topLevel: top, offsetX: dx, offsetY: dy)
+        let windowRect = Rectangle(x: dx, y: dy, width: win.width, height: win.height)
+        // Reconstruct the contiguous thumb extent (window-local, full-height
+        // coords) from the occupancy buffer. The renderer rescales it into the
+        // trough channel between the arrow buttons.
+        var thumbTop: Int32 = 0
+        var thumbHeight: Int32 = 0
+        if let occ = scrollbarThumbOccupancy[id],
+           let first = occ.firstIndex(of: true),
+           let last = occ.lastIndex(of: true) {
+            thumbTop = Int32(first)
+            thumbHeight = Int32(last - first + 1)
+        }
+        bridge.paintMotifScrollbar(target: target, windowRect: windowRect,
+                                   thumbTop: thumbTop, thumbHeight: thumbHeight)
+    }
+
+    /// Fraction of the visible page a single arrow click scrolls.
+    private static let scrollbarArrowStepFraction = 0.15
+
+    /// If (x, y) [top-level-local] is a press on a Motif-skinned scrollbar's
+    /// up/down arrow, return the top-level y to relocate a synthetic Btn2
+    /// "move thumb" to — a page-relative step from the current thumb position.
+    /// Returns nil for non-arrow clicks (trough/slider keep the grab behavior),
+    /// short scrollbars with no arrows, or when there's no thumb to step.
+    func motifScrollbarArrowStepTarget(topLevel: UInt32, x: Int16, y: Int16) -> Int16? {
+        guard let (sbId, _, _) = mouseTarget(topLevel: topLevel, x: x, y: y, eventMaskBit: 1 << 2),
+              isMotifSkinnedScrollbar(sbId),
+              let win = windows.get(sbId),
+              let (_, _, dy) = topLevelAndOffset(for: sbId) else { return nil }
+        let h = Int(win.height)
+        guard let arrow = MotifScrollbarRenderer.arrowSize(
+                width: CGFloat(win.width), height: CGFloat(h)) else { return nil }
+        let arrowPx = Int(arrow)
+        let localY = Int(y) - Int(dy)
+
+        let up: Bool
+        if localY < arrowPx { up = true }
+        else if localY >= h - arrowPx { up = false }
+        else { return nil }   // trough/slider — leave the grab behavior alone
+
+        // Current thumb extent (window-local). No thumb → nothing to step.
+        guard let occ = scrollbarThumbOccupancy[sbId],
+              let first = occ.firstIndex(of: true),
+              let last = occ.lastIndex(of: true) else { return nil }
+        let thumbTop = first
+        let thumbHeight = last - first + 1
+
+        let step = max(1, Int(Double(thumbHeight) * Self.scrollbarArrowStepFraction))
+        let maxTop = max(0, h - thumbHeight)
+
+        // xterm's Btn2 MoveThumb sets the thumb top to the pointer's window-
+        // local y. Normally we land a full step from the current position; but
+        // when a step would reach (or overshoot) an end, drive the click to the
+        // absolute window edge so xterm snaps fully to the terminal line — the
+        // last sub-step remainder always gets traversed, even when xterm's
+        // line rounding would otherwise leave the thumb a hair short.
+        let clickLocalY: Int
+        if up {
+            let t = thumbTop - step
+            clickLocalY = t <= 0 ? 1 : t          // snap to the very top
+        } else {
+            let t = thumbTop + step
+            clickLocalY = t >= maxTop ? (h - 2) : t   // snap to the very bottom
+        }
+        // Keep the click inside the scrollbar trough.
+        let safeY = max(1, min(clickLocalY, h - 2))
+        return Int16(clamping: safeY + Int(dy))
+    }
+
     /// Mouse-down/up at top-level-local logical coords (x, y). Resolves the
     /// deepest mapped descendant containing the click whose event mask has
     /// ButtonPressMask (1<<2) or ButtonReleaseMask (1<<3) set; falls back
@@ -1033,53 +1153,69 @@ public final class ServerSession: @unchecked Sendable {
         modifierFlags: UInt = 0
     ) {
         guard let order = byteOrder else { return }
+        var x = x, y = y
+        let physicalButton = button
         let mask: UInt32 = isDown ? (1 << 2) : (1 << 3)
         let mask16: UInt16 = UInt16(mask)
-        let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
         // Server-side context-aware button rewrite, applied BEFORE held-
         // button bookkeeping so the press and release both see the
-        // overridden value. First-of-its-kind: when the user is hosting
-        // xterm AND has the scrollbar-thumb-override on AND this click
-        // resolves to an xterm-shaped scrollbar widget, force the wire
-        // button to 2 ("grab thumb"). Keeps left-click-selects-text in
-        // the xterm content area while giving Mac users the "any button
-        // grabs the thumb" behavior in the scrollbar.
+        // overridden value. Two related xterm-scrollbar rewrites:
+        //  1. Motif-skin arrow stepper: an up/down arrow click is relocated
+        //     to a Btn2 "move thumb" at a page-relative step from the current
+        //     thumb (instead of grabbing at the arrow, which jumps to the
+        //     very top/bottom). Takes precedence — checked first.
+        //  2. Thumb override: when the scrollbar-thumb-override is on, any
+        //     click that resolves to an xterm-shaped scrollbar widget forces
+        //     wire button 2 ("grab thumb"). Keeps left-click-selects-text in
+        //     the content area while giving Mac users "any button grabs."
         //
-        // Press: lookup target with ButtonPressMask, decide override, stash
-        // original→effective in pendingButtonOverrides so the matching
-        // release reuses the same effective value regardless of where the
-        // pointer ends up at release time.
-        // Release: prefer the stashed override (set at the press location)
-        // over a fresh lookup, then clear the entry.
+        // Press: decide the rewrite, stash physical→effective button (and, for
+        // an arrow, the relocated y) so the matching release reuses the same
+        // values regardless of where the pointer ends up at release time.
+        // Release: replay the stashed override + relocation, then clear them.
         var button = button
         if isDown {
-            // Decide whether this press needs the xterm-scrollbar override.
-            let overrideFires =
-                PointerConfig.current.xtermScrollbarThumbOverride
-                && wmClass == "XTerm"
-                && mouseTarget(topLevel: topLevel, x: x, y: y,
-                               eventMaskBit: 1 << 2)
-                    .map { isXtermScrollbarWindow($0.0) } ?? false
-            if overrideFires {
-                if button != 2 {
-                    log?.log("  xterm-ext: scrollbar click button \(button) → 2")
-                    pendingButtonOverrides[button] = 2
-                    button = 2
-                }
+            if let targetY = motifScrollbarArrowStepTarget(topLevel: topLevel, x: x, y: y) {
+                log?.log("  xterm-ext: scrollbar arrow step → Btn2 at y=\(targetY)")
+                y = targetY
+                pendingButtonOverrides[physicalButton] = 2
+                pendingArrowTargetY[physicalButton] = targetY
+                button = 2
             } else {
-                // A non-overriding press MUST clear any leftover entry for
-                // this physical button — without this, a stale pending
-                // entry from a previous botched scrollbar interaction
-                // (release dropped, dragMonitor consumed it, etc.) bleeds
-                // into the release of THIS press and rewrites the wire
-                // button. Symptom: content-area left-click selection
-                // breaks because the press goes out as wire 1 but the
-                // release goes out as wire 2.
-                pendingButtonOverrides.removeValue(forKey: button)
+                // Decide whether this press needs the xterm-scrollbar override.
+                let overrideFires =
+                    PointerConfig.current.xtermScrollbarThumbOverride
+                    && wmClass == "XTerm"
+                    && mouseTarget(topLevel: topLevel, x: x, y: y,
+                                   eventMaskBit: 1 << 2)
+                        .map { isXtermScrollbarWindow($0.0) } ?? false
+                if overrideFires {
+                    if button != 2 {
+                        log?.log("  xterm-ext: scrollbar click button \(button) → 2")
+                        pendingButtonOverrides[physicalButton] = 2
+                        button = 2
+                    }
+                } else {
+                    // A non-overriding press MUST clear any leftover entry for
+                    // this physical button — without this, a stale pending
+                    // entry from a previous botched scrollbar interaction
+                    // (release dropped, dragMonitor consumed it, etc.) bleeds
+                    // into the release of THIS press and rewrites the wire
+                    // button. Symptom: content-area left-click selection
+                    // breaks because the press goes out as wire 1 but the
+                    // release goes out as wire 2.
+                    pendingButtonOverrides.removeValue(forKey: physicalButton)
+                }
             }
-        } else if let override = pendingButtonOverrides.removeValue(forKey: button) {
-            button = override
+        } else {
+            // Release: relocate to the stashed arrow target (if any), then
+            // apply the stashed button override.
+            if let ty = pendingArrowTargetY.removeValue(forKey: physicalButton) { y = ty }
+            if let override = pendingButtonOverrides.removeValue(forKey: physicalButton) {
+                button = override
+            }
         }
+        let (rx, ry) = rootCoords(topLevel: topLevel, localX: x, localY: y)
 
         // Update held-button bookkeeping first; resolve target second; then
         // (after delivery) install or tear down the implicit grab.
@@ -3167,6 +3303,12 @@ public final class ServerSession: @unchecked Sendable {
     /// ChangeWindowAttributes); falls back to white when no bg pixel was
     /// configured. Used by ClearArea and by the paint-on-map flow.
     func windowBackground(_ windowId: UInt32, byteOrder: ByteOrder) -> RGB16 {
+        // Motif-skin hack: paint the scrollbar trough color instead of xterm's
+        // bg pixel, so every normal bg-paint path (map / expose / configure)
+        // lays down the Motif trough with no extra call sites.
+        if isMotifSkinnedScrollbar(windowId) {
+            return MotifScrollbarRenderer.troughRGB16(MotifTheme.current.activeColors)
+        }
         guard let w = windows.get(windowId) else {
             return RGB16(red: 0xFFFF, green: 0xFFFF, blue: 0xFFFF)
         }
@@ -3345,6 +3487,17 @@ public final class ServerSession: @unchecked Sendable {
         guard let target = validateDrawTarget(r.drawable, majorOpcode: PolyFillRectangle.opcode) else { return }
         guard validateGC(r.gc, majorOpcode: PolyFillRectangle.opcode) != nil else { return }
         guard let bridge = bridge else { return }
+        // Motif-skin hack: a fill into the xterm scrollbar window is the
+        // stippled thumb. Suppress it; record the filled rows and repaint the
+        // Motif slider over the reconstructed thumb extent instead.
+        if case .window(let wid, _, _, _) = target, isMotifSkinnedScrollbar(wid) {
+            for rect in r.rectangles {
+                markScrollbarThumb(window: wid, y: Int(rect.y),
+                                   height: Int(rect.height), filled: true)
+            }
+            repaintScrollbarSkin(wid)
+            return
+        }
         let state = gcState(r.gc, byteOrder: byteOrder)
         let (dx, dy) = target.windowOffset
         let translated = r.rectangles.map {
@@ -3769,6 +3922,17 @@ public final class ServerSession: @unchecked Sendable {
 
     private func handleClearArea(_ r: ClearArea, byteOrder: ByteOrder) {
         guard let entry = validateWindow(r.window, majorOpcode: ClearArea.opcode) else { return }
+        // Motif-skin hack: a clear in the xterm scrollbar window is xterm
+        // erasing the vacated part of the thumb. Suppress the normal trough
+        // clear; unmark those rows and repaint the Motif scrollbar (the trough
+        // under the cleared strip comes back via the repaint). xterm uses
+        // exposures=False here, so no Expose to forward.
+        if isMotifSkinnedScrollbar(r.window) {
+            let clearH = r.height == 0 ? max(0, Int(entry.height) - Int(r.y)) : Int(r.height)
+            markScrollbarThumb(window: r.window, y: Int(r.y), height: clearH, filled: false)
+            repaintScrollbarSkin(r.window)
+            return
+        }
         guard let bridge = bridge,
               let (top, dx, dy) = topLevelAndOffset(for: r.window) else { return }
         let bg = windowBackground(r.window, byteOrder: byteOrder)
