@@ -17,9 +17,12 @@ unchanged and still the larger ongoing thread.
   own menus. Defaults rebaked to match Todd's actual config (wheel = Select
   text, right = Menu, scrollbar-thumb override on) for fresh installs only.
 
-- **Motif-skin the xterm scrollbar** (commit 1de1139). New
-  `xterm.scrollbarMotifSkin` toggle (OFF by default -- opt-in). When on, the
-  server takes over the scrollbar window's rendering: suppresses xterm's
+- **Motif-skin the xterm scrollbar** (commit 1de1139; default now derived from
+  the Motif frame setting). When the Motif window frame is on, the xterm
+  scrollbar automatically gets the Motif look -- derived from `motifFrameEnabled`
+  in applyPointerConfig, no separate toggle (the Mouse-tab xterm section just
+  carries a note pointing at the Display tab). When on, the server takes over
+  the scrollbar window's rendering: suppresses xterm's
   gray-stipple Athena thumb and draws a Motif XmScrollBar look colored from the
   live frame palette -- recessed trough, raised beveled slider, and 3D stepper
   arrows at top/bottom. Bevel thickness pulled from `MotifTheme.bevelWidth` (the
@@ -44,16 +47,14 @@ unchanged and still the larger ongoing thread.
   to the pointer y. Held up live, but if a future xterm build centers the thumb
   instead, the step math in `motifScrollbarArrowStepTarget` is the one spot to
   adjust.
-- Scrollbar skin is opt-in (default off). Once Todd's comfortable it can be
-  flipped on by default like the thumb-override was.
 - Occupancy model assumes xterm only draws the thumb (fills) + trough-clears
   into the scrollbar window. True for the Athena scrollbar; the live Solaris
   xterm is the real test (held up so far).
 
 ## What's next
 
-- macXserver: optional -- default the scrollbar Motif skin on; tune the 15%
-  step fraction or arrow rendering if Todd wants.
+- macXserver: optional -- tune the 15% step fraction or arrow rendering if
+  Todd wants. (Scrollbar skin now auto-follows the Motif frame setting.)
 - **Helios (the larger thread, unchanged from session 1):**
   - **C6:** more guided-sysadmin tasks (add-a-user, hostname/timezone, NFS,
     repair items). DNS editor is the reusable template.

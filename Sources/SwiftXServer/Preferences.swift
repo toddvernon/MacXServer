@@ -30,7 +30,6 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         static let pointerWheelClick     = "pointer.wheelClick"     // int
         static let pointerRightClick     = "pointer.rightClick"     // int
         static let xtermScrollbarThumbOverride = "xterm.scrollbarThumbOverride" // bool
-        static let xtermScrollbarMotifSkin = "xterm.scrollbarMotifSkin" // bool
         static let sparcDiskImagePath = "sparcplug.diskImagePath"   // string, "" = not installed
         static let sparcAutoBackupOnShutdown = "sparcplug.autoBackupOnShutdown" // bool
         static let sparcTftpEnabled = "sparcplug.tftpEnabled"       // bool
@@ -71,7 +70,6 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
             Key.pointerWheelClick: 1,
             Key.pointerRightClick: 3,
             Key.xtermScrollbarThumbOverride: true,
-            Key.xtermScrollbarMotifSkin: false,
             Key.sparcDiskImagePath: "",
             Key.sparcAutoBackupOnShutdown: true,
             Key.sparcTftpEnabled: false,
@@ -215,18 +213,6 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         }
     }
 
-    /// Server-side xterm hack: when on, the xterm scrollbar's gray-stipple
-    /// thumb is replaced with a Motif XmScrollBar look (recessed trough +
-    /// raised beveled slider) colored from the Motif frame palette. Sibling
-    /// of the scrollbar-thumb override in the same hack family.
-    var xtermScrollbarMotifSkin: Bool {
-        get { defaults.bool(forKey: Key.xtermScrollbarMotifSkin) }
-        set {
-            defaults.set(newValue, forKey: Key.xtermScrollbarMotifSkin)
-            NotificationCenter.default.post(name: Self.didChange, object: self)
-        }
-    }
-
     /// Absolute path to the SPARCstation Solaris disk image (qcow2). Empty
     /// means "not installed": the SPARCstation menu offers Install and Run is
     /// disabled. The user can put the image anywhere; this one setting is the
@@ -310,7 +296,10 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
             // native menu; non-xterm clients still get button 3 for their own.
             // Derived, not a separate setting, so the two can't drift.
             xtermRightClickMenu: pointerRightClick == 3,
-            xtermScrollbarMotifSkin: xtermScrollbarMotifSkin
+            // The xterm scrollbar's Motif skin follows the Motif window frame:
+            // if you're running the Motif look, the scrollbar matches. Derived,
+            // so there's no separate toggle to drift from the frame setting.
+            xtermScrollbarMotifSkin: motifFrameEnabled
         ))
     }
 
