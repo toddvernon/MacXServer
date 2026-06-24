@@ -31,21 +31,23 @@
 
 ## Mission
 
-Bring Claude-driven, agentic software development *and* modern remote management to classic Sun workstations **without turning the Suns into modern machines.** The intelligence, the network, the secrets, and the editing logic all live on the Mac. The Sun stays exactly as period-correct as it is today and contributes the one thing only it can: executing and running native SPARC/SunOS code.
+The story is **Claude doing agentic, native software development on a classic Sun** -- writing, compiling, and running real SPARC/SunOS code on a machine that could never run a modern agent itself **without turning the Sun into a modern machine.** The trick is that nothing modern moves onto the Sun: the intelligence, the network, the secrets, and the editing logic all live on the Mac. The Sun stays exactly as period-correct as it is today and contributes the one thing only it can: executing native SPARC/SunOS code. Claude Code, on the Mac, reaches it through an **MCP bridge that sits over the Helios agent** -- a small guest agent running inside the Sun.
+
+That same agent, because it's a clean general mechanism with no opinion about who's calling, is *also* what macXserver uses to control SPARCplug (shutdown, liveness, orphan recovery, image repair, file transfer). That second use is real and it ships first, but it's a consequence of building the agent well, not the headline. The headline is the Sun doing agentic development it has no business being able to do.
 
 Development happens entirely on **SPARCplug**, the bundled emulated SPARCstation -- self-contained, reproducible, no hardware required. The Sun (emulated or real) is reached through a single **guest agent** running inside it, listening on a TCP port, that proxies both commands and filesystem access. The serial console is a secondary, mixed-in channel for boot and recovery. There is no NFS and no shared mount.
 
 ---
 
-## Two use cases, one daemon
+## One general agent (the duality is plumbing, not the pitch)
 
-The same guest agent serves two conceptually different jobs. Keeping them separate in our heads is what keeps the design clean.
+Helios the agent is deliberately dumb: a general exec + file + liveness proxy that knows nothing about LLMs or control policy. All policy lives in the clients. That's an implementation choice, and it has a convenient consequence -- the same agent ends up serving two very different clients. Worth being clear that this duality is an implementation fact, **not** the interesting story. The interesting story is the agentic one; the control plane is what falls out of having built the right mechanism to make it possible.
 
-**Use case 1 -- control plane (near-term, release-gating).** macXserver itself is the client. No AI, no API key, deterministic. This is what plugs the holes we hit building the plugin: graceful shutdown that doesn't depend on console-scraping or telnet (which Solaris 2.6 refuses for root), a real "is the guest up and ready" liveness signal, orphan recovery, a curated image-repair GUI, and -- because `run_command` gives clean exec with real exit codes and no prompt-scraping -- the **least-brittle transport for the remote app launcher** (macXserver keeps telnet, adds ssh, and adds Helios as the preferred X-client launch path). These are operational features the appliance needs anyway, and the SPARCplug release is parked until they exist.
+**The agentic client (the story).** Claude Code, on the Mac, pointed at an MCP bridge that sits over the agent. Claude develops native software on the Sun -- edit on the Mac, compile and run on the iron -- with a world-class agent loop we don't have to build. This is the reason Helios exists.
 
-**Use case 2 -- agentic coding (the vision, built on top).** Claude is the client, via the Claude Code app pointed at a SPARCplug MCP server. The headline: Claude developing native software on a Sun. It rides the *exact same* daemon verbs the control plane uses, so building the control plane well builds almost all of the agentic substrate for free.
+**The control client (the plumbing that ships first).** macXserver itself, no AI, deterministic. It plugs the holes we hit building the plugin: graceful shutdown that doesn't depend on console-scraping or telnet (which Solaris 2.6 refuses for root), a real "is the guest up and ready" liveness signal, orphan recovery, a curated image-repair GUI, the per-launcher file browser, and -- because `run_command` gives clean exec with real exit codes and no prompt-scraping -- the **least-brittle transport for the remote app launcher**. These are operational features the appliance needs anyway, so they're built first and the SPARCplug release is parked behind them.
 
-Both are **clients** over one **daemon mechanism**. The daemon knows nothing about control policy or LLMs; it is a dumb, general exec + file + liveness proxy. All policy lives in the clients. Build it well for control and it is automatically the right substrate for the agent.
+Both ride the *exact same* daemon verbs, so building the control plane well builds almost all of the agentic substrate for free. That's the whole payoff of keeping the agent policy-free -- but it's a happy implementation outcome, not a combined "it serves two masters!" narrative. Nobody is moved by a daemon with two callers; they're moved by a 1998 Sun doing agentic development.
 
 ---
 
