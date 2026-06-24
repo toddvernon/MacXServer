@@ -7,10 +7,47 @@ turns its three deliverables into concrete, dependency-ordered tasks
 against the actual code, and records the decisions we've settled so they
 don't get relitigated.
 
-Scope is plugin v1 only: download one app, install the disk image from a
-menu, boot a working SPARCstation with the console visible, launch X
-clients into it. No Helios, no QMP, no snapshot fast-launch. Those are
-fast-follows, called out where relevant.
+Scope (as originally written): download one app, install the disk image from
+a menu, boot a working SPARCstation with the console visible, launch X clients
+into it. The original draft said "No Helios" and treated it as a fast-follow --
+that's now stale: Helios **landed** and is part of the product. See the
+reconciliation below.
+
+## What's actually left for v1 (reconciled 2026-06-25)
+
+Most of this doc is done. The **Helios control plane** (HELIOS_PLAN C1-C8) landed
+since this list was written and closed every control/shutdown/orphan item the
+"Crash / orphan safety" section was reaching toward: graceful shutdown,
+liveness, and orphan recovery all run over the daemon now, and the console
+auto-login is gone (it's a read-only observation glass-TTY). Helios is no longer
+a "fast-follow" -- it shipped, and brought DNS admin + the per-launcher file
+browser with it (tracked in HELIOS_PLAN, beyond this doc's scope).
+
+What's genuinely left before a stranger can install and run the combo, in
+priority order:
+
+1. **Package the engine into the signed app (Track A).** A5 (`release.sh`
+   copy-in + sign the qemu helper inside-out with its entitlements), A6
+   (clean-Mac acceptance on a fresh no-Homebrew account), A4 (bundle layout,
+   realized by A5). The signing recipe is already proven locally (A3); this is
+   wiring it into `release.sh` + notarizing the combined bundle.
+2. **Install the disk image (Track C + E).** C1 downloader (NSURLSession ->
+   SHA256 -> gunzip -> Application Support), C2 `manifest.json` + actually
+   hosting the gzipped qcow2, C3 install sheet + state detection, E1 confirm the
+   shipping image is baseline-configured **and has the current Helios daemon
+   baked in**.
+3. **Restore from Backup** (data safety, "fix before shipping"). Auto-backup
+   exists; the in-app restore UI does not. The one real functional gap.
+4. **D2 launcher un-gray** (minor): un-gray the bundled-SPARCstation launcher
+   entry when the engine runs.
+
+Not v1: L4 (kqueue watchdog -- optional, needs maintainer sign-off) and the
+re-attachable serial console for orphan reconnect (Helios covers control; the
+console-view re-attach is a nice-to-have).
+
+Most-likely-to-bite: **A6**. The embedded-helper signing failure only shows up
+on a Mac that isn't yours, and it's exactly what makes "no Homebrew, just drag
+it" either true or a support nightmare.
 
 ## Settled decisions (2026-06-17)
 
@@ -118,14 +155,14 @@ hard kill of qemu leaves Solaris (non-logging UFS) needing fsck on next boot,
 and quitting the app without stopping the engine would orphan a headless
 qemu. All DONE 2026-06-17.
 
-- [x] **Graceful shutdown.** `QemuEngine` now drives the serial console
-  (writable stdin + `sendConsole`). On boot it auto-logs-in as root (the
-  image allows passwordless root console login — also the Helios
-  prerequisite, so it's on by default). `shutDown()` sends `init 5`; the
-  guest syncs/unmounts and powers off, so qemu exits on its own.
-  Empirically verified: the positive "safe to power off" signal is the
-  console line `syncing file systems... done` (`onCleanHalt`), and `init 5`
-  cleanly exits qemu (not parked at `ok`).
+- [x] **Graceful shutdown.** *(Mechanism superseded by Helios -- see L0/L2/L3.
+  This described the original console-driven path; `shutDown()` now drives the
+  Helios `shutdown` verb, the console auto-login was removed, and the console is
+  read-only. The clean-halt detection below is unchanged and still gates the
+  auto-backup.)* The guest syncs/unmounts and powers off, so qemu exits on its
+  own. The positive "safe to power off" signal is the console line
+  `syncing file systems... done` (`onCleanHalt`), and `init 5` cleanly exits
+  qemu (not parked at `ok`).
 - [x] **States + UI.** Added `State.shuttingDown`. Console window has
   Shut Down + Force Quit buttons and shows a "Filesystems synced — safe to
   power off" banner when the clean-halt signal lands. Menu: Start / Shut
@@ -183,14 +220,15 @@ hand over the telnet hostfwd). The latent corruption risk is worse than the
 orphan: nothing stops a *second* qemu from opening the same qcow2.
 
 **Strategic resolution (DECISIONS 2026-06-20): the Helios control-plane daemon
-is the destination for all of this.** A guest-side agent on a port gives a real
-`shutdown` verb (graceful `init 5` that also works on an orphan, since the
-daemon outlives the parent) and a real liveness signal -- the shippable control
-channel that L0/L2/L3 were all reaching toward. So the SPARCplug release is now
-parked behind the control plane, and the items below are interim: L1 (lock) +
-Force Quit + auto-backup are the safety floor *today*; the daemon supersedes the
-telnet/ssh/console-scrape shutdown paths once it lands. See `Helios-Mission.md`
-(control plane = use case 1) and DECISIONS 2026-06-20 (mission refinement).
+is the destination for all of this** -- and it has since **LANDED** (HELIOS_PLAN
+C1-C8, deployed + verified on the live image 2026-06-24). The guest-side agent
+gives a real `shutdown` verb (graceful `init 5` that also works on an orphan,
+since the daemon outlives the parent) and a real liveness signal -- the
+shippable control channel L0/L2/L3 were all reaching toward. So those three are
+now **closed via Helios** (see each below); graceful shutdown, readiness, and
+orphan recovery run over the daemon, superseding the telnet/ssh/console-scrape
+paths. L1 (lock) + Force Quit + auto-backup remain the safety floor. See
+`Helios-Mission.md` and DECISIONS 2026-06-20.
 
 - [x] **L1. Image lock file. DONE 2026-06-20.** `ImageLock` /
   `ImageLockManager` in SwiftXServerCore: host-aware advisory lock written
@@ -206,48 +244,45 @@ telnet/ssh/console-scrape shutdown paths once it lands. See `Helios-Mission.md`
   decision tree + parse/serialize + release-by-host. Caveats accepted: lock
   is advisory (qemu's own fcntl lock doesn't cross Dropbox) and cross-machine
   detection is best-effort (Dropbox sync latency).
-- [~] **L2. Orphan recovery UX. PARTIAL 2026-06-20; graceful path PARKED.**
-  The localOrphan dialog offers: **Try to Shut It Down** (best-effort `init 5`
-  over the 2123 telnet hostfwd via `TelnetLauncher`, success measured by
-  polling the pid to death), **Force Quit** (verified SIGKILL), **Show Me How**
-  (manual telnet steps), **Cancel**.
-  - (b) **DONE 2026-06-20.** The silent ~35s poll is now a live panel
+- [x] **L2. Orphan recovery UX. Graceful path DONE via Helios 2026-06-24.**
+  The localOrphan dialog offers: **Try to Shut It Down**, **Force Quit**
+  (verified SIGKILL), **Show Me How** (manual steps), **Cancel**.
+  - (b) **DONE 2026-06-20.** The silent ~35s poll is a live panel
     (`SparcShutdownProgressWindowController`): countdown + progress bar while
     waiting, auto-dismiss + boot on power-off, and on timeout it flips in place
-    to an actionable failure state (Force Quit / Show Me How / Cancel). Reusable
-    UI shell the agent can drive later.
-  - (c) **The telnet mechanism is dead on this image — PARKED.** Solaris 2.6
-    *refuses root login over telnet*, so "Try to Shut It Down" can never
-    authenticate and always times out → Force Quit. We are NOT switching it to
-    ssh: `ssh sparcplug "init 5"` works on an orphan's 2222 hostfwd today, but
-    only on machines that have the per-Mac `~/.ssh/sparcplug_rsa` + config —
-    a shipped customer has neither, so it's dev-only scaffolding. The real,
-    shippable graceful-shutdown channel is the **Helios agent** (next up).
-    Until then, **Force Quit + auto-backup is the working recovery path.**
-  - (a) **Reconnect** to a live orphan — still TODO, needs L3's console socket.
-  - Footgun noted while parked: "Try to Shut It Down" is the dialog's default
-    button but can't work on this image, so a reflexive Return is a guaranteed
-    timeout. Consider making Force Quit the default until the agent lands.
-- [ ] **L3. Move console + control off the stdio pipe.** Today console +
-  control ride `-nographic` stdio owned by the parent's `Pipe`; when the
-  parent dies they're unreachable and qemu spins. Switch to
-  `-serial unix:console.sock,server,nowait` (re-attachable console) +
-  `-qmp unix:qmp.sock,server,nowait` (reliable liveness + hard `quit`).
-  Then L2's Reconnect re-wires the observation window and Shut Down drives
-  `init 5` over the serial socket — works even on an orphan. NB: SPARC has
-  no ACPI, so QMP `system_powerdown` won't cleanly halt Solaris; graceful
-  stays `init 5` over serial. **Mostly superseded by the daemon (06-20):**
-  the *control* half (liveness + shutdown, incl. orphans) comes from the
-  Helios `shutdown`/`hello` verbs, not QMP/serial. The only residual reason
-  for the serial socket is re-attaching the *console view* to an orphan
-  (L2's Reconnect); reassess whether that's worth it once the daemon is in.
-- [ ] **L0. Drop console auto-login; control off the console** (DECISIONS
-  2026-06-20). `QemuEngine` currently scrapes `login:` → types `root` → drives
-  `init 5` over the console. Move graceful shutdown to ssh-key (works today)
-  or the Helios agent, then delete the auto-login so the console is a pure
-  observation glass-TTY. Decouples macXserver from the guest's password
-  policy (a root password breaks the current auto-login). Same direction as
-  L3 — do them together.
+    to an actionable failure state (Force Quit / Show Me How / Cancel).
+  - (c) **Graceful shutdown now works -- over Helios, not telnet.** The old
+    telnet path was dead (Solaris 2.6 refuses root telnet); it's replaced by
+    `attemptHeliosShutdown`, which drives the daemon's `shutdown` verb (`init 5`)
+    over the 2125 hostfwd and polls the pid to death. The daemon outlives the
+    parent, so it answers even for an orphan. **The auth gap is closed
+    (2026-06-24):** the per-boot Helios secret is persisted in the image lock
+    (`ImageLock.secret`), so a *different* macXserver process (this Mac after a
+    crash, or the other Mac via the Dropbox-synced lock) can authenticate to the
+    orphan's daemon. Force Quit + auto-backup remain the fallback when the daemon
+    is unreachable. The failure-panel + by-hand copy was de-telnet-ified.
+  - (a) **Reconnect** to a live orphan -- still TODO, needs a re-attachable
+    console socket (L3). Non-v1.
+  - (Former footgun resolved: "Try to Shut It Down" can now actually work, so it
+    being the default button is fine.)
+- [x] **L3. Move *control* off the stdio pipe. DONE via Helios; console-reconnect
+  deferred (non-v1).** The original plan was a `-serial unix:` socket +
+  `-qmp unix:` socket so control survived the parent's death. The **control half
+  is now closed by the daemon**: liveness is the Helios `hello` probe and
+  shutdown (incl. orphans) is the Helios `shutdown` verb, neither of which rides
+  the stdio pipe. The only residual reason for a serial socket is re-attaching
+  the *console view* to an orphan (L2's Reconnect) -- a nice-to-have, explicitly
+  deferred past v1. (QMP was never the graceful path anyway: SPARC has no ACPI,
+  so `system_powerdown` won't halt Solaris; graceful is `init 5`, now via Helios.)
+- [x] **L0. Drop console auto-login; control off the console. DONE.** Graceful
+  shutdown is the Helios `shutdown` verb (`QemuEngine.requestShutdownViaDaemon`
+  / `performDaemonShutdown`, no console fallback) and readiness is the Helios
+  `hello` probe, so the console drives no control. The auto-login was removed:
+  `ingest()` only reads the console (forward to UI + clean-halt/fsck/progress
+  markers) and there is no `sendConsole`/type-`root` anywhere -- it's a pure
+  observation glass-TTY, which also decouples macXserver from the guest's
+  password policy. (Stale "auto-logs-in as root" wording survives in the
+  Lifecycle section below and one code comment; both are vestigial.)
 - [ ] **L4. (Optional) kqueue watchdog — true prevention.** A tiny guardian
   process spawns qemu and `kqueue`-watches the macXserver pid
   (`EVFILT_PROC`/`NOTE_EXIT`); on parent exit by *any* means including

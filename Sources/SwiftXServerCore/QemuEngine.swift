@@ -595,9 +595,10 @@ public final class QemuEngine: @unchecked Sendable {
 
     // MARK: - I/O (all on `queue`)
 
-    /// Process a console chunk: forward it to the UI, auto-login on the first
-    /// login prompt, and fire the clean-halt signal during shutdown. Runs on
-    /// `queue` so the flags and tail buffer aren't raced.
+    /// Process a console chunk: forward it to the UI and fire the boot/shutdown
+    /// markers (clean-halt, fsck stall, progress). Read-only -- the console is a
+    /// pure observation glass-TTY; control (readiness, shutdown) runs over Helios,
+    /// not the console. Runs on `queue` so the flags and tail buffer aren't raced.
     private func ingest(_ data: Data) {
         guard let s = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .ascii) else { return }
