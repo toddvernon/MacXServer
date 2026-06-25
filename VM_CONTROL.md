@@ -1,8 +1,8 @@
 # VM control: QMP for the machine, Helios for the guest
 
-Status: **proposed 2026-06-24, approved; Stages 1 + 2 + Stage 3's
-lock-as-VM-handle / orphan QMP recovery built + live-validated 2026-06-25
-(console-view reconnect is the lone remaining tail).** The settled-decision
+Status: **proposed 2026-06-24, approved; Stages 1-3 built + live-validated
+2026-06-25 (incl. Design-2 console-view reconnect via engine adoption; the
+end-to-end relaunch flow is a manual check).** The settled-decision
 summary is the DECISIONS.md entry of
 2026-06-24; this is the full design and the staging. Stage progress is tracked in
 the rollout section below.
@@ -183,12 +183,26 @@ testable against the `SPARCPLUG_LIVE_TEST` harness:
     quitOrphanViaQmp success/missing-socket) + 1 live test. NB: qemu's QMP
     `server=on` socket is single-client, which is *why* this works only once the
     parent's connection is gone -- exactly the orphan case.
-  - **Console-view reconnect: still open (the L2a nice-to-have).** The console
-    socket path is now recorded in the lock, so a fresh process *can* re-attach
-    the observation view to a live orphan via `SerialConsoleClient`. The remaining
-    work is the detached-console window mode + the "Reconnect" UX in the orphan
-    dialog -- a new UI surface, deliberately left for a design pass. The punchlist
-    has always branded this non-v1.
+  - **Console-view reconnect (Design 2 -- engine adoption): DONE + live-validated
+    2026-06-25.** On launch, `checkForReconnectableOrphanOnLaunch` evaluates the
+    lock; on a `localOrphan` it probes Helios and prompts. `QemuEngine.attach(
+    toOrphan:)` then drives the orphan as a live session *without a child Process*:
+    it wires the QMP + console clients to the lock's socket paths, flips to
+    `.running`, stamps a "reconnected to console" marker (the serial socket replays
+    no history, so a late joiner sees a blank window otherwise), and -- since there's
+    no `terminationHandler` -- detects exit by polling the pid (`scheduleOrphanDeathPoll`).
+    A shared `finishRun()` is the single teardown both the spawned-process and
+    adopted paths funnel through. Because the engine fires the same callbacks, the
+    whole console UI follows for free, including clean-halt (the QMP `SHUTDOWN`
+    event) -> auto-backup. **Graceful-first policy (per Todd):** the prompt leads
+    with **Shut It Down** when Helios answers and only offers **Force Quit** when it
+    doesn't; the console window mirrors it -- **Shut Down** while ready, **Force
+    Quit** only when the daemon can't be reached (booting, wedged, or a graceful
+    attempt failed, surfaced via the new `onShutdownUnavailable`). **Live-validated:**
+    a spawned orphan was adopted (state -> running, marker landed) and clean-stopped
+    through the adopted engine, with the no-Process death poll firing onTerminated.
+    2 new unit tests + 1 live test. The full end-to-end (Xcode-stop a session,
+    relaunch, reconnect) is a manual check.
 - **Stage 4 (post-v1):** snapshot fast-launch, now that the sun4m vmstate support
   is verified.
 

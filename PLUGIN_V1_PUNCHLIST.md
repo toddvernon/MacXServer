@@ -262,11 +262,15 @@ paths. L1 (lock) + Force Quit + auto-backup remain the safety floor. See
     crash, or the other Mac via the Dropbox-synced lock) can authenticate to the
     orphan's daemon. Force Quit + auto-backup remain the fallback when the daemon
     is unreachable. The failure-panel + by-hand copy was de-telnet-ified.
-  - (a) **Reconnect** to a live orphan -- the re-attachable console socket now
-    exists (VM_CONTROL Stage 2: `-serial unix:` + `SerialConsoleClient`) and its
-    path is recorded in the lock (Stage 3 "lock-as-VM-handle"), so the plumbing is
-    in place. The remaining piece is the detached-console window mode + the
-    "Reconnect" button -- a UI design pass. Still non-v1.
+  - (a) **Reconnect** to a live orphan -- **DONE 2026-06-25 (VM_CONTROL Stage 3,
+    Design 2 "engine adoption").** On launch, `checkForReconnectableOrphanOnLaunch`
+    detects a `localOrphan`, probes Helios, and prompts; `QemuEngine.attach(
+    toOrphan:)` adopts it as a live session (QMP + console wired to the lock's
+    sockets, no child Process, pid-poll for exit, "reconnected to console" marker).
+    The whole console UI + clean-halt -> auto-backup follow because the engine fires
+    the same callbacks. Graceful-first: Shut It Down when Helios answers, Force Quit
+    only when it doesn't. Engine adoption live-validated; the end-to-end relaunch
+    flow is a manual check.
   - (d) **Force Quit is now qcow2-clean (VM_CONTROL Stage 3, 2026-06-25).** The
     orphan Force Quit prefers `QemuEngine.quitOrphanViaQmp` -- a fresh QmpClient on
     the QMP socket path the lock records, issuing a `quit` that drains + closes the

@@ -140,6 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         installStatusItem()
         installMainMenu()
         setupSparcEngine()
+        checkForReconnectableOrphanOnLaunch()
         NotificationCenter.default.addObserver(
             self, selector: #selector(launchersFileChanged(_:)),
             name: .launchersFileDidChange, object: nil
@@ -226,6 +227,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self?.ensureSparcConsole()
             self?.sparcConsole?.showWindow()
             self?.sparcConsole?.markBootStalled(reason)
+        }
+        engine.onShutdownUnavailable { [weak self] in
+            // Graceful path couldn't reach the daemon -- surface Force Quit.
+            self?.sparcConsole?.markShutdownUnavailable()
         }
         engine.onTerminated { [weak self] wasCleanHalt in
             self?.autoBackupAfterCleanShutdown(wasCleanHalt: wasCleanHalt)
@@ -990,6 +995,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             presentLocalOrphanDialog(lock: lock, image: image)
         case .remoteLocked(let lock):
             presentRemoteLockedDialog(lock: lock, image: image)
+        }
+    }
+
+    /// On launch, if a SPARCstation from a previous run is still alive on this
+    /// Mac (the Xcode-stop / crash / SIGKILL orphan), offer to reconnect to it --
+    /// the Design 2 flow (VM_CONTROL.md Stage 3). We probe the Helios daemon first
+    /// so the prompt leads with a graceful **Shut It Down** when the guest is
+    /// reachable, and only falls back to **Force Quit** when it isn't. **Reconnect**
+    /// is offered either way (it just re-attaches the console + control channels;
+    /// a still-booting guest comes to "Ready" on its own once Helios answers).
+    private func checkForReconnectableOrphanOnLaunch() {
+        guard let engine = qemuEngine, engine.state != .running else { return }
+        let image = makeSparcConfig().diskImage
+        guard case .localOrphan(let lock) = ImageLockManager.evaluate(imageURL: image) else { return }
+        // Probe Helios off-main (it can block up to the timeout), then prompt.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let heliosUp = Self.probeOrphanHelios(secret: lock.secret)
+            DispatchQueue.main.async {
+                self?.presentReconnectPrompt(lock: lock, image: image, heliosUp: heliosUp)
+            }
+        }
+    }
+
+    /// One-shot `hello` to a (possibly orphaned) guest's Helios daemon, using the
+    /// secret the lock recorded. True means the guest OS is up and answering.
+    nonisolated private static func probeOrphanHelios(secret: String?) -> Bool {
+        let client = HeliosClient(timeout: 3, secret: secret)
+        defer { client.close() }
+        do {
+            try client.connect()
+            _ = try client.hello()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    @MainActor
+    private func presentReconnectPrompt(lock: ImageLock, image: URL, heliosUp: Bool) {
+        let since = lock.startedAt.isEmpty ? "" : " (started \(friendlyDate(lock.startedAt)))"
+        let alert = NSAlert()
+        alert.messageText = "Reconnect to the running SPARCstation?"
+        if heliosUp {
+            alert.informativeText =
+                "A SPARCstation from a previous run (process \(lock.pid))\(since) is still running on "
+                + "this Mac and answering. Reconnect to watch and control it, or shut it down cleanly."
+            alert.addButton(withTitle: "Reconnect")       // first
+            alert.addButton(withTitle: "Shut It Down")    // second
+            alert.addButton(withTitle: "Ignore")          // third
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:  reconnectToOrphan(lock: lock, image: image)
+            case .alertSecondButtonReturn: attemptHeliosShutdown(lock: lock, image: image)
+            default: break
+            }
+        } else {
+            // Daemon isn't answering: graceful shutdown isn't available, so Force
+            // Quit replaces it (per the graceful-first policy). Reconnect still
+            // works -- the guest may just be mid-boot.
+            alert.alertStyle = .warning
+            alert.informativeText =
+                "A SPARCstation from a previous run (process \(lock.pid))\(since) is still running on "
+                + "this Mac but isn't answering yet. Reconnect to watch it (it may still be booting), "
+                + "or force quit it (which risks a disk check on the next boot)."
+            alert.addButton(withTitle: "Reconnect")       // first
+            alert.addButton(withTitle: "Force Quit")      // second
+            alert.addButton(withTitle: "Ignore")          // third
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:  reconnectToOrphan(lock: lock, image: image)
+            case .alertSecondButtonReturn: forceQuitOrphan(lock: lock, image: image)
+            default: break
+            }
+        }
+    }
+
+    /// Adopt the orphan as this session's engine and surface its console. The
+    /// existing engine callbacks (wired in `rebuildSparcEngine`) then drive the
+    /// window exactly as a booted session would -- including clean-halt ->
+    /// auto-backup. If the orphan died between detection and here, clear the
+    /// stale lock instead.
+    @MainActor
+    private func reconnectToOrphan(lock: ImageLock, image: URL) {
+        ensureSparcConsole()
+        sparcConsole?.showWindow()
+        if qemuEngine?.attach(toOrphan: lock) != true {
+            ImageLockManager.forceRemove(imageURL: image)
         }
     }
 

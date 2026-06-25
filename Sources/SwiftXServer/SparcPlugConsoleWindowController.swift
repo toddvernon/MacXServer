@@ -49,6 +49,7 @@ final class SparcPlugConsoleWindowController: NSWindowController {
             model.safeToQuit = false   // fresh boot
             model.ready = false
             model.bootStalledReason = nil
+            model.shutdownUnavailable = false
             model.beginRun()
         }
         model.state = state
@@ -73,6 +74,12 @@ final class SparcPlugConsoleWindowController: NSWindowController {
     func markBootStalled(_ reason: String) {
         model.bootStalledReason = reason
     }
+
+    /// A graceful Shut Down couldn't reach the Helios daemon -- surface Force Quit
+    /// even though the guest may still look "ready" (graceful-first policy).
+    func markShutdownUnavailable() {
+        model.shutdownUnavailable = true
+    }
 }
 
 @MainActor
@@ -92,6 +99,9 @@ final class SparcPlugConsoleModel: ObservableObject {
     /// Non-nil when the boot stalled (fsck maintenance drop or readiness
     /// timeout); the value is a short human reason.
     @Published var bootStalledReason: String?
+    /// Set when a graceful Shut Down couldn't reach the daemon -- forces the
+    /// controls to offer Force Quit even though the guest still looks ready.
+    @Published var shutdownUnavailable = false
     /// 0...1 boot/shutdown progress for the top thermometer.
     @Published var progress: Double = 0
 
@@ -229,8 +239,15 @@ struct SparcPlugConsoleView: View {
     private var controls: some View {
         switch model.state {
         case .running:
-            Button("Shut Down", action: shutDown)
-            Button("Force Quit", action: forceQuit)
+            // Graceful-first: when the guest is up and answering (ready, no failed
+            // graceful attempt, not wedged), the only stop is a clean Shut Down.
+            // Force Quit appears only when Helios can't be reached -- still booting,
+            // wedged, or a graceful attempt just failed.
+            if model.ready && !model.shutdownUnavailable && model.bootStalledReason == nil {
+                Button("Shut Down", action: shutDown)
+            } else {
+                Button("Force Quit", action: forceQuit)
+            }
         case .shuttingDown:
             // Graceful shutdown underway; still offer the escape hatch.
             Button("Force Quit", action: forceQuit)

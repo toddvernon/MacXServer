@@ -351,6 +351,109 @@ final class QemuEngineTests: XCTestCase {
         XCTAssertFalse(p.isRunning)
     }
 
+    /// attach() refuses an orphan that isn't actually alive -- nothing to adopt,
+    /// so the engine stays stopped. (pid 0 never passes the liveness guard.)
+    func testAttachRejectsDeadOrphan() throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("attach-reject-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let img = tmp.appendingPathComponent("solaris-2.6.qcow2")
+        FileManager.default.createFile(atPath: img.path, contents: Data("x".utf8))
+
+        let engine = QemuEngine(config: QemuEngineConfig(
+            helper: tmp.appendingPathComponent("qemu-system-sparc"),
+            firmwareDir: tmp.appendingPathComponent("firmware"),
+            diskImage: img))
+        XCTAssertEqual(engine.state, .stopped)
+
+        let deadLock = ImageLock(host: "MacA", pid: 0, imagePath: img.path,
+                                 startedAt: "", appVersion: "",
+                                 qmpSocketPath: "/tmp/x.sock", consoleSocketPath: "/tmp/y.sock")
+        XCTAssertFalse(engine.attach(toOrphan: deadLock))
+        XCTAssertEqual(engine.state, .stopped)
+    }
+
+    /// Live test: spawn an orphan qemu (no controller), then ADOPT it via
+    /// `attach(toOrphan:)` -- the Design 2 reconnect path. Asserts the engine
+    /// flips to running, the "reconnected to console" marker lands in the
+    /// transcript (the serial socket replays no history, so without it the window
+    /// is blank), and that a clean-stop via the adopted engine fires onTerminated
+    /// and returns to stopped (proving the no-Process death detection). Gated like
+    /// the other live tests.
+    ///
+    ///   SPARCPLUG_LIVE_TEST=1 SPARCPLUG_ENGINE_DIR=~/dev/SPARCplug/dist \
+    ///     swift test --filter testLiveAdoptOrphanLifecycle
+    func testLiveAdoptOrphanLifecycle() throws {
+        guard ProcessInfo.processInfo.environment["SPARCPLUG_LIVE_TEST"] != nil,
+              let dir = ProcessInfo.processInfo.environment["SPARCPLUG_ENGINE_DIR"], !dir.isEmpty
+        else { throw XCTSkip("set SPARCPLUG_LIVE_TEST=1 and SPARCPLUG_ENGINE_DIR to run") }
+
+        let base = URL(fileURLWithPath: dir, isDirectory: true)
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("qemu-adopt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let disk = tmp.appendingPathComponent("throwaway.img")
+        FileManager.default.createFile(atPath: disk.path, contents: nil)
+        let fh = try FileHandle(forWritingTo: disk)
+        try fh.truncate(atOffset: 64 * 1024 * 1024)
+        try fh.close()
+
+        // Spawn the orphan directly with explicit sockets (no controlling client).
+        let qmpPath = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("adopt-qmp-\(UUID().uuidString.prefix(8)).sock")
+        let conPath = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("adopt-con-\(UUID().uuidString.prefix(8)).sock")
+        let config = QemuEngineConfig(
+            helper: base.appendingPathComponent("qemu-system-sparc"),
+            firmwareDir: base.appendingPathComponent("firmware", isDirectory: true),
+            diskImage: disk)
+        let args = QemuEngine.buildArguments(config: config,
+                                             qmpSocketPath: qmpPath, consoleSocketPath: conPath)
+        let p = Process()
+        p.executableURL = config.helper
+        p.arguments = args
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        defer { if p.isRunning { kill(p.processIdentifier, SIGKILL) } }
+
+        let lock = ImageLock(host: ImageLockManager.currentHost(), pid: p.processIdentifier,
+                             imagePath: disk.path, startedAt: "", appVersion: "test",
+                             qmpSocketPath: qmpPath, consoleSocketPath: conPath)
+
+        // Adopt it.
+        let engine = QemuEngine(config: config)
+        let lockOut = NSLock()
+        var console = ""
+        let sawMarker = expectation(description: "reconnected-to-console marker")
+        sawMarker.assertForOverFulfill = false
+        engine.onConsole { chunk in
+            lockOut.lock(); console += chunk
+            let hit = console.contains("reconnected to console"); lockOut.unlock()
+            if hit { sawMarker.fulfill() }
+        }
+        let terminated = expectation(description: "adopted orphan terminated")
+        terminated.assertForOverFulfill = false
+        engine.onTerminated { _ in terminated.fulfill() }
+
+        // qemu needs a beat to open its sockets before the adopt connects.
+        Thread.sleep(forTimeInterval: 1.0)
+        XCTAssertTrue(engine.attach(toOrphan: lock), "should adopt the live orphan")
+        XCTAssertEqual(engine.state, .running)
+
+        wait(for: [sawMarker], timeout: 5)
+
+        // Clean-stop through the adopted engine; the no-Process death poll should
+        // notice the exit and fire onTerminated.
+        engine.kill()
+        wait(for: [terminated], timeout: 15)
+        XCTAssertNotEqual(engine.state, .running)
+    }
+
     // MARK: - C3 readiness helpers
 
     /// The fsck maintenance drop is detected on its failure phrase, and a

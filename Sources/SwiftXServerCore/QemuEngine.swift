@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public enum QemuEngineError: Error, LocalizedError, Sendable {
     case engineNotFound(String)
@@ -106,6 +107,12 @@ public final class QemuEngine: @unchecked Sendable {
     private var consoleClient: SerialConsoleClient?
     /// The per-launch console unix-socket path qemu serves on; "" when stopped.
     private var consoleSocketPath = ""
+    /// Set while this engine drives an ADOPTED orphan (VM_CONTROL.md Stage 3,
+    /// Design 2): a qemu we connected to but did NOT spawn, so there's no child
+    /// Process -- exit is detected by polling `orphanPid`, not a terminationHandler.
+    private var adopted = false
+    /// The adopted orphan's qemu pid (0 when not adopting). Polled for death.
+    private var orphanPid: Int32 = 0
     private var isRunning = false
     private var shuttingDown = false
     /// The clean-halt signal fires once per shutdown.
@@ -143,6 +150,7 @@ public final class QemuEngine: @unchecked Sendable {
     private var progressCallback: ((Double) -> Void)?
     private var readyCallback: (() -> Void)?
     private var bootStalledCallback: ((String) -> Void)?
+    private var shutdownUnavailableCallback: (() -> Void)?
 
     // Boot/shutdown progress milestones are derived from real console
     // transcripts (see ProgressReference) rather than a hand-tuned table:
@@ -204,6 +212,13 @@ public final class QemuEngine: @unchecked Sendable {
     /// Quit is the recovery.
     public func onBootStalled(_ callback: @escaping (String) -> Void) {
         self.bootStalledCallback = callback
+    }
+
+    /// Fires on the main queue when a graceful shutdown couldn't reach the Helios
+    /// daemon, so Force Quit is the only stop left. Lets the console surface Force
+    /// Quit even though the guest may still look "ready" (graceful-first policy).
+    public func onShutdownUnavailable(_ callback: @escaping () -> Void) {
+        self.shutdownUnavailableCallback = callback
     }
 
     // MARK: - State
@@ -270,11 +285,9 @@ public final class QemuEngine: @unchecked Sendable {
         p.terminationHandler = { [weak self] _ in
             self?.queue.async {
                 guard let self = self else { return }
-                // Release the image lock (only ours, by host) now that qemu
-                // has exited cleanly under our control.
-                ImageLockManager.release(imageURL: self.config.diskImage)
-                // Stdout is emulator diagnostics now (the console is on the serial
-                // socket), so drain any leftover to the same path as stderr.
+                // Drain any trailing emulator stdout/stderr (the guest console is
+                // on the serial socket now), detach the handlers, drop the
+                // process + pipes, then run the shared end-of-run teardown.
                 if let rest = try? outPipe.fileHandleForReading.readToEnd(), !rest.isEmpty {
                     self.ingestEmulatorOutput(rest)
                 }
@@ -286,39 +299,7 @@ public final class QemuEngine: @unchecked Sendable {
                 self.process = nil
                 self.stdoutPipe = nil
                 self.stderrPipe = nil
-                // Tear down the QMP channel + its socket file (qemu is gone, so
-                // the socket already closed; close() joins the reader quickly).
-                self.qmpClient?.close()
-                self.qmpClient = nil
-                if !self.qmpSocketPath.isEmpty {
-                    unlink(self.qmpSocketPath)
-                    self.qmpSocketPath = ""
-                }
-                // Same for the serial console channel + its socket file.
-                self.consoleClient?.close()
-                self.consoleClient = nil
-                if !self.consoleSocketPath.isEmpty {
-                    unlink(self.consoleSocketPath)
-                    self.consoleSocketPath = ""
-                }
-                // Capture the clean-halt result before resetting per-run
-                // state, so the terminated callback can tell a graceful
-                // power-off from a hard kill.
-                let wasCleanHalt = self.sawCleanHalt
-                self.isRunning = false
-                self.shuttingDown = false
-                self.sawCleanHalt = false
-                self.ready = false
-                self.bootStalled = false
-                self.readinessDeadline = nil
-                self.currentSecret = nil
-                self.consoleTail = ""
-                self.stderrTail = ""
-                self.progress = 0
-                self.emitState()
-                self.emitProgress()
-                let cb = self.terminatedCallback
-                DispatchQueue.main.async { cb?(wasCleanHalt) }
+                self.finishRun()
             }
         }
 
@@ -406,6 +387,8 @@ public final class QemuEngine: @unchecked Sendable {
                     self.emitState()
                     self.emitDiagnostic("Helios daemon unreachable (\(daemonError)). "
                                         + "Couldn't request shutdown -- use Force Quit.")
+                    let cb = self.shutdownUnavailableCallback
+                    DispatchQueue.main.async { cb?() }
                 } else {
                     self.emitDiagnostic("shutdown requested via Helios daemon, give it a second")
                 }
@@ -436,16 +419,139 @@ public final class QemuEngine: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self = self else { return }
             guard let qmp = self.qmpClient else {
-                self.process?.terminate()
+                self.hardKill()
                 return
             }
-            // quit() blocks; run it off `queue`. On any QMP failure, SIGTERM.
+            // quit() blocks; run it off `queue`. On any QMP failure, hard-stop.
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 do {
                     try qmp.quit()
                 } catch {
-                    self?.queue.async { self?.process?.terminate() }
+                    self?.queue.async { self?.hardKill() }
                 }
+            }
+        }
+    }
+
+    /// Last-resort stop when QMP can't do it: SIGTERM the child process we
+    /// spawned, or SIGKILL an adopted orphan by pid (we have no Process handle for
+    /// a qemu we didn't spawn). Runs on `queue`.
+    private func hardKill() {
+        if let p = process {
+            p.terminate()
+        } else if orphanPid > 0 {
+            Darwin.kill(orphanPid, SIGKILL)
+        }
+    }
+
+    /// Shared end-of-run teardown for BOTH lifecycle paths -- the spawned-process
+    /// terminationHandler and the adopted-orphan death poll funnel here. Runs on
+    /// `queue`. Releases the image lock, tears down the QMP + console channels and
+    /// their socket files, resets per-run state, and fires onTerminated with the
+    /// clean-halt verdict (so the auto-backup path can tell a graceful power-off
+    /// from a hard kill). Any process/pipe-specific cleanup happens at the call
+    /// site before this runs.
+    private func finishRun() {
+        ImageLockManager.release(imageURL: config.diskImage)
+        qmpClient?.close()
+        qmpClient = nil
+        if !qmpSocketPath.isEmpty { unlink(qmpSocketPath); qmpSocketPath = "" }
+        consoleClient?.close()
+        consoleClient = nil
+        if !consoleSocketPath.isEmpty { unlink(consoleSocketPath); consoleSocketPath = "" }
+        let wasCleanHalt = sawCleanHalt
+        isRunning = false
+        adopted = false
+        orphanPid = 0
+        shuttingDown = false
+        sawCleanHalt = false
+        ready = false
+        bootStalled = false
+        readinessDeadline = nil
+        currentSecret = nil
+        consoleTail = ""
+        stderrTail = ""
+        progress = 0
+        emitState()
+        emitProgress()
+        let cb = terminatedCallback
+        DispatchQueue.main.async { cb?(wasCleanHalt) }
+    }
+
+    /// Adopt an already-running ORPHAN qemu (VM_CONTROL.md Stage 3, Design 2):
+    /// wire the QMP + console channels to the sockets its image lock records and
+    /// present it as a live session, WITHOUT a child Process. This is what lets a
+    /// restarted macXserver pick up a VM the previous instance left running. The
+    /// caller should confirm the guest is reachable first (Helios `hello`); this
+    /// still works if it isn't (the session sits in "booting" until Helios answers
+    /// or the readiness budget elapses). Returns false if the orphan isn't alive
+    /// (nothing to adopt) or we're already running. Mirrors `start()`'s threading
+    /// (runs on the caller's thread, kicks the async channels) -- safe because
+    /// nothing is running yet.
+    @discardableResult
+    public func attach(toOrphan lock: ImageLock) -> Bool {
+        guard !isRunning else { return false }
+        guard lock.pid > 0, ImageLockManager.isProcessAlive(lock.pid) else { return false }
+
+        let qmp = lock.qmpSocketPath ?? ""
+        let console = lock.consoleSocketPath ?? ""
+
+        currentSecret = lock.secret
+        orphanPid = lock.pid
+        adopted = true
+        qmpSocketPath = qmp
+        consoleSocketPath = console
+        shuttingDown = false
+        sawCleanHalt = false
+        ready = false
+        bootStalled = false
+        readinessDeadline = nil
+        consoleTail = ""
+        stderrTail = ""
+        slirpWaitCount = 0
+        // Adopted mid-session: no boot to track, so park the bar near full and let
+        // the `hello` probe flip it green (1.0) once the daemon answers.
+        progress = 0.9
+        isRunning = true
+        emitState()
+        emitProgress()
+
+        // The serial socket replays NO history -- a late joiner only sees new
+        // bytes -- so stamp the reconnection in the transcript or the window sits
+        // blank until the guest next prints.
+        emitDiagnostic("reconnected to console")
+
+        // Wire the control channels to the orphan's sockets (same retry as boot).
+        // Older orphans (pre-Stage-2/3 locks) may lack one or both paths; we adopt
+        // anyway -- graceful shutdown still works over Helios, just without the
+        // QMP clean-halt event or the console view.
+        if !qmp.isEmpty { connectQmp(path: qmp) }
+        if !console.isEmpty { connectConsole(path: console) }
+        // No child Process to deliver an exit, so poll the pid for death.
+        scheduleOrphanDeathPoll()
+        // Drive readiness off Helios `hello`, exactly like a boot.
+        readinessDeadline = Date().addingTimeInterval(Self.readinessBudget)
+        scheduleReadinessProbe(after: 0)
+        return true
+    }
+
+    /// Poll an adopted orphan's pid for death (we have no terminationHandler).
+    /// A clean halt fires the QMP `SHUTDOWN` event first (setting `sawCleanHalt`),
+    /// then qemu exits and this notices; an external kill just leaves the pid gone
+    /// with `sawCleanHalt` false. Either way, run the shared teardown.
+    private func scheduleOrphanDeathPoll() {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.orphanDeathProbe()
+        }
+    }
+
+    private func orphanDeathProbe() {
+        queue.async { [weak self] in
+            guard let self = self, self.isRunning, self.adopted else { return }
+            if self.orphanPid > 0, ImageLockManager.isProcessAlive(self.orphanPid) {
+                self.scheduleOrphanDeathPoll()        // still alive; keep watching
+            } else {
+                self.finishRun()                      // orphan exited
             }
         }
     }
