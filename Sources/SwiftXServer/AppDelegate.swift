@@ -1076,17 +1076,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    /// SIGKILL the orphan, but only after re-verifying it's still our qemu
-    /// (so a recycled pid is never killed). Then clear the lock and boot.
+    /// Stop the orphan, then clear the lock and boot. Prefers a qcow2-clean QMP
+    /// `quit` through the socket path the lock records (VM_CONTROL.md Stage 3):
+    /// qemu drains + closes the block layer, so the container can't be torn
+    /// mid-write the way SIGKILL can. Falls back to a verified SIGKILL (still our
+    /// qemu, so a recycled pid is never killed) when the lock has no QMP socket or
+    /// the channel is wedged. The guest filesystem is dirty either way (no
+    /// `init 5`), so it still fscks next boot -- the win is container integrity.
+    /// The QMP attempt blocks, so it runs off-main.
     private func forceQuitOrphan(lock: ImageLock, image: URL) {
-        if ImageLockManager.isProcessAlive(lock.pid),
-           ImageLockManager.processIsOurQemu(lock.pid) {
-            kill(lock.pid, SIGKILL)
-        }
-        // Give it a beat to die, then clear the (now-stale) lock and launch.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            ImageLockManager.forceRemove(imageURL: image)
-            self?.proceedSparcLaunch()
+        let qmp = lock.qmpSocketPath ?? ""
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let cleanStopped = QemuEngine.quitOrphanViaQmp(qmpSocketPath: qmp)
+            if !cleanStopped,
+               ImageLockManager.isProcessAlive(lock.pid),
+               ImageLockManager.processIsOurQemu(lock.pid) {
+                kill(lock.pid, SIGKILL)
+            }
+            // Give it a beat to die, then clear the (now-stale) lock and launch.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                ImageLockManager.forceRemove(imageURL: image)
+                self?.proceedSparcLaunch()
+            }
         }
     }
 

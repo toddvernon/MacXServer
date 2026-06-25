@@ -55,6 +55,41 @@ final class ImageLockTests: XCTestCase {
         XCTAssertNil(ImageLock.parse("host: MacA\npid: 7")?.secret)
     }
 
+    // The QMP + console socket paths round-trip (VM_CONTROL.md Stage 3,
+    // "lock-as-VM-handle") and are optional, so older locks still parse.
+    func testSocketPathsRoundTripAndAreOptional() {
+        let withSockets = ImageLock(host: "MacA", pid: 7, imagePath: image.path,
+                                    startedAt: "2026-06-25T19:00:00Z", appVersion: "dev",
+                                    secret: "abc123",
+                                    qmpSocketPath: "/tmp/macxserver-qmp-1234.sock",
+                                    consoleSocketPath: "/tmp/macxserver-con-1234.sock")
+        let reparsed = ImageLock.parse(withSockets.serialized())
+        XCTAssertEqual(reparsed?.qmpSocketPath, "/tmp/macxserver-qmp-1234.sock")
+        XCTAssertEqual(reparsed?.consoleSocketPath, "/tmp/macxserver-con-1234.sock")
+        XCTAssertEqual(reparsed, withSockets)
+
+        // Omitted when absent, and older socket-less locks parse to nil.
+        let noSockets = ImageLock(host: "MacA", pid: 7, imagePath: image.path,
+                                  startedAt: "2026-06-25T19:00:00Z", appVersion: "dev")
+        XCTAssertFalse(noSockets.serialized().contains("qmp:"))
+        XCTAssertFalse(noSockets.serialized().contains("console:"))
+        let older = ImageLock.parse("host: MacA\npid: 7")
+        XCTAssertNil(older?.qmpSocketPath)
+        XCTAssertNil(older?.consoleSocketPath)
+    }
+
+    // acquire() persists the socket paths so a later process can pick up the
+    // VM handle.
+    func testAcquireWritesSocketPaths() {
+        ImageLockManager.acquire(imageURL: image, pid: 321, appVersion: "9",
+                                 secret: "s", qmpSocketPath: "/tmp/q.sock",
+                                 consoleSocketPath: "/tmp/c.sock", host: "MacA")
+        let text = try! String(contentsOf: ImageLockManager.lockURL(for: image), encoding: .utf8)
+        let lock = ImageLock.parse(text)
+        XCTAssertEqual(lock?.qmpSocketPath, "/tmp/q.sock")
+        XCTAssertEqual(lock?.consoleSocketPath, "/tmp/c.sock")
+    }
+
     /// A lock written by a different machine is a hard stop regardless of the
     /// recorded pid (we can't verify a remote pid).
     func testRemoteHostLocked() {

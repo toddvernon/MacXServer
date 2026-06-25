@@ -37,15 +37,29 @@ public struct ImageLock: Equatable, Sendable {
     /// qemu exits, so persisting it next to the image is low-risk. nil for locks
     /// written before this field existed (or by an unauthed launch).
     public let secret: String?
+    /// The captive qemu's QMP control-socket path (VM_CONTROL.md Stage 3,
+    /// "lock-as-VM-handle"). Lets a LATER process on THIS Mac clean-stop an
+    /// orphan via a qcow2-clean QMP `quit` instead of SIGKILL -- no guest
+    /// cooperation, no network auth. Local-filesystem path, so it's only
+    /// meaningful when `host` matches this machine (same caveat as `pid`). nil
+    /// for older locks or a launch without a QMP socket.
+    public let qmpSocketPath: String?
+    /// The captive qemu's serial-console socket path (VM_CONTROL.md Stage 3).
+    /// Lets a later process re-attach the console *view* to a live orphan.
+    /// Local-only, same host caveat as `qmpSocketPath`. nil for older locks.
+    public let consoleSocketPath: String?
 
     public init(host: String, pid: Int32, imagePath: String,
-                startedAt: String, appVersion: String, secret: String? = nil) {
+                startedAt: String, appVersion: String, secret: String? = nil,
+                qmpSocketPath: String? = nil, consoleSocketPath: String? = nil) {
         self.host = host
         self.pid = pid
         self.imagePath = imagePath
         self.startedAt = startedAt
         self.appVersion = appVersion
         self.secret = secret
+        self.qmpSocketPath = qmpSocketPath
+        self.consoleSocketPath = consoleSocketPath
     }
 
     /// Simple `key: value` lines, stable order, so a human can read it. The
@@ -60,6 +74,8 @@ public struct ImageLock: Equatable, Sendable {
             "appVersion: \(appVersion)",
         ]
         if let secret, !secret.isEmpty { lines.append("secret: \(secret)") }
+        if let qmpSocketPath, !qmpSocketPath.isEmpty { lines.append("qmp: \(qmpSocketPath)") }
+        if let consoleSocketPath, !consoleSocketPath.isEmpty { lines.append("console: \(consoleSocketPath)") }
         return lines.joined(separator: "\n")
     }
 
@@ -82,7 +98,9 @@ public struct ImageLock: Equatable, Sendable {
             imagePath: fields["image"] ?? "",
             startedAt: fields["started"] ?? "",
             appVersion: fields["appVersion"] ?? "",
-            secret: fields["secret"].flatMap { $0.isEmpty ? nil : $0 })
+            secret: fields["secret"].flatMap { $0.isEmpty ? nil : $0 },
+            qmpSocketPath: fields["qmp"].flatMap { $0.isEmpty ? nil : $0 },
+            consoleSocketPath: fields["console"].flatMap { $0.isEmpty ? nil : $0 })
     }
 }
 
@@ -141,11 +159,13 @@ public enum ImageLockManager {
     @discardableResult
     public static func acquire(
         imageURL: URL, pid: Int32, appVersion: String, secret: String? = nil,
+        qmpSocketPath: String? = nil, consoleSocketPath: String? = nil,
         host: String = currentHost(), now: Date = Date()
     ) -> ImageLock {
         let stamp = ISO8601DateFormatter().string(from: now)
         let lock = ImageLock(host: host, pid: pid, imagePath: imageURL.path,
-                             startedAt: stamp, appVersion: appVersion, secret: secret)
+                             startedAt: stamp, appVersion: appVersion, secret: secret,
+                             qmpSocketPath: qmpSocketPath, consoleSocketPath: consoleSocketPath)
         try? lock.serialized().write(to: lockURL(for: imageURL),
                                      atomically: true, encoding: .utf8)
         return lock

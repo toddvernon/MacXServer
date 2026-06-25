@@ -1,7 +1,9 @@
 # VM control: QMP for the machine, Helios for the guest
 
-Status: **proposed 2026-06-24, approved; Stages 1 + 2 built + live-validated
-2026-06-25.** The settled-decision summary is the DECISIONS.md entry of
+Status: **proposed 2026-06-24, approved; Stages 1 + 2 + Stage 3's
+lock-as-VM-handle / orphan QMP recovery built + live-validated 2026-06-25
+(console-view reconnect is the lone remaining tail).** The settled-decision
+summary is the DECISIONS.md entry of
 2026-06-24; this is the full design and the staging. Stage progress is tracked in
 the rollout section below.
 
@@ -166,6 +168,27 @@ testable against the `SPARCPLUG_LIVE_TEST` harness:
 - **Stage 3:** lock-as-VM-handle (socket paths in the lock) + orphan QMP recovery
   + console reconnect. This is where the parked "reconnect to a live orphan" and
   "control off the stdio pipe" punchlist items actually close.
+  - **Lock-as-VM-handle + orphan QMP recovery: DONE + live-validated 2026-06-25.**
+    `ImageLock` gained `qmp:` and `console:` socket-path lines (optional,
+    host-local like `pid`/`secret`; older locks still parse), written by
+    `QemuEngine.start()` at acquire time. New `QemuEngine.quitOrphanViaQmp(
+    qmpSocketPath:)` connects a *fresh* QmpClient to the path the lock records and
+    issues a qcow2-clean `quit` -- the orphan teardown a *different* process drives
+    with no process handle, no guest cooperation, no network auth. The
+    AppDelegate orphan "Force Quit" now prefers it (off-main), falling back to the
+    verified SIGKILL when the lock has no QMP socket or the channel is wedged.
+    **Live-validated:** a directly-spawned orphan qemu (a lock but no controlling
+    client, mirroring a dead parent) was clean-stopped via the socket read back
+    out of its lock, and it exited. 4 new unit tests (lock round-trip + acquire +
+    quitOrphanViaQmp success/missing-socket) + 1 live test. NB: qemu's QMP
+    `server=on` socket is single-client, which is *why* this works only once the
+    parent's connection is gone -- exactly the orphan case.
+  - **Console-view reconnect: still open (the L2a nice-to-have).** The console
+    socket path is now recorded in the lock, so a fresh process *can* re-attach
+    the observation view to a live orphan via `SerialConsoleClient`. The remaining
+    work is the detached-console window mode + the "Reconnect" UX in the orphan
+    dialog -- a new UI surface, deliberately left for a design pass. The punchlist
+    has always branded this non-v1.
 - **Stage 4 (post-v1):** snapshot fast-launch, now that the sun4m vmstate support
   is verified.
 

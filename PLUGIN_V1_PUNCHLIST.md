@@ -246,7 +246,8 @@ paths. L1 (lock) + Force Quit + auto-backup remain the safety floor. See
   detection is best-effort (Dropbox sync latency).
 - [x] **L2. Orphan recovery UX. Graceful path DONE via Helios 2026-06-24.**
   The localOrphan dialog offers: **Try to Shut It Down**, **Force Quit**
-  (verified SIGKILL), **Show Me How** (manual steps), **Cancel**.
+  (qcow2-clean QMP `quit` -> verified SIGKILL fallback; see (d)), **Show Me How**
+  (manual steps), **Cancel**.
   - (b) **DONE 2026-06-20.** The silent ~35s poll is a live panel
     (`SparcShutdownProgressWindowController`): countdown + progress bar while
     waiting, auto-dismiss + boot on power-off, and on timeout it flips in place
@@ -261,19 +262,30 @@ paths. L1 (lock) + Force Quit + auto-backup remain the safety floor. See
     crash, or the other Mac via the Dropbox-synced lock) can authenticate to the
     orphan's daemon. Force Quit + auto-backup remain the fallback when the daemon
     is unreachable. The failure-panel + by-hand copy was de-telnet-ified.
-  - (a) **Reconnect** to a live orphan -- still TODO, needs a re-attachable
-    console socket (L3). Non-v1.
+  - (a) **Reconnect** to a live orphan -- the re-attachable console socket now
+    exists (VM_CONTROL Stage 2: `-serial unix:` + `SerialConsoleClient`) and its
+    path is recorded in the lock (Stage 3 "lock-as-VM-handle"), so the plumbing is
+    in place. The remaining piece is the detached-console window mode + the
+    "Reconnect" button -- a UI design pass. Still non-v1.
+  - (d) **Force Quit is now qcow2-clean (VM_CONTROL Stage 3, 2026-06-25).** The
+    orphan Force Quit prefers `QemuEngine.quitOrphanViaQmp` -- a fresh QmpClient on
+    the QMP socket path the lock records, issuing a `quit` that drains + closes the
+    block layer so the container isn't torn mid-write. Verified SIGKILL remains the
+    fallback when the lock has no QMP socket or the channel is wedged. The guest FS
+    is still dirty either way (no `init 5`), so it still fscks next boot; the win is
+    container integrity.
   - (Former footgun resolved: "Try to Shut It Down" can now actually work, so it
     being the default button is fine.)
-- [x] **L3. Move *control* off the stdio pipe. DONE via Helios; console-reconnect
-  deferred (non-v1).** The original plan was a `-serial unix:` socket +
-  `-qmp unix:` socket so control survived the parent's death. The **control half
-  is now closed by the daemon**: liveness is the Helios `hello` probe and
-  shutdown (incl. orphans) is the Helios `shutdown` verb, neither of which rides
-  the stdio pipe. The only residual reason for a serial socket is re-attaching
-  the *console view* to an orphan (L2's Reconnect) -- a nice-to-have, explicitly
-  deferred past v1. (QMP was never the graceful path anyway: SPARC has no ACPI,
-  so `system_powerdown` won't halt Solaris; graceful is `init 5`, now via Helios.)
+- [x] **L3. Move *control* off the stdio pipe. DONE -- both halves now landed.**
+  The original plan was a `-serial unix:` socket + `-qmp unix:` socket so control
+  survived the parent's death, and **both shipped** (VM_CONTROL Stages 1-3,
+  2026-06-25): the `-qmp` socket gives a qcow2-clean orphan `quit` (its path is in
+  the lock), and the `-serial unix:` socket retired the stdio pipe (closing the
+  orphan CPU-spin) and makes the console re-attachable. The Helios daemon already
+  closed the *graceful* control half (liveness via `hello`, `init 5` shutdown incl.
+  orphans). The lone residual is the *console view* re-attach UI (L2a Reconnect) --
+  still non-v1. (QMP was never the graceful path: SPARC has no ACPI, so
+  `system_powerdown` won't halt Solaris; graceful is `init 5`, via Helios.)
 - [x] **L0. Drop console auto-login; control off the console. DONE.** Graceful
   shutdown is the Helios `shutdown` verb (`QemuEngine.requestShutdownViaDaemon`
   / `performDaemonShutdown`, no console fallback) and readiness is the Helios

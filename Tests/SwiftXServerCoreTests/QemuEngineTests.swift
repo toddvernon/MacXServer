@@ -77,6 +77,29 @@ final class QemuEngineTests: XCTestCase {
         XCTAssertFalse(plain.contains("-serial"))
     }
 
+    /// Orphan QMP recovery (VM_CONTROL.md Stage 3): a fresh QmpClient connects to
+    /// the socket path the lock recorded and issues `quit`, returning true. This
+    /// is the qcow2-clean Force Quit a *different* process drives via the
+    /// socket-in-lock -- no process handle, no guest, no network auth.
+    func testQuitOrphanViaQmpSucceeds() throws {
+        let server = try MockQmpServer { cmd, _ in
+            if cmd["execute"] as? String == "qmp_capabilities" { return ["return": [:]] }
+            return nil   // `quit`: send nothing, then the mock closes (mimics qemu exit)
+        }
+        defer { server.stop() }
+        server.start()
+
+        XCTAssertTrue(QemuEngine.quitOrphanViaQmp(qmpSocketPath: server.socketPath))
+    }
+
+    /// An empty or dead socket path returns false so the caller falls back to a
+    /// verified SIGKILL.
+    func testQuitOrphanViaQmpFailsForMissingSocket() {
+        XCTAssertFalse(QemuEngine.quitOrphanViaQmp(qmpSocketPath: ""))
+        XCTAssertFalse(QemuEngine.quitOrphanViaQmp(
+            qmpSocketPath: "/tmp/qmp-orphan-missing-\(UUID().uuidString).sock"))
+    }
+
     /// nil and empty tftpDirectory both leave the `-nic` value without a
     /// `tftp=` clause (empty must not produce a dangling `tftp=`).
     func testBuildArgumentsNoSharedFolderWhenUnset() {
@@ -254,6 +277,78 @@ final class QemuEngineTests: XCTestCase {
         wait(for: [cleanHalt], timeout: 200)   // boot + auto-login + init 5 + sync
         wait(for: [terminated], timeout: 30)    // power-off -> qemu exits
         XCTAssertEqual(engine.state, .stopped)
+    }
+
+    /// Live test: simulate an orphan -- a qemu with a lock but NO controlling
+    /// client (its parent macXserver "died", so the single-client QMP socket is
+    /// free) -- then recover it the way a fresh macXserver process would: read the
+    /// QMP socket path back out of the image lock (Stage 3 "lock-as-VM-handle")
+    /// and clean-stop qemu through it. Asserts the process exits. Spawning qemu
+    /// directly (not via QemuEngine) is deliberate: the engine would hold the QMP
+    /// connection, which a real orphan's dead parent does not. Throwaway empty
+    /// disk, gated like the other live tests.
+    ///
+    ///   SPARCPLUG_LIVE_TEST=1 SPARCPLUG_ENGINE_DIR=~/dev/SPARCplug/dist \
+    ///     swift test --filter testLiveOrphanQmpQuitViaLock
+    func testLiveOrphanQmpQuitViaLock() throws {
+        guard ProcessInfo.processInfo.environment["SPARCPLUG_LIVE_TEST"] != nil,
+              let dir = ProcessInfo.processInfo.environment["SPARCPLUG_ENGINE_DIR"], !dir.isEmpty
+        else { throw XCTSkip("set SPARCPLUG_LIVE_TEST=1 and SPARCPLUG_ENGINE_DIR to run") }
+
+        let base = URL(fileURLWithPath: dir, isDirectory: true)
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("qemu-orphan-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let disk = tmp.appendingPathComponent("throwaway.img")
+        FileManager.default.createFile(atPath: disk.path, contents: nil)
+        let fh = try FileHandle(forWritingTo: disk)
+        try fh.truncate(atOffset: 64 * 1024 * 1024)
+        try fh.close()
+
+        // Spawn qemu directly with explicit QMP + console socket paths -- an orphan
+        // with no live controller. Console socket served but nobody attached.
+        let qmpPath = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("orphan-qmp-\(UUID().uuidString.prefix(8)).sock")
+        let conPath = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("orphan-con-\(UUID().uuidString.prefix(8)).sock")
+        let config = QemuEngineConfig(
+            helper: base.appendingPathComponent("qemu-system-sparc"),
+            firmwareDir: base.appendingPathComponent("firmware", isDirectory: true),
+            diskImage: disk)
+        let args = QemuEngine.buildArguments(config: config,
+                                             qmpSocketPath: qmpPath, consoleSocketPath: conPath)
+        let p = Process()
+        p.executableURL = config.helper
+        p.arguments = args
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        let terminated = expectation(description: "orphan qemu terminated")
+        p.terminationHandler = { _ in terminated.fulfill() }
+        try p.run()
+        defer { if p.isRunning { kill(p.processIdentifier, SIGKILL) } }
+
+        // Write the lock the way QemuEngine.start() does (the VM handle).
+        ImageLockManager.acquire(imageURL: disk, pid: p.processIdentifier, appVersion: "test",
+                                 qmpSocketPath: qmpPath, consoleSocketPath: conPath, host: "TestHost")
+        defer { ImageLockManager.forceRemove(imageURL: disk) }
+
+        // Recover: read the QMP path back out of the lock, then clean-stop.
+        let text = try String(contentsOf: ImageLockManager.lockURL(for: disk), encoding: .utf8)
+        let recoveredPath = try XCTUnwrap(ImageLock.parse(text)?.qmpSocketPath,
+                                          "the lock should record the QMP socket path")
+        // qemu opens the QMP socket during early startup; give it a moment.
+        var quit = false
+        let connectDeadline = Date().addingTimeInterval(8)
+        while Date() < connectDeadline {
+            if QemuEngine.quitOrphanViaQmp(qmpSocketPath: recoveredPath) { quit = true; break }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        XCTAssertTrue(quit, "a fresh QMP client should clean-stop the orphan via the socket-in-lock")
+        wait(for: [terminated], timeout: 10)
+        XCTAssertFalse(p.isRunning)
     }
 
     // MARK: - C3 readiness helpers

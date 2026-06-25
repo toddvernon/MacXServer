@@ -350,9 +350,13 @@ public final class QemuEngine: @unchecked Sendable {
         // Persist the per-launch secret in the lock so a later process (this Mac
         // after a crash, or the other Mac) can authenticate to this qemu's daemon
         // and shut it down via Helios if it's ever orphaned.
+        // Record the QMP + console socket paths in the lock (VM_CONTROL.md Stage 3,
+        // "lock-as-VM-handle"): a later process on this Mac can then clean-stop an
+        // orphan via a qcow2-clean QMP `quit` and re-attach the console view.
         ImageLockManager.acquire(imageURL: config.diskImage,
                                  pid: p.processIdentifier, appVersion: appVersion,
-                                 secret: self.currentSecret)
+                                 secret: self.currentSecret,
+                                 qmpSocketPath: qmpPath, consoleSocketPath: consolePath)
         progress = 0.05            // a visible sliver the moment qemu launches
         emitState()
         emitProgress()
@@ -446,6 +450,27 @@ public final class QemuEngine: @unchecked Sendable {
         }
     }
 
+
+    /// Clean-stop an *orphaned* qemu (one this process didn't spawn) through the
+    /// QMP socket path recorded in its image lock. qemu drains + closes the block
+    /// layer, so the qcow2 container stays consistent -- the qcow2-clean teardown
+    /// SIGKILL can't give. Returns true if the `quit` was issued (a connection
+    /// close right after counts as success, since qemu may exit before replying);
+    /// the caller falls back to a verified SIGKILL when this returns false (socket
+    /// gone, qemu already dead, or QMP wedged). Blocks; call off the main thread.
+    /// VM_CONTROL.md Stage 3 (orphan QMP recovery).
+    public static func quitOrphanViaQmp(qmpSocketPath: String) -> Bool {
+        guard !qmpSocketPath.isEmpty else { return false }
+        let client = QmpClient(socketPath: qmpSocketPath, timeout: 5)
+        defer { client.close() }
+        do {
+            try client.connect()
+            try client.quit()
+            return true
+        } catch {
+            return false
+        }
+    }
 
     // MARK: - QMP control channel (VM_CONTROL.md Stage 1)
 
