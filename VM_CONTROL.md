@@ -1,8 +1,9 @@
 # VM control: QMP for the machine, Helios for the guest
 
-Status: **proposed 2026-06-24, pending sign-off.** No code yet. This doc is the
-shape to approve before building. The settled-decision summary is the
-DECISIONS.md entry of the same date; this is the full design and the staging.
+Status: **proposed 2026-06-24, approved; Stage 1 built + live-validated
+2026-06-25.** The settled-decision summary is the DECISIONS.md entry of
+2026-06-24; this is the full design and the staging. Stage progress is tracked in
+the rollout section below.
 
 ## The problem this fixes
 
@@ -132,11 +133,19 @@ testable against the `SPARCPLUG_LIVE_TEST` harness:
   on the existing console stream (reset on any console output or shutdown
   milestone; escalate to surfacing Force Quit only on silence past the window,
   never auto-execute it). No QMP needed.
-- **Stage 1 (additive, low risk -- the v1 sweet spot):** add the `-qmp unix:`
-  socket + `QmpClient`; subscribe to `SHUTDOWN` for the clean-halt gate (back up
-  the console string, don't rip it out yet); switch Force Quit to QMP `quit` with
-  SIGKILL fallback. Closes the brittle clean-halt detection and the Force-Quit
-  qcow2-safety risk **without touching the console path at all.**
+- **Stage 1 (additive, low risk -- the v1 sweet spot). DONE + live-validated
+  2026-06-25.** `QmpClient` (async, demuxes events from id-correlated responses;
+  6 unit tests) + `QemuEngine` wiring: `-qmp unix:<sock>,server=on,wait=off` at
+  launch, a post-launch connect-with-retry, the `SHUTDOWN` event
+  (`reason: guest-shutdown`) as a backup clean-halt signal next to the console
+  string, and Force Quit now prefers a qcow2-clean QMP `quit` (SIGTERM fallback).
+  The console path is untouched (still the stdio pipe). **Live-validated against
+  real qemu-9.2.4 / SS-5:** QMP handshake + `query-status: running`; a Helios
+  `init 5` fired `SHUTDOWN {guest:true, reason:"guest-shutdown"}` then qemu
+  exited; a QMP `quit` fired `SHUTDOWN {guest:false, reason:"host-qmp-quit"}` and
+  exited cleanly -- so the reason field reliably separates a guest clean-halt
+  from a host Force Quit, which is exactly the discrimination `handleQmpEvent`
+  relies on.
 - **Stage 2 (console surgery):** move the console to a `-serial unix:` socket,
   retire the stdio pipe. Closes the orphan CPU-spin and enables console
   reconnect.

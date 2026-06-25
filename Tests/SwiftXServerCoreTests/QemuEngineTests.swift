@@ -43,6 +43,19 @@ final class QemuEngineTests: XCTestCase {
             "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::2123-:23,hostfwd=tcp::2222-:22,hostfwd=tcp::2125-:2125,tftp=/Users/x/macXserverTFTP")
     }
 
+    /// The QMP control socket (VM_CONTROL.md Stage 1) is added only when a path
+    /// is given, in server/no-wait mode; the default omits it (so existing argv
+    /// is unchanged).
+    func testBuildArgumentsQmpSocket() {
+        let withQmp = QemuEngine.buildArguments(config: cfg(), qmpSocketPath: "/tmp/q.sock")
+        let i = withQmp.firstIndex(of: "-qmp")
+        XCTAssertNotNil(i, "expected a -qmp flag")
+        XCTAssertEqual(withQmp[i! + 1], "unix:/tmp/q.sock,server=on,wait=off")
+
+        XCTAssertFalse(QemuEngine.buildArguments(config: cfg()).contains("-qmp"),
+                       "no -qmp when the path is omitted")
+    }
+
     /// nil and empty tftpDirectory both leave the `-nic` value without a
     /// `tftp=` clause (empty must not produce a dangling `tftp=`).
     func testBuildArgumentsNoSharedFolderWhenUnset() {

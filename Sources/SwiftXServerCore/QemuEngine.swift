@@ -95,6 +95,12 @@ public final class QemuEngine: @unchecked Sendable {
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
     private var stdinPipe: Pipe?
+    /// QMP control channel to the captive qemu (VM_CONTROL.md Stage 1). nil until
+    /// we connect after launch, or when stopped. Source of the SHUTDOWN clean-halt
+    /// signal and a qcow2-clean `quit` on Force Quit.
+    private var qmpClient: QmpClient?
+    /// The per-launch QMP unix-socket path qemu serves on; "" when stopped.
+    private var qmpSocketPath = ""
     private var isRunning = false
     private var shuttingDown = false
     /// The clean-halt signal fires once per shutdown.
@@ -223,7 +229,9 @@ public final class QemuEngine: @unchecked Sendable {
         // requires it), held for our own daemon calls + the launcher + dev file.
         let secret = Self.generateHeliosSecret()
         self.currentSecret = secret
-        let args = Self.buildArguments(config: config, heliosSecret: secret)
+        let qmpPath = Self.makeQmpSocketPath()
+        self.qmpSocketPath = qmpPath
+        let args = Self.buildArguments(config: config, heliosSecret: secret, qmpSocketPath: qmpPath)
 
         let p = Process()
         p.executableURL = config.helper
@@ -268,6 +276,14 @@ public final class QemuEngine: @unchecked Sendable {
                 self.stdoutPipe = nil
                 self.stderrPipe = nil
                 self.stdinPipe = nil
+                // Tear down the QMP channel + its socket file (qemu is gone, so
+                // the socket already closed; close() joins the reader quickly).
+                self.qmpClient?.close()
+                self.qmpClient = nil
+                if !self.qmpSocketPath.isEmpty {
+                    unlink(self.qmpSocketPath)
+                    self.qmpSocketPath = ""
+                }
                 // Capture the clean-halt result before resetting per-run
                 // state, so the terminated callback can tell a graceful
                 // power-off from a hard kill.
@@ -328,6 +344,9 @@ public final class QemuEngine: @unchecked Sendable {
         // Start polling the daemon for liveness; first success flips us to ready.
         readinessDeadline = Date().addingTimeInterval(Self.readinessBudget)
         scheduleReadinessProbe(after: Self.readinessPollInterval)
+        // Connect the QMP control channel. qemu opens the socket early in startup
+        // (well before Solaris boots), so a short retry covers the launch race.
+        connectQmp(path: qmpPath)
     }
 
     /// Graceful shutdown via the Helios daemon's `shutdown` verb (it runs
@@ -386,14 +405,76 @@ public final class QemuEngine: @unchecked Sendable {
         }
     }
 
-    /// Hard kill: SIGTERM to qemu (pulls the power cord -- Solaris will fsck on
-    /// next boot). For wedged cases where graceful shutdown won't complete.
+    /// Force stop (pulls the power cord -- Solaris will fsck on next boot, since
+    /// this skips `init 5`). For wedged cases where graceful shutdown won't
+    /// complete. Prefers a qcow2-clean QMP `quit` (qemu drains + closes the block
+    /// layer so the *container* stays consistent); falls back to SIGTERM if QMP
+    /// isn't connected or doesn't answer. VM_CONTROL.md Stage 1.
     public func kill() {
         queue.async { [weak self] in
-            self?.process?.terminate()
+            guard let self = self else { return }
+            guard let qmp = self.qmpClient else {
+                self.process?.terminate()
+                return
+            }
+            // quit() blocks; run it off `queue`. On any QMP failure, SIGTERM.
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                do {
+                    try qmp.quit()
+                } catch {
+                    self?.queue.async { self?.process?.terminate() }
+                }
+            }
         }
     }
 
+
+    // MARK: - QMP control channel (VM_CONTROL.md Stage 1)
+
+    /// Connect the QMP channel after launch, retrying briefly while qemu opens
+    /// its socket. Runs off `queue` (connect blocks). Stores the client only if
+    /// this run is still current, so a stop/relaunch race can't strand it.
+    private func connectQmp(path: String) {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            let deadline = Date().addingTimeInterval(8)
+            while Date() < deadline {
+                let stillCurrent = self.queue.sync { self.isRunning && self.qmpSocketPath == path }
+                guard stillCurrent else { return }
+
+                let client = QmpClient(socketPath: path, timeout: 5)
+                client.onEvent { [weak self] event in self?.handleQmpEvent(event) }
+                do {
+                    try client.connect()
+                    let kept = self.queue.sync { () -> Bool in
+                        guard self.isRunning, self.qmpSocketPath == path else { return false }
+                        self.qmpClient = client
+                        return true
+                    }
+                    if !kept { client.close() }
+                    return
+                } catch {
+                    Thread.sleep(forTimeInterval: 0.25)   // socket not up yet; retry
+                }
+            }
+        }
+    }
+
+    /// Handle a QMP event (called on the QmpClient reader queue). A `SHUTDOWN`
+    /// with `reason: guest-shutdown` means the guest powered itself off via the
+    /// sun4m AUX2_PWROFF path, which fires *after* `init 5` syncs the filesystems
+    /// -- so it's a clean-halt signal. We back up the console-string detection
+    /// (fire once, dedup with `sawCleanHalt`), independent of who initiated it.
+    private func handleQmpEvent(_ event: [String: Any]) {
+        guard (event["event"] as? String) == "SHUTDOWN" else { return }
+        let reason = (event["data"] as? [String: Any])?["reason"] as? String
+        queue.async { [weak self] in
+            guard let self = self, reason == "guest-shutdown", !self.sawCleanHalt else { return }
+            self.sawCleanHalt = true
+            let cb = self.cleanHaltCallback
+            DispatchQueue.main.async { cb?() }
+        }
+    }
 
     // MARK: - Readiness (hello liveness drives "guest is up")
 
@@ -490,7 +571,8 @@ public final class QemuEngine: @unchecked Sendable {
     /// NVRAM variable `helios-secret` (read back by the daemon's init script via
     /// `eeprom`). It's per-launch and runtime-only -- `-prom-env` never persists
     /// to the qcow2 (verified 2026-06-22), so the secret never lands on disk.
-    public static func buildArguments(config: QemuEngineConfig, heliosSecret: String = "") -> [String] {
+    public static func buildArguments(config: QemuEngineConfig, heliosSecret: String = "",
+                                      qmpSocketPath: String = "") -> [String] {
         // slirp NAT, AMD lance NIC (Solaris le0). hostfwd opens Mac ports
         // 2123/2222/2125 -> guest 23/22/2125 so the launcher can telnet/ssh in
         // and the Mac reaches the Helios daemon directly (no ssh tunnel). Fixed
@@ -512,11 +594,24 @@ public final class QemuEngine: @unchecked Sendable {
         if !heliosSecret.isEmpty {
             args += ["-prom-env", "helios-secret=\(heliosSecret)"]
         }
+        if !qmpSocketPath.isEmpty {
+            // QMP control channel (VM_CONTROL.md Stage 1): server mode, don't wait
+            // for a client, so qemu boots whether or not macXserver has connected.
+            args += ["-qmp", "unix:\(qmpSocketPath),server=on,wait=off"]
+        }
         args += [
             "-nic", nic,
             "-drive", "file=\(config.diskImage.path),bus=0,unit=0,media=disk",
         ]
         return args
+    }
+
+    /// Per-launch QMP socket under the user-private temp dir (mode-700 on macOS,
+    /// so the unauthenticated QMP socket isn't world-reachable). Short enough for
+    /// the sockaddr_un 104-byte limit.
+    private static func makeQmpSocketPath() -> String {
+        let name = "macxserver-qmp-\(UUID().uuidString.prefix(8)).sock"
+        return (NSTemporaryDirectory() as NSString).appendingPathComponent(name)
     }
 
     /// A fresh per-launch shared secret (128 bits, hex). `SystemRandomNumberGenerator`
