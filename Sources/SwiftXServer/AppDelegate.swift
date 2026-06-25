@@ -62,6 +62,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// failure state without waiting out the full countdown. Reset at the start
     /// of each attempt.
     private var orphanShutdownFailed = false
+    /// Set when the user chose "Quit and Detach" with the VM still running. Tells
+    /// `applicationWillTerminate` to PRESERVE the Claude-dev secret file: the guest
+    /// keeps running after we quit, so Claude Code must still be able to reach its
+    /// daemon. (A normal quit / guest exit clears it -- the secret is then dead.)
+    private var detachingSparcOnQuit = false
     /// Live progress panel shown while we wait for an orphan to power off.
     /// Non-nil only during an in-flight "Try to Shut It Down"; its presence is
     /// also the poll loop's keep-going signal (cleared the instant the user
@@ -245,7 +250,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// outlive the app. (The guest-exit path usually clears it first, since we
     /// block quitting while the VM runs; this covers the rest.)
     func applicationWillTerminate(_ notification: Notification) {
-        clearClaudeDevSecretFile()
+        // On a "Quit and Detach" the guest stays up, so its secret is still live --
+        // leave the file so Claude Code keeps its daemon access. Every other quit
+        // clears it (the secret dies with the guest, or there was none).
+        if !detachingSparcOnQuit {
+            clearClaudeDevSecretFile()
+        }
     }
 
     /// Returns false so the status-bar app keeps running with no X windows open.
@@ -280,6 +290,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case .alertFirstButtonReturn:
             // Detach: let the app terminate. qemu reparents to launchd and keeps
             // running; the image lock persists so the next launch can reconnect.
+            // Preserve the Claude-dev secret file so Claude Code can still reach
+            // the still-running guest while we're quit.
+            detachingSparcOnQuit = true
             return .terminateNow
         case .alertSecondButtonReturn:
             ensureSparcConsole()
@@ -1089,7 +1102,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func reconnectToOrphan(lock: ImageLock, image: URL) {
         ensureSparcConsole()
         sparcConsole?.showWindow()
-        if qemuEngine?.attach(toOrphan: lock) != true {
+        if qemuEngine?.attach(toOrphan: lock) == true {
+            // Refresh the Claude-dev secret file from the adopted guest's secret
+            // (the launch-time wipe cleared it; the engine now carries lock.secret).
+            writeClaudeDevSecretFile()
+        } else {
             ImageLockManager.forceRemove(imageURL: image)
         }
     }
@@ -1126,9 +1143,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// Remove the dev-secret file. Called everywhere the secret could go stale:
-    /// app launch (wipe a prior crash's leftover), guest exit, and app quit. We
-    /// can't catch a kill -9, but this guarantees the file never survives into a
-    /// new app session, and a dead secret is never left readable on disk.
+    /// app launch (wipe a prior crash's leftover), guest exit, and app quit --
+    /// EXCEPT a "Quit and Detach", where the guest keeps running and the secret is
+    /// still live (see `detachingSparcOnQuit`). We can't catch a kill -9, but this
+    /// guarantees a dead secret is never left readable on disk.
     private func clearClaudeDevSecretFile() {
         try? FileManager.default.removeItem(atPath: Self.claudeDevSecretPath)
     }
