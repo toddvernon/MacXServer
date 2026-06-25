@@ -13,7 +13,7 @@ into it. The original draft said "No Helios" and treated it as a fast-follow --
 that's now stale: Helios **landed** and is part of the product. See the
 reconciliation below.
 
-## What's actually left for v1 (reconciled 2026-06-25)
+## What's actually left for v1 (reconciled 2026-06-24)
 
 Most of this doc is done. The **Helios control plane** (HELIOS_PLAN C1-C8) landed
 since this list was written and closed every control/shutdown/orphan item the
