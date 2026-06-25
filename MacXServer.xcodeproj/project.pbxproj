@@ -284,6 +284,7 @@
 		F33F40D162D192245FFEE8B9 /* GetSelectionOwnerReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C8D7A9CF6DAD4981E786C91 /* GetSelectionOwnerReply.swift */; };
 		F37795F15CEB16896F0E7A1B /* ResourcesPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D8CF306EEFA6C0D4B55F875 /* ResourcesPanelView.swift */; };
 		F4491C69D02ADFB05549B0A8 /* CaptureSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F04C9320D2980D91CF50A3F5 /* CaptureSyntaxHighlighter.swift */; };
+		F50195F852FC41DC2FFD07F2 /* QmpClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F420A33EB754EB1F6D056150 /* QmpClient.swift */; };
 		F57AE56B2E04748960601EF5 /* MoreRequests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F418428E74B2F051B2D245A /* MoreRequests.swift */; };
 		F59B3C71C00B8A868DA94304 /* GetWindowAttributesReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6C7155A123546E5D4F4348B /* GetWindowAttributesReply.swift */; };
 		F6A8B8A6DD8BDC188C839728 /* ServerMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73E5D73EEB22199AA3ABA989 /* ServerMessage.swift */; };
@@ -679,6 +680,7 @@
 		F04C9320D2980D91CF50A3F5 /* CaptureSyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSyntaxHighlighter.swift; sourceTree = "<group>"; };
 		F053A2250444A41E4F9079AA /* ShapeRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShapeRequests.swift; sourceTree = "<group>"; };
 		F3E7E9D57468CC49753116B8 /* SparcConfigWindows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparcConfigWindows.swift; sourceTree = "<group>"; };
+		F420A33EB754EB1F6D056150 /* QmpClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QmpClient.swift; sourceTree = "<group>"; };
 		F449EE99556157173AE28DFE /* LineNumberGutter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineNumberGutter.swift; sourceTree = "<group>"; };
 		F4565EE71368DDEE198B44E6 /* AllocColorReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AllocColorReply.swift; sourceTree = "<group>"; };
 		F47394D4E3F7BA0E22CD5FAA /* DefaultMotifResources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultMotifResources.swift; sourceTree = "<group>"; };
@@ -781,6 +783,7 @@
 				FEAAC6D6AB02404456535F45 /* PixelBuffer.swift */,
 				96CD807BE28C18051D249341 /* PointerConfig.swift */,
 				E2C27389B140F26E809375BE /* QemuEngine.swift */,
+				F420A33EB754EB1F6D056150 /* QmpClient.swift */,
 				C62F63EBF845EE60FC8C7221 /* RemoteLauncher.swift */,
 				3786DF66F0E0DC6F2B22D543 /* ResourceFile.swift */,
 				B1E38DA72875F2CB1EE5A11B /* ResourceTables.swift */,
@@ -1447,6 +1450,7 @@
 				CE591857F0C41C97E597EE90 /* PixelBuffer.swift in Sources */,
 				528A50EAC0A4E1E29A65AB16 /* PointerConfig.swift in Sources */,
 				C3DA09C7E6DAFE597CEB9301 /* QemuEngine.swift in Sources */,
+				F50195F852FC41DC2FFD07F2 /* QmpClient.swift in Sources */,
 				FF215B9CEEF7EE25F44B75A8 /* Region.swift in Sources */,
 				49D5735C4F198471DDF8CA3B /* RegionDebug.swift in Sources */,
 				94179B158905B30F50AAB39D /* RegionExtras.swift in Sources */,
