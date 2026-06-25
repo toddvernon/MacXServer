@@ -255,28 +255,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         false
     }
 
-    /// Don't let the user quit macXserver out from under a running
-    /// SPARCstation -- that would either orphan qemu or pull the power on
-    /// Solaris (fsck on next boot). Refuse the quit and point them at the
-    /// console, where they can Shut Down cleanly, then quit again.
+    /// Quitting macXserver with a SPARCstation still running is now a real choice,
+    /// not a footgun: detaching leaves qemu running in the background (the serial
+    /// console is on a socket, so there's no orphan CPU-spin), and macXserver will
+    /// offer to reconnect next launch (VM_CONTROL.md Stage 3). So the dialog offers
+    /// both -- **Quit and Detach** (leave it running) or **Go to Console** (shut
+    /// Solaris down cleanly first) -- plus Cancel. The only thing detaching skips
+    /// is the clean `init 5` sync; the VM keeps managing its own disk, so it's
+    /// safe, but a clean shutdown is still tidier.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let engine = qemuEngine,
               engine.state == .running || engine.state == .shuttingDown else {
             return .terminateNow
         }
         let alert = NSAlert()
-        alert.messageText = "Shut down the SPARCstation first"
-        alert.informativeText = "The SPARCstation is still running. Shut it down from its console "
-            + "so Solaris can sync its disk, then quit macXserver. Quitting now could leave the "
-            + "disk image needing a repair on next boot."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Go to Console")
-        alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn {
+        alert.messageText = "The SPARCstation is still running"
+        alert.informativeText = "You can quit and leave it running in the background -- macXserver "
+            + "will offer to reconnect the next time you launch -- or go to its console to shut "
+            + "Solaris down cleanly first. Detaching is safe; the VM keeps managing its own disk."
+        alert.addButton(withTitle: "Quit and Detach")   // first / default
+        alert.addButton(withTitle: "Go to Console")      // second
+        alert.addButton(withTitle: "Cancel")             // third
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            // Detach: let the app terminate. qemu reparents to launchd and keeps
+            // running; the image lock persists so the next launch can reconnect.
+            return .terminateNow
+        case .alertSecondButtonReturn:
             ensureSparcConsole()
             sparcConsole?.showWindow()
+            return .terminateCancel
+        default:
+            return .terminateCancel
         }
-        return .terminateCancel
     }
 
     // MARK: - Status item
