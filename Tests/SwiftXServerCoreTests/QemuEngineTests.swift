@@ -56,6 +56,27 @@ final class QemuEngineTests: XCTestCase {
                        "no -qmp when the path is omitted")
     }
 
+    /// The serial-console socket (VM_CONTROL.md Stage 2) replaces `-nographic`
+    /// with an explicit `-display none` + `-serial unix:...` + `-monitor none`
+    /// when a path is given; the default keeps the legacy `-nographic` stdio form.
+    func testBuildArgumentsConsoleSocket() {
+        let withCon = QemuEngine.buildArguments(config: cfg(), consoleSocketPath: "/tmp/c.sock")
+        XCTAssertFalse(withCon.contains("-nographic"),
+                       "the socket console form drops -nographic")
+        let i = withCon.firstIndex(of: "-serial")
+        XCTAssertNotNil(i, "expected a -serial flag")
+        XCTAssertEqual(withCon[i! + 1], "unix:/tmp/c.sock,server=on,wait=off")
+        XCTAssertTrue(withCon.contains("-display") && withCon.contains("none"),
+                      "headless: -display none")
+        let m = withCon.firstIndex(of: "-monitor")
+        XCTAssertNotNil(m, "expected a -monitor flag")
+        XCTAssertEqual(withCon[m! + 1], "none", "HMP disabled; we drive via QMP")
+
+        let plain = QemuEngine.buildArguments(config: cfg())
+        XCTAssertTrue(plain.contains("-nographic"), "no console path -> legacy stdio console")
+        XCTAssertFalse(plain.contains("-serial"))
+    }
+
     /// nil and empty tftpDirectory both leave the `-nic` value without a
     /// `tftp=` clause (empty must not produce a dangling `tftp=`).
     func testBuildArgumentsNoSharedFolderWhenUnset() {

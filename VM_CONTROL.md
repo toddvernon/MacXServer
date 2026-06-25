@@ -1,6 +1,6 @@
 # VM control: QMP for the machine, Helios for the guest
 
-Status: **proposed 2026-06-24, approved; Stage 1 built + live-validated
+Status: **proposed 2026-06-24, approved; Stages 1 + 2 built + live-validated
 2026-06-25.** The settled-decision summary is the DECISIONS.md entry of
 2026-06-24; this is the full design and the staging. Stage progress is tracked in
 the rollout section below.
@@ -146,9 +146,23 @@ testable against the `SPARCPLUG_LIVE_TEST` harness:
   exited cleanly -- so the reason field reliably separates a guest clean-halt
   from a host Force Quit, which is exactly the discrimination `handleQmpEvent`
   relies on.
-- **Stage 2 (console surgery):** move the console to a `-serial unix:` socket,
-  retire the stdio pipe. Closes the orphan CPU-spin and enables console
-  reconnect.
+- **Stage 2 (console surgery). DONE + live-validated 2026-06-25.** The console
+  moved to a `-serial unix:<sock>,server=on,wait=off` socket, retiring the stdio
+  pipe. `buildArguments` swaps `-nographic` for `-display none` + the `-serial
+  unix:` socket + `-monitor none` (HMP off; the VM is driven through `-qmp`) when
+  a console path is given (additive, same shape as the Stage 1 `-qmp` opt-in; the
+  no-path default keeps the legacy `-nographic` form). New `SerialConsoleClient`
+  (raw byte stream, SO_RCVTIMEO poll loop + reader-join on close, mirroring
+  QmpClient's socket I/O; 5 unit tests) connects post-launch with the same
+  connect-with-retry as QMP and streams bytes into `ingest` -- exactly where the
+  old stdout handler delivered them, so clean-halt / fsck-stall / progress
+  detection are unchanged. stdin is now `/dev/null` (the console no longer reads
+  it) and stray qemu stdout is routed to the emulator-diagnostics path. **Live-
+  validated against real qemu-9.2.4 / SS-5:** boot console streamed through the
+  unix socket, and a QMP `quit` exited qemu cleanly with the socket files
+  unlinked and no orphan. Closes the orphan CPU-spin (the console is a listening
+  socket now, so our disconnect just drops the client) and lays the groundwork
+  for console reconnect (Stage 3).
 - **Stage 3:** lock-as-VM-handle (socket paths in the lock) + orphan QMP recovery
   + console reconnect. This is where the parked "reconnect to a live orphan" and
   "control off the stdio pipe" punchlist items actually close.

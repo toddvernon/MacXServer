@@ -94,13 +94,18 @@ public final class QemuEngine: @unchecked Sendable {
     private var process: Process?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
-    private var stdinPipe: Pipe?
     /// QMP control channel to the captive qemu (VM_CONTROL.md Stage 1). nil until
     /// we connect after launch, or when stopped. Source of the SHUTDOWN clean-halt
     /// signal and a qcow2-clean `quit` on Force Quit.
     private var qmpClient: QmpClient?
     /// The per-launch QMP unix-socket path qemu serves on; "" when stopped.
     private var qmpSocketPath = ""
+    /// Serial console channel (VM_CONTROL.md Stage 2). qemu serves the console on
+    /// a unix socket instead of the stdio pipe; this client streams it into
+    /// `ingest`. nil until connected after launch, or when stopped.
+    private var consoleClient: SerialConsoleClient?
+    /// The per-launch console unix-socket path qemu serves on; "" when stopped.
+    private var consoleSocketPath = ""
     private var isRunning = false
     private var shuttingDown = false
     /// The clean-halt signal fires once per shutdown.
@@ -231,25 +236,29 @@ public final class QemuEngine: @unchecked Sendable {
         self.currentSecret = secret
         let qmpPath = Self.makeQmpSocketPath()
         self.qmpSocketPath = qmpPath
-        let args = Self.buildArguments(config: config, heliosSecret: secret, qmpSocketPath: qmpPath)
+        let consolePath = Self.makeConsoleSocketPath()
+        self.consoleSocketPath = consolePath
+        let args = Self.buildArguments(config: config, heliosSecret: secret,
+                                       qmpSocketPath: qmpPath, consoleSocketPath: consolePath)
 
         let p = Process()
         p.executableURL = config.helper
         p.arguments = args
 
-        let outPipe = Pipe(), errPipe = Pipe(), inPipe = Pipe()
+        let outPipe = Pipe(), errPipe = Pipe()
         p.standardOutput = outPipe
         p.standardError = errPipe
-        // Give qemu a stdin pipe we hold open but never write to. The console
-        // is observation-only (C5: control goes through the Helios daemon, not
-        // the serial line), but qemu's serial console still reads stdin -- a
-        // live, silent pipe keeps it from hitting EOF on an inherited stdin.
-        p.standardInput = inPipe
+        // The serial console is on its own unix socket now (Stage 2), so qemu no
+        // longer reads stdin for the console -- hand it /dev/null rather than a
+        // pipe we'd have to hold open.
+        p.standardInput = FileHandle.nullDevice
 
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             if data.isEmpty { handle.readabilityHandler = nil; return }
-            self?.queue.async { self?.ingest(data) }
+            // Guest console arrives via the serial socket now; anything qemu
+            // writes to stdout is emulator-level diagnostics, treated like stderr.
+            self?.queue.async { self?.ingestEmulatorOutput(data) }
         }
         errPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
@@ -264,8 +273,10 @@ public final class QemuEngine: @unchecked Sendable {
                 // Release the image lock (only ours, by host) now that qemu
                 // has exited cleanly under our control.
                 ImageLockManager.release(imageURL: self.config.diskImage)
+                // Stdout is emulator diagnostics now (the console is on the serial
+                // socket), so drain any leftover to the same path as stderr.
                 if let rest = try? outPipe.fileHandleForReading.readToEnd(), !rest.isEmpty {
-                    self.ingest(rest)
+                    self.ingestEmulatorOutput(rest)
                 }
                 if let rest = try? errPipe.fileHandleForReading.readToEnd(), !rest.isEmpty {
                     self.ingestEmulatorOutput(rest)
@@ -275,7 +286,6 @@ public final class QemuEngine: @unchecked Sendable {
                 self.process = nil
                 self.stdoutPipe = nil
                 self.stderrPipe = nil
-                self.stdinPipe = nil
                 // Tear down the QMP channel + its socket file (qemu is gone, so
                 // the socket already closed; close() joins the reader quickly).
                 self.qmpClient?.close()
@@ -283,6 +293,13 @@ public final class QemuEngine: @unchecked Sendable {
                 if !self.qmpSocketPath.isEmpty {
                     unlink(self.qmpSocketPath)
                     self.qmpSocketPath = ""
+                }
+                // Same for the serial console channel + its socket file.
+                self.consoleClient?.close()
+                self.consoleClient = nil
+                if !self.consoleSocketPath.isEmpty {
+                    unlink(self.consoleSocketPath)
+                    self.consoleSocketPath = ""
                 }
                 // Capture the clean-halt result before resetting per-run
                 // state, so the terminated callback can tell a graceful
@@ -308,7 +325,6 @@ public final class QemuEngine: @unchecked Sendable {
         self.process = p
         self.stdoutPipe = outPipe
         self.stderrPipe = errPipe
-        self.stdinPipe = inPipe
         self.shuttingDown = false
         self.sawCleanHalt = false
         self.ready = false
@@ -325,7 +341,6 @@ public final class QemuEngine: @unchecked Sendable {
             self.process = nil
             self.stdoutPipe = nil
             self.stderrPipe = nil
-            self.stdinPipe = nil
             throw QemuEngineError.spawnFailed(error.localizedDescription)
         }
         isRunning = true
@@ -347,6 +362,9 @@ public final class QemuEngine: @unchecked Sendable {
         // Connect the QMP control channel. qemu opens the socket early in startup
         // (well before Solaris boots), so a short retry covers the launch race.
         connectQmp(path: qmpPath)
+        // Connect the serial console channel the same way -- qemu opens its
+        // listening socket during startup, so retry briefly past the launch race.
+        connectConsole(path: consolePath)
     }
 
     /// Graceful shutdown via the Helios daemon's `shutdown` verb (it runs
@@ -449,6 +467,39 @@ public final class QemuEngine: @unchecked Sendable {
                     let kept = self.queue.sync { () -> Bool in
                         guard self.isRunning, self.qmpSocketPath == path else { return false }
                         self.qmpClient = client
+                        return true
+                    }
+                    if !kept { client.close() }
+                    return
+                } catch {
+                    Thread.sleep(forTimeInterval: 0.25)   // socket not up yet; retry
+                }
+            }
+        }
+    }
+
+    /// Connect the serial console channel after launch, retrying briefly while
+    /// qemu opens its listening socket. Runs off `queue` (connect blocks). Stores
+    /// the client only if this run is still current, so a stop/relaunch race can't
+    /// strand it. Streamed bytes hop to `queue` and into `ingest`, exactly where
+    /// the old stdout-pipe handler delivered them. VM_CONTROL.md Stage 2.
+    private func connectConsole(path: String) {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            let deadline = Date().addingTimeInterval(8)
+            while Date() < deadline {
+                let stillCurrent = self.queue.sync { self.isRunning && self.consoleSocketPath == path }
+                guard stillCurrent else { return }
+
+                let client = SerialConsoleClient(socketPath: path)
+                client.onData { [weak self] data in
+                    self?.queue.async { self?.ingest(data) }
+                }
+                do {
+                    try client.connect()
+                    let kept = self.queue.sync { () -> Bool in
+                        guard self.isRunning, self.consoleSocketPath == path else { return false }
+                        self.consoleClient = client
                         return true
                     }
                     if !kept { client.close() }
@@ -572,7 +623,8 @@ public final class QemuEngine: @unchecked Sendable {
     /// `eeprom`). It's per-launch and runtime-only -- `-prom-env` never persists
     /// to the qcow2 (verified 2026-06-22), so the secret never lands on disk.
     public static func buildArguments(config: QemuEngineConfig, heliosSecret: String = "",
-                                      qmpSocketPath: String = "") -> [String] {
+                                      qmpSocketPath: String = "",
+                                      consoleSocketPath: String = "") -> [String] {
         // slirp NAT, AMD lance NIC (Solaris le0). hostfwd opens Mac ports
         // 2123/2222/2125 -> guest 23/22/2125 so the launcher can telnet/ssh in
         // and the Mac reaches the Helios daemon directly (no ssh tunnel). Fixed
@@ -586,7 +638,24 @@ public final class QemuEngine: @unchecked Sendable {
         var args = [
             "-M", "SS-5",                                   // SPARCstation 5 (sun4m)
             "-m", String(config.memoryMB),                  // RAM in MB
-            "-nographic",                                   // serial console to stdio, no framebuffer window
+        ]
+        if consoleSocketPath.isEmpty {
+            // Legacy form: serial console multiplexed onto stdio, no framebuffer.
+            args += ["-nographic"]
+        } else {
+            // VM_CONTROL.md Stage 2: route the serial console to a unix socket
+            // instead of the stdio pipe, so an orphaned qemu doesn't busy-spin on
+            // a hung-up stdio console fd and the console can be reconnected.
+            // `-display none` keeps the headless build from any UI; `-monitor none`
+            // disables the HMP monitor (its non-graphical default is stdio) because
+            // we drive the VM through `-qmp` instead.
+            args += [
+                "-display", "none",
+                "-serial", "unix:\(consoleSocketPath),server=on,wait=off",
+                "-monitor", "none",
+            ]
+        }
+        args += [
             "-L", config.firmwareDir.path,                  // bundled openbios-sparc32 lives here
             "-prom-env", "input-device=ttya",               // OpenBOOT console policy: serial from boot
             "-prom-env", "output-device=ttya",
@@ -611,6 +680,13 @@ public final class QemuEngine: @unchecked Sendable {
     /// the sockaddr_un 104-byte limit.
     private static func makeQmpSocketPath() -> String {
         let name = "macxserver-qmp-\(UUID().uuidString.prefix(8)).sock"
+        return (NSTemporaryDirectory() as NSString).appendingPathComponent(name)
+    }
+
+    /// Per-launch serial-console socket, same placement/constraints as the QMP
+    /// socket (mode-700 temp dir, short enough for the 104-byte sockaddr_un limit).
+    private static func makeConsoleSocketPath() -> String {
+        let name = "macxserver-con-\(UUID().uuidString.prefix(8)).sock"
         return (NSTemporaryDirectory() as NSString).appendingPathComponent(name)
     }
 
