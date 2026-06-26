@@ -806,16 +806,18 @@ public final class QemuEngine: @unchecked Sendable {
             "-L", config.firmwareDir.path,                  // bundled openbios-sparc32 lives here
             "-prom-env", "input-device=ttya",               // OpenBOOT console policy: serial from boot
             "-prom-env", "output-device=ttya",
-            // Console speedup via the OpenBoot console line setting (was the
-            // 9600 default; ~4x faster at 38400). ttya-mode = baud,bits,parity,
-            // stop,handshake. The emulated ESCC doesn't pace by baud itself (Tx
-            // immediate, no FIFO in hw/char/escc.c); the guest (OpenBIOS/
-            // Solaris) paces by ospeed, so a higher rate -> faster console.
-            // 38400 is the ceiling: it's the documented sun zilog max, and
-            // 115200 tested as no-faster AND destabilized the console (clear/
-            // top broke -- the BRG can't represent it, leaving the line
-            // misconfigured). -prom-env is runtime-only (never persisted).
-            "-prom-env", "ttya-mode=38400,8,n,1,-",
+            // Console speed via the OpenBoot console line setting (was the 9600
+            // default). ttya-mode = baud,bits,parity,stop,handshake. The
+            // emulated ESCC doesn't pace by baud itself (Tx immediate, no FIFO
+            // in hw/char/escc.c); the guest (OpenBIOS/Solaris) paces by ospeed,
+            // so a higher rate -> faster console. 115200 is honored and stable
+            // here (verified live: faster than 38400, clear/top fine) even
+            // though it's above the real sun zilog's 38400 -- qemu does no real
+            // bit-timing so the emulated line happily runs faster than the
+            // hardware could. The earlier clear/top breakage at 115200 was just
+            // the fresh-boot TERM default, not the baud. -prom-env is
+            // runtime-only (never persisted to the image).
+            "-prom-env", "ttya-mode=115200,8,n,1,-",
         ]
         if !heliosSecret.isEmpty {
             args += ["-prom-env", "helios-secret=\(heliosSecret)"]

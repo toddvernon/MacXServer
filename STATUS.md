@@ -91,9 +91,12 @@ session:
   in an xterm (pty + X-over-TCP, no UART) is instant. The emulated ESCC itself
   doesn't pace (`hw/char/escc.c`: Tx immediate, no FIFO/timer) -- the pacing is
   guest-side (OpenBIOS/Solaris pacing by `ospeed`). **Fix: `-prom-env
-  ttya-mode=38400,8,n,1,-`** (was the 9600 default; 38400 is the sun zilog max
-  per the escc comment). ~4x faster, confirmed live. -prom-env is runtime-only.
-  Open: test whether the guest honors >38400 (115200) since we're emulated.
+  ttya-mode=115200,8,n,1,-`** (was the 9600 default). The emulated line runs
+  above the real sun zilog's 38400 max because qemu does no real bit-timing --
+  115200 verified live: faster than 38400, clear/top fine. (115200 looked like
+  it broke clear/top in one test, but that was just the fresh-boot TERM default,
+  not the baud -- set TERM=vt100 / Set Up Terminal each boot.) -prom-env is
+  runtime-only (never persisted).
 - Two rendering optimizations also landed, orthogonal to the baud fix and still
   worth keeping: (1) dirty-rect diff (`TerminalView` invalidates only changed
   cells, `draw` honors `needsToDraw`); (2) coalesced `setNeedsRefresh()` so a
