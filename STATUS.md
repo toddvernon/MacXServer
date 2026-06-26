@@ -1,136 +1,107 @@
-# Status 2026-06-25 (end of day, session 3)
+# Status 2026-06-25 (end of day, session 4)
 
-## ⚠️ NEXT SESSION FIRST — xterm ctrl-button menu regression
+## ⚠️ NEXT SESSION FIRST -- xterm ctrl-button menu regression
 
-A later scrollbar/border session (commit c6f2911) landed an xterm scrollbar
-polish pass (match the Motif frame's scale + bevel + focus colors, pin the
-thumb-drag cursor) AND a **systemic geometry fix: honor `border_width` in the
-child-window origin** (`topLevelAndOffset` + `ClipListEngine`, per X11R6
-`dix/window.c:669` -- a child's interior origin is `parent + x + border_width`).
-That fixed the scrollbar's 1px up-left shift, but **the native xterm ctrl-button
-menus (Ctrl+Left = Main Options, Ctrl+Right = VT Fonts) now have bugs** -- almost
-certainly a side effect of the `border_width` origin change shifting bordered
-popup-menu placement / coordinates. **Decide next session: fix properly (account
-for border_width consistently in the menu placement + event-coord paths -- likely
-other spots that compute child origins still ignore it) or disable.** Start by
-grepping for parent->child origin math that sums `x` without `borderWidth`.
+Tonight's `border_width` origin fix (commit c6f2911) very likely broke xterm's
+native ctrl-button menus: **Ctrl+Left = Main Options, Ctrl+Right = VT Fonts now
+misbehave.** The fix made a child's interior origin `parent + x + border_width`
+(per X11R6 `dix/window.c:669`) in `topLevelAndOffset` + `ClipListEngine`, which
+fixed the scrollbar but almost certainly shifted bordered popup-menu placement /
+event coords. **Decide: fix properly or disable.** If fixing: there are probably
+OTHER spots that compute parent->child origins and still ignore `borderWidth` --
+I only patched those two. Start by grepping for origin math that sums `x`
+(or `entry.x` / `childEntry.x`) without adding `borderWidth`, especially in the
+event-coordinate and menu-placement paths.
 
-VM control day. Took the QMP Stage 1 foundation from earlier today and drove the
-whole `VM_CONTROL.md` rollout to completion: Stages 2 + 3, then the Design-2
-reconnect feature on top, then the quit-time detach dialog, then dev-secret
-continuity across a detach. macXserver can now hand a running SPARCstation off to
-the background and pick it back up next launch.
+## Today, part 2 -- xterm scrollbar polish + an archaeology find
 
-## Where things stand
+Spent the evening matching the Motif-skinned xterm scrollbar to the window-frame
+chrome, and in the process surfaced a 30-year-old X11 quirk. All in c6f2911:
 
-**VM control Stages 1-3 are all done + live-validated** (`VM_CONTROL.md` rollout
-section has the per-stage detail). The captive qemu is driven through two planes:
-Helios (guest OS) and QMP (the VM). What landed this session:
+- **Scrollbar matches the frame's scale.** The frame draws at the AppKit backing
+  scale (points); the scrollbar is X content at the X display scaleFactor. On the
+  Studio Display (X 3x, backing 2x) the scrollbar's 1px bevels were 3 device px
+  vs the frame's 2. Now counter-scaled by backing/scaleFactor and drawn in points
+  so they match exactly. Same device footprint.
+- **Crisp arrow.** AA-off so the stepper-arrow's diagonal edges are hard 1px like
+  the frame and real Motif. Render regression test flags any AA blend.
+- **Follows focus.** Picks active vs inactive palette from the window's key state
+  (same signal as MotifFrameView.isActiveWindow); `handleFocusChange` re-issues
+  the paint across the whole subtree on focus change (the scrollbar is a
+  grandchild in xterm: Shell -> VT100 -> scrollbar).
+- **Cursor pinned vertical.** Athena sets sb_right_arrow during a thumb drag
+  (Scrollbar.c StartScroll 'c'); we now keep the up/down cursor.
+- **THE ARCHAEOLOGY: honor `border_width` in the child-window origin.** xterm
+  places its scrollbar at (-1,-1) with border_width=1 so the content lands flush
+  at the parent origin (the border falls off-parent and is clipped) -- correct
+  X11, relies on the server adding border_width. We never did, so the scrollbar
+  was shifted up-left a pixel (clipped top/left bevel highlights, down-arrow
+  lifted off the base). Invisible for 30 years because xterm's flat gray fill
+  didn't care about a 1px shift; the Motif bevels do. xterm was right all along;
+  the bug was ours. Diagnosed against `dix/window.c:669`.
 
-- **Stage 2 -- serial console on a socket.** Console moved off the `-nographic`
-  stdio pipe onto `-serial unix:<sock>,server=on,wait=off` (+ `-display none` +
-  `-monitor none`). New `SerialConsoleClient` streams it. Closes the orphan
-  CPU-spin (the console is a listening socket now, so our disconnect just drops
-  the client) and makes the console re-attachable. `buildArguments` keeps the
-  legacy `-nographic` form when no console path is given (additive, like the
-  Stage 1 `-qmp` opt-in).
+## The larger thread (today, part 1) -- VM control Stages 1-3 + reconnect
 
-- **Stage 3 -- lock-as-VM-handle + qcow2-clean orphan recovery.** `ImageLock`
-  records the QMP + console socket paths (`qmp:` / `console:`, host-local like
-  pid/secret). `QemuEngine.quitOrphanViaQmp(qmpSocketPath:)` connects a fresh
-  QmpClient to the path the lock records and issues a qcow2-clean `quit` (drains +
-  closes the block layer) -- the orphan Force Quit prefers it, SIGKILL fallback.
-
-- **Stage 3 Design 2 -- reconnect to an orphaned VM on launch.** This is the big
-  one. On launch, `checkForReconnectableOrphanOnLaunch` detects a `localOrphan`,
-  probes Helios, and prompts. `QemuEngine.attach(toOrphan:)` adopts an
-  already-running qemu as a live session WITHOUT a child Process: wires QMP +
-  console to the lock's sockets, flips to `.running`, stamps a "reconnected to
-  console" marker (the serial socket replays no history, so a late joiner sees a
-  blank window otherwise), and detects exit by polling the pid (no
-  terminationHandler). A shared `finishRun()` is the single teardown both
-  lifecycle paths funnel through. Because the engine fires the same callbacks, the
-  whole console UI follows for free, including clean-halt -> auto-backup.
-  **Graceful-first policy (per Todd):** the prompt leads with Shut It Down when
-  Helios answers and only offers Force Quit when it doesn't; the console window
-  mirrors it (Shut Down while ready, Force Quit only when the daemon can't be
-  reached, via the new `onShutdownUnavailable` signal that closes the old
-  told-to-Force-Quit-with-no-button dead-end).
-
-- **Quit-with-VM-running dialog.** `applicationShouldTerminate` used to refuse
-  outright. Now it offers **Quit and Detach** (leave qemu running in the
-  background; the lock persists so the next launch offers to reconnect), **Go to
-  Console** (shut Solaris down cleanly first), or Cancel. Detaching is safe now
-  (no CPU-spin, reconnectable) -- same outcome as the Xcode-stop path.
-
-- **Dev-secret continuity on detach.** On a detach the guest keeps running, so its
-  Helios secret is still live. A `detachingSparcOnQuit` flag tells
-  `applicationWillTerminate` to PRESERVE the Claude-dev secret file (`/tmp/sparkplug`)
-  so Claude Code keeps daemon access while we're quit; reconnect re-writes it from
-  `lock.secret` on relaunch.
+Earlier today: drove `VM_CONTROL.md` to completion. macXserver drives the captive
+qemu through two planes -- Helios (guest OS) and QMP (the VM). Done + live-
+validated: serial console on a `-serial unix:` socket (Stage 2), lock-as-VM-handle
++ qcow2-clean orphan QMP recovery (Stage 3), Design-2 **reconnect to an orphaned
+VM on launch** (engine adoption, no child Process), the **Quit-and-Detach** quit
+dialog, and dev-secret continuity across a detach. See VM_CONTROL.md.
 
 ## What's working
 
-- Full suite green: **1415 tests, 0 failures** (31 skipped = the live tests).
-- New tests: `SerialConsoleClientTests` (5), QMP orphan-quit + lock-socket
-  round-trip + acquire (4), `attach` reject (1), plus 3 live tests
-  (`testLiveBootStreamsConsole`, `testLiveOrphanQmpQuitViaLock`,
-  `testLiveAdoptOrphanLifecycle`) all passing against real qemu-9.2.4 / SS-5.
-- Both the Xcode `SwiftXServerCore` and `MacXServer` schemes build clean
-  (xcodegen regenned to pick up `SerialConsoleClient.swift`).
-- **Reconnect validated live by Todd** end-to-end (boot, Xcode-stop to orphan,
-  relaunch, reconnect prompt -> connected console). "works great."
+- Full suite green: **1418 tests, 0 failures** (31 skipped = live tests).
+- Scrollbar: width-matched, crisp, focus-following, vertical cursor -- all
+  confirmed live by Todd.
+- border_width fix is systemic + correct (dix/window.c:669); the one clip test
+  that encoded the old inverted interpretation was corrected, plus a regression
+  pinning the (-1,-1)+bw=1 scrollbar case.
+- VM control reconnect validated live (Xcode-stop -> relaunch -> reconnect).
 
 ## What's broken / rough edges
 
-- The end-to-end **Quit and Detach** dialog and the **dev-secret-on-detach** path
-  haven't had a manual click-through yet (logic + build verified, suite green).
-  Worth a quick manual pass: Cmd-Q with the VM up -> Detach -> relaunch ->
-  reconnect, and confirm `/tmp/sparkplug` survives the detach in Claude-dev mode.
-- Console-reconnect "Ignore at launch" edge: if you decline the reconnect prompt
-  while the VM runs, the launch-time secret-file wipe leaves Claude without the
-  file until you reconnect. Minor, non-v1.
+- **xterm ctrl-button menus** (see the banner up top). The one real known
+  regression from tonight.
+- Console-reconnect "Ignore at launch" edge (VM control): declining the reconnect
+  prompt while the VM runs leaves Claude's dev-secret file wiped until you
+  reconnect. Minor, non-v1.
 
 ## What's next
 
-- **Stage 4 (post-v1): snapshot fast-launch.** `snapshot-save`/`snapshot-load`
-  for a "boot once, snapshot at the CDE desktop, fast-launch in ~2s" feature. The
-  sun4m vmstate support is verified in `VM_CONTROL.md`; wants a real round-trip on
-  the live image before we bank it.
-- **Helios (the standing thread):** C6 more guided-sysadmin tasks; B6 daemon
-  `make test` on Solaris + 2 hardening items (orphan-reap, shutdown
-  euid/exit-status).
+1. **Decide fix-vs-disable on the ctrl-button menu regression** (banner up top).
+   Most likely the first thing to look at.
+2. **Stage 4 (post-v1): snapshot fast-launch.** `snapshot-save`/`snapshot-load`
+   for "boot once, snapshot at the CDE desktop, fast-launch in ~2s". sun4m
+   vmstate verified in VM_CONTROL.md; wants a live round-trip before banking it.
+3. **Helios:** C6 more guided-sysadmin tasks; B6 daemon `make test` on Solaris +
+   2 hardening items (orphan-reap, shutdown euid/exit-status).
 
 ## What's committed (recent, all pushed)
 
 - `~/dev/X` (ahead 0 / behind 0):
-  - 12b4871 -- preserve the Claude-dev secret file on Quit and Detach.
-  - 0de9591 -- quit dialog: Quit and Detach vs Go to Console.
-  - ab914f2 -- regenerate Xcode project (pick up SerialConsoleClient.swift).
-  - 3c0abbd -- Stage 3 Design 2: reconnect to an orphaned VM (engine adoption).
-  - 30404d7 -- Stage 3: lock-as-VM-handle + qcow2-clean orphan QMP recovery.
-  - 4b862c8 -- Stage 2: serial console on a -serial unix: socket.
+  - 4974ace -- STATUS: flag the ctrl-button menu regression.
+  - c6f2911 -- xterm scrollbar match-the-frame (scale/bevel/focus/cursor) +
+    honor border_width systemically.
+  - 9609698 -- STATUS roll for the VM control session.
+  - 12b4871 / 0de9591 -- dev-secret-on-detach + Quit-and-Detach dialog.
 - `~/dev/SPARCplug` (ahead 0 / behind 0) and the cx tree: unchanged this session.
 
 ## Switching to the other Mac
 
-- A SPARCstation VM is **still running** on this Mac (Todd's real SUN40G.qcow2,
-  from testing reconnect). It holds the image lock on the Dropbox-synced qcow2.
-  Left up on purpose. If you switch Macs, the other Mac will see `remoteLocked` on
-  that image until this VM shuts down (or you detach + let it run, knowing the
-  lock is held). Shut it down here first if you want the other Mac to boot it.
+- VM is not running; no image lock. Clean.
 - Let Dropbox finish syncing the memory dir before opening the other Mac.
 - `git pull` X (SPARCplug / cx unchanged but pull anyway).
-- `/sos` first.
+- `/sos` first -- it'll surface the menu-regression banner.
 
 ## Pointers
 
-- VM control: `Sources/SwiftXServerCore/SerialConsoleClient.swift` (console
-  socket), `QmpClient.swift` (QMP), `QemuEngine.swift` (`attach(toOrphan:)`,
-  `finishRun`, `quitOrphanViaQmp`, death poll, `buildArguments`),
-  `ImageLock.swift` (qmp/console paths). UI in `AppDelegate.swift`
-  (`checkForReconnectableOrphanOnLaunch`, `reconnectToOrphan`,
-  `presentReconnectPrompt`, `applicationShouldTerminate`) and
-  `SparcPlugConsoleWindowController.swift` (graceful-first controls).
-- Design + rollout: `VM_CONTROL.md`. Punchlist crash/orphan: `PLUGIN_V1_PUNCHLIST.md`
-  (L2a/L3 closed).
+- Scrollbar: `MotifScrollbarRenderer.swift` (renderer, AA-off),
+  `CocoaWindowBridge.paintMotifScrollbar` (point-unit scale + focus colors),
+  `ServerSession` (`resolveCursorGlyph` cursor pin, `handleFocusChange` +
+  `repaintSkinnedScrollbars` focus repaint, `topLevelAndOffset` border_width).
+- border_width: `ServerSession.topLevelAndOffset` + `Region/ClipList.swift`
+  (childBaseDx/Dy). Both cite dix/window.c:669.
+- VM control: `VM_CONTROL.md`, `QemuEngine.swift`, `SerialConsoleClient.swift`,
+  `QmpClient.swift`, `ImageLock.swift`, `AppDelegate.swift` (reconnect + quit
+  dialog).
