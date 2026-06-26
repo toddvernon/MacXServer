@@ -24,25 +24,31 @@ final class SparcPlugConsoleWindowController: NSWindowController {
         // hang waiting for the answer.
         model.terminal.onOutput = onInput
 
-        // When the window resizes, the grid reflows and we push a matching stty
-        // so the guest's tty winsize agrees (the view debounces + suppresses
-        // this inside a full-screen app).
-        model.terminalView.onResize = { rows, cols in
-            onInput(Data("stty rows \(rows) columns \(cols)\r".utf8))
+        // The grid follows the window for display, but the guest's tty winsize
+        // is synced only when the user presses a button -- a serial line has no
+        // SIGWINCH, so the sync means typing `stty`, and we must not inject that
+        // into whatever the user is doing.
+        let view = model.terminalView
+
+        // "Set Up Terminal": align the guest console TERM with what we emulate
+        // (vt100) and pin the current grid size. csh/tcsh syntax (the bundled
+        // SPARCstation root shell). Fixes top/clear/vi when the login TERM is
+        // the Sun console default rather than vt100.
+        let sendSetup = {
+            let (rows, cols) = view.gridSize
+            onInput(Data("setenv TERM vt100; stty rows \(rows) columns \(cols); clear\r".utf8))
         }
 
-        // "Set Up Terminal" types this at the guest shell: align its console
-        // TERM with what we emulate (vt100) and pin the CURRENT grid size. csh/
-        // tcsh syntax (the bundled SPARCstation root shell). Fixes top/clear/vi
-        // when the login TERM is the Sun console default rather than vt100.
-        let term = model.terminal
-        let sendSetup = {
-            onInput(Data("setenv TERM vt100; stty rows \(term.rows) columns \(term.cols); clear\r".utf8))
+        // "Resize TTY": push just the current grid size, for after dragging the
+        // window. Press it at a shell prompt (not inside a full-screen app).
+        let sendResize = {
+            let (rows, cols) = view.gridSize
+            onInput(Data("stty rows \(rows) columns \(cols)\r".utf8))
         }
 
         let hostingView = NSHostingView(rootView: SparcPlugConsoleView(
             model: model, shutDown: onShutDown, forceQuit: onForceQuit,
-            setupTerminal: sendSetup))
+            setupTerminal: sendSetup, resizeTTY: sendResize))
         // First-class NSWindow (not an NSPanel/.utilityWindow): a utility panel
         // hides whenever macXserver isn't the foreground app, which is annoying
         // for a console you want to keep watching while you work elsewhere. A
@@ -167,6 +173,7 @@ struct SparcPlugConsoleView: View {
     let shutDown: () -> Void
     let forceQuit: () -> Void
     let setupTerminal: () -> Void
+    let resizeTTY: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -238,6 +245,8 @@ struct SparcPlugConsoleView: View {
                 if model.state == .running {
                     Button("Set Up Terminal", action: setupTerminal)
                         .help("Type `setenv TERM vt100; stty rows/columns <current size>; clear` at the guest shell (csh/tcsh) so full-screen apps render correctly.")
+                    Button("Resize TTY", action: resizeTTY)
+                        .help("Push the current window size to the guest (`stty rows/columns`) after resizing. Press at a shell prompt, not inside a full-screen app.")
                 }
                 controls
             }

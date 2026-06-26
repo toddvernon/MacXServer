@@ -128,19 +128,18 @@ session:
   Added a **"Set Up Terminal" button** (visible when running) that types
   `setenv TERM vt100; stty rows 24 columns 80; clear` at the guest (csh/tcsh).
 
-- **Resizable terminal (was fixed 80x24).** The grid now tracks the window:
-  `TerminalView.setFrameSize` -> `reflowToFit` computes rows/cols from the
-  bounds + integer cell metrics, `TerminalEmulator.resize` (vterm_set_size)
-  reflows, and a debounced `onResize` pushes a matching `stty rows/columns` so
-  the guest's winsize agrees -- which is what fixes the "sometimes wraps"
-  (size disagreement). The push is gated: suppressed during the initial layout
-  settle (no stray stty at the boot/login console) and while a full-screen app
-  owns the alt screen (don't inject into vi/top -- tracked via a new
-  `settermprop` callback, which also gives real cursor-hide). Dropped the
-  NSScrollView wrapper; the view fills the window (black layer bg for the
-  sub-cell margin). Set Up Terminal now uses the live size. CAVEAT: serial has
-  no SIGWINCH-over-wire, so resizing *inside* a full-screen app won't reflow it
-  until you exit to a shell (inherent; matches real serial + `resize`).
+- **Resizable terminal (was fixed 80x24).** The grid follows the window for
+  display: `TerminalView.setFrameSize` -> `reflowToFit` computes rows/cols from
+  the bounds + integer cell metrics and `TerminalEmulator.resize`
+  (vterm_set_size) reflows. Dropped the NSScrollView wrapper; the view fills the
+  window (black layer bg for the sub-cell margin). The guest's tty winsize
+  (which fixes the "sometimes wraps" size disagreement) is synced **manually
+  via a new "Resize TTY" button**, NOT auto-pushed -- a serial line has no
+  SIGWINCH, so syncing means typing `stty`, and auto-injecting that corrupts
+  whatever the user is doing (an editor, cm; the alt-screen guard didn't cover
+  cm, which doesn't use ?1049). Press Resize TTY at a shell prompt after
+  dragging. Set Up Terminal uses the live size too. (The `settermprop` callback
+  added for the abandoned auto-push guard stays -- it gives real cursor-hide.)
 
 **Still open for v1:** scrollback (`sb_pushline`); the cm alt-screen case (cm
 uses the old `?47`, unhandled by libvterm 0.3.3 -> a vendored `47->1047` patch);
