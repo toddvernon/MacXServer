@@ -66,32 +66,66 @@ public final class TerminalView: NSView {
         window?.makeFirstResponder(self)
     }
 
-    /// Push the emulator's current state into the view and redraw. Call after
-    /// feeding bytes into the emulator.
+    /// Pull the emulator's new state and invalidate only the cells that
+    /// changed (plus the old/new cursor cells). The spike's original
+    /// whole-view redraw on every chunk is what made full-screen apps visibly
+    /// slow and showed the cursor repainting; diffing keeps a cursor move or a
+    /// few typed cells from triggering a full repaint.
     public func refresh() {
-        grid = term.grid()
-        cursor = term.cursor()
-        needsDisplay = true
+        let newGrid = term.grid()
+        let newCursor = term.cursor()
+
+        if newGrid.count == grid.count {
+            for r in 0..<newGrid.count where r < grid.count {
+                let oldRow = grid[r], newRow = newGrid[r]
+                if oldRow.count == newRow.count {
+                    for c in 0..<newRow.count where newRow[c] != oldRow[c] {
+                        setNeedsDisplay(cellRect(row: r, col: c))
+                    }
+                } else {
+                    needsDisplay = true   // row width changed -> full repaint
+                }
+            }
+        } else {
+            needsDisplay = true           // grid dimensions changed
+        }
+
+        if newCursor != cursor {
+            setNeedsDisplay(cellRect(row: cursor.row, col: cursor.col))
+            setNeedsDisplay(cellRect(row: newCursor.row, col: newCursor.col))
+        }
+
+        grid = newGrid
+        cursor = newCursor
     }
 
     // MARK: - Drawing
 
+    private func cellRect(row: Int, col: Int) -> NSRect {
+        NSRect(x: CGFloat(col) * cellW, y: CGFloat(row) * cellH,
+               width: cellW, height: cellH)
+    }
+
     public override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
 
-        // Default background behind everything (also covers any sub-cell gap).
+        // Repaint only the dirty area's background, then only the cells that
+        // intersect it. needsToDraw honors AppKit's actual dirty region (which
+        // may be several disjoint rects), so scattered changes stay cheap.
         ctx.setFillColor(TerminalView.cg(TerminalEmulator.Cell.blank.bg))
-        ctx.fill(bounds)
+        ctx.fill(dirtyRect)
 
         for row in 0..<grid.count {
             for col in 0..<grid[row].count {
+                guard needsToDraw(cellRect(row: row, col: col)) else { continue }
                 drawCell(grid[row][col], row: row, col: col, isCursor: false)
             }
         }
 
         if cursor.visible,
            cursor.row >= 0, cursor.row < grid.count,
-           cursor.col >= 0, cursor.col < grid[cursor.row].count {
+           cursor.col >= 0, cursor.col < grid[cursor.row].count,
+           needsToDraw(cellRect(row: cursor.row, col: cursor.col)) {
             drawCell(grid[cursor.row][cursor.col],
                      row: cursor.row, col: cursor.col, isCursor: true)
         }
@@ -99,8 +133,7 @@ public final class TerminalView: NSView {
 
     private func drawCell(_ cell: TerminalEmulator.Cell, row: Int, col: Int, isCursor: Bool) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        let rect = NSRect(x: CGFloat(col) * cellW, y: CGFloat(row) * cellH,
-                          width: cellW, height: cellH)
+        let rect = cellRect(row: row, col: col)
 
         // reverse video and the block cursor both swap fg/bg.
         let swap = cell.reverse != isCursor

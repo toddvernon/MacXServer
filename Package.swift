@@ -24,7 +24,11 @@ let package = Package(
                 // The .c sources sit in the target root next to the private
                 // headers (vterm_internal.h, utf8.h, rect.h) and the .inc
                 // tables; make the root searchable for their quoted includes.
-                .headerSearchPath(".")
+                .headerSearchPath("."),
+                // libvterm gates its noisy DEBUG_LOG (Unhandled CSI / Unknown
+                // DEC mode) on DEBUG; undefine it so the lib stays quiet even
+                // in a debug build of the package.
+                .unsafeFlags(["-UDEBUG"])
             ]
         ),
         .target(

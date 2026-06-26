@@ -83,8 +83,25 @@ Quit buttons are unchanged; only the text area was swapped. Data path:
 `QemuEngine.sendConsole`; AppDelegate feeds `onConsoleData -> feedConsoleData ->
 emulator.feed/refresh` and binds `TerminalView.onInput -> engine.sendConsole`.
 Focus on show + click-to-focus. Caption now "Interactive serial console."
-Builds clean (SwiftPM + Xcode app), suite 1428/0. **NOT yet live-verified
-against a running guest** -- needs a boot + a vi session to confirm.
+**Live-verified** (Todd booted it, ran vi + cm). Follow-up fixes from that
+session:
+- **Perf:** the spike's whole-view redraw on every chunk made full-screen
+  apps visibly slow (you could watch the cursor repaint). `TerminalView` now
+  diffs old vs new grid and invalidates only changed cells (+ old/new cursor);
+  `draw` honors `needsToDraw` per cell. Cursor moves / typing repaint a couple
+  cells instead of 1920.
+- **Alt-screen:** `vterm_screen_enable_altscreen` on, so vi/curses' ?1047/1049
+  use the alt buffer instead of scribbling the main screen. The old ?47 form
+  is unhandled by libvterm 0.3.3 (cm uses it -> still redraws main screen); a
+  vendored 47->1047 patch is the follow-up if it matters.
+- **libvterm stderr spam** (`Unhandled CSI t`, `Unknown DEC mode 47/2026`) was
+  its `DEBUG_LOG`, active because the project's Debug `DEBUG=1` was inherited by
+  the CVTerm compile. Overrode CVTerm to `NDEBUG` (project.yml) + `-UDEBUG`
+  (Package.swift); silent now in both build systems.
+- **Priority inversion** (pre-existing, surfaced on `init 5`): `QmpClient.close`
+  joined its reader thread from a higher-QoS caller -> Thread Performance
+  Checker backtrace. Bumped `QmpClient` + `SerialConsoleClient` reader queues to
+  `.userInitiated`.
 
 **Still open for v1:** scrollback (`sb_pushline`), the "Send terminal setup"
 affordance (`TERM=vt100; stty rows 24 columns 80`), reconcile

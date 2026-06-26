@@ -1949,6 +1949,9 @@
 				CLANG_ENABLE_MODULES = YES;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEFINES_MODULE = YES;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"NDEBUG=1",
+				);
 				HEADER_SEARCH_PATHS = (
 					"$(SRCROOT)/Sources/CVTerm",
 					"$(SRCROOT)/Sources/CVTerm/include",
@@ -2300,6 +2303,9 @@
 				CLANG_ENABLE_MODULES = YES;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEFINES_MODULE = YES;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"NDEBUG=1",
+				);
 				HEADER_SEARCH_PATHS = (
 					"$(SRCROOT)/Sources/CVTerm",
 					"$(SRCROOT)/Sources/CVTerm/include",

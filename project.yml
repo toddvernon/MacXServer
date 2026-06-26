@@ -77,6 +77,12 @@ targets:
         HEADER_SEARCH_PATHS:
           - $(SRCROOT)/Sources/CVTerm
           - $(SRCROOT)/Sources/CVTerm/include
+        # Do NOT inherit the project's Debug DEBUG=1 here: libvterm gates its
+        # noisy DEBUG_LOG (Unhandled CSI / Unknown DEC mode) on DEBUG, and we
+        # don't develop libvterm. Override to NDEBUG so the lib stays quiet in
+        # both configs.
+        GCC_PREPROCESSOR_DEFINITIONS:
+          - NDEBUG=1
 
   SwiftXServerCore:
     type: framework

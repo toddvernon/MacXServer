@@ -29,7 +29,10 @@ public final class SerialConsoleClient {
     }
 
     private let socketPath: String
-    private let readerQueue = DispatchQueue(label: "swiftx.console.reader")
+    // userInitiated so close()'s reader-join doesn't wait on a lower-QoS
+    // thread (Thread Performance Checker priority-inversion warning), matching
+    // QmpClient.
+    private let readerQueue = DispatchQueue(label: "swiftx.console.reader", qos: .userInitiated)
     private let lock = NSLock()
 
     private var fd: Int32 = -1

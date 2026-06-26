@@ -61,6 +61,13 @@ public final class TerminalEmulator {
         vterm_set_utf8(vt, 1)
         screen = vterm_obtain_screen(vt)
         state = vterm_obtain_state(vt)
+        // Honor the alternate-screen buffer (DEC ?1047/?1049): full-screen apps
+        // (vi, less, curses) swap to it and restore on exit instead of
+        // scribbling over the main screen. NOTE: the old ?47 form is NOT
+        // handled by libvterm 0.3.3 (logs "Unknown DEC mode 47"); apps using
+        // it -- e.g. cm -- still redraw on the main screen. A small vendored
+        // patch mapping 47 -> 1047 is the follow-up if that matters.
+        vterm_screen_enable_altscreen(screen, 1)
         vterm_screen_reset(screen, 1)   // hard reset: clears + sets defaults
     }
 

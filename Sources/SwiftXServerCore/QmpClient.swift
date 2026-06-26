@@ -51,7 +51,10 @@ public final class QmpClient {
 
     private let socketPath: String
     private let timeout: TimeInterval
-    private let readerQueue = DispatchQueue(label: "swiftx.qmp.reader")
+    // userInitiated so close()'s reader-join (called from the engine queue on
+    // shutdown) doesn't wait on a lower-QoS thread -- the Thread Performance
+    // Checker flags that as a priority inversion.
+    private let readerQueue = DispatchQueue(label: "swiftx.qmp.reader", qos: .userInitiated)
     private let lock = NSLock()
 
     private var fd: Int32 = -1
