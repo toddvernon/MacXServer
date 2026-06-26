@@ -107,14 +107,13 @@ public final class TerminalView: NSView {
     }
 
     public override func draw(_ dirtyRect: NSRect) {
-        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-
-        // Repaint only the dirty area's background, then only the cells that
-        // intersect it. needsToDraw honors AppKit's actual dirty region (which
-        // may be several disjoint rects), so scattered changes stay cheap.
-        ctx.setFillColor(TerminalView.cg(TerminalEmulator.Cell.blank.bg))
-        ctx.fill(dirtyRect)
-
+        // Each cell paints its own background, so we redraw exactly the cells
+        // that intersect the dirty region and leave the rest untouched. We do
+        // NOT blanket-fill dirtyRect first: it's the bounding box of possibly
+        // scattered dirty cells, and filling it would erase the live cells
+        // between them (e.g. text under a cursor that jumped across a line).
+        // needsToDraw honors AppKit's real (possibly disjoint) dirty region.
+        // Cells tile the view exactly (integer metrics), so there are no gaps.
         for row in 0..<grid.count {
             for col in 0..<grid[row].count {
                 guard needsToDraw(cellRect(row: row, col: col)) else { continue }

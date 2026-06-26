@@ -40,6 +40,32 @@ final class TerminalEmulatorTests: XCTestCase {
         XCTAssertEqual(rowString(grid, 0, width: 7), "X      ")
     }
 
+    func testClearScreenVariants() {
+        // The forms `clear`/tput emit across vt100/xterm/sun: ED(2), and
+        // home + ED(0)-to-end. All must leave the whole grid blank.
+        for clearSeq in ["\u{1b}[2J", "\u{1b}[H\u{1b}[J", "\u{1b}[H\u{1b}[2J", "\u{1b}[1;1H\u{1b}[2J"] {
+            let term = TerminalEmulator(rows: 24, cols: 80)
+            // Fill several rows with content.
+            term.feed(Data("line one\r\nline two\r\nline three\r\n".utf8))
+            term.feed(Data(clearSeq.utf8))
+            let grid = term.grid()
+            let nonBlank = grid.flatMap { $0 }.filter { $0.text != " " }
+            XCTAssertTrue(nonBlank.isEmpty,
+                          "clear seq \(clearSeq.debugDescription) left \(nonBlank.count) non-blank cells")
+        }
+    }
+
+    func testFormFeedDoesNotClear() {
+        // A bare form-feed (^L) is NOT a screen clear in vt100/xterm; it acts
+        // like a line feed. If a guest's `clear` only sent ^L we'd (correctly)
+        // not blank the screen -- documents that distinction so a "clear didn't
+        // work" report points at TERM, not the emulator.
+        let term = TerminalEmulator(rows: 24, cols: 80)
+        term.feed(Data("keep me".utf8))
+        term.feed(Data("\u{0c}".utf8))   // ^L
+        XCTAssertEqual(term.grid()[0].prefix(7).map(\.text).joined(), "keep me")
+    }
+
     func testSGRBoldAndReverseAttributes() {
         let term = TerminalEmulator(rows: 24, cols: 80)
         term.feed(Data("\u{1b}[1mB\u{1b}[0m\u{1b}[7mR\u{1b}[0mn".utf8))
