@@ -1,296 +1,94 @@
 # Status 2026-06-26 (session 5)
 
-## Ctrl+Right xterm menu fixed; Ctrl+Left works; menu-orphan still open
+## Headline: the SPARCstation serial console is now a real interactive terminal
 
-- **Ctrl+Button3 (VT Fonts) restored.** Our server-side xterm right-click
-  Copy/Paste override (`FlippedXView.rightMouseDown`) was swallowing button 3
-  unconditionally, so Ctrl+Right popped OUR menu instead of xterm's native VT
-  Fonts menu. Now gated on `!ctrlHeld` -- Ctrl is xterm's own menu modifier
-  (Ctrl+Btn1 = Main Options, Ctrl+Btn2 = VT Options, Ctrl+Btn3 = VT Fonts), so
-  when Ctrl is held we fall through and send button 3 on the wire and xterm
-  pops its own menu. Plain right-click still gets the Copy/Paste menu. Builds
-  clean and **verified live** -- Ctrl+Right brings up VT Fonts as expected.
-- **Ctrl+Left (Main Options) works today** per Todd -- the border_width
-  coordinate worry from the session-4 banner seems to have been a non-issue (or
-  is masked); leaving the banner's other half closed unless it resurfaces.
-
-### OPEN: orphaned ctrl-button menu window (needs a past-the-release capture)
-
-Todd saw a menu window orphan on screen again (same class as the older
-move-during-menu grab bug) but couldn't reproduce on demand. Dug the last
-xterm capture from session 4: `/tmp/macxcapture/2026-06-25T20-26-30-xterm.xtap`.
-The menu is window `0x440002B` (child of root, override-redirect, save-under,
-140x410 -- the Main Options / Ctrl+Btn1 Athena popup). Lifecycle:
-
-- seq 2504 Map -> 2533 Unmap   (clean)
-- seq 2538 Map -> 2567 Unmap   (clean)
-- seq 2572 Map -> **never unmapped**
-
-After 2572 it's all menu-highlight `PolyFillRectangle` + `MotionNotify
-state=Ctrl|Button1`, then seq 2630 `ButtonRelease button=1` + `EnterNotify
-mode=ungrab`, and the **capture ends right there**. No `UnmapWindow` for
-`0x440002B`. Consistent with the orphan, BUT the recording stops exactly at the
-release -- xterm's popdown (Notify -> XtPopdown -> UnmapWindow) would land
-microseconds later and we can't see it. So: strongly suggestive, not proof.
-Earlier cycles popped down cleanly, so the path works in general; something
-about that last release is different.
-
-**Next step to confirm:** reproduce with capture still running, hold past the
-release. If `0x440002B` is still mapped ~100ms after the ButtonRelease it's a
-real orphan, and the prime suspect is how we deliver the grab-release
-Enter/Leave (mode=ungrab) that xterm's SimpleMenu relies on to pop down.
-
-### NEW: interactive console terminal -- scoped AND spiked
-
-Now that VM control no longer relies on the serial console (Helios drives the
-guest, QMP drives the VM), turning the console teletype into a real terminal so
-a user can run `vi`/`top`/`format` during recovery -- the guided-repair story
-(Helios C6). Decision: **vendor libvterm (Vim/Neovim's `:terminal` core, MIT)
-built from source + keep our Core Text cell renderer**; not SwiftTerm (whole
-NSView + its own rendering), not a port of xterm (`charproc.c` welded to
-Xt/Xaw, unliftable). vt100 / fixed 80x24 / scrollback / 16-color for v1. Zero
-external deps -- one vendored source we own (same posture as bundled qemu). Full
-v1 scope in **`CONSOLE_TERMINAL.md`**, decision in **`DECISIONS.md`
-(2026-06-26)**.
-
-**Spike landed this session (vendor + both halves proven):**
-- **`Sources/CVTerm/`** -- vendored libvterm 0.3.3, MIT, built from source.
-  Wired into *both* build systems: SwiftPM C target (`Package.swift`) and an
-  XcodeGen `library.static` (`project.yml`, with `link: true` -- the default
-  build-order-only dep did NOT link, symbols were undefined until forced).
-  Provenance + update steps in `Sources/CVTerm/VENDOR.md`.
-- **`TerminalEmulator.swift`** -- pull-based wrapper (no C callbacks):
-  `feed(Data)` -> grid via `vterm_screen_get_cell`, cursor via
-  `vterm_state_get_cursorpos`, input via `vterm_keyboard_*` + drained through
-  `vterm_output_read`. Colors pre-resolved to RGB.
-- **`TerminalView.swift`** -- NSView rendering the grid with Menlo integer
-  cell metrics (ascent+descent, ceil'd), reverse/bold/underline + block
-  cursor, `keyDown` -> emulator -> `onInput` bytes. The integration unknown
-  (our Core Text drawing of libvterm's grid) is **resolved** -- offscreen
-  render test asserts real pixels.
-- **Tests:** 8 emulator (plain text, CRLF, the `ESC[2J ESC[H` erase vi uses,
-  SGR bold/reverse, color->RGB, typing->bytes, Enter/arrow DECCKM, Ctrl-C->ETX)
-  + 2 offscreen-render. Full suite **1428 tests, 0 failures**. Framework AND
-  full app build clean in Xcode.
-
-**Wired into the console window this session (interactive, not read-only):**
-`SparcPlugConsoleWindowController` now hosts the `TerminalView` (via an
-`NSScrollView`/`NSViewRepresentable`) in place of the `AttributedString` scroll
-area -- the boot thermometer, header graphic + title, and Shut Down / Force
-Quit buttons are unchanged; only the text area was swapped. Data path:
-`SerialConsoleClient.write` added (the `-serial unix:` socket is bidirectional);
-`QemuEngine.onConsoleData` (raw bytes, escape sequences intact) +
-`QemuEngine.sendConsole`; AppDelegate feeds `onConsoleData -> feedConsoleData ->
-emulator.feed/refresh` and binds `TerminalView.onInput -> engine.sendConsole`.
-Focus on show + click-to-focus. Caption now "Interactive serial console."
-**Live-verified** (Todd booted it, ran vi + cm). Follow-up fixes from that
-session:
-- **Perf -- the ~5s `top`/`ls` paint was the CONSOLE BAUD, not our rendering.**
-  Diagnosed via Todd's `/usr/bin/time ls /etc`: 0 CPU but ~5s wall with `ls`
-  blocking = a baud-limited tty (5KB / 5s = 960 B/s = exactly 9600). Same `ls`
-  in an xterm (pty + X-over-TCP, no UART) is instant. The emulated ESCC itself
-  doesn't pace (`hw/char/escc.c`: Tx immediate, no FIFO/timer) -- the pacing is
-  guest-side (OpenBIOS/Solaris pacing by `ospeed`). **Fix: `-prom-env
-  ttya-mode=115200,8,n,1,-`** (was the 9600 default). The emulated line runs
-  above the real sun zilog's 38400 max because qemu does no real bit-timing --
-  115200 verified live: faster than 38400, clear/top fine. (115200 looked like
-  it broke clear/top in one test, but that was just the fresh-boot TERM default,
-  not the baud -- set TERM=vt100 / Set Up Terminal each boot.) -prom-env is
-  runtime-only (never persisted).
-- Two rendering optimizations also landed, orthogonal to the baud fix and still
-  worth keeping: (1) dirty-rect diff (`TerminalView` invalidates only changed
-  cells, `draw` honors `needsToDraw`); (2) coalesced `setNeedsRefresh()` so a
-  burst of feed chunks collapses to one grid rebuild + draw per runloop turn.
-- **Alt-screen:** `vterm_screen_enable_altscreen` on, so vi/curses' ?1047/1049
-  use the alt buffer instead of scribbling the main screen. The old ?47 form
-  is unhandled by libvterm 0.3.3 (cm uses it -> still redraws main screen); a
-  vendored 47->1047 patch is the follow-up if it matters.
-- **libvterm stderr spam** (`Unhandled CSI t`, `Unknown DEC mode 47/2026`) was
-  its `DEBUG_LOG`, active because the project's Debug `DEBUG=1` was inherited by
-  the CVTerm compile. Overrode CVTerm to `NDEBUG` (project.yml) + `-UDEBUG`
-  (Package.swift); silent now in both build systems.
-- **Priority inversion** (pre-existing, surfaced on `init 5`): `QmpClient.close`
-  joined its reader thread from a higher-QoS caller -> Thread Performance
-  Checker backtrace. Bumped `QmpClient` + `SerialConsoleClient` reader queues to
-  `.userInitiated`.
-- **Dirty-rect erase bug:** `draw` blanket-filled the dirty *bounding box*
-  before redrawing only the dirty cells, erasing live cells between scattered
-  changes (text vanished under a cursor jump). Removed the wholesale fill --
-  each cell paints its own bg, redraw only cells intersecting the dirty region.
-- **cm hung at startup ("hit Enter 3x")** = our emulator was a one-way street.
-  cm runs `/usr/openwin/bin/resize`, which sends `ESC[999;999H ESC[6n` and
-  blocks reading the cursor-position reply. libvterm queues that reply during
-  `feed()` but we only drained its output on the *keyboard* path. Now `feed()`
-  drains too and routes via `TerminalEmulator.onOutput -> engine.sendConsole`.
-  The far-corner clamp makes the reply report exactly 24;80, so resize learns
-  the right size. (DA `ESC[c` answered too.)
-- **top/clear root cause = TERM**, confirmed (`setenv TERM vt100` fixes top).
-  Added a **"Set Up Terminal" button** (visible when running) that types
-  `setenv TERM vt100; stty rows 24 columns 80; clear` at the guest (csh/tcsh).
-
-- **Resizable terminal (was fixed 80x24).** The grid follows the window for
-  display: `TerminalView.setFrameSize` -> `reflowToFit` computes rows/cols from
-  the bounds + integer cell metrics and `TerminalEmulator.resize`
-  (vterm_set_size) reflows. Dropped the NSScrollView wrapper; the view fills the
-  window (black layer bg for the sub-cell margin). The guest's tty winsize
-  (which fixes the "sometimes wraps" size disagreement) is synced **manually
-  via a new "Resize TTY" button**, NOT auto-pushed -- a serial line has no
-  SIGWINCH, so syncing means typing `stty`, and auto-injecting that corrupts
-  whatever the user is doing (an editor, cm; the alt-screen guard didn't cover
-  cm, which doesn't use ?1049). Press Resize TTY at a shell prompt after
-  dragging. Set Up Terminal uses the live size too. (The `settermprop` callback
-  added for the abandoned auto-push guard stays -- it gives real cursor-hide.)
-- **The Resize TTY button turns blue/prominent** once a window drag has changed
-  the grid size (the guest is now out of sync) and back to default after you
-  push it (Resize TTY or Set Up Terminal). `model.ttyResizePending`, flipped by
-  `TerminalView.onGridResized`.
-
-### KNOWN ROUGH EDGE (accepted 2026-06-26): nano + "level 12 not serviced"
-
-`nano`'s first full-screen redraw makes Solaris spew `WARNING: processor level
-12 onboard interrupt not serviced` into the console (level 12 = the sun4m serial
-IPL, `slavio_irq[15]`). It's NOT the baud: 38400 (the in-spec sun zilog max)
-does it too, so dropping speed doesn't help and we kept 115200. Root cause is
-nano's redraw pattern -- it writes the whole screen in one giant `write()`, a
-gapless byte stream, and the emulated FIFO-less Z8530 fires one interrupt per
-byte with no gaps; under that sustained storm the escc's interrupt-under-service
-logic asserts level-12 interrupts the `zs` driver finds nothing to service. cm
-(your editor) and vi don't trip it -- their draws are chunked (resize handshake
-/ alt-screen / incremental updates), leaving gaps that reset the unclaimed
-counter. **Decision: accept it.** cm and vi are the editors that work; nano is a
-worst-case writer against a faithfully-FIFO-less emulated UART. The real fix
-would be patching the escc IUS emulation in the vendored qemu (deep + uncertain)
--- deferred unless nano specifically becomes important.
-
-- **Guest console TERM/DISPLAY defaulted in the image (DONE, SPARCplug
-  `8e315d3`).** root and tvernon now get `TERM=vt100` on `/dev/console` and
-  `DISPLAY=10.0.2.2:0` on every login, no Set Up Terminal needed -- verified
-  live. In `guest/sparcstation-baseline-config.sh` section 9 (`/etc/profile` +
-  `/.tcshrc` + tvernon's `.cshrc`; telnet/ssh keep their own TERM).
-- **Console buttons settled.** With the guest auto-setup, **Set Up Terminal was
-  removed**. Current buttons (all shown while running): **xterm** (new --
-  launches an xterm on the guest via Helios `run_command`, DISPLAY 10.0.2.2:0,
-  `QemuEngine.launchXterm`), **Resize TTY**, and the Shut Down / Force Quit
-  control. xterm + Resize TTY are `.disabled(!model.ready)` so they're live only
-  after boot (the daemon answering = ready); Shut Down already only appears when
-  ready.
-
-**Still open for v1:** scrollback (`sb_pushline`); the cm alt-screen case (cm
-uses the old `?47`, unhandled by libvterm 0.3.3 -> a vendored `47->1047` patch);
-reconcile point-size/scaleFactor with `FontResolver`/`XTERM_FONT_QUALITY`;
-prune the now-unused `ConsoleSanitizer` (still feeds the String marker path in
-`ingest`).
-
-Commits this session: `306a35a` (launcher seed helios-port doc), the Ctrl+Right
-fix, `671f13b` (console-terminal scope docs), and the spike. Session-4 notes
-below still stand.
-
----
-
-# Status 2026-06-25 (end of day, session 4)
-
-## ⚠️ NEXT SESSION FIRST -- xterm ctrl-button menu regression
-
-Tonight's `border_width` origin fix (commit c6f2911) very likely broke xterm's
-native ctrl-button menus: **Ctrl+Left = Main Options, Ctrl+Right = VT Fonts now
-misbehave.** The fix made a child's interior origin `parent + x + border_width`
-(per X11R6 `dix/window.c:669`) in `topLevelAndOffset` + `ClipListEngine`, which
-fixed the scrollbar but almost certainly shifted bordered popup-menu placement /
-event coords. **Decide: fix properly or disable.** If fixing: there are probably
-OTHER spots that compute parent->child origins and still ignore `borderWidth` --
-I only patched those two. Start by grepping for origin math that sums `x`
-(or `entry.x` / `childEntry.x`) without adding `borderWidth`, especially in the
-event-coordinate and menu-placement paths.
-
-## Today, part 2 -- xterm scrollbar polish + an archaeology find
-
-Spent the evening matching the Motif-skinned xterm scrollbar to the window-frame
-chrome, and in the process surfaced a 30-year-old X11 quirk. All in c6f2911:
-
-- **Scrollbar matches the frame's scale.** The frame draws at the AppKit backing
-  scale (points); the scrollbar is X content at the X display scaleFactor. On the
-  Studio Display (X 3x, backing 2x) the scrollbar's 1px bevels were 3 device px
-  vs the frame's 2. Now counter-scaled by backing/scaleFactor and drawn in points
-  so they match exactly. Same device footprint.
-- **Crisp arrow.** AA-off so the stepper-arrow's diagonal edges are hard 1px like
-  the frame and real Motif. Render regression test flags any AA blend.
-- **Follows focus.** Picks active vs inactive palette from the window's key state
-  (same signal as MotifFrameView.isActiveWindow); `handleFocusChange` re-issues
-  the paint across the whole subtree on focus change (the scrollbar is a
-  grandchild in xterm: Shell -> VT100 -> scrollbar).
-- **Cursor pinned vertical.** Athena sets sb_right_arrow during a thumb drag
-  (Scrollbar.c StartScroll 'c'); we now keep the up/down cursor.
-- **THE ARCHAEOLOGY: honor `border_width` in the child-window origin.** xterm
-  places its scrollbar at (-1,-1) with border_width=1 so the content lands flush
-  at the parent origin (the border falls off-parent and is clipped) -- correct
-  X11, relies on the server adding border_width. We never did, so the scrollbar
-  was shifted up-left a pixel (clipped top/left bevel highlights, down-arrow
-  lifted off the base). Invisible for 30 years because xterm's flat gray fill
-  didn't care about a 1px shift; the Motif bevels do. xterm was right all along;
-  the bug was ours. Diagnosed against `dix/window.c:669`.
-
-## The larger thread (today, part 1) -- VM control Stages 1-3 + reconnect
-
-Earlier today: drove `VM_CONTROL.md` to completion. macXserver drives the captive
-qemu through two planes -- Helios (guest OS) and QMP (the VM). Done + live-
-validated: serial console on a `-serial unix:` socket (Stage 2), lock-as-VM-handle
-+ qcow2-clean orphan QMP recovery (Stage 3), Design-2 **reconnect to an orphaned
-VM on launch** (engine adoption, no child Process), the **Quit-and-Detach** quit
-dialog, and dev-secret continuity across a detach. See VM_CONTROL.md.
+The whole session was one arc: turn the captive-VM serial console from a
+read-only teletype into an interactive vt100 terminal, then iterate it to
+genuinely usable. cm (Todd's editor) and vi work in it. Decision + scope live
+in `CONSOLE_TERMINAL.md` and `DECISIONS.md` (2026-06-26).
 
 ## What's working
 
-- Full suite green: **1418 tests, 0 failures** (31 skipped = live tests).
-- Scrollbar: width-matched, crisp, focus-following, vertical cursor -- all
-  confirmed live by Todd.
-- border_width fix is systemic + correct (dix/window.c:669); the one clip test
-  that encoded the old inverted interpretation was corrected, plus a regression
-  pinning the (-1,-1)+bw=1 scrollbar case.
-- VM control reconnect validated live (Xcode-stop -> relaunch -> reconnect).
+- **Interactive console terminal.** Vendored libvterm (`Sources/CVTerm`, MIT,
+  built from source) + `TerminalEmulator` and `TerminalView` in
+  SwiftXServerCore, hosted in `SparcPlugConsoleWindowController` where the old
+  `AttributedString` teletype was. vt100, 16-color + bold/underline/reverse,
+  block cursor, cursor-hide. Input both directions (keystrokes out, terminal
+  query replies on feed so cm's `resize` doesn't hang). Dirty-rect + coalesced
+  rendering (a `top` repaint was ~5s of full-grid rebuilds; now one rebuild per
+  runloop turn).
+- **Console speed: `ttya-mode=115200`** (was the 9600 default). The ~5s `ls`/
+  `top` was the console baud, not our rendering (proven by Todd's
+  `/usr/bin/time` test: 0 CPU, 5s wall, `ls` blocking = baud-limited tty). The
+  emulated escc does no real bit-timing, so 115200 runs clean even though it's
+  above the real zs 38400 max.
+- **Resizable.** Grid follows the window (`reflowToFit` + `vterm_set_size`).
+  Guest tty winsize synced **manually** via the **Resize TTY** button (auto-
+  injecting `stty` corrupts editors). Button goes blue when out of sync.
+- **Guest auto-setup at login** (SPARCplug `8e315d3`, applied live + verified):
+  root and tvernon get `TERM=vt100` on `/dev/console` and `DISPLAY=10.0.2.2:0`
+  on every login. No Set Up Terminal step needed.
+- **Buttons:** **xterm** (launches a guest xterm via Helios `run_command`,
+  DISPLAY 10.0.2.2:0) and **Resize TTY**, both `.disabled(!ready)` so they're
+  live only after boot. Header shows "115200 baud". Shut Down / Force Quit
+  unchanged.
+- **Ctrl+Right VT Fonts menu fixed** (was our copy/paste override swallowing
+  button 3; now gated on `!ctrlHeld`). Ctrl+Left works. Both verified live.
+- Full suite **1435 tests, 0 failures**; SwiftPM + Xcode app build clean.
 
-## What's broken / rough edges
+## Known rough edges
 
-- **xterm ctrl-button menus** (see the banner up top). The one real known
-  regression from tonight.
-- Console-reconnect "Ignore at launch" edge (VM control): declining the reconnect
-  prompt while the VM runs leaves Claude's dev-secret file wiped until you
-  reconnect. Minor, non-v1.
+- **nano "level 12 not serviced" (accepted).** nano's single giant-`write()`
+  screen redraw storms the FIFO-less emulated zs (one interrupt per byte, no
+  gaps) and Solaris logs unclaimed level-12 (serial IPL) interrupts that pollute
+  the console. NOT the baud (38400 does it too). cm/vi are chunked and don't
+  trip it. Real fix = patch the escc IUS emulation in vendored qemu (deep,
+  deferred). See the STATUS history / `45eec74`.
 
-## What's next
+## What's next (v1 odds-and-ends)
 
-1. **Decide fix-vs-disable on the ctrl-button menu regression** (banner up top).
-   Most likely the first thing to look at.
-2. **Stage 4 (post-v1): snapshot fast-launch.** `snapshot-save`/`snapshot-load`
-   for "boot once, snapshot at the CDE desktop, fast-launch in ~2s". sun4m
-   vmstate verified in VM_CONTROL.md; wants a live round-trip before banking it.
-3. **Helios:** C6 more guided-sysadmin tasks; B6 daemon `make test` on Solaris +
-   2 hardening items (orphan-reap, shutdown euid/exit-status).
+- Scrollback (`sb_pushline`).
+- cm alt-screen: cm uses the old `?47`, unhandled by libvterm 0.3.3 -> a
+  vendored `47->1047` patch in `Sources/CVTerm/state.c` if cm's alt-screen
+  matters (recorded in `VENDOR.md`).
+- Reconcile terminal point-size / scaleFactor with `FontResolver` /
+  `XTERM_FONT_QUALITY` so the console matches the server text-quality bar.
+- Prune the now-unused `ConsoleSanitizer` (still feeds the String marker path in
+  `QemuEngine.ingest`).
+- **Carryover from session 4 (untouched this session):** the xterm ctrl-button
+  **menu-orphan** -- needs a capture that runs *past* the ButtonRelease to
+  confirm whether the menu window (`0x440002B`) is genuinely left mapped. Prime
+  suspect is grab-release Enter/Leave delivery.
 
-## What's committed (recent, all pushed)
+## What's committed (recent; all pushed)
 
-- `~/dev/X` (ahead 0 / behind 0):
-  - 4974ace -- STATUS: flag the ctrl-button menu regression.
-  - c6f2911 -- xterm scrollbar match-the-frame (scale/bevel/focus/cursor) +
-    honor border_width systemically.
-  - 9609698 -- STATUS roll for the VM control session.
-  - 12b4871 / 0de9591 -- dev-secret-on-detach + Quit-and-Detach dialog.
-- `~/dev/SPARCplug` (ahead 0 / behind 0) and the cx tree: unchanged this session.
+- `~/dev/X`:
+  - `dbeac10` console buttons: drop Set Up Terminal, add xterm, gate on ready.
+  - `839e42c` quick wins (baud in header, no launch-blue button, kill console
+    spam). `e1c69a1` blue Resize-TTY-when-stale. `e37acb2` manual Resize TTY.
+  - `aa72d4a` resizable grid. `a09130f` lock in 115200. `2fbd7dd` coalesced
+    rendering. `a9af169` terminal-query replies on feed. `dea9d62` wire the
+    terminal into the console window. `4830555` vendor libvterm + spike.
+  - `295d223` Ctrl+Right VT Fonts fix. `306a35a` launcher seed helios-port doc.
+- `~/dev/SPARCplug`:
+  - `8e315d3` baseline-config section 9: console DISPLAY + TERM=vt100 at login.
 
 ## Switching to the other Mac
 
-- VM is not running; no image lock. Clean.
-- Let Dropbox finish syncing the memory dir before opening the other Mac.
-- `git pull` X (SPARCplug / cx unchanged but pull anyway).
-- `/sos` first -- it'll surface the menu-regression banner.
+- **VM is RUNNING** with an image lock (`SUN40G.qcow2.macxserver-lock`). If you
+  open the other Mac it'll see `remoteLocked` until this one's VM is shut down.
+  Shut it down cleanly here first if you're switching.
+- The SPARCplug `8e315d3` guest change was also applied LIVE to the running
+  image (persists in the qcow2), so a fresh boot already has TERM/DISPLAY set.
+- Let Dropbox finish syncing the memory dir + cx tree before opening the other
+  Mac.
+- `/sos` first over there -- it'll pull X + SPARCplug.
 
 ## Pointers
 
-- Scrollbar: `MotifScrollbarRenderer.swift` (renderer, AA-off),
-  `CocoaWindowBridge.paintMotifScrollbar` (point-unit scale + focus colors),
-  `ServerSession` (`resolveCursorGlyph` cursor pin, `handleFocusChange` +
-  `repaintSkinnedScrollbars` focus repaint, `topLevelAndOffset` border_width).
-- border_width: `ServerSession.topLevelAndOffset` + `Region/ClipList.swift`
-  (childBaseDx/Dy). Both cite dix/window.c:669.
-- VM control: `VM_CONTROL.md`, `QemuEngine.swift`, `SerialConsoleClient.swift`,
-  `QmpClient.swift`, `ImageLock.swift`, `AppDelegate.swift` (reconnect + quit
-  dialog).
+- Console terminal: `Sources/CVTerm/` (vendored libvterm + `VENDOR.md`),
+  `TerminalEmulator.swift`, `TerminalView.swift` (SwiftXServerCore),
+  `SparcPlugConsoleWindowController.swift` (SwiftXServer), `CONSOLE_TERMINAL.md`.
+- Console plumbing: `QemuEngine` (`onConsoleData`, `sendConsole`, `launchXterm`,
+  readiness via Helios `hello`), `SerialConsoleClient` (now bidirectional).
+- Guest config: `~/dev/SPARCplug/guest/sparcstation-baseline-config.sh` (sect 9).
