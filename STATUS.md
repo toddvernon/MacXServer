@@ -1,5 +1,20 @@
 # Status 2026-06-25 (end of day, session 3)
 
+## ⚠️ NEXT SESSION FIRST — xterm ctrl-button menu regression
+
+A later scrollbar/border session (commit c6f2911) landed an xterm scrollbar
+polish pass (match the Motif frame's scale + bevel + focus colors, pin the
+thumb-drag cursor) AND a **systemic geometry fix: honor `border_width` in the
+child-window origin** (`topLevelAndOffset` + `ClipListEngine`, per X11R6
+`dix/window.c:669` -- a child's interior origin is `parent + x + border_width`).
+That fixed the scrollbar's 1px up-left shift, but **the native xterm ctrl-button
+menus (Ctrl+Left = Main Options, Ctrl+Right = VT Fonts) now have bugs** -- almost
+certainly a side effect of the `border_width` origin change shifting bordered
+popup-menu placement / coordinates. **Decide next session: fix properly (account
+for border_width consistently in the menu placement + event-coord paths -- likely
+other spots that compute child origins still ignore it) or disable.** Start by
+grepping for parent->child origin math that sums `x` without `borderWidth`.
+
 VM control day. Took the QMP Stage 1 foundation from earlier today and drove the
 whole `VM_CONTROL.md` rollout to completion: Stages 2 + 3, then the Design-2
 reconnect feature on top, then the quit-time detach dialog, then dev-secret
