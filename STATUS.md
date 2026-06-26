@@ -140,6 +140,27 @@ session:
   cm, which doesn't use ?1049). Press Resize TTY at a shell prompt after
   dragging. Set Up Terminal uses the live size too. (The `settermprop` callback
   added for the abandoned auto-push guard stays -- it gives real cursor-hide.)
+- **The Resize TTY button turns blue/prominent** once a window drag has changed
+  the grid size (the guest is now out of sync) and back to default after you
+  push it (Resize TTY or Set Up Terminal). `model.ttyResizePending`, flipped by
+  `TerminalView.onGridResized`.
+
+### KNOWN ROUGH EDGE (accepted 2026-06-26): nano + "level 12 not serviced"
+
+`nano`'s first full-screen redraw makes Solaris spew `WARNING: processor level
+12 onboard interrupt not serviced` into the console (level 12 = the sun4m serial
+IPL, `slavio_irq[15]`). It's NOT the baud: 38400 (the in-spec sun zilog max)
+does it too, so dropping speed doesn't help and we kept 115200. Root cause is
+nano's redraw pattern -- it writes the whole screen in one giant `write()`, a
+gapless byte stream, and the emulated FIFO-less Z8530 fires one interrupt per
+byte with no gaps; under that sustained storm the escc's interrupt-under-service
+logic asserts level-12 interrupts the `zs` driver finds nothing to service. cm
+(your editor) and vi don't trip it -- their draws are chunked (resize handshake
+/ alt-screen / incremental updates), leaving gaps that reset the unclaimed
+counter. **Decision: accept it.** cm and vi are the editors that work; nano is a
+worst-case writer against a faithfully-FIFO-less emulated UART. The real fix
+would be patching the escc IUS emulation in the vendored qemu (deep + uncertain)
+-- deferred unless nano specifically becomes important.
 
 **Still open for v1:** scrollback (`sb_pushline`); the cm alt-screen case (cm
 uses the old `?47`, unhandled by libvterm 0.3.3 -> a vendored `47->1047` patch);
