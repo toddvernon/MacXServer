@@ -18,9 +18,23 @@ final class SparcPlugConsoleWindowController: NSWindowController {
         // Keystrokes the terminal produces go straight back to the guest
         // console (engine.sendConsole on the app side).
         model.terminalView.onInput = onInput
+        // Terminal-query replies (cursor-position report, device attributes)
+        // the guest's own output triggers go back over the same path; without
+        // it, apps that probe the terminal -- cm's /usr/openwin/bin/resize --
+        // hang waiting for the answer.
+        model.terminal.onOutput = onInput
+
+        // "Set Up Terminal" types this at the guest shell: align its console
+        // TERM with what we emulate (vt100) and pin the 80x24 size. csh/tcsh
+        // syntax (the bundled SPARCstation root shell). Fixes top/clear/vi when
+        // the login TERM is the Sun console default rather than vt100.
+        let sendSetup = {
+            onInput(Data("setenv TERM vt100; stty rows 24 columns 80; clear\r".utf8))
+        }
 
         let hostingView = NSHostingView(rootView: SparcPlugConsoleView(
-            model: model, shutDown: onShutDown, forceQuit: onForceQuit))
+            model: model, shutDown: onShutDown, forceQuit: onForceQuit,
+            setupTerminal: sendSetup))
         // First-class NSWindow (not an NSPanel/.utilityWindow): a utility panel
         // hides whenever macXserver isn't the foreground app, which is annoying
         // for a console you want to keep watching while you work elsewhere. A
@@ -153,6 +167,7 @@ struct SparcPlugConsoleView: View {
     @ObservedObject var model: SparcPlugConsoleModel
     let shutDown: () -> Void
     let forceQuit: () -> Void
+    let setupTerminal: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -221,6 +236,10 @@ struct SparcPlugConsoleView: View {
                         .foregroundStyle(.orange)
                 }
                 Spacer()
+                if model.state == .running {
+                    Button("Set Up Terminal", action: setupTerminal)
+                        .help("Type `setenv TERM vt100; stty rows 24 columns 80; clear` at the guest shell (csh/tcsh) so full-screen apps render correctly.")
+                }
                 controls
             }
         }

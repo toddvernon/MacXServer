@@ -89,6 +89,30 @@ final class TerminalEmulatorTests: XCTestCase {
         XCTAssertGreaterThan(fg.r, fg.b)
     }
 
+    func testCursorPositionReportRepliesOnFeed() {
+        // The resize handshake (cm runs /usr/openwin/bin/resize): move to the
+        // far corner, then DSR `ESC[6n` -> the emulator must reply with the
+        // cursor position `ESC[r;cR` on the FEED path (not waiting for a
+        // keystroke), or resize hangs. The far corner clamps to our grid, so
+        // the report should be row 24, col 80 (1-based).
+        let term = TerminalEmulator(rows: 24, cols: 80)
+        var replies = [Data]()
+        term.onOutput = { replies.append($0) }
+        term.feed(Data("\u{1b}[999;999H\u{1b}[6n".utf8))
+        let joined = replies.reduce(Data(), +)
+        XCTAssertEqual(joined, Data("\u{1b}[24;80R".utf8))
+    }
+
+    func testDeviceAttributesReplyOnFeed() {
+        // `ESC[c` (primary DA) must also get an answer on the feed path.
+        let term = TerminalEmulator(rows: 24, cols: 80)
+        var got = Data()
+        term.onOutput = { got.append($0) }
+        term.feed(Data("\u{1b}[c".utf8))
+        XCTAssertFalse(got.isEmpty, "primary DA query should produce a reply")
+        XCTAssertEqual(got.first, 0x1b)   // a CSI response
+    }
+
     func testTypingProducesWireBytes() {
         let term = TerminalEmulator(rows: 24, cols: 80)
         let bytes = term.sendText("ls")

@@ -102,13 +102,28 @@ session:
   joined its reader thread from a higher-QoS caller -> Thread Performance
   Checker backtrace. Bumped `QmpClient` + `SerialConsoleClient` reader queues to
   `.userInitiated`.
+- **Dirty-rect erase bug:** `draw` blanket-filled the dirty *bounding box*
+  before redrawing only the dirty cells, erasing live cells between scattered
+  changes (text vanished under a cursor jump). Removed the wholesale fill --
+  each cell paints its own bg, redraw only cells intersecting the dirty region.
+- **cm hung at startup ("hit Enter 3x")** = our emulator was a one-way street.
+  cm runs `/usr/openwin/bin/resize`, which sends `ESC[999;999H ESC[6n` and
+  blocks reading the cursor-position reply. libvterm queues that reply during
+  `feed()` but we only drained its output on the *keyboard* path. Now `feed()`
+  drains too and routes via `TerminalEmulator.onOutput -> engine.sendConsole`.
+  The far-corner clamp makes the reply report exactly 24;80, so resize learns
+  the right size. (DA `ESC[c` answered too.)
+- **top/clear root cause = TERM**, confirmed (`setenv TERM vt100` fixes top).
+  Added a **"Set Up Terminal" button** (visible when running) that types
+  `setenv TERM vt100; stty rows 24 columns 80; clear` at the guest (csh/tcsh).
 
-**Still open for v1:** scrollback (`sb_pushline`), the "Send terminal setup"
-affordance (`TERM=vt100; stty rows 24 columns 80`), reconcile
-point-size/scaleFactor with `FontResolver`/`XTERM_FONT_QUALITY`, and the spike's
-per-cell draw + full-grid repaint (fine for 80x24; tighten if needed). The old
-`ConsoleSanitizer` is now unused by the window (still feeds the String marker
-path in `ingest`); prune later.
+**Still open for v1:** scrollback (`sb_pushline`); the cm alt-screen case (cm
+uses the old `?47`, unhandled by libvterm 0.3.3 -> a vendored `47->1047` patch
+is the fix if cm still misbehaves after the resize fix); reconcile
+point-size/scaleFactor with `FontResolver`/`XTERM_FONT_QUALITY`; default the
+guest console TERM in the image (SPARCplug side) so the Set-Up button isn't
+needed; prune the now-unused `ConsoleSanitizer` (still feeds the String marker
+path in `ingest`).
 
 Commits this session: `306a35a` (launcher seed helios-port doc), the Ctrl+Right
 fix, `671f13b` (console-terminal scope docs), and the spike. Session-4 notes

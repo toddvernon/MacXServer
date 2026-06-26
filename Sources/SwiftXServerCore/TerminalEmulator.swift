@@ -47,6 +47,15 @@ public final class TerminalEmulator {
         public var visible: Bool
     }
 
+    /// Bytes libvterm wants sent back to the host: terminal-query replies that
+    /// the guest's OWN output triggers -- the cursor-position report for
+    /// `ESC[6n`, device attributes for `ESC[c`, etc. The host MUST write these
+    /// back to the console, or apps that query the terminal block waiting for a
+    /// reply. (cm runs `/usr/openwin/bin/resize`, which moves to the far corner
+    /// and sends `ESC[6n` to learn the size; without the reply it hangs.) Wire
+    /// this to the same console write path as keyboard input.
+    public var onOutput: ((Data) -> Void)?
+
     public private(set) var rows: Int
     public private(set) var cols: Int
 
@@ -85,6 +94,11 @@ public final class TerminalEmulator {
             }
         }
         vterm_screen_flush_damage(screen)
+
+        // Processing the guest's bytes may have queued terminal-query replies
+        // (e.g. a cursor-position report answering `ESC[6n`); send them back.
+        let reply = drainOutput()
+        if !reply.isEmpty { onOutput?(reply) }
     }
 
     /// The full rows x cols grid, top-to-bottom, left-to-right. Colors are
