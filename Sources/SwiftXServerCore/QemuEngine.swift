@@ -189,6 +189,30 @@ public final class QemuEngine: @unchecked Sendable {
         queue.async { [weak self] in self?.consoleClient?.write(data) }
     }
 
+    /// Launch an xterm on the guest via Helios, displayed back to macXserver
+    /// (DISPLAY 10.0.2.2:0). Goes through the daemon rather than the console so
+    /// it works even when nobody is logged in at the console. Fire-and-forget on
+    /// a background queue; the optional completion reports on the main queue.
+    public func launchXterm(completion: ((Result<Void, Error>) -> Void)? = nil) {
+        let secret = currentSecret
+        DispatchQueue.global(qos: .userInitiated).async {
+            let client = HeliosClient(timeout: 10, secret: secret)
+            defer { client.close() }
+            // Same shape as HeliosLauncher: prepend the Solaris X bin dirs, set
+            // DISPLAY, and background detached so run_command returns at once.
+            let cmd = "PATH=/usr/openwin/bin:/usr/dt/bin:/usr/bin/X11:$PATH; export PATH; " +
+                      "DISPLAY=10.0.2.2:0; export DISPLAY; " +
+                      "nohup xterm </dev/null >/dev/null 2>&1 &"
+            do {
+                try client.connect()
+                _ = try client.runCommand(cmd, timeoutMs: 8000, user: "root")
+                DispatchQueue.main.async { completion?(.success(())) }
+            } catch {
+                DispatchQueue.main.async { completion?(.failure(error)) }
+            }
+        }
+    }
+
     /// Fires on the main queue whenever the state changes.
     public func onStateChange(_ callback: @escaping (State) -> Void) {
         self.stateCallback = callback

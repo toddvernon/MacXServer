@@ -14,7 +14,8 @@ final class SparcPlugConsoleWindowController: NSWindowController {
 
     init(onShutDown: @escaping () -> Void,
          onForceQuit: @escaping () -> Void,
-         onInput: @escaping (Data) -> Void) {
+         onInput: @escaping (Data) -> Void,
+         onLaunchXterm: @escaping () -> Void) {
         // Keystrokes the terminal produces go straight back to the guest
         // console (engine.sendConsole on the app side).
         model.terminalView.onInput = onInput
@@ -38,18 +39,10 @@ final class SparcPlugConsoleWindowController: NSWindowController {
             DispatchQueue.main.async { model?.ttyResizePending = true }
         }
 
-        // "Set Up Terminal": align the guest console TERM with what we emulate
-        // (vt100) and pin the current grid size. csh/tcsh syntax (the bundled
-        // SPARCstation root shell). Fixes top/clear/vi when the login TERM is
-        // the Sun console default rather than vt100.
-        let sendSetup = { [weak model] in
-            let (rows, cols) = view.gridSize
-            onInput(Data("setenv TERM vt100; stty rows \(rows) columns \(cols); clear\r".utf8))
-            model?.ttyResizePending = false
-        }
-
         // "Resize TTY": push just the current grid size, for after dragging the
         // window. Press it at a shell prompt (not inside a full-screen app).
+        // (TERM/DISPLAY are now set on the guest at login -- see SPARCplug
+        // baseline-config -- so there's no separate Set Up Terminal step.)
         let sendResize = { [weak model] in
             let (rows, cols) = view.gridSize
             onInput(Data("stty rows \(rows) columns \(cols)\r".utf8))
@@ -58,7 +51,7 @@ final class SparcPlugConsoleWindowController: NSWindowController {
 
         let hostingView = NSHostingView(rootView: SparcPlugConsoleView(
             model: model, shutDown: onShutDown, forceQuit: onForceQuit,
-            setupTerminal: sendSetup, resizeTTY: sendResize))
+            resizeTTY: sendResize, launchXterm: onLaunchXterm))
         // First-class NSWindow (not an NSPanel/.utilityWindow): a utility panel
         // hides whenever macXserver isn't the foreground app, which is annoying
         // for a console you want to keep watching while you work elsewhere. A
@@ -150,7 +143,7 @@ final class SparcPlugConsoleModel: ObservableObject {
     @Published var progress: Double = 0
     /// True when the window has been resized since the last tty sync, so the
     /// guest's winsize is stale. Highlights the Resize TTY button; cleared when
-    /// the user pushes a size (Resize TTY or Set Up Terminal).
+    /// the user pushes the size (Resize TTY).
     @Published var ttyResizePending = false
 
     /// The interactive terminal: the libvterm emulator and its rendering view.
@@ -186,8 +179,8 @@ struct SparcPlugConsoleView: View {
     @ObservedObject var model: SparcPlugConsoleModel
     let shutDown: () -> Void
     let forceQuit: () -> Void
-    let setupTerminal: () -> Void
     let resizeTTY: () -> Void
+    let launchXterm: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -257,8 +250,11 @@ struct SparcPlugConsoleView: View {
                 }
                 Spacer()
                 if model.state == .running {
-                    Button("Set Up Terminal", action: setupTerminal)
-                        .help("Set the guest console TERM to vt100 and stty to the current window size, then clear, so full-screen apps render correctly (csh/tcsh).")
+                    // Both are only useful once the guest is up and the Helios
+                    // daemon answers, so they stay disabled until `ready`.
+                    Button("xterm", action: launchXterm)
+                        .disabled(!model.ready)
+                        .help("Launch an xterm on the guest, displayed here on macXserver (via the Helios daemon).")
                     // Turns blue (prominent) once the window has been resized
                     // since the last sync, prompting the user to push the new
                     // size; back to default after they click it.
@@ -266,6 +262,7 @@ struct SparcPlugConsoleView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(model.ttyResizePending ? .blue : Color(nsColor: .controlColor))
                         .foregroundStyle(model.ttyResizePending ? .white : .primary)
+                        .disabled(!model.ready)
                         .help("Push the current window size to the guest (stty rows/columns) after resizing. Press at a shell prompt, not inside a full-screen app.")
                 }
                 controls

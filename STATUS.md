@@ -166,9 +166,14 @@ would be patching the escc IUS emulation in the vendored qemu (deep + uncertain)
   `8e315d3`).** root and tvernon now get `TERM=vt100` on `/dev/console` and
   `DISPLAY=10.0.2.2:0` on every login, no Set Up Terminal needed -- verified
   live. In `guest/sparcstation-baseline-config.sh` section 9 (`/etc/profile` +
-  `/.tcshrc` + tvernon's `.cshrc`; telnet/ssh keep their own TERM). Set Up
-  Terminal stays for re-sync / non-default cases; Resize TTY still needed after
-  a window drag.
+  `/.tcshrc` + tvernon's `.cshrc`; telnet/ssh keep their own TERM).
+- **Console buttons settled.** With the guest auto-setup, **Set Up Terminal was
+  removed**. Current buttons (all shown while running): **xterm** (new --
+  launches an xterm on the guest via Helios `run_command`, DISPLAY 10.0.2.2:0,
+  `QemuEngine.launchXterm`), **Resize TTY**, and the Shut Down / Force Quit
+  control. xterm + Resize TTY are `.disabled(!model.ready)` so they're live only
+  after boot (the daemon answering = ready); Shut Down already only appears when
+  ready.
 
 **Still open for v1:** scrollback (`sb_pushline`); the cm alt-screen case (cm
 uses the old `?47`, unhandled by libvterm 0.3.3 -> a vendored `47->1047` patch);

@@ -869,7 +869,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             let console = SparcPlugConsoleWindowController(
                 onShutDown: { [weak self] in self?.qemuEngine?.shutDown() },
                 onForceQuit: { [weak self] in self?.confirmForceQuit() },
-                onInput: { [weak self] data in self?.qemuEngine?.sendConsole(data) }
+                onInput: { [weak self] data in self?.qemuEngine?.sendConsole(data) },
+                onLaunchXterm: { [weak self] in
+                    self?.qemuEngine?.launchXterm { result in
+                        if case .failure(let error) = result {
+                            let alert = NSAlert()
+                            alert.messageText = "Couldn't launch xterm"
+                            alert.informativeText = error.localizedDescription
+                            alert.alertStyle = .warning
+                            alert.runModal()
+                        }
+                    }
+                }
             )
             console.setState(qemuEngine?.state ?? .stopped)
             sparcConsole = console
