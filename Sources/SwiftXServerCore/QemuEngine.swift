@@ -806,6 +806,14 @@ public final class QemuEngine: @unchecked Sendable {
             "-L", config.firmwareDir.path,                  // bundled openbios-sparc32 lives here
             "-prom-env", "input-device=ttya",               // OpenBOOT console policy: serial from boot
             "-prom-env", "output-device=ttya",
+            // Experimental console speedup: bump the line from the 9600 default
+            // to the sun zilog max (38400 -- hw/char/escc.c notes "sunzilog can
+            // only do 38400"). ttya-mode = baud,bits,parity,stop,handshake.
+            // CAVEAT: the emulated ESCC doesn't pace by baud (Tx is immediate,
+            // no FIFO), so this may not change throughput at all -- it's here to
+            // test the "OpenBoot honors 9600" theory. -prom-env is runtime-only
+            // (never persisted), so it's safe to drop if it's a no-op.
+            "-prom-env", "ttya-mode=38400,8,n,1,-",
         ]
         if !heliosSecret.isEmpty {
             args += ["-prom-env", "helios-secret=\(heliosSecret)"]

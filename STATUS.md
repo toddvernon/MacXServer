@@ -85,16 +85,19 @@ emulator.feed/refresh` and binds `TerminalView.onInput -> engine.sendConsole`.
 Focus on show + click-to-focus. Caption now "Interactive serial console."
 **Live-verified** (Todd booted it, ran vi + cm). Follow-up fixes from that
 session:
-- **Perf:** two layers. (1) Dirty-rect: `TerminalView` diffs old vs new grid
-  and invalidates only changed cells (+ old/new cursor); `draw` honors
-  `needsToDraw` per cell. (2) **Coalescing (the big one):** a `top` repaint
-  took ~5s because `feed` rebuilt the whole 1920-cell grid + drew on EVERY
-  console chunk, and qemu transmits byte-by-byte (the ESCC does a blocking
-  1-byte write per char -- confirmed no baud throttling in `hw/char/escc.c`,
-  it sets TXEMPTY/ALLSENT + raises the tx irq instantly). So a screen update
-  = hundreds of full rebuilds. Now `feed` is cheap (libvterm input only) and
-  `setNeedsRefresh()` collapses a burst into ONE grid rebuild + draw per
-  runloop turn. Not yet live-timed but should drop seconds -> ms.
+- **Perf -- the ~5s `top`/`ls` paint was the CONSOLE BAUD, not our rendering.**
+  Diagnosed via Todd's `/usr/bin/time ls /etc`: 0 CPU but ~5s wall with `ls`
+  blocking = a baud-limited tty (5KB / 5s = 960 B/s = exactly 9600). Same `ls`
+  in an xterm (pty + X-over-TCP, no UART) is instant. The emulated ESCC itself
+  doesn't pace (`hw/char/escc.c`: Tx immediate, no FIFO/timer) -- the pacing is
+  guest-side (OpenBIOS/Solaris pacing by `ospeed`). **Fix: `-prom-env
+  ttya-mode=38400,8,n,1,-`** (was the 9600 default; 38400 is the sun zilog max
+  per the escc comment). ~4x faster, confirmed live. -prom-env is runtime-only.
+  Open: test whether the guest honors >38400 (115200) since we're emulated.
+- Two rendering optimizations also landed, orthogonal to the baud fix and still
+  worth keeping: (1) dirty-rect diff (`TerminalView` invalidates only changed
+  cells, `draw` honors `needsToDraw`); (2) coalesced `setNeedsRefresh()` so a
+  burst of feed chunks collapses to one grid rebuild + draw per runloop turn.
 - **Alt-screen:** `vterm_screen_enable_altscreen` on, so vi/curses' ?1047/1049
   use the alt buffer instead of scribbling the main screen. The old ?47 form
   is unhandled by libvterm 0.3.3 (cm uses it -> still redraws main screen); a
