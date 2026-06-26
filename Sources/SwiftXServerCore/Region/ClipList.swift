@@ -134,8 +134,14 @@ public enum ClipListEngine {
                                  baseDx: 0, baseDy: 0, scale: scale)
                 continue
             }
-            let childBaseDx = baseDx + Int32(childEntry.x) * scale
-            let childBaseDy = baseDy + Int32(childEntry.y) * scale
+            // Interior origin = parent_origin + x + border_width (the CreateWindow
+            // (x,y) is the OUTER corner; the drawable sits border_width inside it
+            // -- X11R6 dix/window.c:669). Must match topLevelAndOffset so a
+            // bordered child's clip and its drawing land on the same pixels; the
+            // Athena scrollbar (placed at -1,-1 with bw=1) is the case that bites.
+            let childBw = Int32(childEntry.borderWidth) * scale
+            let childBaseDx = baseDx + Int32(childEntry.x) * scale + childBw
+            let childBaseDy = baseDy + Int32(childEntry.y) * scale + childBw
             recomputeSubtree(childId, parentVisible: clipList, in: windows,
                              baseDx: childBaseDx, baseDy: childBaseDy, scale: scale)
             if let updated = windows.get(childId) {

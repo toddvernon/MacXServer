@@ -1061,15 +1061,46 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         // come from the same source the window frame uses — keeping the
         // scrollbar chrome consistent with the frame's bevel thickness.
         let theme = MotifTheme.current
-        let colors = theme.activeColors
         let bevelWidth = Int(theme.bevelWidth)
-        let rect = CGRect(x: CGFloat(windowRect.x), y: CGFloat(windowRect.y),
-                          width: CGFloat(windowRect.width), height: CGFloat(windowRect.height))
-        withDrawContext(target, clipRectangles: nil) { ctx in
+        // Top-level whose key-window state selects the active vs inactive palette,
+        // so the scrollbar dims/undims with focus exactly like the Motif frame.
+        let focusTopLevel: UInt32? = {
+            if case .window(_, let t, _, _) = target { return t }
+            return nil
+        }()
+
+        // Render the scrollbar chrome in the SAME units as the Motif window frame
+        // so their bevels are the same physical width. The frame draws at the
+        // AppKit backing scale (points); this scrollbar is X content drawn through
+        // FlippedXView's logical->device CTM at the X display scaleFactor. When
+        // those differ (e.g. Studio Display: X scaleFactor 3, backing 2) an
+        // X-logical 1px bevel is 3 device px while the frame's 1-point bevel is 2,
+        // so the scrollbar's lines read heavier. Counter-scale by backing/scaleFactor
+        // and convert the geometry to points, so a 1px bevel here is one backing
+        // point exactly like the frame. The device footprint is unchanged; only the
+        // chrome's drawing scale changes (down to the frame's, so the arrow matches
+        // the title-bar buttons too).
+        let backingScale = NSScreen.main?.backingScaleFactor ?? 2.0
+        let sf = CGFloat(self.scaleFactor > 0 ? self.scaleFactor : 1)
+        let ptsPerLogical = sf / backingScale
+        let rect = CGRect(x: CGFloat(windowRect.x) * ptsPerLogical,
+                          y: CGFloat(windowRect.y) * ptsPerLogical,
+                          width: CGFloat(windowRect.width) * ptsPerLogical,
+                          height: CGFloat(windowRect.height) * ptsPerLogical)
+        withDrawContext(target, clipRectangles: nil) { [weak self] ctx in
+            // Read key-window state here (main thread, inside the deferred draw)
+            // since paintMotifScrollbar is called off-main. Default to active when
+            // the window is unknown. Matches MotifFrameView.isActiveWindow, which
+            // is driven by the same windowDidBecomeKey/ResignKey transitions.
+            let active = focusTopLevel.flatMap { self?.slot($0)?.window?.isKeyWindow } ?? true
+            let colors = active ? theme.activeColors : theme.inactiveColors
+            ctx.saveGState()
+            ctx.scaleBy(x: backingScale / sf, y: backingScale / sf)
             MotifScrollbarRenderer.paint(ctx, windowRect: rect,
-                                         thumbTop: CGFloat(thumbTop),
-                                         thumbHeight: CGFloat(thumbHeight),
+                                         thumbTop: CGFloat(thumbTop) * ptsPerLogical,
+                                         thumbHeight: CGFloat(thumbHeight) * ptsPerLogical,
                                          colors: colors, bevelWidth: bevelWidth)
+            ctx.restoreGState()
         }
     }
 

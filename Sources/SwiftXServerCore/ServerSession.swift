@@ -865,6 +865,27 @@ public final class ServerSession: @unchecked Sendable {
         let code: UInt8 = gained ? 9 : 10        // FocusIn / FocusOut
         log?.log("  → \(gained ? "FocusIn" : "FocusOut") target=0x\(String(topLevel, radix: 16)) detail=nonlinear mode=normal")
         outbound.append(event.encode(code: code, byteOrder: order))
+
+        // Repaint any Motif-skinned scrollbar so it follows the window's focus
+        // (active vs inactive palette) just like the frame chrome. paintMotifScrollbar
+        // reads the live key-window state; we just need to re-issue the paint on the
+        // focus transition. The scrollbar can be a grandchild (xterm: Shell ->
+        // VT100 -> scrollbar), so walk the whole subtree, not just direct children.
+        if PointerConfig.current.xtermScrollbarMotifSkin {
+            repaintSkinnedScrollbars(inSubtreeOf: topLevel)
+        }
+    }
+
+    /// Re-issue the Motif scrollbar skin paint for every skinned scrollbar in the
+    /// subtree rooted at `root`. Used on focus change so the skin follows the
+    /// window's active/inactive palette like the frame. Depth-capped against a
+    /// malformed tree.
+    private func repaintSkinnedScrollbars(inSubtreeOf root: UInt32, depth: Int = 0) {
+        guard depth < 32 else { return }
+        for child in SiblingChain.directChildrenTopFirst(of: root, in: windows) {
+            if isMotifSkinnedScrollbar(child) { repaintScrollbarSkin(child) }
+            repaintSkinnedScrollbars(inSubtreeOf: child, depth: depth + 1)
+        }
     }
 
     /// Called by the bridge from main thread when a keyDown/keyUp NSEvent
@@ -1727,7 +1748,20 @@ public final class ServerSession: @unchecked Sendable {
     /// a non-None cursor attribute, and return the cursor's source glyph.
     /// Returns nil if no window in the chain declares a cursor — bridge
     /// falls back to the default arrow.
+    /// X cursor-font glyph for `sb_v_double_arrow` (the vertical up/down
+    /// scrollbar cursor). Maps to NSCursor.resizeUpDown.
+    private static let xcSbVDoubleArrow: UInt16 = 116
+
     private func resolveCursorGlyph(for window: UInt32) -> UInt16? {
+        // Our skinned scrollbar is always vertical, so pin its cursor to the
+        // up/down double-arrow. The Athena scrollbar sets sb_right_arrow during a
+        // thumb drag (Scrollbar.c StartScroll, 'c' action, vertical orientation),
+        // which would otherwise map to a left/right resize cursor mid-drag --
+        // jarring on a vertical scrollbar. Hover/arrow-press already resolve to
+        // up/down; this keeps the drag consistent.
+        if isMotifSkinnedScrollbar(window) {
+            return Self.xcSbVDoubleArrow
+        }
         var cur: UInt32? = window
         while let id = cur, let entry = windows.get(id) {
             if let cursorId = entry.cursor, let glyph = cursors.glyph(cursorId) {
@@ -2481,8 +2515,16 @@ public final class ServerSession: @unchecked Sendable {
         for _ in 0..<32 {
             guard let entry = windows.get(id) else { return nil }
             if entry.parent == config.rootWindowId { return (id, dx, dy) }
-            dx = dx &+ entry.x
-            dy = dy &+ entry.y
+            // A child's interior origin is parent_origin + x + border_width: the
+            // CreateWindow (x,y) is the window's OUTER corner, so the drawable
+            // sits border_width inside it (X11R6 dix/window.c:669
+            // `pWin->drawable.x = pParent->drawable.x + x + (int)bw`). Almost all
+            // toolkit windows use bw=0, but the Athena scrollbar places itself at
+            // (-1,-1) with bw=1 so its content lands flush at the parent origin --
+            // miss the border and the whole scrollbar shifts up-left by a pixel.
+            let bw = Int16(clamping: entry.borderWidth)
+            dx = dx &+ entry.x &+ bw
+            dy = dy &+ entry.y &+ bw
             id = entry.parent
         }
         return nil

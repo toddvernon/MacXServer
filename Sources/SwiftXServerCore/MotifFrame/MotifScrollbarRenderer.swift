@@ -70,6 +70,18 @@ enum MotifScrollbarRenderer {
         // never less than 1 so the chrome doesn't disappear.
         let bw = max(1, bevelWidth)
 
+        // Antialiasing OFF for the whole skin. The frame chrome is axis-aligned
+        // fills (crisp either way), but the stepper-arrow glyph has diagonal edges
+        // -- with AA on those smear across ~2px and the lit (highlight) slant
+        // washes out, so the arrow reads as having no top-left highlight and lines
+        // heavier than the frame's. Off, it renders hard-edged, like the frame and
+        // real Motif (which never antialiased). The pixmap draw path disables AA;
+        // the window path (which this rides) does not, so we do it here.
+        ctx.saveGState()
+        ctx.setShouldAntialias(false)
+        ctx.setAllowsAntialiasing(false)
+        defer { ctx.restoreGState() }
+
         // Square stepper arrows at each end (nil if too short to host them).
         let arrowOpt = arrowSize(width: w, height: h)
         let hasArrows = arrowOpt != nil

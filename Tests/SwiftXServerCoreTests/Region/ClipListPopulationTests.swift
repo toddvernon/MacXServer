@@ -253,9 +253,11 @@ final class ClipListPopulationTests: XCTestCase {
     // MARK: - Border handling
 
     func testWindowWithBorderHasLargerBorderClip() {
-        // A top-level. Child B with borderWidth=2 at (50,50,20x20)
-        // inside it. borderClip extends 2px on each side; clipList does
-        // not include the border.
+        // A top-level. Child B with borderWidth=2 at (50,50,20x20) inside it.
+        // The (x,y) is B's OUTER corner, so its interior (drawable) origin is at
+        // x+bw = (52,52) -- X11R6 dix/window.c:669. The interior clipList is
+        // (52,52..72,72); the border ring extends 2px outside that, so the
+        // border-included extent (borderClip) is (50,50..74,74).
         let aId: UInt32 = 0x100
         let bId: UInt32 = 0x101
         let rootId: UInt32 = 0x28
@@ -267,15 +269,39 @@ final class ClipListPopulationTests: XCTestCase {
         let t = recompute(entries, topLevel: aId)
 
         let b = t.get(bId)!
-        XCTAssertEqual(b.clipList, Region(box: box(50, 50, 70, 70)))
-        XCTAssertEqual(b.borderClip, Region(box: box(48, 48, 72, 72)))
+        XCTAssertEqual(b.clipList, Region(box: box(52, 52, 72, 72)))
+        XCTAssertEqual(b.borderClip, Region(box: box(50, 50, 74, 74)))
 
         // A's clipList is its interior minus B's borderClip (the border
         // ring also obscures A).
         let a = t.get(aId)!
         let expectedAClip = Region(box: box(0, 0, 200, 200))
-            .subtracting(Region(box: box(48, 48, 72, 72)))
+            .subtracting(Region(box: box(50, 50, 74, 74)))
         XCTAssertEqual(a.clipList, expectedAClip)
+    }
+
+    // The Athena/xterm scrollbar case: a bw=1 child placed at (-1,-1) so its
+    // interior origin (x+bw) lands flush at the parent origin (0,0), with the 1px
+    // border falling off-parent where it's clipped. This is what xterm relies on
+    // (scrollbar.c CreateScrollBar at -1,-1, borderWidth 1) and what was shifting
+    // the Motif scrollbar skin up-left by a pixel before border_width was honored.
+    func testBorderedChildAtMinusOneLandsContentAtParentOrigin() {
+        let aId: UInt32 = 0x100
+        let sbId: UInt32 = 0x101
+        let rootId: UInt32 = 0x28
+        let entries = [
+            makeWindow(id: aId, parent: rootId, width: 100, height: 100, mapped: true),
+            makeWindow(id: sbId, parent: aId, x: -1, y: -1, width: 14, height: 100,
+                       borderWidth: 1, mapped: true),
+        ]
+        let t = recompute(entries, topLevel: aId)
+        let sb = t.get(sbId)!
+        // Interior origin = x+bw = 0, so the content's top-left IS the parent
+        // origin -- no shift. (Was (-1,-1) before the fix, clipping the top row
+        // and left column.)
+        XCTAssertEqual(sb.clipList, Region(box: box(0, 0, 14, 100)))
+        // Border ring extends 1px outside the interior but is clamped to the parent.
+        XCTAssertEqual(sb.borderClip, Region(box: box(0, 0, 15, 100)))
     }
 
     // MARK: - Dispatch wiring (drives a real ServerSession)
