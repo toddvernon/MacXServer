@@ -144,6 +144,7 @@ public final class QemuEngine: @unchecked Sendable {
     private var progress: Double = 0
 
     private var consoleCallback: ((String) -> Void)?
+    private var consoleDataCallback: ((Data) -> Void)?
     private var stateCallback: ((State) -> Void)?
     private var terminatedCallback: ((Bool) -> Void)?
     private var cleanHaltCallback: (() -> Void)?
@@ -167,10 +168,25 @@ public final class QemuEngine: @unchecked Sendable {
 
     // MARK: - Callbacks (set before start)
 
-    /// Serial-console text as it arrives (stdout + stderr merged). Read-only
-    /// for v1; this is what the observation window renders.
+    /// Serial-console text as it arrives (stdout + stderr merged). Still used
+    /// for the boot/shutdown marker detection; the interactive terminal renders
+    /// from `onConsoleData` instead.
     public func onConsole(_ callback: @escaping (String) -> Void) {
         self.consoleCallback = callback
+    }
+
+    /// Raw serial-console bytes as they arrive, on the main queue. This is what
+    /// the interactive terminal (TerminalEmulator) consumes -- it needs the
+    /// unmodified byte stream (escape sequences intact), not the sanitized
+    /// String the marker-detection path uses.
+    public func onConsoleData(_ callback: @escaping (Data) -> Void) {
+        self.consoleDataCallback = callback
+    }
+
+    /// Send input bytes to the guest's serial console (keystrokes from the
+    /// interactive terminal). No-op if the console client isn't connected.
+    public func sendConsole(_ data: Data) {
+        queue.async { [weak self] in self?.consoleClient?.write(data) }
     }
 
     /// Fires on the main queue whenever the state changes.
@@ -936,6 +952,10 @@ public final class QemuEngine: @unchecked Sendable {
 
         let cb = consoleCallback
         DispatchQueue.main.async { cb?(s) }
+
+        // Raw bytes to the interactive terminal (escape sequences intact).
+        let dcb = consoleDataCallback
+        DispatchQueue.main.async { dcb?(data) }
     }
 
     /// qemu's OWN stderr (emulator diagnostics), kept out of the guest serial

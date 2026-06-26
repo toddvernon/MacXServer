@@ -55,6 +55,28 @@ public final class SerialConsoleClient {
         lock.lock(); dataHandler = handler; lock.unlock()
     }
 
+    /// Write input bytes to the console TTY (the socket is bidirectional --
+    /// qemu's `-serial unix:` carries keystrokes back to the guest console).
+    /// Used by the interactive terminal to send what the user types. Keystroke
+    /// payloads are tiny so a synchronous write under the lock is fine; the
+    /// lock guards the fd against a concurrent close(), not the byte direction
+    /// (read and write on a socket fd are independent at the OS level).
+    public func write(_ data: Data) {
+        guard !data.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        guard reading, fd >= 0 else { return }
+        data.withUnsafeBytes { raw in
+            guard var p = raw.bindMemory(to: UInt8.self).baseAddress else { return }
+            var remaining = data.count
+            while remaining > 0 {
+                let n = Darwin.write(fd, p, remaining)
+                if n > 0 { p = p.advanced(by: n); remaining -= n; continue }
+                if n < 0 && errno == EINTR { continue }
+                break   // closed or hard error; drop the rest
+            }
+        }
+    }
+
     // MARK: - Lifecycle
 
     /// Open the socket and start the background reader. Throws if the connect

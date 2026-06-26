@@ -198,8 +198,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// them), so touching the console window here is safe.
     private func rebuildSparcEngine() {
         let engine = QemuEngine(config: makeSparcConfig())
-        engine.onConsole { [weak self] text in
-            self?.sparcConsole?.appendConsole(text)
+        engine.onConsoleData { [weak self] data in
+            self?.sparcConsole?.feedConsoleData(data)
         }
         engine.onStateChange { [weak self] state in
             self?.sparcConsole?.setState(state)
@@ -868,7 +868,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if sparcConsole == nil {
             let console = SparcPlugConsoleWindowController(
                 onShutDown: { [weak self] in self?.qemuEngine?.shutDown() },
-                onForceQuit: { [weak self] in self?.confirmForceQuit() }
+                onForceQuit: { [weak self] in self?.confirmForceQuit() },
+                onInput: { [weak self] data in self?.qemuEngine?.sendConsole(data) }
             )
             console.setState(qemuEngine?.state ?? .stopped)
             sparcConsole = console

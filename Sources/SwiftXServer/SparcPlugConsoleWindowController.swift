@@ -2,23 +2,29 @@ import AppKit
 import SwiftUI
 import SwiftXServerCore
 
-// Read-only observation window for the bundled SPARCstation engine's
-// -nographic serial console. Modeled on LaunchProgressWindowController: an
-// NSPanel hosting a SwiftUI monospaced transcript that autoscrolls. The user
-// watches the boot here and drives shutdown from the buttons. Helios later
-// builds its split terminal on this same window.
+// Interactive console window for the bundled SPARCstation engine's serial
+// console (qemu `-serial unix:`). An NSWindow hosting a SwiftUI chrome (boot
+// thermometer, header, status + Shut Down / Force Quit) wrapped around a real
+// terminal: the TerminalView renders libvterm's screen grid and sends the
+// user's keystrokes back to the guest console, so vi/top/format work here when
+// the graphical path is down. See CONSOLE_TERMINAL.md.
 final class SparcPlugConsoleWindowController: NSWindowController {
 
     private let model = SparcPlugConsoleModel()
 
-    init(onShutDown: @escaping () -> Void, onForceQuit: @escaping () -> Void) {
+    init(onShutDown: @escaping () -> Void,
+         onForceQuit: @escaping () -> Void,
+         onInput: @escaping (Data) -> Void) {
+        // Keystrokes the terminal produces go straight back to the guest
+        // console (engine.sendConsole on the app side).
+        model.terminalView.onInput = onInput
+
         let hostingView = NSHostingView(rootView: SparcPlugConsoleView(
             model: model, shutDown: onShutDown, forceQuit: onForceQuit))
         // First-class NSWindow (not an NSPanel/.utilityWindow): a utility panel
         // hides whenever macXserver isn't the foreground app, which is annoying
         // for a console you want to keep watching while you work elsewhere. A
-        // plain window stays put on deactivate. Taller default than wide -- a
-        // serial console reads as a long scroll of lines.
+        // plain window stays put on deactivate.
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 780),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -38,10 +44,17 @@ final class SparcPlugConsoleWindowController: NSWindowController {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        // Focus the terminal so typing goes to the guest. Deferred to the next
+        // runloop so SwiftUI has realized the NSView tree first.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self.model.terminalView)
+        }
     }
 
-    func appendConsole(_ text: String) {
-        model.append(text)
+    /// Raw serial-console bytes from the engine -> the terminal emulator.
+    func feedConsoleData(_ data: Data) {
+        model.feed(data)
     }
 
     func setState(_ state: QemuEngine.State) {
@@ -84,13 +97,6 @@ final class SparcPlugConsoleWindowController: NSWindowController {
 
 @MainActor
 final class SparcPlugConsoleModel: ObservableObject {
-    /// Finished lines (each already terminated with "\n").
-    @Published var committed = AttributedString()
-    /// The in-progress last line, re-rendered live so CR/BS overwrites (and the
-    /// `\|/-` spinner) animate in place instead of waiting for a newline.
-    @Published var currentLine = ""
-    /// Bumped on every transcript change; the scroll view follows it.
-    @Published var revision = 0
     @Published var state: QemuEngine.State = .stopped
     /// Set once Solaris confirms filesystems are synced during shutdown.
     @Published var safeToQuit = false
@@ -105,43 +111,42 @@ final class SparcPlugConsoleModel: ObservableObject {
     /// 0...1 boot/shutdown progress for the top thermometer.
     @Published var progress: Double = 0
 
-    private let sanitizer = ConsoleSanitizer()
+    /// The interactive terminal: the libvterm emulator and its rendering view.
+    /// Driven imperatively (feed bytes -> the NSView repaints itself), so it's
+    /// not @Published -- SwiftUI only owns the chrome around it.
+    let terminal = TerminalEmulator(rows: 24, cols: 80)
+    lazy var terminalView = TerminalView(emulator: terminal)
 
-    private let mono: AttributeContainer = {
-        var c = AttributeContainer()
-        c.font = .system(size: 12, design: .monospaced)
-        return c
-    }()
-
-    /// What the view draws: committed lines plus the live current line.
-    var displayContent: AttributedString {
-        var c = committed
-        if !currentLine.isEmpty {
-            c.append(AttributedString(currentLine, attributes: mono))
-        }
-        return c
+    /// Feed raw console bytes into the emulator and repaint the view.
+    func feed(_ data: Data) {
+        terminal.feed(data)
+        terminalView.refresh()
     }
 
-    func append(_ text: String) {
-        let update = sanitizer.feed(text)
-        for line in update.completedLines {
-            committed.append(AttributedString(line + "\n", attributes: mono))
-        }
-        currentLine = update.currentLine
-        revision &+= 1
+    /// New boot. The terminal keeps its current screen; the guest repaints as
+    /// it boots. (A hard screen reset per run could be added later if wanted.)
+    func beginRun() {}
+}
+
+/// Bridges the AppKit TerminalView into SwiftUI, inside a scroll view with the
+/// terminal's black background. The TerminalView sizes itself to the 80x24
+/// grid; the scroll view clips/scrolls when the window is smaller (and is the
+/// natural home for scrollback later).
+private struct TerminalConsoleView: NSViewRepresentable {
+    let view: TerminalView
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.drawsBackground = true
+        scroll.backgroundColor = .black
+        scroll.borderType = .noBorder
+        scroll.documentView = view
+        return scroll
     }
 
-    /// New boot: flush any dangling partial line into history and clear the
-    /// sanitizer's parse state so a half-line from the prior run doesn't merge
-    /// into the new one. Keeps the scrollback.
-    func beginRun() {
-        if !currentLine.isEmpty {
-            committed.append(AttributedString(currentLine + "\n", attributes: mono))
-            currentLine = ""
-        }
-        sanitizer.reset()
-        revision &+= 1
-    }
+    func updateNSView(_ nsView: NSScrollView, context: Context) {}
 }
 
 struct SparcPlugConsoleView: View {
@@ -187,27 +192,16 @@ struct SparcPlugConsoleView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("SPARCstation 5 — Solaris 2.6")
                         .font(.title2)
-                    Text("Serial console (read-only).")
+                    Text("Interactive serial console.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
             }
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    Text(model.displayContent)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
-                        .id("console")
-                }
-                .background(Color(nsColor: .textBackgroundColor))
+            TerminalConsoleView(view: model.terminalView)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
-                .onChange(of: model.revision) {
-                    proxy.scrollTo("console", anchor: .bottom)
-                }
-            }
 
             HStack(spacing: 8) {
                 Circle()

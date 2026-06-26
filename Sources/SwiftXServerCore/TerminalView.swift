@@ -61,6 +61,11 @@ public final class TerminalView: NSView {
     public override var isFlipped: Bool { true }   // row 0 at the top
     public override var acceptsFirstResponder: Bool { true }
 
+    // Click anywhere in the terminal to focus it, so typing goes to the guest.
+    public override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+    }
+
     /// Push the emulator's current state into the view and redraw. Call after
     /// feeding bytes into the emulator.
     public func refresh() {

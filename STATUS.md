@@ -73,14 +73,25 @@ v1 scope in **`CONSOLE_TERMINAL.md`**, decision in **`DECISIONS.md`
   + 2 offscreen-render. Full suite **1428 tests, 0 failures**. Framework AND
   full app build clean in Xcode.
 
-**Next (v1 build, not spike):** wire `TerminalView` into
-`SparcPlugConsoleWindowController` (replace the `AttributedString` line-buffer +
-`ConsoleSanitizer` path); marshal `SerialConsoleClient.onData` -> main ->
-`emulator.feed`/`view.refresh`, and `onInput` -> `SerialConsoleClient.write`.
-Then scrollback (`sb_pushline`), the "Send terminal setup" affordance
-(`TERM=vt100; stty rows 24 columns 80`), and reconcile point-size/scaleFactor
-with `FontResolver`/`XTERM_FONT_QUALITY`. The spike does per-cell draw +
-full-grid repaint (fine for 80x24; tighten later).
+**Wired into the console window this session (interactive, not read-only):**
+`SparcPlugConsoleWindowController` now hosts the `TerminalView` (via an
+`NSScrollView`/`NSViewRepresentable`) in place of the `AttributedString` scroll
+area -- the boot thermometer, header graphic + title, and Shut Down / Force
+Quit buttons are unchanged; only the text area was swapped. Data path:
+`SerialConsoleClient.write` added (the `-serial unix:` socket is bidirectional);
+`QemuEngine.onConsoleData` (raw bytes, escape sequences intact) +
+`QemuEngine.sendConsole`; AppDelegate feeds `onConsoleData -> feedConsoleData ->
+emulator.feed/refresh` and binds `TerminalView.onInput -> engine.sendConsole`.
+Focus on show + click-to-focus. Caption now "Interactive serial console."
+Builds clean (SwiftPM + Xcode app), suite 1428/0. **NOT yet live-verified
+against a running guest** -- needs a boot + a vi session to confirm.
+
+**Still open for v1:** scrollback (`sb_pushline`), the "Send terminal setup"
+affordance (`TERM=vt100; stty rows 24 columns 80`), reconcile
+point-size/scaleFactor with `FontResolver`/`XTERM_FONT_QUALITY`, and the spike's
+per-cell draw + full-grid repaint (fine for 80x24; tighten if needed). The old
+`ConsoleSanitizer` is now unused by the window (still feeds the String marker
+path in `ingest`); prune later.
 
 Commits this session: `306a35a` (launcher seed helios-port doc), the Ctrl+Right
 fix, `671f13b` (console-terminal scope docs), and the spike. Session-4 notes
