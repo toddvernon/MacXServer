@@ -87,6 +87,20 @@ public final class TerminalView: NSView {
     /// Resize TTY button). This is a UI signal only -- it never touches the guest.
     public var onGridResized: (() -> Void)?
 
+    /// Off until the window settles, so the initial layout reflow (80x24 ->
+    /// window size) doesn't flag the guest as out-of-sync (blue Resize TTY
+    /// button) before the user has touched anything.
+    private var settled = false
+
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        settled = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.settled = true
+        }
+    }
+
     public override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         reflowToFit()
@@ -102,7 +116,7 @@ public final class TerminalView: NSView {
         grid = term.grid()
         cursor = term.cursor()
         needsDisplay = true
-        onGridResized?()
+        if settled { onGridResized?() }
     }
 
     private var refreshScheduled = false

@@ -32,7 +32,11 @@ final class SparcPlugConsoleWindowController: NSWindowController {
 
         // A window drag reflows the grid -> the guest tty is now stale; flag it
         // so the Resize TTY button highlights. UI-only, never touches the guest.
-        view.onGridResized = { [weak model] in model?.ttyResizePending = true }
+        // Defer the publish: onGridResized fires during the view's setFrameSize
+        // (a view-update pass), and mutating an @Published there is undefined.
+        view.onGridResized = { [weak model] in
+            DispatchQueue.main.async { model?.ttyResizePending = true }
+        }
 
         // "Set Up Terminal": align the guest console TERM with what we emulate
         // (vt100) and pin the current grid size. csh/tcsh syntax (the bundled
@@ -221,7 +225,7 @@ struct SparcPlugConsoleView: View {
                     .frame(height: 30)
                     .accessibilityLabel("Sun SPARCstation 5")
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("SPARCstation 5 — Solaris 2.6")
+                    Text("SPARCstation 5 — Solaris 2.6 — 115200 baud")
                         .font(.title2)
                     Text("Interactive serial console.")
                         .font(.caption)
@@ -254,7 +258,7 @@ struct SparcPlugConsoleView: View {
                 Spacer()
                 if model.state == .running {
                     Button("Set Up Terminal", action: setupTerminal)
-                        .help("Type `setenv TERM vt100; stty rows/columns <current size>; clear` at the guest shell (csh/tcsh) so full-screen apps render correctly.")
+                        .help("Set the guest console TERM to vt100 and stty to the current window size, then clear, so full-screen apps render correctly (csh/tcsh).")
                     // Turns blue (prominent) once the window has been resized
                     // since the last sync, prompting the user to push the new
                     // size; back to default after they click it.
@@ -262,7 +266,7 @@ struct SparcPlugConsoleView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(model.ttyResizePending ? .blue : Color(nsColor: .controlColor))
                         .foregroundStyle(model.ttyResizePending ? .white : .primary)
-                        .help("Push the current window size to the guest (`stty rows/columns`) after resizing. Press at a shell prompt, not inside a full-screen app.")
+                        .help("Push the current window size to the guest (stty rows/columns) after resizing. Press at a shell prompt, not inside a full-screen app.")
                 }
                 controls
             }
