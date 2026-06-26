@@ -3,6 +3,8 @@
 .swiftpm/
 DerivedData/
 Package.resolved
+# Command-line `xcodebuild` writes here (default SYMROOT when not using DerivedData)
+build/
 
 # macOS
 .DS_Store

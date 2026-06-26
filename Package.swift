@@ -16,13 +16,24 @@ let package = Package(
     ],
     targets: [
         .target(name: "Framer"),
+        // Vendored libvterm (terminal-emulator state machine, MIT).
+        // Built from source; see Sources/CVTerm/VENDOR.md.
+        .target(
+            name: "CVTerm",
+            cSettings: [
+                // The .c sources sit in the target root next to the private
+                // headers (vterm_internal.h, utf8.h, rect.h) and the .inc
+                // tables; make the root searchable for their quoted includes.
+                .headerSearchPath(".")
+            ]
+        ),
         .target(
             name: "SwiftXCaptureCore",
             dependencies: ["Framer"]
         ),
         .target(
             name: "SwiftXServerCore",
-            dependencies: ["Framer", "SwiftXCaptureCore"]
+            dependencies: ["Framer", "SwiftXCaptureCore", "CVTerm"]
         ),
         // Shared AppKit/SwiftUI editor + capture viewer (dark code editor,
         // syntax highlighting, Save As / Export as Text). Used by both apps.

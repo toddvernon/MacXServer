@@ -40,25 +40,51 @@ release. If `0x440002B` is still mapped ~100ms after the ButtonRelease it's a
 real orphan, and the prime suspect is how we deliver the grab-release
 Enter/Leave (mode=ungrab) that xterm's SimpleMenu relies on to pop down.
 
-### NEW: interactive console terminal scoped (no code yet)
+### NEW: interactive console terminal -- scoped AND spiked
 
 Now that VM control no longer relies on the serial console (Helios drives the
-guest, QMP drives the VM), scoped turning the console teletype into a real
-terminal so a user can run `vi`/`top`/`format` during recovery -- the
-guided-repair story (Helios C6). Decision: **vendor libvterm (Vim/Neovim's
-`:terminal` core, MIT) built from source + keep our Core Text cell renderer**;
-not SwiftTerm (whole NSView + its own rendering), not a port of xterm
-(`charproc.c` is welded to Xt/Xaw, unliftable). vt100 / fixed 80x24 /
-scrollback / 16-color for v1. Zero external deps -- one vendored source we own
-(same posture as the bundled qemu). Full v1 scope in **`CONSOLE_TERMINAL.md`**;
-the decision + rejected alternatives in **`DECISIONS.md` (2026-06-26)**. When
-building starts, the honest first move is a spike on the `TerminalView` grid
-renderer (the bulk + the one real integration unknown); vendoring libvterm and
-the wrapper are low-risk by comparison.
+guest, QMP drives the VM), turning the console teletype into a real terminal so
+a user can run `vi`/`top`/`format` during recovery -- the guided-repair story
+(Helios C6). Decision: **vendor libvterm (Vim/Neovim's `:terminal` core, MIT)
+built from source + keep our Core Text cell renderer**; not SwiftTerm (whole
+NSView + its own rendering), not a port of xterm (`charproc.c` welded to
+Xt/Xaw, unliftable). vt100 / fixed 80x24 / scrollback / 16-color for v1. Zero
+external deps -- one vendored source we own (same posture as bundled qemu). Full
+v1 scope in **`CONSOLE_TERMINAL.md`**, decision in **`DECISIONS.md`
+(2026-06-26)**.
+
+**Spike landed this session (vendor + both halves proven):**
+- **`Sources/CVTerm/`** -- vendored libvterm 0.3.3, MIT, built from source.
+  Wired into *both* build systems: SwiftPM C target (`Package.swift`) and an
+  XcodeGen `library.static` (`project.yml`, with `link: true` -- the default
+  build-order-only dep did NOT link, symbols were undefined until forced).
+  Provenance + update steps in `Sources/CVTerm/VENDOR.md`.
+- **`TerminalEmulator.swift`** -- pull-based wrapper (no C callbacks):
+  `feed(Data)` -> grid via `vterm_screen_get_cell`, cursor via
+  `vterm_state_get_cursorpos`, input via `vterm_keyboard_*` + drained through
+  `vterm_output_read`. Colors pre-resolved to RGB.
+- **`TerminalView.swift`** -- NSView rendering the grid with Menlo integer
+  cell metrics (ascent+descent, ceil'd), reverse/bold/underline + block
+  cursor, `keyDown` -> emulator -> `onInput` bytes. The integration unknown
+  (our Core Text drawing of libvterm's grid) is **resolved** -- offscreen
+  render test asserts real pixels.
+- **Tests:** 8 emulator (plain text, CRLF, the `ESC[2J ESC[H` erase vi uses,
+  SGR bold/reverse, color->RGB, typing->bytes, Enter/arrow DECCKM, Ctrl-C->ETX)
+  + 2 offscreen-render. Full suite **1428 tests, 0 failures**. Framework AND
+  full app build clean in Xcode.
+
+**Next (v1 build, not spike):** wire `TerminalView` into
+`SparcPlugConsoleWindowController` (replace the `AttributedString` line-buffer +
+`ConsoleSanitizer` path); marshal `SerialConsoleClient.onData` -> main ->
+`emulator.feed`/`view.refresh`, and `onInput` -> `SerialConsoleClient.write`.
+Then scrollback (`sb_pushline`), the "Send terminal setup" affordance
+(`TERM=vt100; stty rows 24 columns 80`), and reconcile point-size/scaleFactor
+with `FontResolver`/`XTERM_FONT_QUALITY`. The spike does per-cell draw +
+full-grid repaint (fine for 80x24; tighten later).
 
 Commits this session: `306a35a` (launcher seed helios-port doc), the Ctrl+Right
-fix, and `671f13b` (console-terminal scope docs). Session-4 notes below still
-stand.
+fix, `671f13b` (console-terminal scope docs), and the spike. Session-4 notes
+below still stand.
 
 ---
 

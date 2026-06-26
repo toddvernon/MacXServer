@@ -1,0 +1,6 @@
+module CVTerm {
+    // vterm.h pulls in vterm_keycodes.h, so exposing it is enough for the
+    // full API (VTerm*, VTermScreen*, VTermKey/VTermModifier, ...).
+    header "vterm.h"
+    export *
+}
