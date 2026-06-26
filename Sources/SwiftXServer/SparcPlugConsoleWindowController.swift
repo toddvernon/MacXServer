@@ -30,20 +30,26 @@ final class SparcPlugConsoleWindowController: NSWindowController {
         // into whatever the user is doing.
         let view = model.terminalView
 
+        // A window drag reflows the grid -> the guest tty is now stale; flag it
+        // so the Resize TTY button highlights. UI-only, never touches the guest.
+        view.onGridResized = { [weak model] in model?.ttyResizePending = true }
+
         // "Set Up Terminal": align the guest console TERM with what we emulate
         // (vt100) and pin the current grid size. csh/tcsh syntax (the bundled
         // SPARCstation root shell). Fixes top/clear/vi when the login TERM is
         // the Sun console default rather than vt100.
-        let sendSetup = {
+        let sendSetup = { [weak model] in
             let (rows, cols) = view.gridSize
             onInput(Data("setenv TERM vt100; stty rows \(rows) columns \(cols); clear\r".utf8))
+            model?.ttyResizePending = false
         }
 
         // "Resize TTY": push just the current grid size, for after dragging the
         // window. Press it at a shell prompt (not inside a full-screen app).
-        let sendResize = {
+        let sendResize = { [weak model] in
             let (rows, cols) = view.gridSize
             onInput(Data("stty rows \(rows) columns \(cols)\r".utf8))
+            model?.ttyResizePending = false
         }
 
         let hostingView = NSHostingView(rootView: SparcPlugConsoleView(
@@ -138,6 +144,10 @@ final class SparcPlugConsoleModel: ObservableObject {
     @Published var shutdownUnavailable = false
     /// 0...1 boot/shutdown progress for the top thermometer.
     @Published var progress: Double = 0
+    /// True when the window has been resized since the last tty sync, so the
+    /// guest's winsize is stale. Highlights the Resize TTY button; cleared when
+    /// the user pushes a size (Resize TTY or Set Up Terminal).
+    @Published var ttyResizePending = false
 
     /// The interactive terminal: the libvterm emulator and its rendering view.
     /// Driven imperatively (feed bytes -> the NSView repaints itself), so it's
@@ -245,7 +255,13 @@ struct SparcPlugConsoleView: View {
                 if model.state == .running {
                     Button("Set Up Terminal", action: setupTerminal)
                         .help("Type `setenv TERM vt100; stty rows/columns <current size>; clear` at the guest shell (csh/tcsh) so full-screen apps render correctly.")
+                    // Turns blue (prominent) once the window has been resized
+                    // since the last sync, prompting the user to push the new
+                    // size; back to default after they click it.
                     Button("Resize TTY", action: resizeTTY)
+                        .buttonStyle(.borderedProminent)
+                        .tint(model.ttyResizePending ? .blue : Color(nsColor: .controlColor))
+                        .foregroundStyle(model.ttyResizePending ? .white : .primary)
                         .help("Push the current window size to the guest (`stty rows/columns`) after resizing. Press at a shell prompt, not inside a full-screen app.")
                 }
                 controls

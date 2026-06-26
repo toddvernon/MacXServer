@@ -82,6 +82,11 @@ public final class TerminalView: NSView {
     /// when the user presses the button at a safe moment.
     public var gridSize: (rows: Int, cols: Int) { (term.rows, term.cols) }
 
+    /// Fires when the grid reflowed to a new size (window drag). The host uses
+    /// it to flag that the guest tty is now out of sync (e.g. highlight the
+    /// Resize TTY button). This is a UI signal only -- it never touches the guest.
+    public var onGridResized: (() -> Void)?
+
     public override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         reflowToFit()
@@ -97,6 +102,7 @@ public final class TerminalView: NSView {
         grid = term.grid()
         cursor = term.cursor()
         needsDisplay = true
+        onGridResized?()
     }
 
     private var refreshScheduled = false
