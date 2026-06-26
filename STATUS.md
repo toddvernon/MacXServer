@@ -128,13 +128,26 @@ session:
   Added a **"Set Up Terminal" button** (visible when running) that types
   `setenv TERM vt100; stty rows 24 columns 80; clear` at the guest (csh/tcsh).
 
+- **Resizable terminal (was fixed 80x24).** The grid now tracks the window:
+  `TerminalView.setFrameSize` -> `reflowToFit` computes rows/cols from the
+  bounds + integer cell metrics, `TerminalEmulator.resize` (vterm_set_size)
+  reflows, and a debounced `onResize` pushes a matching `stty rows/columns` so
+  the guest's winsize agrees -- which is what fixes the "sometimes wraps"
+  (size disagreement). The push is gated: suppressed during the initial layout
+  settle (no stray stty at the boot/login console) and while a full-screen app
+  owns the alt screen (don't inject into vi/top -- tracked via a new
+  `settermprop` callback, which also gives real cursor-hide). Dropped the
+  NSScrollView wrapper; the view fills the window (black layer bg for the
+  sub-cell margin). Set Up Terminal now uses the live size. CAVEAT: serial has
+  no SIGWINCH-over-wire, so resizing *inside* a full-screen app won't reflow it
+  until you exit to a shell (inherent; matches real serial + `resize`).
+
 **Still open for v1:** scrollback (`sb_pushline`); the cm alt-screen case (cm
-uses the old `?47`, unhandled by libvterm 0.3.3 -> a vendored `47->1047` patch
-is the fix if cm still misbehaves after the resize fix); reconcile
-point-size/scaleFactor with `FontResolver`/`XTERM_FONT_QUALITY`; default the
-guest console TERM in the image (SPARCplug side) so the Set-Up button isn't
-needed; prune the now-unused `ConsoleSanitizer` (still feeds the String marker
-path in `ingest`).
+uses the old `?47`, unhandled by libvterm 0.3.3 -> a vendored `47->1047` patch);
+reconcile point-size/scaleFactor with `FontResolver`/`XTERM_FONT_QUALITY`;
+default the guest console TERM in the image (SPARCplug side) so the Set-Up
+button isn't needed; prune the now-unused `ConsoleSanitizer` (still feeds the
+String marker path in `ingest`).
 
 Commits this session: `306a35a` (launcher seed helios-port doc), the Ctrl+Right
 fix, `671f13b` (console-terminal scope docs), and the spike. Session-4 notes

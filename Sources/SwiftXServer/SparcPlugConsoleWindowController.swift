@@ -24,12 +24,20 @@ final class SparcPlugConsoleWindowController: NSWindowController {
         // hang waiting for the answer.
         model.terminal.onOutput = onInput
 
+        // When the window resizes, the grid reflows and we push a matching stty
+        // so the guest's tty winsize agrees (the view debounces + suppresses
+        // this inside a full-screen app).
+        model.terminalView.onResize = { rows, cols in
+            onInput(Data("stty rows \(rows) columns \(cols)\r".utf8))
+        }
+
         // "Set Up Terminal" types this at the guest shell: align its console
-        // TERM with what we emulate (vt100) and pin the 80x24 size. csh/tcsh
-        // syntax (the bundled SPARCstation root shell). Fixes top/clear/vi when
-        // the login TERM is the Sun console default rather than vt100.
+        // TERM with what we emulate (vt100) and pin the CURRENT grid size. csh/
+        // tcsh syntax (the bundled SPARCstation root shell). Fixes top/clear/vi
+        // when the login TERM is the Sun console default rather than vt100.
+        let term = model.terminal
         let sendSetup = {
-            onInput(Data("setenv TERM vt100; stty rows 24 columns 80; clear\r".utf8))
+            onInput(Data("setenv TERM vt100; stty rows \(term.rows) columns \(term.cols); clear\r".utf8))
         }
 
         let hostingView = NSHostingView(rootView: SparcPlugConsoleView(
@@ -144,25 +152,14 @@ final class SparcPlugConsoleModel: ObservableObject {
     func beginRun() {}
 }
 
-/// Bridges the AppKit TerminalView into SwiftUI, inside a scroll view with the
-/// terminal's black background. The TerminalView sizes itself to the 80x24
-/// grid; the scroll view clips/scrolls when the window is smaller (and is the
-/// natural home for scrollback later).
+/// Bridges the AppKit TerminalView into SwiftUI. The view fills the available
+/// space and reflows its grid to fit (see TerminalView.setFrameSize), so the
+/// terminal is resizable with the window.
 private struct TerminalConsoleView: NSViewRepresentable {
     let view: TerminalView
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = false
-        scroll.drawsBackground = true
-        scroll.backgroundColor = .black
-        scroll.borderType = .noBorder
-        scroll.documentView = view
-        return scroll
-    }
-
-    func updateNSView(_ nsView: NSScrollView, context: Context) {}
+    func makeNSView(context: Context) -> TerminalView { view }
+    func updateNSView(_ nsView: TerminalView, context: Context) {}
 }
 
 struct SparcPlugConsoleView: View {
@@ -240,7 +237,7 @@ struct SparcPlugConsoleView: View {
                 Spacer()
                 if model.state == .running {
                     Button("Set Up Terminal", action: setupTerminal)
-                        .help("Type `setenv TERM vt100; stty rows 24 columns 80; clear` at the guest shell (csh/tcsh) so full-screen apps render correctly.")
+                        .help("Type `setenv TERM vt100; stty rows/columns <current size>; clear` at the guest shell (csh/tcsh) so full-screen apps render correctly.")
                 }
                 controls
             }

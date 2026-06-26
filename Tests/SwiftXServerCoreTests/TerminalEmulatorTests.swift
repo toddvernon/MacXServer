@@ -113,6 +113,37 @@ final class TerminalEmulatorTests: XCTestCase {
         XCTAssertEqual(got.first, 0x1b)   // a CSI response
     }
 
+    func testResizeChangesGridDimensions() {
+        let term = TerminalEmulator(rows: 24, cols: 80)
+        term.feed(Data("hi".utf8))
+        term.resize(rows: 40, cols: 100)
+        XCTAssertEqual(term.rows, 40)
+        XCTAssertEqual(term.cols, 100)
+        let grid = term.grid()
+        XCTAssertEqual(grid.count, 40)
+        XCTAssertEqual(grid[0].count, 100)
+        // Content on row 0 survives a grow.
+        XCTAssertEqual(grid[0].prefix(2).map(\.text).joined(), "hi")
+    }
+
+    func testAltScreenTrackedFromSettermprop() {
+        let term = TerminalEmulator(rows: 24, cols: 80)
+        XCTAssertFalse(term.isAltScreen)
+        term.feed(Data("\u{1b}[?1049h".utf8))    // enter alt screen
+        XCTAssertTrue(term.isAltScreen)
+        term.feed(Data("\u{1b}[?1049l".utf8))    // leave alt screen
+        XCTAssertFalse(term.isAltScreen)
+    }
+
+    func testCursorVisibilityTrackedFromSettermprop() {
+        let term = TerminalEmulator(rows: 24, cols: 80)
+        XCTAssertTrue(term.cursor().visible)
+        term.feed(Data("\u{1b}[?25l".utf8))       // hide cursor (DECTCEM)
+        XCTAssertFalse(term.cursor().visible)
+        term.feed(Data("\u{1b}[?25h".utf8))       // show cursor
+        XCTAssertTrue(term.cursor().visible)
+    }
+
     func testTypingProducesWireBytes() {
         let term = TerminalEmulator(rows: 24, cols: 80)
         let bytes = term.sendText("ls")

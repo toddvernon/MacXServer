@@ -63,6 +63,19 @@ public final class TerminalEmulator {
     private let screen: OpaquePointer
     private let state: OpaquePointer
 
+    /// Heap-allocated so libvterm can hold the pointer for the emulator's
+    /// lifetime (a pointer to a stored property has no stable address).
+    private let callbacksPtr = UnsafeMutablePointer<VTermScreenCallbacks>.allocate(capacity: 1)
+
+    /// Tracked from settermprop. `altScreen` gates the resize stty-push so we
+    /// don't inject into a full-screen app; `cursorVisible` lets apps hide the
+    /// caret during redraws.
+    private var altScreen = false
+    private var cursorVisible = true
+
+    /// True while a full-screen app owns the alternate screen (vi/less/top).
+    public var isAltScreen: Bool { altScreen }
+
     public init(rows: Int = 24, cols: Int = 80) {
         self.rows = rows
         self.cols = cols
@@ -70,6 +83,23 @@ public final class TerminalEmulator {
         vterm_set_utf8(vt, 1)
         screen = vterm_obtain_screen(vt)
         state = vterm_obtain_state(vt)
+
+        // Track a couple of terminal properties. The callback is non-capturing
+        // (recovers self from the user pointer) so it bridges to a C function
+        // pointer; it fires during feed() on the same thread, no locking.
+        callbacksPtr.pointee = VTermScreenCallbacks()
+        callbacksPtr.pointee.settermprop = { prop, valPtr, user in
+            guard let user, let valPtr else { return 1 }
+            let me = Unmanaged<TerminalEmulator>.fromOpaque(user).takeUnretainedValue()
+            switch prop {
+            case VTERM_PROP_ALTSCREEN:     me.altScreen = valPtr.pointee.boolean != 0
+            case VTERM_PROP_CURSORVISIBLE: me.cursorVisible = valPtr.pointee.boolean != 0
+            default: break
+            }
+            return 1
+        }
+        vterm_screen_set_callbacks(screen, callbacksPtr, Unmanaged.passUnretained(self).toOpaque())
+
         // Honor the alternate-screen buffer (DEC ?1047/?1049): full-screen apps
         // (vi, less, curses) swap to it and restore on exit instead of
         // scribbling over the main screen. NOTE: the old ?47 form is NOT
@@ -80,7 +110,20 @@ public final class TerminalEmulator {
         vterm_screen_reset(screen, 1)   // hard reset: clears + sets defaults
     }
 
-    deinit { vterm_free(vt) }
+    deinit {
+        vterm_free(vt)
+        callbacksPtr.deallocate()
+    }
+
+    /// Resize the screen grid (libvterm reflows). The caller is responsible for
+    /// telling the guest (stty) so its tty winsize agrees.
+    public func resize(rows: Int, cols: Int) {
+        guard rows > 0, cols > 0, rows != self.rows || cols != self.cols else { return }
+        self.rows = rows
+        self.cols = cols
+        vterm_set_size(vt, Int32(rows), Int32(cols))
+        vterm_screen_flush_damage(screen)
+    }
 
     // MARK: - Output side (console -> screen)
 
@@ -122,8 +165,6 @@ public final class TerminalEmulator {
         vterm_state_get_cursorpos(state, &pos)
         return Cursor(row: Int(pos.row), col: Int(pos.col), visible: cursorVisible)
     }
-
-    private var cursorVisible = true
 
     private func cell(row: Int, col: Int) -> Cell {
         var c = VTermScreenCell()

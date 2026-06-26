@@ -27,6 +27,7 @@ final class QemuEngineTests: XCTestCase {
             "-L", "/Apps/MacXServer.app/Contents/Resources/qemu-firmware",
             "-prom-env", "input-device=ttya",
             "-prom-env", "output-device=ttya",
+            "-prom-env", "ttya-mode=115200,8,n,1,-",
             "-nic", "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::2123-:23,hostfwd=tcp::2222-:22,hostfwd=tcp::2125-:2125",
             "-drive", "file=/Users/x/Library/Application Support/macXserver/solaris-2.6.qcow2,bus=0,unit=0,media=disk",
         ])

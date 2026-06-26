@@ -22,6 +22,12 @@ public final class TerminalView: NSView {
     /// socket. Set by whoever owns the view.
     public var onInput: ((Data) -> Void)?
 
+    /// Fires (debounced) when the grid is resized to fit the window, with the
+    /// new (rows, cols). The host pushes a matching `stty` so the guest's tty
+    /// winsize agrees. Suppressed while a full-screen app owns the alt screen
+    /// (we can't inject stty into vi/top without corrupting it).
+    public var onResize: ((_ rows: Int, _ cols: Int) -> Void)?
+
     private let term: TerminalEmulator
     private var grid: [[TerminalEmulator.Cell]]
     private var cursor: TerminalEmulator.Cursor
@@ -54,6 +60,12 @@ public final class TerminalView: NSView {
         let size = NSSize(width: cellW * CGFloat(emulator.cols),
                           height: cellH * CGFloat(emulator.rows))
         super.init(frame: NSRect(origin: .zero, size: size))
+
+        // Layer-backed with a black background so any margin beyond the integer
+        // grid (the window rarely divides evenly into cells) reads as terminal
+        // background rather than empty.
+        wantsLayer = true
+        layer?.backgroundColor = TerminalView.cg(TerminalEmulator.Cell.blank.bg)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -64,6 +76,54 @@ public final class TerminalView: NSView {
     // Click anywhere in the terminal to focus it, so typing goes to the guest.
     public override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+    }
+
+    // MARK: - Resize (grid tracks the window)
+
+    private var pendingResizeNotify: DispatchWorkItem?
+    /// Gates the stty auto-push. Off until the window has settled so the
+    /// initial layout reflow (80x24 -> window size) doesn't inject a stray
+    /// `stty` at the boot/login console; user-driven drags happen well after.
+    private var allowResizeNotify = false
+
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        allowResizeNotify = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.allowResizeNotify = true
+        }
+    }
+
+    public override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        reflowToFit()
+    }
+
+    /// Recompute the grid from the current bounds and the integer cell metrics,
+    /// resize the emulator if it changed, and (debounced) tell the host to push
+    /// the matching stty. Many size changes during a live drag collapse to one
+    /// stty push once dragging settles.
+    private func reflowToFit() {
+        let cols = max(1, Int(bounds.width / cellW))
+        let rows = max(1, Int(bounds.height / cellH))
+        guard rows != term.rows || cols != term.cols else { return }
+
+        term.resize(rows: rows, cols: cols)
+        grid = term.grid()
+        cursor = term.cursor()
+        needsDisplay = true
+
+        pendingResizeNotify?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.allowResizeNotify else { return }
+            // Don't inject stty into a full-screen app (vi/top own the screen);
+            // the guest re-syncs when the user returns to a shell.
+            guard !self.term.isAltScreen else { return }
+            self.onResize?(rows, cols)
+        }
+        pendingResizeNotify = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
     }
 
     private var refreshScheduled = false
