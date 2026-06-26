@@ -806,13 +806,15 @@ public final class QemuEngine: @unchecked Sendable {
             "-L", config.firmwareDir.path,                  // bundled openbios-sparc32 lives here
             "-prom-env", "input-device=ttya",               // OpenBOOT console policy: serial from boot
             "-prom-env", "output-device=ttya",
-            // Experimental console speedup: bump the line from the 9600 default
-            // to the sun zilog max (38400 -- hw/char/escc.c notes "sunzilog can
-            // only do 38400"). ttya-mode = baud,bits,parity,stop,handshake.
-            // CAVEAT: the emulated ESCC doesn't pace by baud (Tx is immediate,
-            // no FIFO), so this may not change throughput at all -- it's here to
-            // test the "OpenBoot honors 9600" theory. -prom-env is runtime-only
-            // (never persisted), so it's safe to drop if it's a no-op.
+            // Console speedup via the OpenBoot console line setting (was the
+            // 9600 default; ~4x faster at 38400). ttya-mode = baud,bits,parity,
+            // stop,handshake. The emulated ESCC doesn't pace by baud itself (Tx
+            // immediate, no FIFO in hw/char/escc.c); the guest (OpenBIOS/
+            // Solaris) paces by ospeed, so a higher rate -> faster console.
+            // 38400 is the ceiling: it's the documented sun zilog max, and
+            // 115200 tested as no-faster AND destabilized the console (clear/
+            // top broke -- the BRG can't represent it, leaving the line
+            // misconfigured). -prom-env is runtime-only (never persisted).
             "-prom-env", "ttya-mode=38400,8,n,1,-",
         ]
         if !heliosSecret.isEmpty {
