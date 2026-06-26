@@ -162,12 +162,19 @@ worst-case writer against a faithfully-FIFO-less emulated UART. The real fix
 would be patching the escc IUS emulation in the vendored qemu (deep + uncertain)
 -- deferred unless nano specifically becomes important.
 
+- **Guest console TERM/DISPLAY defaulted in the image (DONE, SPARCplug
+  `8e315d3`).** root and tvernon now get `TERM=vt100` on `/dev/console` and
+  `DISPLAY=10.0.2.2:0` on every login, no Set Up Terminal needed -- verified
+  live. In `guest/sparcstation-baseline-config.sh` section 9 (`/etc/profile` +
+  `/.tcshrc` + tvernon's `.cshrc`; telnet/ssh keep their own TERM). Set Up
+  Terminal stays for re-sync / non-default cases; Resize TTY still needed after
+  a window drag.
+
 **Still open for v1:** scrollback (`sb_pushline`); the cm alt-screen case (cm
 uses the old `?47`, unhandled by libvterm 0.3.3 -> a vendored `47->1047` patch);
 reconcile point-size/scaleFactor with `FontResolver`/`XTERM_FONT_QUALITY`;
-default the guest console TERM in the image (SPARCplug side) so the Set-Up
-button isn't needed; prune the now-unused `ConsoleSanitizer` (still feeds the
-String marker path in `ingest`).
+prune the now-unused `ConsoleSanitizer` (still feeds the String marker path in
+`ingest`).
 
 Commits this session: `306a35a` (launcher seed helios-port doc), the Ctrl+Right
 fix, `671f13b` (console-terminal scope docs), and the spike. Session-4 notes
