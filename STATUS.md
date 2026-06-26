@@ -1,3 +1,14 @@
+# Status 2026-06-26 (session 5)
+
+Trivial doc-only session. One commit (`306a35a`): launcher seed
+(`DefaultLaunchers.swift`) now makes the helios example's `port = 2125`
+explicit and warns it differs from the telnet port (2123) -- a leftover
+2123 from a converted telnet block can't reach the Helios daemon. No code
+or behavior change. Everything below (session 4) still stands; the
+ctrl-button menu regression is still the top "what's next."
+
+---
+
 # Status 2026-06-25 (end of day, session 4)
 
 ## ⚠️ NEXT SESSION FIRST -- xterm ctrl-button menu regression
