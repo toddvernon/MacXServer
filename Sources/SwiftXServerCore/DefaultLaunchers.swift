@@ -129,10 +129,14 @@ public enum DefaultLaunchers {
         # # The bundled SPARCstation over the Helios daemon. host/port point at
         # # the daemon (127.0.0.1:2125 via the qemu hostfwd), and display is the
         # # slirp view of the Mac (10.0.2.2:0). No password or keys needed.
+        # # NOTE: helios talks to port 2125, NOT the telnet port (2123). If you
+        # # convert a telnet block to helios, change `port` too (or drop it and
+        # # let the 2125 default apply) -- a leftover 2123 won't reach the daemon.
         # [host:sparc]
         # host = 127.0.0.1
         # user = root
         # transport = helios
+        # port = 2125
         # display = 10.0.2.2:0
         #
         # [sparc/xterm]
