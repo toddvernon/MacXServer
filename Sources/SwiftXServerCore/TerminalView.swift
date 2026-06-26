@@ -66,11 +66,28 @@ public final class TerminalView: NSView {
         window?.makeFirstResponder(self)
     }
 
+    private var refreshScheduled = false
+
+    /// Coalesced refresh: schedule ONE grid re-read + repaint for the next
+    /// main-queue turn, deduped. The guest/qemu deliver console output in many
+    /// small chunks (the ESCC transmits byte-by-byte), so calling the full
+    /// `refresh()` per chunk meant rebuilding the whole 1920-cell grid hundreds
+    /// of times for a single screen update -- a `top` repaint took ~5s. With
+    /// coalescing a burst of feeds collapses to one rebuild + one draw, and we
+    /// naturally render only the final state.
+    public func setNeedsRefresh() {
+        guard !refreshScheduled else { return }
+        refreshScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.refreshScheduled = false
+            self.refresh()
+        }
+    }
+
     /// Pull the emulator's new state and invalidate only the cells that
-    /// changed (plus the old/new cursor cells). The spike's original
-    /// whole-view redraw on every chunk is what made full-screen apps visibly
-    /// slow and showed the cursor repainting; diffing keeps a cursor move or a
-    /// few typed cells from triggering a full repaint.
+    /// changed (plus the old/new cursor cells). Synchronous; prefer
+    /// `setNeedsRefresh()` on the hot path so bursts coalesce.
     public func refresh() {
         let newGrid = term.grid()
         let newCursor = term.cursor()

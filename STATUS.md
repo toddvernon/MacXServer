@@ -85,11 +85,16 @@ emulator.feed/refresh` and binds `TerminalView.onInput -> engine.sendConsole`.
 Focus on show + click-to-focus. Caption now "Interactive serial console."
 **Live-verified** (Todd booted it, ran vi + cm). Follow-up fixes from that
 session:
-- **Perf:** the spike's whole-view redraw on every chunk made full-screen
-  apps visibly slow (you could watch the cursor repaint). `TerminalView` now
-  diffs old vs new grid and invalidates only changed cells (+ old/new cursor);
-  `draw` honors `needsToDraw` per cell. Cursor moves / typing repaint a couple
-  cells instead of 1920.
+- **Perf:** two layers. (1) Dirty-rect: `TerminalView` diffs old vs new grid
+  and invalidates only changed cells (+ old/new cursor); `draw` honors
+  `needsToDraw` per cell. (2) **Coalescing (the big one):** a `top` repaint
+  took ~5s because `feed` rebuilt the whole 1920-cell grid + drew on EVERY
+  console chunk, and qemu transmits byte-by-byte (the ESCC does a blocking
+  1-byte write per char -- confirmed no baud throttling in `hw/char/escc.c`,
+  it sets TXEMPTY/ALLSENT + raises the tx irq instantly). So a screen update
+  = hundreds of full rebuilds. Now `feed` is cheap (libvterm input only) and
+  `setNeedsRefresh()` collapses a burst into ONE grid rebuild + draw per
+  runloop turn. Not yet live-timed but should drop seconds -> ms.
 - **Alt-screen:** `vterm_screen_enable_altscreen` on, so vi/curses' ?1047/1049
   use the alt buffer instead of scribbling the main screen. The old ?47 form
   is unhandled by libvterm 0.3.3 (cm uses it -> still redraws main screen); a

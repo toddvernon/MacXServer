@@ -131,10 +131,12 @@ final class SparcPlugConsoleModel: ObservableObject {
     let terminal = TerminalEmulator(rows: 24, cols: 80)
     lazy var terminalView = TerminalView(emulator: terminal)
 
-    /// Feed raw console bytes into the emulator and repaint the view.
+    /// Feed raw console bytes into the emulator and schedule a coalesced
+    /// repaint. feed() is cheap (just libvterm input); setNeedsRefresh()
+    /// collapses a burst of chunks into one grid rebuild + draw.
     func feed(_ data: Data) {
         terminal.feed(data)
-        terminalView.refresh()
+        terminalView.setNeedsRefresh()
     }
 
     /// New boot. The terminal keeps its current screen; the guest repaints as
