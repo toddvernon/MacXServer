@@ -293,7 +293,14 @@ public final class FlippedXView: NSView {
         // popUpContextMenu runs its own modal tracking loop and consumes
         // the matching right-mouse-up, so we never dispatch a button-3
         // press/release pair to the client on this path.
-        if isXtermWindow, PointerConfig.current.xtermRightClickMenu {
+        //
+        // Ctrl is xterm's own menu modifier: Ctrl+Button3 = VT Fonts menu
+        // (Ctrl+Button1 = Main Options, Ctrl+Button2 = VT Options). When Ctrl
+        // is held the user wants xterm's native menu, so we must NOT swallow
+        // the button for our Copy/Paste menu — fall through and send button 3
+        // on the wire so xterm pops its own menu.
+        let ctrlHeld = event.modifierFlags.contains(.control)
+        if isXtermWindow, PointerConfig.current.xtermRightClickMenu, !ctrlHeld {
             presentXtermContextMenu(for: event)
             return
         }

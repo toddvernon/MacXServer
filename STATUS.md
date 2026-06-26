@@ -1,11 +1,47 @@
 # Status 2026-06-26 (session 5)
 
-Trivial doc-only session. One commit (`306a35a`): launcher seed
-(`DefaultLaunchers.swift`) now makes the helios example's `port = 2125`
-explicit and warns it differs from the telnet port (2123) -- a leftover
-2123 from a converted telnet block can't reach the Helios daemon. No code
-or behavior change. Everything below (session 4) still stands; the
-ctrl-button menu regression is still the top "what's next."
+## Ctrl+Right xterm menu fixed; Ctrl+Left works; menu-orphan still open
+
+- **Ctrl+Button3 (VT Fonts) restored.** Our server-side xterm right-click
+  Copy/Paste override (`FlippedXView.rightMouseDown`) was swallowing button 3
+  unconditionally, so Ctrl+Right popped OUR menu instead of xterm's native VT
+  Fonts menu. Now gated on `!ctrlHeld` -- Ctrl is xterm's own menu modifier
+  (Ctrl+Btn1 = Main Options, Ctrl+Btn2 = VT Options, Ctrl+Btn3 = VT Fonts), so
+  when Ctrl is held we fall through and send button 3 on the wire and xterm
+  pops its own menu. Plain right-click still gets the Copy/Paste menu. Builds
+  clean. NOT yet verified live.
+- **Ctrl+Left (Main Options) works today** per Todd -- the border_width
+  coordinate worry from the session-4 banner seems to have been a non-issue (or
+  is masked); leaving the banner's other half closed unless it resurfaces.
+
+### OPEN: orphaned ctrl-button menu window (needs a past-the-release capture)
+
+Todd saw a menu window orphan on screen again (same class as the older
+move-during-menu grab bug) but couldn't reproduce on demand. Dug the last
+xterm capture from session 4: `/tmp/macxcapture/2026-06-25T20-26-30-xterm.xtap`.
+The menu is window `0x440002B` (child of root, override-redirect, save-under,
+140x410 -- the Main Options / Ctrl+Btn1 Athena popup). Lifecycle:
+
+- seq 2504 Map -> 2533 Unmap   (clean)
+- seq 2538 Map -> 2567 Unmap   (clean)
+- seq 2572 Map -> **never unmapped**
+
+After 2572 it's all menu-highlight `PolyFillRectangle` + `MotionNotify
+state=Ctrl|Button1`, then seq 2630 `ButtonRelease button=1` + `EnterNotify
+mode=ungrab`, and the **capture ends right there**. No `UnmapWindow` for
+`0x440002B`. Consistent with the orphan, BUT the recording stops exactly at the
+release -- xterm's popdown (Notify -> XtPopdown -> UnmapWindow) would land
+microseconds later and we can't see it. So: strongly suggestive, not proof.
+Earlier cycles popped down cleanly, so the path works in general; something
+about that last release is different.
+
+**Next step to confirm:** reproduce with capture still running, hold past the
+release. If `0x440002B` is still mapped ~100ms after the ButtonRelease it's a
+real orphan, and the prime suspect is how we deliver the grab-release
+Enter/Leave (mode=ungrab) that xterm's SimpleMenu relies on to pop down.
+
+Commits this session: `306a35a` (launcher seed helios-port doc), plus the
+Ctrl+Right fix above. Session-4 notes below still stand.
 
 ---
 
