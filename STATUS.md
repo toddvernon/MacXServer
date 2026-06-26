@@ -40,8 +40,25 @@ release. If `0x440002B` is still mapped ~100ms after the ButtonRelease it's a
 real orphan, and the prime suspect is how we deliver the grab-release
 Enter/Leave (mode=ungrab) that xterm's SimpleMenu relies on to pop down.
 
-Commits this session: `306a35a` (launcher seed helios-port doc), plus the
-Ctrl+Right fix above. Session-4 notes below still stand.
+### NEW: interactive console terminal scoped (no code yet)
+
+Now that VM control no longer relies on the serial console (Helios drives the
+guest, QMP drives the VM), scoped turning the console teletype into a real
+terminal so a user can run `vi`/`top`/`format` during recovery -- the
+guided-repair story (Helios C6). Decision: **vendor libvterm (Vim/Neovim's
+`:terminal` core, MIT) built from source + keep our Core Text cell renderer**;
+not SwiftTerm (whole NSView + its own rendering), not a port of xterm
+(`charproc.c` is welded to Xt/Xaw, unliftable). vt100 / fixed 80x24 /
+scrollback / 16-color for v1. Zero external deps -- one vendored source we own
+(same posture as the bundled qemu). Full v1 scope in **`CONSOLE_TERMINAL.md`**;
+the decision + rejected alternatives in **`DECISIONS.md` (2026-06-26)**. When
+building starts, the honest first move is a spike on the `TerminalView` grid
+renderer (the bulk + the one real integration unknown); vendoring libvterm and
+the wrapper are low-risk by comparison.
+
+Commits this session: `306a35a` (launcher seed helios-port doc), the Ctrl+Right
+fix, and `671f13b` (console-terminal scope docs). Session-4 notes below still
+stand.
 
 ---
 
