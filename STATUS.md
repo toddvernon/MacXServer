@@ -9,7 +9,7 @@
   (Ctrl+Btn1 = Main Options, Ctrl+Btn2 = VT Options, Ctrl+Btn3 = VT Fonts), so
   when Ctrl is held we fall through and send button 3 on the wire and xterm
   pops its own menu. Plain right-click still gets the Copy/Paste menu. Builds
-  clean. NOT yet verified live.
+  clean and **verified live** -- Ctrl+Right brings up VT Fonts as expected.
 - **Ctrl+Left (Main Options) works today** per Todd -- the border_width
   coordinate worry from the session-4 banner seems to have been a non-issue (or
   is masked); leaving the banner's other half closed unless it resurfaces.
