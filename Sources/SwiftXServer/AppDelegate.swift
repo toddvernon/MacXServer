@@ -33,6 +33,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// then), gated on `sparcReady` -- NOT mere `.running`, which is true the
     /// instant the qemu process launches, long before the daemon is up.
     private var adminMenuItem: NSMenuItem?
+    /// The SPARCstation submenu's leaf items. We turn off auto-enable for that
+    /// submenu and drive these directly from the engine callbacks, so dim/undim
+    /// happens live -- including while the menu is held open -- instead of only
+    /// at menu-open time the way validateMenuItem works. See refreshSparcMenu().
+    private var startMenuItem: NSMenuItem?
+    private var shutDownMenuItem: NSMenuItem?
+    private var forceQuitMenuItem: NSMenuItem?
+    private var showConsoleMenuItem: NSMenuItem?
+    private var backUpMenuItem: NSMenuItem?
     /// True once the guest answered `hello` this run (the authoritative
     /// daemon-is-up signal). Set in onReady, cleared the moment state leaves
     /// `.running` (so shutdown dims Admin immediately, and a fresh boot starts
@@ -213,7 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // .running too, but shutdown/stop don't) means the daemon isn't
             // answering -- drop readiness so Admin dims. onReady re-enables it.
             if state != .running { self?.sparcReady = false }
-            self?.adminMenuItem?.isEnabled = (self?.sparcReady ?? false)
+            self?.refreshSparcMenu()
         }
         engine.onCleanHalt { [weak self] in
             self?.sparcConsole?.markCleanHalt()
@@ -223,10 +232,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         engine.onReady { [weak self] in
             self?.sparcConsole?.markReady()
-            // Daemon answered -- the guest is fully up. Unlock Admin now (not
-            // at process launch).
+            // Daemon answered -- the guest is fully up. Unlock graceful Shut Down
+            // and Admin now (not at process launch).
             self?.sparcReady = true
-            self?.adminMenuItem?.isEnabled = true
+            self?.refreshSparcMenu()
         }
         engine.onBootStalled { [weak self] reason in
             // Wedged guest -- make sure the user sees it and can Force Quit.
@@ -456,27 +465,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         // SPARCstation menu -- the bundled QEMU SS-5. Start handles the
         // missing-image case itself (it presents the install flow), so there's
-        // no separate Install item. Start is enabled whenever not running;
-        // Stop when running.
+        // no separate Install item.
+        //
+        // Two stop verbs, deliberately gated differently:
+        //  - "Shut Down" is the graceful halt (init 5 via the Helios daemon). It
+        //    only works once the guest is fully up, so it gates on `sparcReady`,
+        //    NOT mere `.running` (which is true the instant qemu launches, while
+        //    Solaris is still booting and the daemon isn't listening yet).
+        //  - "Force Quit" is the hard power-off (QMP quit / SIGTERM). It's always
+        //    available while running, so there's a way out during boot or a wedge.
         let sparcMenuItem = NSMenuItem()
         let sparcMenu = NSMenu(title: "SPARCstation")
+        // Drive these items' enablement ourselves (see the leaf-item properties
+        // and refreshSparcMenu): auto-enable only revalidates at menu-open, which
+        // leaves dim/undim stale if the guest's state changes while the menu is
+        // held open. The Config/Admin submenus keep their own auto-enable.
+        sparcMenu.autoenablesItems = false
         let start = NSMenuItem(title: "Start SPARCstation",
                                action: #selector(startSparcStation(_:)), keyEquivalent: "")
         start.target = self
         sparcMenu.addItem(start)
+        startMenuItem = start
         let shutDown = NSMenuItem(title: "Shut Down SPARCstation",
                                   action: #selector(shutDownSparcStation(_:)), keyEquivalent: "")
         shutDown.target = self
         sparcMenu.addItem(shutDown)
+        shutDownMenuItem = shutDown
+        let forceQuit = NSMenuItem(title: "Force Quit SPARCstation\u{2026}",
+                                   action: #selector(forceQuitSparcStation(_:)), keyEquivalent: "")
+        forceQuit.target = self
+        sparcMenu.addItem(forceQuit)
+        forceQuitMenuItem = forceQuit
         sparcMenu.addItem(.separator())
         let showConsole = NSMenuItem(title: "Show Console",
                                      action: #selector(showSparcConsole(_:)), keyEquivalent: "")
         showConsole.target = self
         sparcMenu.addItem(showConsole)
+        showConsoleMenuItem = showConsole
         let backup = NSMenuItem(title: "Back Up Disk Image\u{2026}",
                                 action: #selector(backUpDiskImage(_:)), keyEquivalent: "")
         backup.target = self
         sparcMenu.addItem(backup)
+        backUpMenuItem = backup
         sparcMenu.addItem(.separator())
         // Config submenu -- the bundled-SPARCstation setup that used to be the
         // Preferences "SPARCstation" tab, one window per task. Available
@@ -503,11 +533,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         dns.target = self
         adminMenu.addItem(dns)
         adminItem.submenu = adminMenu
-        adminItem.isEnabled = sparcReady   // false until the daemon answers
         self.adminMenuItem = adminItem
         sparcMenu.addItem(adminItem)
         sparcMenuItem.submenu = sparcMenu
         main.addItem(sparcMenuItem)
+        refreshSparcMenu()   // set the initial enabled states
 
         // Window menu -- minimise / close are handy when an X window is up.
         let windowMenuItem = NSMenuItem()
@@ -898,7 +928,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             )
             console.setState(qemuEngine?.state ?? .stopped)
             sparcConsole = console
+            refreshSparcMenu()   // "Show Console" can undim now
         }
+    }
+
+    /// Recompute the SPARCstation submenu's enabled states from the live engine
+    /// state + daemon readiness. Called from the engine callbacks (onStateChange,
+    /// onReady) and when the console is created, so dim/undim tracks reality even
+    /// while the menu is held open -- the submenu has auto-enable off, so these
+    /// assignments are authoritative and there's no validateMenuItem for them.
+    @MainActor
+    private func refreshSparcMenu() {
+        let state = qemuEngine?.state ?? .notInstalled
+        startMenuItem?.isEnabled    = (state == .stopped || state == .notInstalled)
+        // Graceful halt needs the daemon up; greyed through boot. Force Quit
+        // (hard power-off) covers stopping during boot or a wedge.
+        shutDownMenuItem?.isEnabled  = (state == .running && sparcReady)
+        forceQuitMenuItem?.isEnabled = (state == .running || state == .shuttingDown)
+        showConsoleMenuItem?.isEnabled = (sparcConsole != nil)
+        backUpMenuItem?.isEnabled    = (state == .stopped)
+        adminMenuItem?.isEnabled     = sparcReady
     }
 
     @MainActor
@@ -921,17 +970,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @MainActor
+    @objc private func forceQuitSparcStation(_ sender: Any?) {
+        confirmForceQuit()
+    }
+
+    @MainActor
     private func confirmForceQuit() {
         let alert = NSAlert()
         alert.messageText = "Force quit the SPARCstation?"
         alert.informativeText = "This pulls the power without a clean shutdown, like yanking the "
-            + "cord. Solaris will run fsck on the next boot. Use this only if a graceful shut down "
-            + "won't complete."
+            + "cord. Solaris will run fsck on the next boot.\n\nIf it's wedged mid-boot, try the "
+            + "console first -- it's a real terminal now, so you can often recover by hand at the "
+            + "ok prompt or in single-user. Force Quit only if you can't."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Force Quit")
+        alert.addButton(withTitle: "Show Console")
         alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn {
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
             qemuEngine?.kill()
+        case .alertSecondButtonReturn:
+            ensureSparcConsole()
+            sparcConsole?.showWindow()
+        default:
+            break
         }
     }
 
@@ -1411,14 +1473,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// Enable the SPARCstation items by engine state. Start is available
     /// whenever not running (it triggers the install flow if no image yet);
-    /// Stop only while running. Other items fall through to enabled.
+    /// Most SPARCstation items are driven live by refreshSparcMenu() (auto-enable
+    /// off), so they're intentionally absent here. These remaining items live in
+    /// auto-enabled menus and still validate the normal way.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        let state = qemuEngine?.state ?? .notInstalled
         switch item.action {
-        case #selector(startSparcStation(_:)):    return state == .stopped || state == .notInstalled
-        case #selector(shutDownSparcStation(_:)): return state == .running
-        case #selector(showSparcConsole(_:)):     return sparcConsole != nil
-        case #selector(backUpDiskImage(_:)):      return state == .stopped
         case #selector(openDnsAdmin(_:)):         return sparcReady
         case #selector(openFileBrowser(_:)):
             // Helios filebrowser keys gate on the bundled guest being up. A

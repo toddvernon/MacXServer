@@ -1,10 +1,56 @@
 # Status 2026-06-27
 
-## Headline: in-app Acknowledgements / Open Source Licenses screen + GPLv2 compliance
+## Headline: Acknowledgements screen + GPLv2 compliance, then SPARCstation Start/Stop menu fixes
 
-Release-list burn-down. Built the screen that credits every package, license,
-and reference MacXServer ships or was built on, and settled the GPLv2 source
-obligation for the bundled QEMU. One commit, pushed: `c47cca4`.
+Release-list burn-down. Built the in-app screen that credits every package,
+license, and reference MacXServer ships or was built on; settled the GPLv2
+source obligation for the bundled QEMU; then fixed the SPARCstation menu's
+Start/Stop gating so "Shut Down" can't dead-end during boot and dim/undim
+tracks live. All pushed.
+
+## SPARCstation Start/Stop/Force-Quit menu (today, second half)
+
+The bug Todd caught: "Shut Down SPARCstation" was selectable the instant qemu
+launched (state goes `.running` immediately), but graceful shutdown is
+daemon-only and the Helios daemon isn't up until ~end of boot -- so clicking it
+mid-boot dead-ended into a "daemon unreachable, use Force Quit" no-op. Safe (no
+corruption) but misleading. Fixed:
+
+- **Shut Down** now gates on `state == .running && sparcReady` -- greyed through
+  the whole boot, undims only when the daemon actually answers (same signal
+  Admin/DNS use).
+- **Force Quit SPARCstation...** promoted to a first-class menu item, enabled for
+  `.running || .shuttingDown`, so there's always a stop path during boot or a
+  wedge. Its confirm is now 3-button (Force Quit / Show Console / Cancel) and
+  the text points at the console first -- "it's a real terminal now, recover by
+  hand at the ok prompt or single-user."
+- **Live dim/undim while the menu is open:** the SPARCstation submenu now has
+  `autoenablesItems = false`; `refreshSparcMenu()` drives each leaf item's
+  `isEnabled` directly from the engine callbacks (`onStateChange`, `onReady`,
+  console-created). validateMenuItem no longer governs those items. Callbacks
+  fire on `DispatchQueue.main` (QemuEngine emitState/onReady) and main-queue
+  blocks run during menu tracking, so Shut Down undims under the cursor the
+  moment boot completes. Todd verified live ("looks good").
+
+## What's working (Acknowledgements, first half)
+
+- **Acknowledgements screen.** `MacXServer -> Acknowledgements...`. Master/detail
+  in an NSPanel via HSplitView (NOT NavigationSplitView -- it collapses the
+  sidebar in a bare panel). Left list groups four ways; right pane shows a
+  plain-English "how we use it" note, an upstream link, and the **full verbatim
+  license text** embedded. Sidebar rows show a compact derived license tag; full
+  label in the detail header.
+- **License texts generated, not hand-typed.** `Tools/regen_licenses.py` reads
+  canonical license files from this repo + the sibling SPARCplug checkout and
+  emits `AcknowledgementsLicenseTexts.swift` (strips form-feed/control chars the
+  GNU files carry).
+- **GPLv2 corresponding-source: self-host (section 3a).** `GPL_SOURCE.md` is the
+  canonical statement; screen + CREDITS.md point at it.
+  `Tools/make-gpl-source-bundle.sh` assembles the complete corresponding source
+  (unmodified `qemu-9.2.4.tar.xz` SHA-verified against `qemu.lock` + build
+  scripts) into a ~129MB tarball ready to attach to a release. Tested.
+- **CREDITS.md** refreshed to match reality.
+- Both builds green throughout: `swift build` and full `xcodebuild`.
 
 ## What's working
 
@@ -64,6 +110,9 @@ obligation for the bundled QEMU. One commit, pushed: `c47cca4`.
 ## What's committed (recent; all pushed)
 
 - `~/dev/X`:
+  - (this session, final commit) SPARCstation Start/Shut Down/Force Quit menu
+    gating + live `refreshSparcMenu()` enablement + STATUS roll.
+  - `a1ed165` Acknowledgements: compact license tag in the sidebar rows.
   - `c47cca4` Acknowledgements screen + GPL_SOURCE.md + generator + bundle
     script + CREDITS refresh.
   - (session 5) `dbeac10`/`839e42c`/... interactive console terminal work.
