@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem?
     private var prefsController: PreferencesWindowController?
     private var resourcesController: ResourcesWindowController?
+    private var acknowledgementsController: AcknowledgementsWindowController?
     private var fontMappingsController: FontMappingsWindowController?
     private var dnsAdminController: DnsAdminWindowController?
     /// Helios file-browser windows, one per filebrowser launcher entry, keyed by
@@ -350,6 +351,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         appMenu.addItem(NSMenuItem(title: "About MacXServer",
                                    action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                                    keyEquivalent: ""))
+        let acknowledgements = NSMenuItem(title: "Acknowledgements\u{2026}",
+                                          action: #selector(openAcknowledgements(_:)),
+                                          keyEquivalent: "")
+        acknowledgements.target = self
+        appMenu.addItem(acknowledgements)
         appMenu.addItem(.separator())
         let prefs = NSMenuItem(title: "Preferences\u{2026}",
                                action: #selector(openPreferences(_:)),
@@ -542,6 +548,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             resourcesController = ResourcesWindowController()
         }
         resourcesController?.showWindow()
+    }
+
+    @MainActor
+    @objc private func openAcknowledgements(_ sender: Any?) {
+        if acknowledgementsController == nil {
+            acknowledgementsController = AcknowledgementsWindowController()
+        }
+        acknowledgementsController?.showWindow()
     }
 
     /// Shared Config model, created on first use and seeded with the current
