@@ -51,7 +51,8 @@ struct Acknowledgement: Identifiable {
     let name: String
     let version: String?
     let kind: Kind
-    /// Short license label for the list row, e.g. "MIT", "GPL-2.0-or-later".
+    /// Full license label for the detail header, e.g.
+    /// "BSD-3-Clause (also offered under GPL-2.0)".
     let license: String
     /// Upstream project or repository page.
     let link: String
@@ -62,6 +63,18 @@ struct Acknowledgement: Identifiable {
     let licenseText: String
 
     var url: URL? { URL(string: link) }
+
+    /// Compact license tag for the narrow sidebar row. The full `license`
+    /// string still shows in the detail header. Derived so there's nothing
+    /// extra to keep in sync: drop any parenthetical, and collapse the
+    /// "Reference only ..." labels to a single word.
+    var licenseTag: String {
+        if license.hasPrefix("Reference") { return "Reference" }
+        if let paren = license.firstIndex(of: "(") {
+            return license[..<paren].trimmingCharacters(in: .whitespaces)
+        }
+        return license
+    }
 }
 
 extension Acknowledgement {

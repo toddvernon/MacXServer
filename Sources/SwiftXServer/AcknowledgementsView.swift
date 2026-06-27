@@ -41,14 +41,16 @@ struct AcknowledgementsView: View {
                         ForEach(entries) { item in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(item.name)
+                                    .lineLimit(1)
                                 HStack(spacing: 6) {
                                     if let version = item.version {
                                         Text(version)
                                     }
-                                    Text(item.license)
+                                    Text(item.licenseTag)
                                 }
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
                             }
                             .tag(item.id)
                         }

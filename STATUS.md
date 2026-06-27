@@ -16,7 +16,9 @@ obligation for the bundled QEMU. One commit, pushed: `c47cca4`.
   embedded (works offline; satisfies the MIT/GPL "include this notice" duty).
   13 entries: libvterm, QEMU + its deps (libslirp, SoftFloat, keycodemapdb,
   OpenBIOS, GLib), the X11R6 code we transcribed, and the references we studied
-  (XQuartz, X11 spec/ICCCM, Motif/CDE).
+  (XQuartz, X11 spec/ICCCM, Motif/CDE). Sidebar rows show a compact, derived
+  license tag (parenthetical dropped, "Reference only..." -> "Reference",
+  one line each); the full label stays in the detail header.
 - **License texts are generated, not hand-typed.** `Tools/regen_licenses.py`
   reads the canonical license files from this repo and the sibling SPARCplug
   checkout and emits `AcknowledgementsLicenseTexts.swift` (64KB, 8 license
