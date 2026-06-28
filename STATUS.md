@@ -1,70 +1,67 @@
 # Status 2026-06-28
 
-## Headline: per-image QEMU host-port blocks (multi-OS groundwork) + SPARCplug code/resource split
+## Headline: NetBSD 9.2/sparc is the third SPARCplug guest (built + verified)
 
-Today was mostly SPARCplug-side, laying groundwork to eventually run three guest
-OSes at once (Solaris 2.6, SunOS 4.1.4, NetBSD). The macXserver-repo deliverable
-is `ImagePorts`: per-image telnet/ssh/helios host-port blocks so concurrent
-images don't collide on Mac ports. The rest of the day was reorg in the sibling
-`~/dev/SPARCplug` repo + the Dropbox resources dir.
+Two sessions today. Earlier: macXserver `ImagePorts` (per-image QEMU host-port
+blocks, committed f56c489). This session was all SPARCplug-side -- stood up a
+NetBSD guest to join Solaris 2.6 and SunOS 4.1.4. macXserver (`~/dev/X`) itself
+has no code changes today; this is a STATUS roll plus the SPARCplug work in the
+sibling repo.
 
-## What landed in ~/dev/X (committed + pushed: f56c489)
+## NetBSD guest (sibling repo ~/dev/SPARCplug, commit f863ad0)
 
-- **ImagePorts.** Per-image host-port blocks replace the hardcoded
-  2123/2222/2125 hostfwd. `QemuEngineConfig.ports` selects the block; the default
-  is the Solaris 2.6 block, so the bundled image is byte-for-byte unchanged on
-  the wire. Reserved blocks: SunOS 4.1.4 = 2133/2232/2135, NetBSD =
-  2143/2242/2145. A test pins the per-image hostfwd output and asserts the three
-  blocks don't overlap. Scheme documented in `SPARCSTATION_PLUGIN.md`. `swift
-  build` + the buildArguments tests are green.
-- macXserver still runs **one** image at a time. ImagePorts is only the
-  groundwork; the concurrent-three-images runtime (multiple `QemuEngine`
-  instances + per-image windows/console + lifecycle) is NOT built yet -- that's
-  the next big piece (see What's next).
+- **NetBSD 9.2/sparc installed and booting from disk.** Picked 9.2 because it's
+  the last sparc release with a bootable ISO (9.3+ are miniroot/netboot only,
+  which is miserable under qemu's NFS-less slirp). Same 9.x kernel gen / sun4m
+  support as 9.4, far easier install.
+- **The one gotcha worth remembering:** boot the install CD with `-cdrom ISO
+  -boot d`. That hits OpenBIOS's CD-boot routine, which reads the Sun-disklabel
+  boot blocks correctly. Booting the bare `sd@N` device path by hand fails
+  ("Not a bootable image"), and there's no `cdrom` devalias. Full recipe in
+  `~/dev/SPARCplug/docs/netbsd-install.md`.
+- **Disk:** 40 GiB qcow2 (matches Solaris ceiling; sparse, ~1.25 GB real).
+  Single root + 1 GB swap on purpose -- no separate /usr, so adding packages
+  can't run a small /usr out of space.
+- **Sets:** base, comp (dev tools), man, kernel, and the X11 *client* sets
+  (xterm/xclock/libs/fonts in /usr/X11R7/bin). No Xorg server -- macXserver is
+  the display.
+- **Access:** root has NO password (cleared via /etc/master.passwd +
+  pwd_mkdb; passwd refuses empty even as root). User `tvernon` / `kemosabe`
+  (wheel, ksh). `ssh -p 2242 tvernon@localhost` then `su`. SSH verified end to
+  end. NetBSD host-port block: telnet 2143 / ssh 2242 / helios 2145.
+- **Run it:** `~/dev/SPARCplug/emu/netbsd-full.sh` (disk-only boot, mirrors the
+  other two). Image at `~/Dropbox/dev/SPARCplug/images/netbsd/netbsd-boot.qcow2`,
+  ISO at `~/Dropbox/dev/SPARCplug/iso/NetBSD-9.2-sparc.iso` (both Dropbox, not
+  git). Quit the VM with Ctrl-A X; clean shutdown is `halt -p`.
 
-## SPARCplug work (sibling repo ~/dev/SPARCplug + Dropbox resources -- context, not this repo)
+## What's working
 
-- **SunOS 4.1.4 ("sunos") networking squared away.** Renamed `ss2`->`sunos`,
-  `le0` on slirp (10.0.2.15/24, gw 10.0.2.2), DNS 192.168.7.3 reachable via NAT,
-  NFS left off; reboot-verified. Solaris box also renamed `SPARCplug`->`solaris`
-  (done live over Helios). Two OSes ran concurrently with no port collision --
-  ImagePorts proven live.
-- **Image reorg.** `~/Dropbox/dev/SPARCplug/images/<os>/<os>-boot.qcow2`
-  (solaris26 / sunos414 / netbsd). The 4.1.4 stack was flattened from its
-  overlay+raw chain into a self-contained qcow2 (no more Desktop dependency).
-  ~14G of unused images parked in `_archive/` (nothing deleted; purge later).
-- **Code/resource split** (commit 9e4733f). Run scripts -> `emu/`, build/process
-  docs -> `docs/`; the Dropbox dir now holds images/iso/tftproot/_archive only.
-  Scripts run images in place with an `lsof`-by-inode guard (qemu's own locking
-  is a no-op on macOS, so two writers would corrupt a qcow2). Images found via
-  `IMAGES_DIR` (defaults to the Dropbox images dir).
-- **macXserver Solaris image pref repointed** to
-  `images/solaris26/solaris26-boot.qcow2` (it's a UserDefaults key,
-  `sparcplug.diskImagePath`); boot-tested.
+- All three SPARCplug guests installed: Solaris 2.6, SunOS 4.1.4, NetBSD 9.2.
+- NetBSD boots from disk, networks (le0 10.0.2.15 via slirp), ssh in as tvernon.
 
-## What's next
+## What's open / next
 
-- **#6: three per-OS launchers + concurrent runtime (the big one).** Let
-  macXserver run Solaris 2.6 + SunOS 4.1.4 + NetBSD simultaneously: multiple
-  `QemuEngine` instances, per-image windows/console, lifecycle, and a launcher
-  per OS. ImagePorts already removes the host-port-collision blocker.
-- NetBSD/sparc image doesn't exist yet (`images/netbsd/` is empty).
-- Purge `~/Dropbox/dev/SPARCplug/_archive` (~14G) once satisfied.
-- **Carryover from 2026-06-27 (still open):**
+- **tcsh on NetBSD (Todd wants it as login shell).** Not in base (base = csh +
+  ksh), and 32-bit sparc has NO official binary packages (only sparc64 does), so
+  pkg_add/pkgin won't work. Must build from pkgsrc source:
+  `cd /usr; ftp .../stable/pkgsrc.tar.gz; tar xzf; cd /usr/pkgsrc/shells/tcsh;
+  make install clean; chsh -s /usr/pkg/bin/tcsh tvernon`. comp set is installed
+  so the base toolchain bootstraps pkgsrc. Not done yet.
+- pkgsrc tree not fetched yet -- once it's there, that's the path for any future
+  package on this box.
+- Carryover from earlier today (macXserver, still open):
+  - **#6: three per-OS launchers + concurrent runtime** -- let macXserver run
+    Solaris + SunOS + NetBSD at once (multiple QemuEngine instances, per-image
+    windows/console/lifecycle, a launcher per OS). ImagePorts already removed the
+    host-port-collision blocker; NetBSD now exists as the third image.
   - MUST DO before any public bundled-QEMU release: run
-    `Tools/make-gpl-source-bundle.sh` and attach the tarball to the MacXServer
-    GitHub release (GPL_SOURCE.md / the Acknowledgements screen promise a bundle
-    that isn't live until it's posted).
-  - Console terminal: scrollback (`sb_pushline`); reconcile terminal
-    point-size/scaleFactor with FontResolver/XTERM_FONT_QUALITY; prune the
-    unused ConsoleSanitizer.
-  - xterm ctrl-button menu-orphan -- needs a capture past the ButtonRelease.
+    `Tools/make-gpl-source-bundle.sh` and attach the tarball to the GitHub
+    release (the Acknowledgements screen promises a bundle that isn't live yet).
+  - Console terminal scrollback; xterm ctrl-button menu-orphan capture.
 
 ## Pointers
 
-- ImagePorts: `Sources/SwiftXServerCore/QemuEngine.swift` (struct +
-  `QemuEngineConfig.ports` + `buildArguments`); test
-  `testBuildArgumentsPerImagePorts` in `Tests/SwiftXServerCoreTests/QemuEngineTests.swift`;
-  port-block table in `SPARCSTATION_PLUGIN.md`.
-- SPARCplug run scripts: `~/dev/SPARCplug/emu/{solaris-full,sunos414-full}.sh`;
-  docs in `~/dev/SPARCplug/docs/`; images in `~/Dropbox/dev/SPARCplug/images/`.
+- NetBSD run script: `~/dev/SPARCplug/emu/netbsd-full.sh`; recipe
+  `~/dev/SPARCplug/docs/netbsd-install.md`; memory
+  `project_sparcplug_netbsd_guest.md`.
+- Port-block table: `~/dev/SPARCplug/emu/README.md` and `SPARCSTATION_PLUGIN.md`.
