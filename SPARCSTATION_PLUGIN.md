@@ -248,12 +248,37 @@ Flag-by-flag:
   OpenBOOT reads the default `input-device=keyboard, output-device=screen`
   and goes looking for the framebuffer we just disabled. With them,
   console policy is serial-only before the first byte prints.
-- `-nic user,model=lance,mac=...,hostfwd=tcp::2123-:23,hostfwd=tcp::2222-:22`
+- `-nic user,model=lance,mac=...,hostfwd=tcp::2123-:23,hostfwd=tcp::2222-:22,hostfwd=tcp::2125-:2125`
   — slirp NAT with an emulated AMD lance NIC. `model=lance` matches
   Solaris's `le0` driver. The MAC is fixed for stable guest identity
-  across reboots. The two `hostfwd` clauses open Mac ports 2123 and
-  2222, forwarding to guest ports 23 (telnet) and 22 (SSH, for future
-  use if OpenSSH ever joins the disk image).
+  across reboots. The `hostfwd` clauses open the image's host-port block,
+  forwarding to guest ports 23 (telnet), 22 (SSH), and 2125 (the Helios
+  daemon).
+
+#### Host port blocks (per OS)
+
+Each guest OS gets its own non-overlapping block of Mac host ports, so
+several images can run at once without fighting over the same forwards.
+The blocks are defined in code as `ImagePorts` (`QemuEngine.swift`) and
+selected per image via `QemuEngineConfig.ports`:
+
+| OS          | telnet | ssh  | helios |
+|-------------|:------:|:----:|:------:|
+| Solaris 2.6 |  2123  | 2222 |  2125  |
+| SunOS 4.1.4 |  2133  | 2232 |  2135  |
+| NetBSD      |  2143  | 2242 |  2145  |
+
+Solaris 2.6 keeps the original numbers so existing launcher configs and
+the Helios path are unchanged. The `helios` slot is reserved in every
+block even though the daemon only runs on Solaris 2.6 today.
+
+The homebrew dev scripts in the SPARCplug repo use these *same* per-OS
+blocks (`fullemu.sh` = Solaris block, `414emu.sh` = 4.1.4 block). A given
+OS never runs under homebrew qemu *and* macXserver at the same time, so
+sharing one block per OS is safe; the isolation that matters is between
+*different* OSes, which the distinct blocks provide. As of 2026-06-28
+macXserver still runs one image at a time — per-image ports are wired so
+the concurrent-three-images runtime can land later without a port redesign.
 - `-drive file=SUN40G.qcow2,bus=0,unit=0,media=disk` — SCSI disk image
   with Solaris 2.6 pre-installed. The `if=scsi` is implicit on SPARC;
   SS-5's only disk interface is SCSI.

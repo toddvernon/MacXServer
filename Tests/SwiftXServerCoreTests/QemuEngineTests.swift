@@ -33,6 +33,22 @@ final class QemuEngineTests: XCTestCase {
         ])
     }
 
+    /// A non-default port block (e.g. SunOS 4.1.4) drives the hostfwd rules, so
+    /// a second image can run alongside the bundled Solaris one without fighting
+    /// over host ports. Default stays the Solaris block (pinned above).
+    func testBuildArgumentsPerImagePorts() {
+        var c = cfg()
+        c.ports = .sunos414
+        let nic = QemuEngine.buildArguments(config: c)[
+            QemuEngine.buildArguments(config: c).firstIndex(of: "-nic")! + 1]
+        XCTAssertEqual(nic,
+            "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::2133-:23,hostfwd=tcp::2232-:22,hostfwd=tcp::2135-:2125")
+        // The three OS blocks must not overlap, or concurrent images collide.
+        let all = [ImagePorts.solaris26, .sunos414, .netbsd]
+            .flatMap { [$0.telnet, $0.ssh, $0.helios] }
+        XCTAssertEqual(Set(all).count, all.count, "ImagePorts blocks overlap")
+    }
+
     /// A configured shared folder appends `tftp=<dir>` to the `-nic` value
     /// and changes nothing else about the argv shape.
     func testBuildArgumentsWithSharedFolder() {

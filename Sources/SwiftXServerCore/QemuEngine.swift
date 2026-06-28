@@ -21,6 +21,34 @@ public enum QemuEngineError: Error, LocalizedError, Sendable {
 /// app bundle (the shipped layout) or from a dev override pointing at
 /// SPARCplug's `dist/` so the controller is testable before the bundle
 /// wiring lands. See `defaultConfig()`.
+/// Mac-side host ports forwarded into one guest OS image: `telnet` (-> guest
+/// 23), `ssh` (-> guest 22), and `helios` (-> the guest Helios daemon on 2125).
+/// Each OS we can run gets its own non-overlapping block so several images can
+/// run at once without fighting over host ports. The homebrew dev scripts in
+/// the SPARCplug repo use these same per-OS blocks: a given OS never runs under
+/// homebrew qemu and macXserver simultaneously, so sharing one block per OS is
+/// safe, while three different OSes get three different blocks. The `helios`
+/// slot is reserved in every block even where no daemon runs there yet.
+public struct ImagePorts: Sendable, Equatable {
+    public var telnet: UInt16
+    public var ssh: UInt16
+    public var helios: UInt16
+
+    public init(telnet: UInt16, ssh: UInt16, helios: UInt16) {
+        self.telnet = telnet
+        self.ssh = ssh
+        self.helios = helios
+    }
+
+    /// Solaris 2.6 -- the bundled image. Unchanged from the original hardcoded
+    /// values so existing launcher configs and the Helios path keep working.
+    public static let solaris26 = ImagePorts(telnet: 2123, ssh: 2222, helios: 2125)
+    /// SunOS 4.1.4 -- the grafted sun4m disk (dev-only for now).
+    public static let sunos414  = ImagePorts(telnet: 2133, ssh: 2232, helios: 2135)
+    /// NetBSD/sparc -- planned.
+    public static let netbsd    = ImagePorts(telnet: 2143, ssh: 2242, helios: 2145)
+}
+
 public struct QemuEngineConfig: Sendable, Equatable {
     /// The qemu-system-sparc helper. Its bundled dylibs are resolved by the
     /// `@executable_path/lib/` rpath baked in at packaging time, so they must
@@ -34,6 +62,10 @@ public struct QemuEngineConfig: Sendable, Equatable {
     /// product (Track C installs it there); overridable for dev.
     public var diskImage: URL
     public var memoryMB: Int
+    /// Host ports forwarded into this image's guest (telnet / ssh / helios).
+    /// Defaults to the Solaris 2.6 block; other OSes pass their own block so
+    /// multiple images can run without colliding. See `ImagePorts`.
+    public var ports: ImagePorts
     /// When non-nil, slirp serves this directory over its built-in TFTP server
     /// on the guest gateway (10.0.2.2). nil = no TFTP (the `-nic` line omits
     /// `tftp=`). The caller is responsible for the directory existing; slirp
@@ -41,11 +73,12 @@ public struct QemuEngineConfig: Sendable, Equatable {
     public var tftpDirectory: String?
 
     public init(helper: URL, firmwareDir: URL, diskImage: URL, memoryMB: Int = 128,
-                tftpDirectory: String? = nil) {
+                ports: ImagePorts = .solaris26, tftpDirectory: String? = nil) {
         self.helper = helper
         self.firmwareDir = firmwareDir
         self.diskImage = diskImage
         self.memoryMB = memoryMB
+        self.ports = ports
         self.tftpDirectory = tftpDirectory
     }
 }
@@ -796,13 +829,16 @@ public final class QemuEngine: @unchecked Sendable {
     public static func buildArguments(config: QemuEngineConfig, heliosSecret: String = "",
                                       qmpSocketPath: String = "",
                                       consoleSocketPath: String = "") -> [String] {
-        // slirp NAT, AMD lance NIC (Solaris le0). hostfwd opens Mac ports
-        // 2123/2222/2125 -> guest 23/22/2125 so the launcher can telnet/ssh in
-        // and the Mac reaches the Helios daemon directly (no ssh tunnel). Fixed
-        // MAC for stable guest identity across reboots. When a shared folder is
-        // configured, append slirp's built-in TFTP server pointed at it; the
-        // guest pulls files with `tftp 10.0.2.2`.
-        var nic = "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::\(telnetHostPort)-:23,hostfwd=tcp::2222-:22,hostfwd=tcp::\(heliosHostPort)-:2125"
+        // slirp NAT, AMD lance NIC (Solaris le0). hostfwd opens this image's
+        // host port block -> guest 23/22/2125 so the launcher can telnet/ssh in
+        // and the Mac reaches the Helios daemon directly (no ssh tunnel). The
+        // block comes from `config.ports` (Solaris 2.6 = 2123/2222/2125 by
+        // default; other OSes pass their own block so several images can run at
+        // once). Fixed MAC for stable guest identity across reboots. When a
+        // shared folder is configured, append slirp's built-in TFTP server
+        // pointed at it; the guest pulls files with `tftp 10.0.2.2`.
+        let p = config.ports
+        var nic = "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::\(p.telnet)-:23,hostfwd=tcp::\(p.ssh)-:22,hostfwd=tcp::\(p.helios)-:2125"
         if let tftp = config.tftpDirectory, !tftp.isEmpty {
             nic += ",tftp=\(tftp)"
         }
@@ -888,14 +924,17 @@ public final class QemuEngine: @unchecked Sendable {
 
     /// Mac-side port forwarded to the guest's telnet (23). Used by launchers
     /// with `transport = telnet` and by the by-hand shutdown instructions
-    /// (orphan shutdown itself goes over Helios, not telnet).
-    public static let telnetHostPort: UInt16 = 2123
+    /// (orphan shutdown itself goes over Helios, not telnet). Defaults to the
+    /// bundled Solaris 2.6 image's block; per-image runs carry their own ports
+    /// in `QemuEngineConfig.ports`.
+    public static let telnetHostPort: UInt16 = ImagePorts.solaris26.telnet
 
     /// Mac-side port forwarded to the guest's Helios daemon (2125). Both clients
     /// -- macXserver's HeliosClient and Claude Code's bridge -- connect here
     /// directly over loopback, no ssh tunnel. (DECISIONS 2026-06-21: macXserver
     /// owns the network path; advertising this port is the discovery follow-up.)
-    public static let heliosHostPort: UInt16 = 2125
+    /// Defaults to the bundled Solaris 2.6 block; see `ImagePorts`.
+    public static let heliosHostPort: UInt16 = ImagePorts.solaris26.helios
 
     /// `~/Library/Application Support/macXserver/`.
     public static func applicationSupportDir() -> URL {
