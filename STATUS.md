@@ -1,73 +1,63 @@
-# Status 2026-06-30
+# Status 2026-06-30 (evening)
 
-## Headline: documented the "detect guest OS from the qcow2 itself" idea
+## Headline: all three SPARCplug guests now run heliosAgent
 
-Short session, no code. Captured a design I want to build into macXserver:
-identify which OS an image is (Solaris 2.6 / SunOS 4.1.4 / NetBSD) by reading
-the *bytes of the qcow2*, with no qemu tooling and no subprocess -- pure Swift,
-run on the image path before we wire up ports/launcher/guest assumptions. Wrote
-it up in `SPARCSTATION_PLUGIN.md` under the host-port-blocks section (new
-subsection "Detecting the guest OS from the image itself").
-
-The gist, so I don't have to re-derive it next time:
-- `qemu-img` writes **uncompressed** clusters by default, so guest data sits in
-  the file verbatim (metadata just interleaves between data clusters). A literal
-  ASCII run like `SunOS Release 5.6` physically exists, contiguous, in the file.
-  Confirm qcow2 magic (`QFI\xFB`), then `mmap` + `memmem` for a few banner
-  signatures. Sub-second; scans the *physical* (allocated) size, not the 40 GB
-  virtual.
-- Structural discriminators DON'T work: Sun VTOC `0xDABE` is on Solaris + SunOS
-  + NetBSD/sparc; UFS/FFS magic `0x011954` is on all three. Use the kernel
-  banner strings instead -- `SunOS Release 5.6` (Solaris 2.6), `SunOS Release
-  4.1.4`, `NetBSD 9.2`. Unique, no collisions.
-- Robust because each string appears many times in the image; a cluster-boundary
-  straddle can't hit every copy.
-- Caveat: a `-c` (compressed) image would defeat the scan. Defense = don't
-  compress (build scripts don't today) + make `.unknown` explain itself by
-  checking the L2 compressed-cluster flag. Bulletproof upgrade is a real qcow2
-  L1/L2 walk, ~150 lines, still no qemu. Ship the linear scan first.
-
-This slots into open item #6 (concurrent three-images runtime): if macXserver
-juggles all three at once, self-identifying each image from content beats
-trusting a config field, and catches "wrong file dropped at diskImagePath" for
-free.
+Big session. SunOS 4.1.4 got bootstrapped end to end and now runs heliosAgent
+alongside Solaris 2.6 and NetBSD 9.2. I can drive all three guests from the Mac
+over the helios JSON daemon -- including compiling software on them remotely,
+which is how I built ncftp on the SunOS box without ever logging in.
 
 ## What's working
 
-- All three SPARCplug guests installed: Solaris 2.6, SunOS 4.1.4, NetBSD 9.2.
-- macXserver `ImagePorts` per-image host-port blocks in place (one image at a
-  time today; ports wired so concurrent-three can land without a redesign).
-- NetBSD boots from disk, networks (le0 10.0.2.15 via slirp), ssh in as tvernon
-  on port 2242.
+- **NetBSD 9.2 guest fully set up:** root password (Kemosabe1) + passwordless
+  ed25519 key login, `PermitRootLogin yes`. heliosAgent installed as an rc.d
+  service (`/etc/rc.d/heliosagent`, `heliosagent=YES`), listening on guest 2125,
+  reachable from the Mac via the 2145->2125 hostfwd. Reboot-survivable.
+- **SunOS 4.1.4 guest fully set up:** heliosAgent built on-box and running
+  (guest 2125, Mac via 2135->2125), installed via deploy.sh's new sunos4 branch
+  (/etc/rc.local stanza). `run_command` confirmed (uname, etc.). ncftp 2.4.3
+  built + installed to /usr/local/bin, defaulting to passive mode for both
+  tvernon (~/.ncftp/prefs) and root (NCFTPDIR=/.ncftp in /.cshrc, since root's
+  home is `/` and ncftp won't use the fs root as a config dir).
+- **deploy.sh is now multi-platform:** solaris (SysV) / netbsd (rc.d) / sunos4
+  (rc.local), with robust binary search. New init/heliosagent.netbsd rc.d script.
+- **sunos414-full.sh gained an `ISO=` flag** to attach a CD. The hard-won part:
+  qemu-sparc needs an explicit `-device scsi-cd,scsi-id=6,logical_block_size=512`
+  -- Sun only talks to 512-byte CD sectors, and the bare `-drive media=cdrom`
+  form parks the disc empty at id 2. See memory reference_sparcplug_sunos_cdrom_512.
+- Mac-side helper `helios.py` (in this session's scratchpad) drives any guest via
+  run_command (cmd/cwd/user fields).
 
-## What's open / next
+## What's broken / rough
 
-- **Build the OS-detection helper** documented today: a pure-Swift
-  `detectGuestOS(qcow2:)` returning an enum + logging the matched banner. Start
-  with the linear scan.
-- **#6: three per-OS launchers + concurrent runtime** -- let macXserver run
-  Solaris + SunOS + NetBSD at once (multiple QemuEngine instances, per-image
-  windows/console/lifecycle, a launcher per OS). ImagePorts already removed the
-  host-port-collision blocker; NetBSD now exists as the third image. The
-  OS-detection helper is a natural companion here.
-- **tcsh on NetBSD** (Todd wants it as login shell). Not in base; 32-bit sparc
-  has no official binary packages, so build from pkgsrc source:
-  `cd /usr; ftp .../stable/pkgsrc.tar.gz; tar xzf; cd /usr/pkgsrc/shells/tcsh;
-  make install clean; chsh -s /usr/pkg/bin/tcsh tvernon`. comp set is installed
-  so the toolchain bootstraps pkgsrc. pkgsrc tree not fetched yet.
-- MUST DO before any public bundled-QEMU release: run
-  `Tools/make-gpl-source-bundle.sh` and attach the tarball to the GitHub release
-  (the Acknowledgements screen promises a bundle that isn't live yet).
-- Console terminal scrollback; xterm ctrl-button menu-orphan capture.
+- The SunOS heliosAgent binary rests on hand-edits + a `vsprintf` stopgap (4.1.4
+  lacks vsnprintf). The PROPER fixes (bounded vsnprintf shim, getopt decl,
+  -lsocket/-lnsl per-release split) are in the Mac repo, uncommitted-until-this-eos.
+  Plan: pull the real sources over the now-working channel, rebuild, redeploy.
+- Reboot-survival on SunOS (rc.local) not yet verified with an actual reboot.
+
+## What's next
+
+- **cx makefile arch-detection cleanup** (the agreed punch list, not started --
+  see memory project_cxlibs_arch_build_cleanup): build dirs collapse to
+  `sunos_` (empty arch suffix); fix ARCH across all platforms, keep Mac building,
+  then validate library+test+helios builds on all three guests via helios. Fast
+  because Claude drives the builds over the wire.
+- Clean-rebuild SunOS heliosAgent from the committed sources (bounded shim).
 
 ## Committed this session
 
-- `~/dev/X`: SPARCSTATION_PLUGIN.md -- OS-from-image detection design.
+- `~/dev/X`: this STATUS roll.
+- `~/dev/SPARCplug`: sunos414-full.sh ISO= flag + 512-byte CD fix (iso-payload/
+  staging is gitignored -- regenerable build artifacts, ~26MB).
+- `~/Dropbox/dev/cx` (cx_apps/heliosAgent): SunOS 4.1.4 build porting +
+  multi-platform deploy.sh + netbsd rc.d script.
 
 ## Switching Macs
 
-- Let Dropbox finish syncing the cx tree + `.claude-memory/` before opening the
-  other Mac.
-- VM was not running this session; no stale lock to worry about.
-- `git pull --ff-only` in `~/dev/X` and `~/dev/SPARCplug` on the other Mac (this
-  session pushed to `~/dev/X`).
+- The SunOS 4.1.4 VM was LEFT RUNNING (with the helios-cx ISO attached). If you
+  open the other Mac, the image lock will block it -- shut the VM down first
+  (halt at the console, Ctrl-A X) or it'll show remoteLocked.
+- Let Dropbox finish syncing the cx tree + `.claude-memory/` before the other Mac.
+- The other cx agent was working the NetBSD lib fixes in the cx/ subtree (clean
+  here); coordinate before assuming that's done.
