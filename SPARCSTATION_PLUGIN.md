@@ -279,6 +279,101 @@ sharing one block per OS is safe; the isolation that matters is between
 *different* OSes, which the distinct blocks provide. As of 2026-06-28
 macXserver still runs one image at a time — per-image ports are wired so
 the concurrent-three-images runtime can land later without a port redesign.
+
+#### Detecting the guest OS from the image itself (design, not yet built)
+
+Right now macXserver is *told* which OS an image is (config picks the
+`ImagePorts` block, the launcher, the guest-side assumptions). With three
+images in play that's a config field that can silently drift out of sync
+with the actual file. We can do better: identify the OS by looking at the
+*bytes of the qcow2*, with no qemu tooling and no subprocess — pure Swift,
+run on the image path before we wire anything up.
+
+**Why it's easy.** `qemu-img` writes **uncompressed** clusters by default,
+so every guest data block sits in the qcow2 file as verbatim bytes (the
+L1/L2/refcount metadata is just interleaved between the data clusters, it
+doesn't transform them). That means a literal ASCII run like
+`SunOS Release 5.6` physically exists, contiguous, somewhere in the file.
+You don't have to interpret the qcow2 mapping, the Sun VTOC / NetBSD
+disklabel, or the UFS/FFS filesystem. Confirm the qcow2 magic (`QFI\xFB`
+at offset 0), then byte-search the mapped file for a small set of
+signatures.
+
+**Why the structural discriminators don't work** (so nobody wastes time on
+them later):
+- **Sun VTOC magic `0xDABE`** (offset 508 of sector 0) is present on
+  Solaris *and* SunOS, and NetBSD/sparc writes a Sun-compatible label too.
+  It tells you "SPARC disk," not which OS.
+- **UFS/FFS superblock magic `0x011954`** is shared by Solaris UFS, SunOS
+  4.x FFS, *and* NetBSD FFS. Useless as a discriminator.
+
+So structure can't separate the three; **content can.** Use the kernel
+banner strings, which are unique and collision-free:
+
+| Signature              | Guest OS    |
+|------------------------|-------------|
+| `SunOS Release 5.6`    | Solaris 2.6 |
+| `SunOS Release 4.1.4`  | SunOS 4.1.4 |
+| `NetBSD 9.2`           | NetBSD      |
+
+**Why a dumb linear scan is robust, not fragile.** Each version string
+appears in the image *many* times (kernel banner, `/etc/release`, package
+metadata, man pages), not once. The only failure mode for a naive byte
+search is a 64 KB qcow2 cluster boundary slicing one copy in half, and
+with that much redundancy the odds that *every* copy is straddled are nil.
+Bonus: you scan the qcow2's *physical* (allocated) size — a few GB of real
+data — not the 40 GB virtual size, so an `mmap` + `memmem` finishes in well
+under a second.
+
+Sketch (pure Swift, no dependency, no qemu):
+
+```swift
+enum GuestOS { case solaris26, sunos414, netbsd, unknown }
+
+func detectGuestOS(qcow2 url: URL) throws -> GuestOS {
+    let data = try Data(contentsOf: url, options: .mappedIfSafe)  // mmap
+    guard data.count > 8,
+          data[0] == 0x51, data[1] == 0x46,
+          data[2] == 0x49, data[3] == 0xFB        // "QFI\xFB"
+    else { return .unknown }
+
+    let sigs: [(String, GuestOS)] = [
+        ("SunOS Release 5.6",  .solaris26),
+        ("SunOS Release 4.1.4", .sunos414),
+        ("NetBSD 9.2",         .netbsd),
+    ]
+    return data.withUnsafeBytes { raw -> GuestOS in
+        let base = raw.bindMemory(to: UInt8.self)
+        for (sig, os) in sigs {
+            let needle = Array(sig.utf8)
+            if memmem(base.baseAddress, base.count,
+                      needle, needle.count) != nil { return os }
+        }
+        return .unknown
+    }
+}
+```
+
+**The one caveat to design around.** If an image were ever created with
+`qemu-img convert -c` (compression on), the data clusters are deflated and
+the scan finds nothing. Two defenses: (1) don't compress the images — the
+current build scripts don't, so this is moot today; (2) make `.unknown`
+*explain itself* rather than guess — read the header, walk one L2 table,
+and check bit 62 (the compressed-cluster flag) on its entries, so a no-match
+result can say "this image is compressed" instead of silently returning
+`.unknown`. If we ever want to be bulletproof against both compression and
+the cluster-straddle case, the upgrade is a proper qcow2 L1/L2 walk that
+reads data clusters in *guest* order and inflates on the fly — ~150 lines
+of pure Swift, still no qemu. Ship the linear scan first; it's correct on
+every image we have today, and it's promotable later.
+
+**Where it slots in.** This is a natural companion to the
+concurrent-three-images runtime (next-milestone item #6): if macXserver is
+going to juggle Solaris + SunOS + NetBSD at once, having it self-identify
+each image from content — and log the banner it matched, so the decision is
+self-documenting — beats trusting a config field to stay correct. It also
+catches the "user dropped the wrong file at `diskImagePath`" case for free.
+
 - `-drive file=SUN40G.qcow2,bus=0,unit=0,media=disk` — SCSI disk image
   with Solaris 2.6 pre-installed. The `if=scsi` is implicit on SPARC;
   SS-5's only disk interface is SCSI.

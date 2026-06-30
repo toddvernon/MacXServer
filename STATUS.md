@@ -1,67 +1,73 @@
-# Status 2026-06-28
+# Status 2026-06-30
 
-## Headline: NetBSD 9.2/sparc is the third SPARCplug guest (built + verified)
+## Headline: documented the "detect guest OS from the qcow2 itself" idea
 
-Two sessions today. Earlier: macXserver `ImagePorts` (per-image QEMU host-port
-blocks, committed f56c489). This session was all SPARCplug-side -- stood up a
-NetBSD guest to join Solaris 2.6 and SunOS 4.1.4. macXserver (`~/dev/X`) itself
-has no code changes today; this is a STATUS roll plus the SPARCplug work in the
-sibling repo.
+Short session, no code. Captured a design I want to build into macXserver:
+identify which OS an image is (Solaris 2.6 / SunOS 4.1.4 / NetBSD) by reading
+the *bytes of the qcow2*, with no qemu tooling and no subprocess -- pure Swift,
+run on the image path before we wire up ports/launcher/guest assumptions. Wrote
+it up in `SPARCSTATION_PLUGIN.md` under the host-port-blocks section (new
+subsection "Detecting the guest OS from the image itself").
 
-## NetBSD guest (sibling repo ~/dev/SPARCplug, commit f863ad0)
+The gist, so I don't have to re-derive it next time:
+- `qemu-img` writes **uncompressed** clusters by default, so guest data sits in
+  the file verbatim (metadata just interleaves between data clusters). A literal
+  ASCII run like `SunOS Release 5.6` physically exists, contiguous, in the file.
+  Confirm qcow2 magic (`QFI\xFB`), then `mmap` + `memmem` for a few banner
+  signatures. Sub-second; scans the *physical* (allocated) size, not the 40 GB
+  virtual.
+- Structural discriminators DON'T work: Sun VTOC `0xDABE` is on Solaris + SunOS
+  + NetBSD/sparc; UFS/FFS magic `0x011954` is on all three. Use the kernel
+  banner strings instead -- `SunOS Release 5.6` (Solaris 2.6), `SunOS Release
+  4.1.4`, `NetBSD 9.2`. Unique, no collisions.
+- Robust because each string appears many times in the image; a cluster-boundary
+  straddle can't hit every copy.
+- Caveat: a `-c` (compressed) image would defeat the scan. Defense = don't
+  compress (build scripts don't today) + make `.unknown` explain itself by
+  checking the L2 compressed-cluster flag. Bulletproof upgrade is a real qcow2
+  L1/L2 walk, ~150 lines, still no qemu. Ship the linear scan first.
 
-- **NetBSD 9.2/sparc installed and booting from disk.** Picked 9.2 because it's
-  the last sparc release with a bootable ISO (9.3+ are miniroot/netboot only,
-  which is miserable under qemu's NFS-less slirp). Same 9.x kernel gen / sun4m
-  support as 9.4, far easier install.
-- **The one gotcha worth remembering:** boot the install CD with `-cdrom ISO
-  -boot d`. That hits OpenBIOS's CD-boot routine, which reads the Sun-disklabel
-  boot blocks correctly. Booting the bare `sd@N` device path by hand fails
-  ("Not a bootable image"), and there's no `cdrom` devalias. Full recipe in
-  `~/dev/SPARCplug/docs/netbsd-install.md`.
-- **Disk:** 40 GiB qcow2 (matches Solaris ceiling; sparse, ~1.25 GB real).
-  Single root + 1 GB swap on purpose -- no separate /usr, so adding packages
-  can't run a small /usr out of space.
-- **Sets:** base, comp (dev tools), man, kernel, and the X11 *client* sets
-  (xterm/xclock/libs/fonts in /usr/X11R7/bin). No Xorg server -- macXserver is
-  the display.
-- **Access:** root has NO password (cleared via /etc/master.passwd +
-  pwd_mkdb; passwd refuses empty even as root). User `tvernon` / `kemosabe`
-  (wheel, ksh). `ssh -p 2242 tvernon@localhost` then `su`. SSH verified end to
-  end. NetBSD host-port block: telnet 2143 / ssh 2242 / helios 2145.
-- **Run it:** `~/dev/SPARCplug/emu/netbsd-full.sh` (disk-only boot, mirrors the
-  other two). Image at `~/Dropbox/dev/SPARCplug/images/netbsd/netbsd-boot.qcow2`,
-  ISO at `~/Dropbox/dev/SPARCplug/iso/NetBSD-9.2-sparc.iso` (both Dropbox, not
-  git). Quit the VM with Ctrl-A X; clean shutdown is `halt -p`.
+This slots into open item #6 (concurrent three-images runtime): if macXserver
+juggles all three at once, self-identifying each image from content beats
+trusting a config field, and catches "wrong file dropped at diskImagePath" for
+free.
 
 ## What's working
 
 - All three SPARCplug guests installed: Solaris 2.6, SunOS 4.1.4, NetBSD 9.2.
-- NetBSD boots from disk, networks (le0 10.0.2.15 via slirp), ssh in as tvernon.
+- macXserver `ImagePorts` per-image host-port blocks in place (one image at a
+  time today; ports wired so concurrent-three can land without a redesign).
+- NetBSD boots from disk, networks (le0 10.0.2.15 via slirp), ssh in as tvernon
+  on port 2242.
 
 ## What's open / next
 
-- **tcsh on NetBSD (Todd wants it as login shell).** Not in base (base = csh +
-  ksh), and 32-bit sparc has NO official binary packages (only sparc64 does), so
-  pkg_add/pkgin won't work. Must build from pkgsrc source:
+- **Build the OS-detection helper** documented today: a pure-Swift
+  `detectGuestOS(qcow2:)` returning an enum + logging the matched banner. Start
+  with the linear scan.
+- **#6: three per-OS launchers + concurrent runtime** -- let macXserver run
+  Solaris + SunOS + NetBSD at once (multiple QemuEngine instances, per-image
+  windows/console/lifecycle, a launcher per OS). ImagePorts already removed the
+  host-port-collision blocker; NetBSD now exists as the third image. The
+  OS-detection helper is a natural companion here.
+- **tcsh on NetBSD** (Todd wants it as login shell). Not in base; 32-bit sparc
+  has no official binary packages, so build from pkgsrc source:
   `cd /usr; ftp .../stable/pkgsrc.tar.gz; tar xzf; cd /usr/pkgsrc/shells/tcsh;
   make install clean; chsh -s /usr/pkg/bin/tcsh tvernon`. comp set is installed
-  so the base toolchain bootstraps pkgsrc. Not done yet.
-- pkgsrc tree not fetched yet -- once it's there, that's the path for any future
-  package on this box.
-- Carryover from earlier today (macXserver, still open):
-  - **#6: three per-OS launchers + concurrent runtime** -- let macXserver run
-    Solaris + SunOS + NetBSD at once (multiple QemuEngine instances, per-image
-    windows/console/lifecycle, a launcher per OS). ImagePorts already removed the
-    host-port-collision blocker; NetBSD now exists as the third image.
-  - MUST DO before any public bundled-QEMU release: run
-    `Tools/make-gpl-source-bundle.sh` and attach the tarball to the GitHub
-    release (the Acknowledgements screen promises a bundle that isn't live yet).
-  - Console terminal scrollback; xterm ctrl-button menu-orphan capture.
+  so the toolchain bootstraps pkgsrc. pkgsrc tree not fetched yet.
+- MUST DO before any public bundled-QEMU release: run
+  `Tools/make-gpl-source-bundle.sh` and attach the tarball to the GitHub release
+  (the Acknowledgements screen promises a bundle that isn't live yet).
+- Console terminal scrollback; xterm ctrl-button menu-orphan capture.
 
-## Pointers
+## Committed this session
 
-- NetBSD run script: `~/dev/SPARCplug/emu/netbsd-full.sh`; recipe
-  `~/dev/SPARCplug/docs/netbsd-install.md`; memory
-  `project_sparcplug_netbsd_guest.md`.
-- Port-block table: `~/dev/SPARCplug/emu/README.md` and `SPARCSTATION_PLUGIN.md`.
+- `~/dev/X`: SPARCSTATION_PLUGIN.md -- OS-from-image detection design.
+
+## Switching Macs
+
+- Let Dropbox finish syncing the cx tree + `.claude-memory/` before opening the
+  other Mac.
+- VM was not running this session; no stale lock to worry about.
+- `git pull --ff-only` in `~/dev/X` and `~/dev/SPARCplug` on the other Mac (this
+  session pushed to `~/dev/X`).
