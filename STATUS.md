@@ -31,6 +31,25 @@ daemon (run_command), and shake out the cross-platform problems:
 
 Full detail lives in memory: project_cxlibs_arch_build_cleanup.
 
+**Also tomorrow (SPARCplug/macXserver, separate from the cx work): unify the
+image locking.** macXserver writes a host-aware `<image>.macxserver-lock`
+(ImageLock.swift: host + qemu pid + secret + qmp/console paths) and evaluates
+free / staleSameHost / localOrphan / remoteLocked using a pid process check
+(kill -0 + proc_pidpath == qemu-system-sparc). The emu/*.sh scripts DON'T
+touch that lock at all -- they only lsof the inode, which is same-Mac only AND
+invisible to macXserver (macXserver doesn't lsof). So a script holding the
+image writes no lock, and launching macXserver then reads `.free` and opens a
+second qemu on the same qcow2. Fix: port ImageLock's evaluate/acquire/release
+into a shared shell snippet the three emu scripts source -- scripts both WRITE
+a lock (host + their qemu pid) on start and CHECK the existing one before
+starting; keep the pid check (it's what makes stale locks self-healing, NOT
+overkill); lsof becomes redundant belt-and-suspenders. While there, settle a
+comment contradiction: the scripts claim qemu's OFD lock is a no-op on macOS
+(two writers corrupt the image) but ImageLock.swift says qemu's fcntl lock
+guards same-machine double-open hard. Test it (start one, try a second, watch
+qemu) -- the answer decides whether the advisory lock is load-bearing for
+same-machine or only cross-Mac + orphan management.
+
 ## What's working / done this session
 
 - **`cx/platform.mk`** is the single source of truth for platform detection.
