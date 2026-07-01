@@ -1,100 +1,78 @@
-# Status 2026-06-30 (late)
+# Status 2026-07-01 (evening)
 
-## Headline: cx build-system rationalized (Mac + Linux green). Tomorrow is the glorious helios day.
+## Headline: cx builds+tests green on all 3 SPARC guests; heliosAgent + cm deployed; login/shell convergence started
 
-Spent the session cleaning up the cx build system: all platform detection is
-now centralized, the SunOS/Solaris directory collision is fixed, archives are
-consolidated and object-safe, and build junk is out of Dropbox sync. Mac and
-Linux both build and test clean. The remaining piece is validating the three
-SPARC guests over helios.
-
-## TOMORROW (the plan, and it will be glorious)
-
-**Build everything on all the Sun VMs via helios and fix whatever breaks.**
-Boot NetBSD 9.2 / SunOS 4.1.4 / Solaris 2.6, drive the builds over the helios
-daemon (run_command), and shake out the cross-platform problems:
-
-1. Ship the updated cx makefiles + `cx/platform.mk` to each guest (they hold
-   older copies) -- git pull on guest if it has the repo, else tar+ship.
-2. Build cx libs + cx_tests + heliosAgent on each guest. Fix what breaks.
-3. **NetBSD: prove the NORMAL makefile path works now** (the ARCH drift that
-   scattered libs across lib/netbsd_sparc vs lib/netbsd_ is fixed) and then
-   RETIRE `cx_apps/heliosAgent/build_helios_netbsd.sh`.
-4. **Tighten the thread/tz Solaris gates**: the top cx + cx_tests makefiles
-   gate with `[ "$(UNAME_S)" != "sunos" ]`, which wrongly excludes Solaris too.
-   Now that PLATFORM_OS distinguishes sunos4 from solaris6/10, make it
-   sunos4-only -- but validate on real Solaris before flipping.
-5. Surface/fix any lib that should build on a platform but is excluded.
-6. Fold in the uncommitted SunOS source fixes (getopt decl, vsnprintf shim,
-   -lsocket/-lnsl per-release split).
-7. IRIX last, via the real Indy (Indigo PSU is dead) -- deferred.
-
-Full detail lives in memory: project_cxlibs_arch_build_cleanup.
-
-**Also tomorrow (SPARCplug/macXserver, separate from the cx work): unify the
-image locking.** macXserver writes a host-aware `<image>.macxserver-lock`
-(ImageLock.swift: host + qemu pid + secret + qmp/console paths) and evaluates
-free / staleSameHost / localOrphan / remoteLocked using a pid process check
-(kill -0 + proc_pidpath == qemu-system-sparc). The emu/*.sh scripts DON'T
-touch that lock at all -- they only lsof the inode, which is same-Mac only AND
-invisible to macXserver (macXserver doesn't lsof). So a script holding the
-image writes no lock, and launching macXserver then reads `.free` and opens a
-second qemu on the same qcow2. Fix: port ImageLock's evaluate/acquire/release
-into a shared shell snippet the three emu scripts source -- scripts both WRITE
-a lock (host + their qemu pid) on start and CHECK the existing one before
-starting; keep the pid check (it's what makes stale locks self-healing, NOT
-overkill); lsof becomes redundant belt-and-suspenders. While there, settle a
-comment contradiction: the scripts claim qemu's OFD lock is a no-op on macOS
-(two writers corrupt the image) but ImageLock.swift says qemu's fcntl lock
-guards same-machine double-open hard. Test it (start one, try a second, watch
-qemu) -- the answer decides whether the advisory lock is load-bearing for
-same-machine or only cross-Mac + orphan management.
+Big helios day. Drove Solaris 2.6, SunOS 4.1.4, and NetBSD 9.2 entirely over
+the helios daemon from the desktop Mac Studio. Got the whole cx library +
+test suite + heliosAgent building and passing on all three, fixed the real
+portability bugs that surfaced, deployed heliosAgent and cm to all three, put
+tcsh on NetBSD, and started converging the guest login experiences on a single
+runtime-deciding dotfile.
 
 ## What's working / done this session
 
-- **`cx/platform.mk`** is the single source of truth for platform detection.
-  All 58 makefiles (cx libs, cx_tests, cm, ss, heliosAgent + test) now
-  `include` it instead of carrying a copy-pasted ~60-line uname block that had
-  drifted.
-- **Dir naming: `$(PLATFORM) = $(PLATFORM_OS)_$(ARCH)`.** PLATFORM_OS encodes
-  the sun-family release (sunos4 / solaris6 / solaris10) so their incompatible
-  binaries never collide in one lib dir (the NFS problem). linux_x86_64 and
-  darwin_arm64 are unchanged. The compile macro (-D _SUNOS_ etc.) stays
-  separate from the dir token and is untouched.
-- **Archives consolidated into the umbrella makefile** (~/Dropbox/dev/cx/makefile):
-  the three targets (cxlibs/cxapps/cxtest_unix.tar) now exclude object dirs with
-  anchored <os>_* patterns + a complete file-type list, and ship platform.mk.
-  The duplicate archive targets in cx/makefile and heliosAgent/makefile were
-  deleted (get-helios.sh already builds from the umbrella).
-- **Object dirs out of Dropbox sync**: com.dropbox.ignored on 132 paths (all
-  per-platform obj dirs + lib/). Deleted 12 orphaned empty-arch `linux_` dirs.
-- **Regressions caught + fixed**: regex BUILD_REGEX and ss DEVELOPER opt-ins
-  (module-local logic my bulk transform ate, restored after the include).
-  Latent bugs fixed: clean lib path, netbsk typos, double-darwin ARCH.
-- **Clean-from-scratch build + tests green on Mac** (16/16 libs, every cx_tests
-  suite 0 failed, cm/ss/heliosAgent link, helios_test 131/0). **Linux verified
-  by Todd** (no-op, dir name unchanged).
+- **cx: all 3 SPARC guests green.** cx libs + cx_tests + heliosAgent build and
+  pass on Solaris 2.6, SunOS 4.1.4, NetBSD 9.2. Ports: Solaris 2125, SunOS 2135,
+  NetBSD 2145 (Mac side). Real bugs found + fixed (all committed, see below):
+  - NetBSD had no gmake (no sparc/9.2 pkgs) -> built GNU make 4.4.1 from source,
+    installed as /usr/local/bin/make. The cx thread library was never ported to
+    NetBSD (guards omitted _NETBSD_) -> added it; NetBSD normal-makefile path now
+    proven (build_helios_netbsd.sh is redundant, left in place for now).
+  - Solaris "thread deadlock" was really usleep() being SIGALRM-based/thread-
+    unsafe -> switched the two tests that use it to select(); thread now passes,
+    gate flipped to sunos4-only. tz stays excluded on Solaris (g++ 2.95, no C++11).
+  - formatTimeLength printed a time_t with %ld -> garbage on NetBSD/sparc
+    (64-bit time_t, 32-bit long); fixed. tz makefile pinned -std=c++11.
+  - SunOS CxFile::tempName used tmpnam -> switched to mkstemp (4.1.4 has it).
+- **heliosAgent redeployed to all three** from the normal-makefile binary via
+  the fixed deploy.sh. Running end-to-end deploys flushed out 3 real deploy
+  bugs (all fixed + committed): binary-location by MKOS (not raw uname),
+  atomic install (ETXTBSY on upgrade), and SunOS /var/run pidfile (no /var/run
+  on 4.1.4 -> daemons had accumulated). Deploy over ssh (SunOS has no sshd ->
+  detached helios). All 3 daemons answering `helios hello`.
+- **cm built + installed on all three** (`make` + `make install`). Added a
+  NetBSD branch to cm's install target. Default non-MCP build, no thread dep.
+- **tcsh on NetBSD:** built tcsh 6.24.13 from source, tvernon shell set to it.
+- **Login/shell convergence started (Solaris = reference).** tvernon + root
+  now share ONE byte-identical `~/.cshrc` on all three, deciding at runtime:
+  $OSTYPE -> path + console device, $uid -> root vs user prompt/history. .tcshrc
+  retired. Console TERM=vt100 now picks the right device per OS (NetBSD serial
+  console is /dev/ttya, not /dev/console). See memory project_image_convergence.
+
+## What's broken / rough
+
+- Guest-side login/shell + tcsh setup is NOT captured as repo scripts yet
+  (applied ad-hoc, all backed up as .pre-converge / .pre-unify on the guests).
+  The gmake + tcsh from-source builds on NetBSD likewise aren't scripted.
+- Console TERM=vt100 verified by device-selection logic, not an actual on-
+  console login (needs the console). NetBSD console tty confirmed /dev/ttya.
+
+## What's next
+
+- **Unify root ~/.profile** the same way (it's the last per-OS file; sh, so
+  branch on uname not $OSTYPE).
+- Decide where the canonical guest dotfiles live in the repo (proposed
+  ~/dev/SPARCplug/guest-config/) so convergence stops being ad-hoc.
+- Small nits: prompt %M->%m for short hostnames (NetBSD shows FQDN); whether the
+  canonical prompt should set the xterm title (SunOS's old one did).
+- `expand_414_fs.md` runbook (untracked in SPARCplug) is the plan to give SunOS
+  4.1.4 a roomier single disk (its 28MB root is why cx has to build on /home2).
 
 ## Committed this session (all pushed to origin/main)
 
-- `~/Dropbox/dev/cx` (umbrella): 90d80b4 -- archive hardening + platform.mk shipped
-- `~/Dropbox/dev/cx/cx`: 99f0575 (platform.mk + conversions), ba42900 (drop dup archive)
-- `~/Dropbox/dev/cx/cx_tests`: c51ed1f
-- `~/Dropbox/dev/cx/cx_apps/cm`: 70ed933
-- `~/Dropbox/dev/cx/cx_apps/ss`: e99383b
-- `~/Dropbox/dev/cx/cx_apps/heliosAgent`: 6081ab3 (conversions), 4867d09 (drop dup archive)
+- `~/Dropbox/dev/cx/cx`: 431c01b (NetBSD thread port + portability fixes)
+- `~/Dropbox/dev/cx/cx_tests`: ea91404 (select()-based sleep; thread gate sunos4)
+- `~/Dropbox/dev/cx` (umbrella): 94defb6 (GUEST_TOOLING_NOTES.md)
+- `~/Dropbox/dev/cx/cx_apps/heliosAgent`: 35fac44 + 599e4c1 + 4dadb60 (deploy fixes)
+- `~/Dropbox/dev/cx/cx_apps/cm`: b99eac4 (NetBSD install branch)
 - `~/dev/X`: this STATUS roll.
 
 ## Switching Macs
 
 - **Let Dropbox finish syncing the cx tree + `.claude-memory/`** before opening
   the other Mac.
-- **On the desktop, re-apply the Dropbox no-sync on cx object dirs** (it's a
-  local xattr, not git, so it doesn't travel). From `~/Dropbox/dev/cx`:
-  ```sh
-  find cx cx_tests cx_apps -type d \( -name 'darwin_*' -o -name 'linux_*' \
-    -o -name 'sunos*' -o -name 'solaris*' -o -name 'netbsd_*' -o -name 'irix*' \
-    -o -name 'nextstep_*' \) -exec xattr -w com.dropbox.ignored 1 {} \;
-  xattr -w com.dropbox.ignored 1 lib
-  ```
-- No VM was running this session; no image lock to worry about.
+- All the guest-side changes (shells, tcsh, deploys, cm) live in the qcow2
+  images on THIS Mac's disk, not in git. The other Mac's images won't have them
+  until you copy the images or re-run the steps.
+- All three VMs were LEFT RUNNING this session. If you open the other Mac, shut
+  them down first (or it'll show remoteLocked on the image).
