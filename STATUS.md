@@ -1,63 +1,81 @@
-# Status 2026-06-30 (evening)
+# Status 2026-06-30 (late)
 
-## Headline: all three SPARCplug guests now run heliosAgent
+## Headline: cx build-system rationalized (Mac + Linux green). Tomorrow is the glorious helios day.
 
-Big session. SunOS 4.1.4 got bootstrapped end to end and now runs heliosAgent
-alongside Solaris 2.6 and NetBSD 9.2. I can drive all three guests from the Mac
-over the helios JSON daemon -- including compiling software on them remotely,
-which is how I built ncftp on the SunOS box without ever logging in.
+Spent the session cleaning up the cx build system: all platform detection is
+now centralized, the SunOS/Solaris directory collision is fixed, archives are
+consolidated and object-safe, and build junk is out of Dropbox sync. Mac and
+Linux both build and test clean. The remaining piece is validating the three
+SPARC guests over helios.
 
-## What's working
+## TOMORROW (the plan, and it will be glorious)
 
-- **NetBSD 9.2 guest fully set up:** root password (Kemosabe1) + passwordless
-  ed25519 key login, `PermitRootLogin yes`. heliosAgent installed as an rc.d
-  service (`/etc/rc.d/heliosagent`, `heliosagent=YES`), listening on guest 2125,
-  reachable from the Mac via the 2145->2125 hostfwd. Reboot-survivable.
-- **SunOS 4.1.4 guest fully set up:** heliosAgent built on-box and running
-  (guest 2125, Mac via 2135->2125), installed via deploy.sh's new sunos4 branch
-  (/etc/rc.local stanza). `run_command` confirmed (uname, etc.). ncftp 2.4.3
-  built + installed to /usr/local/bin, defaulting to passive mode for both
-  tvernon (~/.ncftp/prefs) and root (NCFTPDIR=/.ncftp in /.cshrc, since root's
-  home is `/` and ncftp won't use the fs root as a config dir).
-- **deploy.sh is now multi-platform:** solaris (SysV) / netbsd (rc.d) / sunos4
-  (rc.local), with robust binary search. New init/heliosagent.netbsd rc.d script.
-- **sunos414-full.sh gained an `ISO=` flag** to attach a CD. The hard-won part:
-  qemu-sparc needs an explicit `-device scsi-cd,scsi-id=6,logical_block_size=512`
-  -- Sun only talks to 512-byte CD sectors, and the bare `-drive media=cdrom`
-  form parks the disc empty at id 2. See memory reference_sparcplug_sunos_cdrom_512.
-- Mac-side helper `helios.py` (in this session's scratchpad) drives any guest via
-  run_command (cmd/cwd/user fields).
+**Build everything on all the Sun VMs via helios and fix whatever breaks.**
+Boot NetBSD 9.2 / SunOS 4.1.4 / Solaris 2.6, drive the builds over the helios
+daemon (run_command), and shake out the cross-platform problems:
 
-## What's broken / rough
+1. Ship the updated cx makefiles + `cx/platform.mk` to each guest (they hold
+   older copies) -- git pull on guest if it has the repo, else tar+ship.
+2. Build cx libs + cx_tests + heliosAgent on each guest. Fix what breaks.
+3. **NetBSD: prove the NORMAL makefile path works now** (the ARCH drift that
+   scattered libs across lib/netbsd_sparc vs lib/netbsd_ is fixed) and then
+   RETIRE `cx_apps/heliosAgent/build_helios_netbsd.sh`.
+4. **Tighten the thread/tz Solaris gates**: the top cx + cx_tests makefiles
+   gate with `[ "$(UNAME_S)" != "sunos" ]`, which wrongly excludes Solaris too.
+   Now that PLATFORM_OS distinguishes sunos4 from solaris6/10, make it
+   sunos4-only -- but validate on real Solaris before flipping.
+5. Surface/fix any lib that should build on a platform but is excluded.
+6. Fold in the uncommitted SunOS source fixes (getopt decl, vsnprintf shim,
+   -lsocket/-lnsl per-release split).
+7. IRIX last, via the real Indy (Indigo PSU is dead) -- deferred.
 
-- The SunOS heliosAgent binary rests on hand-edits + a `vsprintf` stopgap (4.1.4
-  lacks vsnprintf). The PROPER fixes (bounded vsnprintf shim, getopt decl,
-  -lsocket/-lnsl per-release split) are in the Mac repo, uncommitted-until-this-eos.
-  Plan: pull the real sources over the now-working channel, rebuild, redeploy.
-- Reboot-survival on SunOS (rc.local) not yet verified with an actual reboot.
+Full detail lives in memory: project_cxlibs_arch_build_cleanup.
 
-## What's next
+## What's working / done this session
 
-- **cx makefile arch-detection cleanup** (the agreed punch list, not started --
-  see memory project_cxlibs_arch_build_cleanup): build dirs collapse to
-  `sunos_` (empty arch suffix); fix ARCH across all platforms, keep Mac building,
-  then validate library+test+helios builds on all three guests via helios. Fast
-  because Claude drives the builds over the wire.
-- Clean-rebuild SunOS heliosAgent from the committed sources (bounded shim).
+- **`cx/platform.mk`** is the single source of truth for platform detection.
+  All 58 makefiles (cx libs, cx_tests, cm, ss, heliosAgent + test) now
+  `include` it instead of carrying a copy-pasted ~60-line uname block that had
+  drifted.
+- **Dir naming: `$(PLATFORM) = $(PLATFORM_OS)_$(ARCH)`.** PLATFORM_OS encodes
+  the sun-family release (sunos4 / solaris6 / solaris10) so their incompatible
+  binaries never collide in one lib dir (the NFS problem). linux_x86_64 and
+  darwin_arm64 are unchanged. The compile macro (-D _SUNOS_ etc.) stays
+  separate from the dir token and is untouched.
+- **Archives consolidated into the umbrella makefile** (~/Dropbox/dev/cx/makefile):
+  the three targets (cxlibs/cxapps/cxtest_unix.tar) now exclude object dirs with
+  anchored <os>_* patterns + a complete file-type list, and ship platform.mk.
+  The duplicate archive targets in cx/makefile and heliosAgent/makefile were
+  deleted (get-helios.sh already builds from the umbrella).
+- **Object dirs out of Dropbox sync**: com.dropbox.ignored on 132 paths (all
+  per-platform obj dirs + lib/). Deleted 12 orphaned empty-arch `linux_` dirs.
+- **Regressions caught + fixed**: regex BUILD_REGEX and ss DEVELOPER opt-ins
+  (module-local logic my bulk transform ate, restored after the include).
+  Latent bugs fixed: clean lib path, netbsk typos, double-darwin ARCH.
+- **Clean-from-scratch build + tests green on Mac** (16/16 libs, every cx_tests
+  suite 0 failed, cm/ss/heliosAgent link, helios_test 131/0). **Linux verified
+  by Todd** (no-op, dir name unchanged).
 
-## Committed this session
+## Committed this session (all pushed to origin/main)
 
+- `~/Dropbox/dev/cx` (umbrella): 90d80b4 -- archive hardening + platform.mk shipped
+- `~/Dropbox/dev/cx/cx`: 99f0575 (platform.mk + conversions), ba42900 (drop dup archive)
+- `~/Dropbox/dev/cx/cx_tests`: c51ed1f
+- `~/Dropbox/dev/cx/cx_apps/cm`: 70ed933
+- `~/Dropbox/dev/cx/cx_apps/ss`: e99383b
+- `~/Dropbox/dev/cx/cx_apps/heliosAgent`: 6081ab3 (conversions), 4867d09 (drop dup archive)
 - `~/dev/X`: this STATUS roll.
-- `~/dev/SPARCplug`: sunos414-full.sh ISO= flag + 512-byte CD fix (iso-payload/
-  staging is gitignored -- regenerable build artifacts, ~26MB).
-- `~/Dropbox/dev/cx` (cx_apps/heliosAgent): SunOS 4.1.4 build porting +
-  multi-platform deploy.sh + netbsd rc.d script.
 
 ## Switching Macs
 
-- The SunOS 4.1.4 VM was LEFT RUNNING (with the helios-cx ISO attached). If you
-  open the other Mac, the image lock will block it -- shut the VM down first
-  (halt at the console, Ctrl-A X) or it'll show remoteLocked.
-- Let Dropbox finish syncing the cx tree + `.claude-memory/` before the other Mac.
-- The other cx agent was working the NetBSD lib fixes in the cx/ subtree (clean
-  here); coordinate before assuming that's done.
+- **Let Dropbox finish syncing the cx tree + `.claude-memory/`** before opening
+  the other Mac.
+- **On the desktop, re-apply the Dropbox no-sync on cx object dirs** (it's a
+  local xattr, not git, so it doesn't travel). From `~/Dropbox/dev/cx`:
+  ```sh
+  find cx cx_tests cx_apps -type d \( -name 'darwin_*' -o -name 'linux_*' \
+    -o -name 'sunos*' -o -name 'solaris*' -o -name 'netbsd_*' -o -name 'irix*' \
+    -o -name 'nextstep_*' \) -exec xattr -w com.dropbox.ignored 1 {} \;
+  xattr -w com.dropbox.ignored 1 lib
+  ```
+- No VM was running this session; no image lock to worry about.
