@@ -1,78 +1,85 @@
-# Status 2026-07-01 (evening)
+# Status 2026-07-02 (evening)
 
-## Headline: cx builds+tests green on all 3 SPARC guests; heliosAgent + cm deployed; login/shell convergence started
+## Headline: SunOS 4.1.4 single-disk expansion DONE; image locking unified across scripts + macXserver
 
-Big helios day. Drove Solaris 2.6, SunOS 4.1.4, and NetBSD 9.2 entirely over
-the helios daemon from the desktop Mac Studio. Got the whole cx library +
-test suite + heliosAgent building and passing on all three, fixed the real
-portability bugs that surfaced, deployed heliosAgent and cm to all three, put
-tcsh on NetBSD, and started converging the guest login experiences on a single
-runtime-deciding dotfile.
+Two big SPARCplug wins today, both shipped and verified. No macXserver /
+swift-x code touched (this repo just gets the STATUS roll).
 
 ## What's working / done this session
 
-- **cx: all 3 SPARC guests green.** cx libs + cx_tests + heliosAgent build and
-  pass on Solaris 2.6, SunOS 4.1.4, NetBSD 9.2. Ports: Solaris 2125, SunOS 2135,
-  NetBSD 2145 (Mac side). Real bugs found + fixed (all committed, see below):
-  - NetBSD had no gmake (no sparc/9.2 pkgs) -> built GNU make 4.4.1 from source,
-    installed as /usr/local/bin/make. The cx thread library was never ported to
-    NetBSD (guards omitted _NETBSD_) -> added it; NetBSD normal-makefile path now
-    proven (build_helios_netbsd.sh is redundant, left in place for now).
-  - Solaris "thread deadlock" was really usleep() being SIGALRM-based/thread-
-    unsafe -> switched the two tests that use it to select(); thread now passes,
-    gate flipped to sunos4-only. tz stays excluded on Solaris (g++ 2.95, no C++11).
-  - formatTimeLength printed a time_t with %ld -> garbage on NetBSD/sparc
-    (64-bit time_t, 32-bit long); fixed. tz makefile pinned -std=c++11.
-  - SunOS CxFile::tempName used tmpnam -> switched to mkstemp (4.1.4 has it).
-- **heliosAgent redeployed to all three** from the normal-makefile binary via
-  the fixed deploy.sh. Running end-to-end deploys flushed out 3 real deploy
-  bugs (all fixed + committed): binary-location by MKOS (not raw uname),
-  atomic install (ETXTBSY on upgrade), and SunOS /var/run pidfile (no /var/run
-  on 4.1.4 -> daemons had accumulated). Deploy over ssh (SunOS has no sshd ->
-  detached helios). All 3 daemons answering `helios hello`.
-- **cm built + installed on all three** (`make` + `make install`). Added a
-  NetBSD branch to cm's install target. Default non-MCP build, no thread dep.
-- **tcsh on NetBSD:** built tcsh 6.24.13 from source, tvernon shell set to it.
-- **Login/shell convergence started (Solaris = reference).** tvernon + root
-  now share ONE byte-identical `~/.cshrc` on all three, deciding at runtime:
-  $OSTYPE -> path + console device, $uid -> root vs user prompt/history. .tcshrc
-  retired. Console TERM=vt100 now picks the right device per OS (NetBSD serial
-  console is /dev/ttya, not /dev/console). See memory project_image_convergence.
+- **4.1.4 disk expansion executed end-to-end** (runbook `expand_414_fs.md` in
+  the SPARCplug repo, narrative log `expand_414_fs_LOG.md` -- written as
+  OldSilicon post material). One 5.4G disk replaces the old 2G boot + 2G
+  /home2 pair: 1G root+var (was 28MB!), 256M swap, 2G /usr, 2G /home. /home2
+  retired: content merged into /home, passwd homes moved, fstab cleaned, one
+  straggler script fixed. Old pair archived in Dropbox
+  `_archive/pre-expand-2026-07-02/` (that's the rollback). New qcow2 is 1.7G
+  on disk vs 3.9G for the pair. Boots multiuser via the unmodified script
+  path, helios-verified, tvernon login lands in /home/tvernon.
+  - Build tricks that are now reusable (memory: reference_sunos414_image_surgery):
+    Sun VTOC written host-side by `build414/sunlabel.py` (kernel accepted it,
+    no interactive format ever); dump-to-FILE not pipes (4.1.4 restore dies
+    silently on big pipe streams); serial-console bridge+marker harness
+    (`build414/bridge.py` + `drive.py`); tty drops input past ~256 chars.
+  - Gotchas found: single-user shell on the 4.1.4 image behaves as tcsh
+    (60-min autologout exited a maintenance session mid-build -> multiuser;
+    guard: `exec /bin/sh` first; root-cause open). helios `shutdown` verb
+    no-ops on 4.1.4 -- use `run "sync; sync; /usr/etc/halt"`.
+- **Image locking unified** (the queued task -- DONE). New
+  `emu/imagelock.sh` shared by all three run scripts: writes + checks
+  macXserver's exact `<image>.macxserver-lock` format, so script-held images
+  show "in use" in macXserver and vice versa, and the other Mac sees
+  remoteLocked via Dropbox. Stale same-host locks self-heal (pid check);
+  remote locks hard-stop with FORCE=1 override (accepted: Dropbox latency can
+  leave brief false positives; no LAN check by design). Cross-validated
+  against compiled ImageLock.swift -- caught a host-case mismatch
+  (ProcessInfo.hostName is lowercase, hostname(1) isn't). Also settled
+  empirically: qemu's own fcntl lock DOES block same-Mac double-open on
+  macOS; old script comments claiming otherwise fixed.
+- **Console-input regression found and fixed same-day:** first lock version
+  ran qemu as a backgrounded child, which POSIX-reassigns stdin to /dev/null
+  -- console login went deaf. Now: lock written with $$, detached monitor
+  releases it on pid death, qemu exec'd in the FOREGROUND (tty identical to
+  pre-lock behavior). Verified under a real pty (expect typed at OpenBIOS and
+  got answers).
 
 ## What's broken / rough
 
-- Guest-side login/shell + tcsh setup is NOT captured as repo scripts yet
-  (applied ad-hoc, all backed up as .pre-converge / .pre-unify on the guests).
-  The gmake + tcsh from-source builds on NetBSD likewise aren't scripted.
-- Console TERM=vt100 verified by device-selection logic, not an actual on-
-  console login (needs the console). NetBSD console tty confirmed /dev/ttya.
+- heliosAgent `shutdown` verb doesn't actually halt 4.1.4 (BSD init, no
+  runlevels). Needs an OS-aware daemon fix someday.
+- Single-user-shell-is-tcsh contradicts the convergence design (base sh,
+  exec tcsh only if interactive); mechanism unverified -- root-cause when
+  convergence work resumes.
+- `build414/big.img` (raw, 5.3G, local disk) kept until the new qcow2 proves
+  itself over a few sessions; `build414/boot-work.img` is deletable anytime.
+- Guest-side setup still not captured as repo scripts (gmake/tcsh from-source
+  on NetBSD, shell convergence steps) -- carried over.
 
 ## What's next
 
-- **Unify root ~/.profile** the same way (it's the last per-OS file; sh, so
-  branch on uname not $OSTYPE).
-- Decide where the canonical guest dotfiles live in the repo (proposed
-  ~/dev/SPARCplug/guest-config/) so convergence stops being ad-hoc.
-- Small nits: prompt %M->%m for short hostnames (NetBSD shows FQDN); whether the
-  canonical prompt should set the xterm title (SunOS's old one did).
-- `expand_414_fs.md` runbook (untracked in SPARCplug) is the plan to give SunOS
-  4.1.4 a roomier single disk (its 28MB root is why cx has to build on /home2).
+- Carried from yesterday: unify root ~/.profile (one file, branch on uname);
+  decide canonical guest-dotfile home (~/dev/SPARCplug/guest-config/
+  proposed); prompt %M->%m; xterm-title decision.
+- Discussed today, not started: "sunfs" tooling arc -- read-only Sun/UFS
+  extractor CLI -> Swift library in macXserver (browse disk images) -> FSKit
+  read-write Finder mount ("drag files onto a Sun disk"); creator via
+  NetBSD makefs lift. Staged plan is in the 2026-07-02 session transcript;
+  extractor is the de-risking first step.
 
 ## Committed this session (all pushed to origin/main)
 
-- `~/Dropbox/dev/cx/cx`: 431c01b (NetBSD thread port + portability fixes)
-- `~/Dropbox/dev/cx/cx_tests`: ea91404 (select()-based sleep; thread gate sunos4)
-- `~/Dropbox/dev/cx` (umbrella): 94defb6 (GUEST_TOOLING_NOTES.md)
-- `~/Dropbox/dev/cx/cx_apps/heliosAgent`: 35fac44 + 599e4c1 + 4dadb60 (deploy fixes)
-- `~/Dropbox/dev/cx/cx_apps/cm`: b99eac4 (NetBSD install branch)
+- `~/dev/SPARCplug`: d200d4f (disk expansion + runbook + LOG + build414
+  tools), c86b368 (image locking unified), d4910bb (console input fix).
 - `~/dev/X`: this STATUS roll.
+- cx repos: untouched today.
 
 ## Switching Macs
 
-- **Let Dropbox finish syncing the cx tree + `.claude-memory/`** before opening
-  the other Mac.
-- All the guest-side changes (shells, tcsh, deploys, cm) live in the qcow2
-  images on THIS Mac's disk, not in git. The other Mac's images won't have them
-  until you copy the images or re-run the steps.
-- All three VMs were LEFT RUNNING this session. If you open the other Mac, shut
-  them down first (or it'll show remoteLocked on the image).
+- Let Dropbox finish syncing (images changed: new sunos414-boot.qcow2, old
+  pair moved to _archive -- that's ~4GB of churn; plus .claude-memory/).
+- **NetBSD VM is RUNNING on this Mac** (relaunched via the new lock-aware
+  script; it holds netbsd-boot.qcow2.macxserver-lock). The other Mac will
+  correctly see remoteLocked until it's shut down here and the lock deletion
+  syncs. Solaris + SunOS VMs are down, no locks.
+- The new 4.1.4 image (and all guest-side state) lives in THIS Mac's Dropbox;
+  wait for the sync before booting it over there.
