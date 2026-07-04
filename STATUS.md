@@ -1,89 +1,86 @@
-# Status 2026-07-04 (evening)
+# Status 2026-07-04 (late)
 
-## Headline: guest logins fully converged + template user; cm terminal-size fixed the right way
+## Headline: guest login convergence + template user shipped; then a cascade of real fixes (cm 2.8, real SS5 hardware, 3 macXserver launcher bugs, a hand-built color xterm)
 
-All SPARCplug/cx work today; no macXserver / swift-x code touched (this repo
-just gets the STATUS roll).
+Long, branchy day. The planned work (guest convergence) landed early; the
+rest was emergent bugs, each fixed and committed. All code is pushed. The
+color xterm lives on the 4.1.4 qcow2 image (an image artifact, not a repo).
 
 ## What's working / done this session
 
-- **Guest login convergence COMPLETE across all three guests** (SPARCplug
-  6b3cae3). One account scheme everywhere: tvernon 1000:100(users) with GECOS
-  "Todd Vernon" (was 100:wheel on SunOS, 1000:adm on Solaris; renumbered +
-  chowned), users(100) group created where missing, Solaris sshd privsep moved
-  1001:100 -> 22:22, /home -> export/home symlink on Solaris (autofs /home
-  retired from auto_master) so /home/<user> resolves identically on all three.
-  Root passwords set on SunOS + Solaris (both were EMPTY): Kemosabe1
-  everywhere, tvernon kemosabe everywhere (already was, hash-verified).
-- **template user (1999:100, locked password) on all three guests** with a
-  canonical skeleton home. This is the stamp macXserver's future add-user
-  copies; new users get uid 1001+. Per-OS add-user recipes documented in
-  guest-config/README.md.
-- **Canonical dotfiles now live in the repo**: ~/dev/SPARCplug/guest-config/
-  (dot.cshrc / dot.login / dot.profile + deploy-dotfiles.py). One file each,
-  runtime-branched ($OSTYPE / uname -r). Backlog items settled: prompt %M->%m,
-  xterm title escape in the prompt (literal ESC/BEL bytes in dot.cshrc), root
-  .profile unified into one uname-branched file. SunOS SMI .login tset relic
-  killed. Serial-console branch sets stty rows 24 columns 80 (6c0014c).
-  Deployed to all nine homes; verified by real telnet/ssh logins on all three.
-- **NetBSD telnetd enabled** (plain, no -a valid) so the 2143 hostfwd actually
-  serves telnet like the other guests.
-- **Guest tool inventory**: ~/dev/SPARCplug/docs/guest-inventory.md (generator
-  helios/inventory-all.py). Cross-guest tool matrix, flavor notes, helios
-  traps (daemon PATH is minimal!, old Bourne sh, HOME=/). Raw material for the
-  release "Claude guide".
-- **cm serial-console wedge root-caused and fixed properly** (Todd verified on
-  Mac + all 3 guests). Serial ttys report 0x0 winsize; cm busy-looped on 0
-  rows. New CxScreen::syncTerminalSize() (cx 10628e4) = in-process resize(1):
-  DSR probe with select() timeout, TIOCSWINSZ write-back, 24x80 fallback.
-  getCursorPosition timeout-protected too. cm's three old hacks
-  (fixTerminalSize/system resize, screenSubtract*, screenOverride*) removed
-  (cm 4587a7e); stale .cmrc keys silently ignored. Rebuilt + installed
-  /usr/local/bin/cm on all three guests (sunos4_sun4m / solaris6_sun4m /
-  netbsd_sparc, all green).
+- **Guest login convergence COMPLETE** (SPARCplug 6b3cae3): one account
+  scheme on all 3 guests (tvernon 1000:100 users, GECOS set), locked
+  `template` user 1999:100 seeding a canonical home for macXserver's future
+  add-user, canonical runtime-branched dotfiles in guest-config/,
+  deploy-dotfiles.py, docs/guest-inventory.md (tool survey, raw material for
+  the release "Claude guide"). Root pw Kemosabe1 / tvernon kemosabe on all 3.
+- **Serial-console 24x80 dotfile fix** (SPARCplug 6c0014c): fixes cm wedging
+  on the 0x0-winsize console; also fixed SunOS stty-acts-on-stdout no-op.
+- **cm terminal-size done right** (cx 10628e4, cm 4587a7e): CxScreen::
+  syncTerminalSize() = in-process resize(1) (DSR probe + TIOCSWINSZ + 24x80
+  fallback, timeout-safe); removed the fixTerminalSize/system-resize +
+  screenSubtract/Override hacks. Rebuilt + reinstalled cm on all 3 guests.
+- **cmacs 2.8 released** (cm b054d93, tag v2.8): GitHub release with
+  cmacs-macos.tar.gz + cmacs-linux.tar.gz; all 3 guests re-revved to 2.8.
+- **Real SS5 hardware booting** off HD3_Sun414_512.img (from the 4.1.4
+  image, ss5-configured network), on the LAN at 192.168.7.19, helios-
+  reachable. See memory reference_qcow_to_real_sparc_zuluscsi.
+- **3 macXserver launcher bugs fixed** (all "assumed target == bundled
+  emulator"): HeliosClient getaddrinfo not inet_aton so hostnames resolve
+  (e8fc3ea); filebrowser/launcher gating + secret only for the loopback
+  target, external Suns enabled unconditionally (e01b36a); HeliosLauncher
+  cd $HOME so launched apps open in home not / (7cac700). Tests updated.
+- **X11R6 color xterm built + installed on the 4.1.4 image**: MIT X11R6
+  xterm + Cray/SGI ANSI-color patch + my cursor-artifact fix
+  (HideCursor/ShowCursor now push each cell's stored fg/bg into the GC like
+  ScrnRefresh -- kills the blue cursor trail with cm). Built with cc (SPARC
+  v7, runs on the SS2 too). Installed /usr/openwin/bin/xterm (Sun original
+  = xterm.old). Source archived at /usr/local/src/colorxterm on the image
+  (NOTES.txt + patch/ with both diffs). Staged at /Volumes/FTP/xterm.color
+  for the SS2 to anon-FTP -- Todd confirmed the FTP grab works.
 
 ## What's broken / rough
 
-- Nothing new. Long-tail carries: 4.1.4 single-user shell tcsh-ish mystery;
-  NetBSD from-source builds (tcsh, gmake) not yet captured as guest scripts;
-  helios shutdown verb no-ops on 4.1.4.
-- Release-password question: images ship with known passwords
-  (Kemosabe1 / kemosabe). Decide before any public image release.
+- Nothing new open. The color xterm needs /usr/X11R6/lib (4.20 libs) on any
+  target box (present if it runs mwm) -- documented, not a bug.
+- Long-tail carries: 4.1.4 single-user-shell-is-tcsh mystery; NetBSD
+  from-source builds not captured as guest scripts; helios shutdown no-ops
+  on 4.1.4.
+- Release-password question still open (images ship Kemosabe1/kemosabe).
 
 ## What's next
 
 - Draft the release "Claude guide" from docs/guest-inventory.md +
-  guest-config/README.md (per-OS pages: identity, transport, toolchain,
-  landmines).
-- macXserver add-user UI someday: the guest-side recipe + template user are
-  ready for it.
-- Carried: sunfs tooling arc (read-only Sun/UFS extractor first); guest-side
-  setup scripts for reproducibility.
-
-## Late addition: cmacs 2.8 released
-
-- release.sh 2.8 run (Claude-driven, Todd built Linux): tag v2.8, GitHub
-  release with cmacs-macos.tar.gz + cmacs-linux.tar.gz
-  (github.com/toddvernon/cm/releases/tag/v2.8), commit b054d93. The 2.8
-  headline is the terminal-size fix. All three guests re-revved to 2.8
-  (incremental HelpView rebuild + reinstall, verified in the binaries).
+  guest-config/README.md.
+- macXserver add-user UI someday (template user + per-OS recipe are ready).
+- Rebuild macXserver in Xcode to pick up the 3 launcher fixes (e8fc3ea /
+  e01b36a / 7cac700) -- they're committed but the running app is older.
+- Carried: sunfs tooling arc (read-only Sun/UFS extractor first).
 
 ## Committed this session (all pushed to origin/main)
 
-- ~/dev/SPARCplug: 6b3cae3 (login convergence + guest-config + inventory),
-  6c0014c (console 24x80 + SunOS stty-on-stdout fix).
-- ~/Dropbox/dev/cx/cx: 10628e4 (CxScreen syncTerminalSize + timeout DSR).
-- ~/Dropbox/dev/cx/cx_apps/cm: 4587a7e (size hacks removed, probe wired in).
-- ~/dev/X: this STATUS roll.
+- ~/dev/SPARCplug: 6b3cae3 (convergence + guest-config + inventory),
+  6c0014c (console 24x80 + SunOS stty fix).
+- ~/Dropbox/dev/cx/cx: 10628e4 (CxScreen syncTerminalSize).
+- ~/Dropbox/dev/cx/cx_apps/cm: 4587a7e (size hacks removed), b054d93
+  (Release v2.8, tag v2.8, GitHub release w/ both tarballs).
+- ~/dev/X: e8fc3ea (getaddrinfo), e01b36a (launcher gating), 7cac700 (cd
+  $HOME), plus STATUS rolls e8b0af1 / b0785c8 / this one.
+
+## Not in any repo (by design)
+
+- The color xterm binary + source live on the 4.1.4 qcow2 image only
+  (/usr/openwin/bin/xterm, /usr/local/src/colorxterm). Copies of the binary:
+  /Volumes/FTP/xterm.color (the FTP-share one Todd uses), ss5:/home/tvernon/
+  xterm.color, /Volumes/NFS/hosts/ss5/xterm.color. sum = 37852 208.
+- ss5 real-hardware image HD3_Sun414_512.img on the ZuluSCSI SD + NFS share.
 
 ## Switching Macs
 
-- Let Dropbox finish syncing: cx tree (source + rebuilt Mac libs), the three
-  guest images (dotfile/passwd/etc changes are INSIDE the qcow2s), and
-  .claude-memory/.
-- All three VMs were RUNNING on this Mac at close (script-launched, each
-  holding its lock). If they stay up, the other Mac correctly sees
-  remoteLocked until they're shut down here.
-- Guest passwords now: root Kemosabe1 / tvernon kemosabe on ALL three.
-  Pre-surgery backups on each guest: /var/tmp/dotfiles-pre-20260704.tar and
-  /etc/*.bak-20260704.
+- Let Dropbox finish syncing: cx tree, .claude-memory, and the 3 guest
+  qcow2 images (login/passwd/dotfile changes + the color xterm + colorxterm
+  source are all INSIDE the sunos414 qcow2 -- that's real churn).
+- Guest passwords: root Kemosabe1 / tvernon kemosabe on all 3.
+- macXserver has 3 committed launcher fixes not yet in a rebuilt app.
+- Leftover test xterm windows may be cluttering the emulator screen (Todd
+  can drop them anytime; harmless).
