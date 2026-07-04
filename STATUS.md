@@ -60,6 +60,14 @@ just gets the STATUS roll).
 - Carried: sunfs tooling arc (read-only Sun/UFS extractor first); guest-side
   setup scripts for reproducibility.
 
+## Late addition: cmacs 2.8 released
+
+- release.sh 2.8 run (Claude-driven, Todd built Linux): tag v2.8, GitHub
+  release with cmacs-macos.tar.gz + cmacs-linux.tar.gz
+  (github.com/toddvernon/cm/releases/tag/v2.8), commit b054d93. The 2.8
+  headline is the terminal-size fix. All three guests re-revved to 2.8
+  (incremental HelpView rebuild + reinstall, verified in the binaries).
+
 ## Committed this session (all pushed to origin/main)
 
 - ~/dev/SPARCplug: 6b3cae3 (login convergence + guest-config + inventory),
