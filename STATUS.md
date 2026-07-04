@@ -1,85 +1,81 @@
-# Status 2026-07-02 (evening)
+# Status 2026-07-04 (evening)
 
-## Headline: SunOS 4.1.4 single-disk expansion DONE; image locking unified across scripts + macXserver
+## Headline: guest logins fully converged + template user; cm terminal-size fixed the right way
 
-Two big SPARCplug wins today, both shipped and verified. No macXserver /
-swift-x code touched (this repo just gets the STATUS roll).
+All SPARCplug/cx work today; no macXserver / swift-x code touched (this repo
+just gets the STATUS roll).
 
 ## What's working / done this session
 
-- **4.1.4 disk expansion executed end-to-end** (runbook `expand_414_fs.md` in
-  the SPARCplug repo, narrative log `expand_414_fs_LOG.md` -- written as
-  OldSilicon post material). One 5.4G disk replaces the old 2G boot + 2G
-  /home2 pair: 1G root+var (was 28MB!), 256M swap, 2G /usr, 2G /home. /home2
-  retired: content merged into /home, passwd homes moved, fstab cleaned, one
-  straggler script fixed. Old pair archived in Dropbox
-  `_archive/pre-expand-2026-07-02/` (that's the rollback). New qcow2 is 1.7G
-  on disk vs 3.9G for the pair. Boots multiuser via the unmodified script
-  path, helios-verified, tvernon login lands in /home/tvernon.
-  - Build tricks that are now reusable (memory: reference_sunos414_image_surgery):
-    Sun VTOC written host-side by `build414/sunlabel.py` (kernel accepted it,
-    no interactive format ever); dump-to-FILE not pipes (4.1.4 restore dies
-    silently on big pipe streams); serial-console bridge+marker harness
-    (`build414/bridge.py` + `drive.py`); tty drops input past ~256 chars.
-  - Gotchas found: single-user shell on the 4.1.4 image behaves as tcsh
-    (60-min autologout exited a maintenance session mid-build -> multiuser;
-    guard: `exec /bin/sh` first; root-cause open). helios `shutdown` verb
-    no-ops on 4.1.4 -- use `run "sync; sync; /usr/etc/halt"`.
-- **Image locking unified** (the queued task -- DONE). New
-  `emu/imagelock.sh` shared by all three run scripts: writes + checks
-  macXserver's exact `<image>.macxserver-lock` format, so script-held images
-  show "in use" in macXserver and vice versa, and the other Mac sees
-  remoteLocked via Dropbox. Stale same-host locks self-heal (pid check);
-  remote locks hard-stop with FORCE=1 override (accepted: Dropbox latency can
-  leave brief false positives; no LAN check by design). Cross-validated
-  against compiled ImageLock.swift -- caught a host-case mismatch
-  (ProcessInfo.hostName is lowercase, hostname(1) isn't). Also settled
-  empirically: qemu's own fcntl lock DOES block same-Mac double-open on
-  macOS; old script comments claiming otherwise fixed.
-- **Console-input regression found and fixed same-day:** first lock version
-  ran qemu as a backgrounded child, which POSIX-reassigns stdin to /dev/null
-  -- console login went deaf. Now: lock written with $$, detached monitor
-  releases it on pid death, qemu exec'd in the FOREGROUND (tty identical to
-  pre-lock behavior). Verified under a real pty (expect typed at OpenBIOS and
-  got answers).
+- **Guest login convergence COMPLETE across all three guests** (SPARCplug
+  6b3cae3). One account scheme everywhere: tvernon 1000:100(users) with GECOS
+  "Todd Vernon" (was 100:wheel on SunOS, 1000:adm on Solaris; renumbered +
+  chowned), users(100) group created where missing, Solaris sshd privsep moved
+  1001:100 -> 22:22, /home -> export/home symlink on Solaris (autofs /home
+  retired from auto_master) so /home/<user> resolves identically on all three.
+  Root passwords set on SunOS + Solaris (both were EMPTY): Kemosabe1
+  everywhere, tvernon kemosabe everywhere (already was, hash-verified).
+- **template user (1999:100, locked password) on all three guests** with a
+  canonical skeleton home. This is the stamp macXserver's future add-user
+  copies; new users get uid 1001+. Per-OS add-user recipes documented in
+  guest-config/README.md.
+- **Canonical dotfiles now live in the repo**: ~/dev/SPARCplug/guest-config/
+  (dot.cshrc / dot.login / dot.profile + deploy-dotfiles.py). One file each,
+  runtime-branched ($OSTYPE / uname -r). Backlog items settled: prompt %M->%m,
+  xterm title escape in the prompt (literal ESC/BEL bytes in dot.cshrc), root
+  .profile unified into one uname-branched file. SunOS SMI .login tset relic
+  killed. Serial-console branch sets stty rows 24 columns 80 (6c0014c).
+  Deployed to all nine homes; verified by real telnet/ssh logins on all three.
+- **NetBSD telnetd enabled** (plain, no -a valid) so the 2143 hostfwd actually
+  serves telnet like the other guests.
+- **Guest tool inventory**: ~/dev/SPARCplug/docs/guest-inventory.md (generator
+  helios/inventory-all.py). Cross-guest tool matrix, flavor notes, helios
+  traps (daemon PATH is minimal!, old Bourne sh, HOME=/). Raw material for the
+  release "Claude guide".
+- **cm serial-console wedge root-caused and fixed properly** (Todd verified on
+  Mac + all 3 guests). Serial ttys report 0x0 winsize; cm busy-looped on 0
+  rows. New CxScreen::syncTerminalSize() (cx 10628e4) = in-process resize(1):
+  DSR probe with select() timeout, TIOCSWINSZ write-back, 24x80 fallback.
+  getCursorPosition timeout-protected too. cm's three old hacks
+  (fixTerminalSize/system resize, screenSubtract*, screenOverride*) removed
+  (cm 4587a7e); stale .cmrc keys silently ignored. Rebuilt + installed
+  /usr/local/bin/cm on all three guests (sunos4_sun4m / solaris6_sun4m /
+  netbsd_sparc, all green).
 
 ## What's broken / rough
 
-- heliosAgent `shutdown` verb doesn't actually halt 4.1.4 (BSD init, no
-  runlevels). Needs an OS-aware daemon fix someday.
-- Single-user-shell-is-tcsh contradicts the convergence design (base sh,
-  exec tcsh only if interactive); mechanism unverified -- root-cause when
-  convergence work resumes.
-- `build414/big.img` (raw, 5.3G, local disk) kept until the new qcow2 proves
-  itself over a few sessions; `build414/boot-work.img` is deletable anytime.
-- Guest-side setup still not captured as repo scripts (gmake/tcsh from-source
-  on NetBSD, shell convergence steps) -- carried over.
+- Nothing new. Long-tail carries: 4.1.4 single-user shell tcsh-ish mystery;
+  NetBSD from-source builds (tcsh, gmake) not yet captured as guest scripts;
+  helios shutdown verb no-ops on 4.1.4.
+- Release-password question: images ship with known passwords
+  (Kemosabe1 / kemosabe). Decide before any public image release.
 
 ## What's next
 
-- Carried from yesterday: unify root ~/.profile (one file, branch on uname);
-  decide canonical guest-dotfile home (~/dev/SPARCplug/guest-config/
-  proposed); prompt %M->%m; xterm-title decision.
-- Discussed today, not started: "sunfs" tooling arc -- read-only Sun/UFS
-  extractor CLI -> Swift library in macXserver (browse disk images) -> FSKit
-  read-write Finder mount ("drag files onto a Sun disk"); creator via
-  NetBSD makefs lift. Staged plan is in the 2026-07-02 session transcript;
-  extractor is the de-risking first step.
+- Draft the release "Claude guide" from docs/guest-inventory.md +
+  guest-config/README.md (per-OS pages: identity, transport, toolchain,
+  landmines).
+- macXserver add-user UI someday: the guest-side recipe + template user are
+  ready for it.
+- Carried: sunfs tooling arc (read-only Sun/UFS extractor first); guest-side
+  setup scripts for reproducibility.
 
 ## Committed this session (all pushed to origin/main)
 
-- `~/dev/SPARCplug`: d200d4f (disk expansion + runbook + LOG + build414
-  tools), c86b368 (image locking unified), d4910bb (console input fix).
-- `~/dev/X`: this STATUS roll.
-- cx repos: untouched today.
+- ~/dev/SPARCplug: 6b3cae3 (login convergence + guest-config + inventory),
+  6c0014c (console 24x80 + SunOS stty-on-stdout fix).
+- ~/Dropbox/dev/cx/cx: 10628e4 (CxScreen syncTerminalSize + timeout DSR).
+- ~/Dropbox/dev/cx/cx_apps/cm: 4587a7e (size hacks removed, probe wired in).
+- ~/dev/X: this STATUS roll.
 
 ## Switching Macs
 
-- Let Dropbox finish syncing (images changed: new sunos414-boot.qcow2, old
-  pair moved to _archive -- that's ~4GB of churn; plus .claude-memory/).
-- **NetBSD VM is RUNNING on this Mac** (relaunched via the new lock-aware
-  script; it holds netbsd-boot.qcow2.macxserver-lock). The other Mac will
-  correctly see remoteLocked until it's shut down here and the lock deletion
-  syncs. Solaris + SunOS VMs are down, no locks.
-- The new 4.1.4 image (and all guest-side state) lives in THIS Mac's Dropbox;
-  wait for the sync before booting it over there.
+- Let Dropbox finish syncing: cx tree (source + rebuilt Mac libs), the three
+  guest images (dotfile/passwd/etc changes are INSIDE the qcow2s), and
+  .claude-memory/.
+- All three VMs were RUNNING on this Mac at close (script-launched, each
+  holding its lock). If they stay up, the other Mac correctly sees
+  remoteLocked until they're shut down here.
+- Guest passwords now: root Kemosabe1 / tvernon kemosabe on ALL three.
+  Pre-surgery backups on each guest: /var/tmp/dotfiles-pre-20260704.tar and
+  /etc/*.bak-20260704.
