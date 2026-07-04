@@ -61,6 +61,12 @@ public final class HeliosLauncher: @unchecked Sendable {
     public static func remoteCommand(entry: LauncherEntry, displayString: String) -> String {
         "PATH=/usr/openwin/bin:/usr/dt/bin:/usr/bin/X11:$PATH; export PATH; " +
         "DISPLAY=\(displayString); export DISPLAY; " +
+        // The daemon's `run_command --user` is a bare setuid: it sets HOME but
+        // leaves cwd at the daemon's `/`, so a launched xterm would open in /
+        // instead of the user's home (its prompt then shows `/`, looking like a
+        // root prompt). chdir into HOME first; `;` not `&&` so a bad HOME just
+        // launches in place rather than not at all.
+        "cd \"$HOME\" 2>/dev/null; " +
         "nohup \(entry.command) </dev/null >/dev/null 2>&1 &"
     }
 

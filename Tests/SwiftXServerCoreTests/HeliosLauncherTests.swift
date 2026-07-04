@@ -21,6 +21,7 @@ final class HeliosLauncherTests: XCTestCase {
         XCTAssertEqual(cmd,
             "PATH=/usr/openwin/bin:/usr/dt/bin:/usr/bin/X11:$PATH; export PATH; " +
             "DISPLAY=10.0.2.2:0; export DISPLAY; " +
+            "cd \"$HOME\" 2>/dev/null; " +
             "nohup xterm -fg \"#95efaf\" -fn 10x20 </dev/null >/dev/null 2>&1 &")
     }
 
