@@ -322,18 +322,28 @@ public final class HeliosClient {
     // MARK: - Socket I/O (Darwin POSIX, matching Listener.swift's house style)
 
     private func openConnection() throws -> Int32 {
-        let sock = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        // Resolve `host` to an address. This used to be inet_aton(), which only
+        // parses a numeric dotted-quad -- fine for the bundled emulator's
+        // 127.0.0.1 loopback, but it fails outright on a DNS name like
+        // "ss5.vernon.com", so helios launchers pointed at a real Sun by name
+        // couldn't connect. getaddrinfo() handles both numeric IPs and hostnames.
+        var hints = addrinfo()
+        hints.ai_family = AF_INET          // IPv4, matching the daemon's socket
+        hints.ai_socktype = SOCK_STREAM
+        var resolved: UnsafeMutablePointer<addrinfo>?
+        let gaiErr = getaddrinfo(host, String(port), &hints, &resolved)
+        guard gaiErr == 0, let info = resolved else {
+            if let resolved { freeaddrinfo(resolved) }
+            let msg = String(cString: gai_strerror(gaiErr))
+            throw HeliosError.connectionFailed("can't resolve \"\(host)\": \(msg)")
+        }
+        defer { freeaddrinfo(info) }
+
+        let sock = Darwin.socket(info.pointee.ai_family,
+                                 info.pointee.ai_socktype,
+                                 info.pointee.ai_protocol)
         guard sock >= 0 else {
             throw HeliosError.connectionFailed("socket(): errno \(errno)")
-        }
-
-        var addr = sockaddr_in()
-        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = port.bigEndian
-        guard inet_aton(host, &addr.sin_addr) != 0 else {
-            Darwin.close(sock)
-            throw HeliosError.connectionFailed("bad host address \"\(host)\"")
         }
 
         // Non-blocking connect so we can bound it with poll(); the daemon may be
@@ -341,11 +351,7 @@ public final class HeliosClient {
         let savedFlags = fcntl(sock, F_GETFL, 0)
         _ = fcntl(sock, F_SETFL, savedFlags | O_NONBLOCK)
 
-        let rc = withUnsafePointer(to: &addr) { ptr -> Int32 in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                Darwin.connect(sock, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
+        let rc = Darwin.connect(sock, info.pointee.ai_addr, info.pointee.ai_addrlen)
         if rc != 0 {
             guard errno == EINPROGRESS else {
                 let e = errno
