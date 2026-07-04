@@ -763,6 +763,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return item
     }
 
+    /// True when a launcher entry points at the bundled emulator's Helios daemon
+    /// (the qemu hostfwd on the loopback), rather than a real Sun on the LAN.
+    /// Only a loopback target's readiness (`sparcReady`) and per-launch secret
+    /// (`qemuEngine.currentSecret`) apply -- an external box has its own daemon
+    /// lifetime and its own (or no) auth, so gating those on the bundled guest
+    /// is wrong.
+    private func isBundledGuestTarget(_ entry: LauncherEntry) -> Bool {
+        let h = entry.host.lowercased()
+        return h == "127.0.0.1" || h == "localhost" || h == "::1"
+    }
+
     @MainActor
     @objc private func openFileBrowser(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String,
@@ -790,10 +801,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         if fileBrowserControllers[key] == nil {
+            // The bundled emulator's per-launch secret only applies to the
+            // loopback target; a real Sun has its own (or an open) daemon.
+            let bundled = isBundledGuestTarget(entry)
             let config = HeliosFileBrowserConfig(
                 host: entry.host, port: entry.port, user: entry.user,
                 label: "\(entry.group): \(entry.user)",
-                secretProvider: { [weak self] in self?.qemuEngine?.currentSecret })
+                secretProvider: { [weak self] in bundled ? self?.qemuEngine?.currentSecret : nil })
             fileBrowserControllers[key] = FileBrowserWindowController(config: config)
         }
         fileBrowserControllers[key]?.showWindow()
@@ -863,8 +877,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case .ssh:
             launcher = SSHLauncher(entry: entry, displayString: display)
         case .helios:
+            // Same bundled-only rule as the file browser: the emulator's
+            // per-launch secret goes only to the loopback target, not a real Sun.
             launcher = HeliosLauncher(entry: entry, displayString: display,
-                                      secret: qemuEngine?.currentSecret)
+                                      secret: isBundledGuestTarget(entry) ? qemuEngine?.currentSecret : nil)
         }
         activeLauncher = launcher
 
@@ -1480,12 +1496,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         switch item.action {
         case #selector(openDnsAdmin(_:)):         return sparcReady
         case #selector(openFileBrowser(_:)):
-            // Helios filebrowser keys gate on the bundled guest being up. A
-            // mis-transported one stays enabled so clicking surfaces the config
-            // error (it points at no bundled guest, so sparcReady is irrelevant).
+            // A helios filebrowser key targeting the BUNDLED guest gates on its
+            // readiness (sparcReady). One pointed at a real Sun on the LAN does
+            // not -- that daemon's availability is independent, so enable it and
+            // let the browser window surface any connection error itself. A
+            // mis-transported key also stays enabled so clicking shows the
+            // config error.
             let key = item.representedObject as? String
-            let entry = currentLauncherFile?.entries.first { "\($0.group)/\($0.name)" == key }
-            return entry?.transport == .helios ? sparcReady : true
+            guard let entry = currentLauncherFile?.entries.first(where: { "\($0.group)/\($0.name)" == key }),
+                  entry.transport == .helios else { return true }
+            return isBundledGuestTarget(entry) ? sparcReady : true
         default: return true
         }
     }
