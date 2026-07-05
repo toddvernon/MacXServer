@@ -42,8 +42,6 @@ struct MachineRow: Identifiable, Equatable {
     /// External hosts carry a Helios daemon secret the user enters (bundled VMs
     /// get theirs per-boot automatically). True → show the "Helios Secret" control.
     let canSetHeliosSecret: Bool
-    /// Whether a secret is currently saved for this machine (drives the checkmark).
-    let heliosSecretSet: Bool
 
     let launchers: [MachineLauncherChip]
 }

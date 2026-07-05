@@ -320,8 +320,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 canBackup: (state == .stopped),
                 canConsole: (sparcConsole != nil),
                 canSetHeliosSecret: !isEmulated,
-                heliosSecretSet: !isEmulated &&
-                    KeychainHelper.retrieve(account: heliosSecretAccount(host: m.host, user: m.user)) != nil,
                 launchers: chips)
         }
     }

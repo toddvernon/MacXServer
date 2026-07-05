@@ -108,13 +108,11 @@ private struct MachineRowView: View {
             Button {
                 model.onSetHeliosSecret?(row.id)
             } label: {
-                Label(row.heliosSecretSet ? "Helios Secret \u{2713}" : "Helios Secret\u{2026}",
-                      systemImage: "key.fill")
+                Label("Helios Secret\u{2026}", systemImage: "key.fill")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help(row.heliosSecretSet ? "A Helios secret is saved for this host"
-                                      : "No Helios secret saved yet")
+            .help("Enter the Helios daemon secret for this host")
         }
     }
 
