@@ -1073,6 +1073,93 @@ This maps onto existing structure: the launcher's `transport` field (telnet / ss
 
 ---
 
+## 2026-07-05: macXserver becomes a machine manager — the X server recedes to a stated-but-secondary service (inverts the "one machine, not a VM list" stance)
+
+**Context**: the app has quietly become two things. The original charter
+(`SPARCSTATION_PLUGIN.md` Phase 2: "NOT a VM list, NOT a configuration panel. One
+machine, one set of controls… resist the temptation to expand scope") was written
+when the emulator was genuinely a hidden appliance under the X server. It isn't
+anymore — there's a console, backups, orphan reconnect, image locking, Helios
+management, a DNS admin panel, and now *real hardware* (the ss5) in the picture.
+The moment there's more than one box — emulated or real — "one machine, one set of
+controls" stops describing reality. Todd's driving "why," sharper than the doc's:
+managing a heterogeneous collection of old machines is genuinely hard (OS config
+drift, hard to build things everywhere), and this app is the control plane that
+makes it not-hard, identically whether a box is emulated or real iron — plus the
+consumer angle, an "experience what Sun machines were like" tool for people who'll
+never own the hardware. Full design in `MACHINE_MANAGER_REFACTOR.md`.
+
+**Chosen**: invert the product identity. The app is organized around a **machine
+list** (a `Machine` model with two kinds — `.emulatedVM` full-lifecycle, and
+`.externalHost` real Sun with no lifecycle we own, differentiated by *capability
+sets* not a uniform interface, because a real Sun genuinely has no QMP/start/stop).
+A `MachineController` (per-machine `{QemuEngine, QmpClient, console, ImageLock,
+secret, ports}`) is extracted from the ~1500-line AppDelegate god-object, held in a
+keyed `MachineRegistry` instead of the single `qemuEngine?`. The X server keeps
+running exactly as-is (same per-connection `protocolQueue` model, still usable with
+zero VMs, still the technical heart) but becomes a *stated-but-secondary service*.
+Phased, each phase shippable: P0 extract controller (no behavior change) → P1
+registry + list window, one-at-a-time → P2 concurrency (dynamic ports, unique
+MACs, per-machine sockets/locks/secrets, N engines) → P3 external hosts +
+launchers-under-machines → P4 catalog + verified downloads → P5 the identity
+reframe. Stop after P1 and reassess.
+
+**Four sub-decisions settled the same day** (each detailed in the doc):
+- **Golden-master config story lives OUTSIDE the app.** NOT building
+  fleet/config-management (no Ansible-for-Suns). Dial the reference VM in by hand,
+  then *Claude* deploys the delta over Helios to bring real boxes into compliance.
+  So the app needs only lifecycle + external-host kind + a registry Claude can see.
+  This forces one architectural rule: **the `MachineRegistry` is visible to the MCP
+  bridge**, not private AppDelegate state — it's the discovery layer Claude reads
+  to know the fleet. Consistent with peer-clients-not-a-hub (2026-06-21): the
+  manager owns lifecycle + network path + discovery and brokers nothing.
+- **Networking**: slirp stays the default (free outbound NAT). Add a `-netdev
+  socket` **fabric as a second NIC** so VMs can talk to each other (unprivileged,
+  static `le1` config into `guest-config/`); hostfwd incl. `0.0.0.0`-bind for
+  inbound-from-LAN on demand. **vmnet-bridged is out of scope** — it needs qemu as
+  root or the Apple-gated `com.apple.vm.networking` entitlement or a shipped
+  privileged helper, all of which break the unprivileged + minimal-tooling story,
+  and bridging unpatched 30-year-old OSes onto real LANs is a security exposure the
+  LAN-only/hobby-grade non-goal exists to fence out. `Machine.networkMode` field
+  carries the choice.
+- **App flow = separate first-class windows**, not a unified sidebar shell (the
+  lower-risk path; doesn't turn this into a big multi-surface app). **Machines**
+  window is the front door (opens on launch, close ≠ quit — the status item is the
+  persistent presence); **X Server** is an on-demand live-runtime window (clients,
+  listener, drop). Menu bar goes thin: App / Machines (replaces SPARCstation,
+  rebuilt from registry, launchers nested per-machine) / Server / Edit / Window.
+  The status item becomes an "N running" dashboard.
+- **Capture is not a peer surface** — server-side capture is a feature of the
+  running X server (Preferences toggle + App-menu actions); the standalone
+  macXcapture app is a separate target, out of this reorg.
+
+**Considered + rejected**: (a) keep the X-server-primary framing and only make the
+*plumbing* multi-machine — the smaller fallback, still worth doing, but Todd bought
+the full inversion with eyes open, so the UI reframe is in. (b) a unified
+window-with-sidebar-surfaces shell (Machines/X Server/Capture as source-list rows)
+— cleaner-scaling but a bigger application-shell commitment; separate windows
+chosen for lower risk. (c) an in-app config-management feature — rejected in favor
+of golden-master-plus-Claude, which needs no new app surface. (d) full
+vmnet-bridged networking — rejected on privilege + security grounds above. (e) a
+uniform Machine interface across both kinds — rejected because capability
+divergence between emulated and real is load-bearing (2026-06-24 QMP-only-on-
+emulator split).
+
+**Trade accepted**: this overturns a written charter stance and adds new top-level
+types (`Machine`/`MachineRegistry`/`MachineController`, kept in `SwiftXServerCore`
+alongside `QemuEngine`, not a new module) — both maintainer-sign-off gates, which
+this conversation cleared. The hard boundary held: **"VM manager primary" means UI
+organization, NEVER a protocol broker** — the manager never proxies X or Helios
+bytes; Claude Code and macXserver stay co-equal Helios peers; the X server keeps
+its own per-connection session model. The two genuinely un-built prerequisites
+(concurrent multi-engine runtime = deferred milestone #6; Helios-on-real-iron =
+HELIOS_PLAN C9) are scoped, not blocking P0–P1. **Status: direction approved
+2026-07-05, no code yet** — `MACHINE_MANAGER_REFACTOR.md` is the burn-down. On
+sign-off this also updates `SPARCSTATION_PLUGIN.md` (the "NOT a VM list" section)
+and `PRODUCT_2_SERVER.md`.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
