@@ -252,6 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.onBackup    = { [weak self] _ in self?.backUpDiskImage(nil) }
         model.onConsole   = { [weak self] _ in self?.showSparcConsole(nil) }
         model.onLaunch    = { [weak self] id, name in self?.launchFromMachine(id, launcherName: name) }
+        model.onSetHeliosSecret = { [weak self] id in self?.promptHeliosSecret(for: id) }
         model.onAddMachine = { [weak self] in self?.presentAddMachineComingSoon() }
         self.machineListModel = model
         let controller = MachineListWindowController(model: model)
@@ -318,6 +319,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 canForceQuit: (state == .running || state == .shuttingDown),
                 canBackup: (state == .stopped),
                 canConsole: (sparcConsole != nil),
+                canSetHeliosSecret: !isEmulated,
+                heliosSecretSet: !isEmulated &&
+                    KeychainHelper.retrieve(account: heliosSecretAccount(host: m.host, user: m.user)) != nil,
                 launchers: chips)
         }
     }
@@ -334,6 +338,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         } else {
             launch(entry)
         }
+    }
+
+    /// Enter / update / clear the Helios daemon secret for an external machine,
+    /// stored in the Keychain keyed by user@host. Prefilled with the current
+    /// value; blank clears it.
+    @MainActor
+    private func promptHeliosSecret(for machineID: UUID) {
+        guard let m = registry?.machine(machineID) else { return }
+        let account = heliosSecretAccount(host: m.host, user: m.user)
+        let alert = NSAlert()
+        alert.messageText = "Helios secret for \(m.user)@\(m.host)"
+        alert.informativeText = "Enter the Helios daemon secret for this machine. "
+            + "Leave blank to clear it. Stored in your macOS Keychain, sent as the "
+            + "daemon's auth on every Helios call to this host."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.stringValue = KeychainHelper.retrieve(account: account) ?? ""
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let value = field.stringValue
+        if value.isEmpty {
+            KeychainHelper.delete(account: account)
+        } else {
+            try? KeychainHelper.store(account: account, password: value)
+        }
+        refreshMachineList()
     }
 
     private func presentAddMachineComingSoon() {
@@ -955,6 +987,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return h == "127.0.0.1" || h == "localhost" || h == "::1"
     }
 
+    /// Keychain account under which an external machine's Helios daemon secret is
+    /// stored. Keyed by user@host so it survives a machine rename / re-migration
+    /// and is shared by every launcher + file-browser call to that box.
+    private func heliosSecretAccount(host: String, user: String) -> String {
+        "helios:\(user)@\(host)"
+    }
+
+    /// The Helios `auth` secret to present to a box's daemon. The bundled emulator
+    /// uses its per-boot `-prom-env` secret from the engine; an external host uses
+    /// the secret the user saved in the Keychain (nil = none saved -- an open
+    /// daemon still works, a secured one rejects until the user sets it). Supplying
+    /// a secret to an open daemon is harmless, so this is safe against both.
+    private func heliosSecret(host: String, user: String) -> String? {
+        let h = host.lowercased()
+        if h == "127.0.0.1" || h == "localhost" || h == "::1" {
+            return controller?.engine.currentSecret
+        }
+        return KeychainHelper.retrieve(account: heliosSecretAccount(host: host, user: user))
+    }
+
     @MainActor
     @objc private func openFileBrowser(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String,
@@ -988,13 +1040,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         if fileBrowserControllers[key] == nil {
-            // The bundled emulator's per-launch secret only applies to the
-            // loopback target; a real Sun has its own (or an open) daemon.
-            let bundled = isBundledGuestTarget(entry)
+            // Bundled → its per-boot engine secret; external → the Keychain secret
+            // for that box (see heliosSecret). Resolved live each call.
+            let host = entry.host, user = entry.user
             let config = HeliosFileBrowserConfig(
                 host: entry.host, port: entry.port, user: entry.user,
                 label: "\(entry.group): \(entry.user)",
-                secretProvider: { [weak self] in bundled ? self?.controller?.engine.currentSecret : nil })
+                secretProvider: { [weak self] in self?.heliosSecret(host: host, user: user) })
             fileBrowserControllers[key] = FileBrowserWindowController(config: config)
         }
         fileBrowserControllers[key]?.showWindow()
@@ -1075,7 +1127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // Same bundled-only rule as the file browser: the emulator's
             // per-launch secret goes only to the loopback target, not a real Sun.
             launcher = HeliosLauncher(entry: entry, displayString: display,
-                                      secret: isBundledGuestTarget(entry) ? controller?.engine.currentSecret : nil)
+                                      secret: heliosSecret(host: entry.host, user: entry.user))
         }
         activeLauncher = launcher
 

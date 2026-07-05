@@ -39,6 +39,12 @@ struct MachineRow: Identifiable, Equatable {
     let canBackup: Bool
     let canConsole: Bool
 
+    /// External hosts carry a Helios daemon secret the user enters (bundled VMs
+    /// get theirs per-boot automatically). True → show the "Helios Secret" control.
+    let canSetHeliosSecret: Bool
+    /// Whether a secret is currently saved for this machine (drives the checkmark).
+    let heliosSecretSet: Bool
+
     let launchers: [MachineLauncherChip]
 }
 
@@ -57,5 +63,6 @@ final class MachineListModel: ObservableObject {
     var onConsole: ((UUID) -> Void)?
     /// (machineID, launcherName)
     var onLaunch: ((UUID, String) -> Void)?
+    var onSetHeliosSecret: ((UUID) -> Void)?
     var onAddMachine: (() -> Void)?
 }

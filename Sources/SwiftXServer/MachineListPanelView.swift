@@ -104,6 +104,17 @@ private struct MachineRowView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+        } else if row.canSetHeliosSecret {
+            Button {
+                model.onSetHeliosSecret?(row.id)
+            } label: {
+                Label(row.heliosSecretSet ? "Helios Secret \u{2713}" : "Helios Secret\u{2026}",
+                      systemImage: "key.fill")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help(row.heliosSecretSet ? "A Helios secret is saved for this host"
+                                      : "No Helios secret saved yet")
         }
     }
 
