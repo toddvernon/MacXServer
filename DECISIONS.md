@@ -1153,10 +1153,15 @@ organization, NEVER a protocol broker** — the manager never proxies X or Helio
 bytes; Claude Code and macXserver stay co-equal Helios peers; the X server keeps
 its own per-connection session model. The two genuinely un-built prerequisites
 (concurrent multi-engine runtime = deferred milestone #6; Helios-on-real-iron =
-HELIOS_PLAN C9) are scoped, not blocking P0–P1. **Status: direction approved
-2026-07-05, no code yet** — `MACHINE_MANAGER_REFACTOR.md` is the burn-down. On
-sign-off this also updates `SPARCSTATION_PLUGIN.md` (the "NOT a VM list" section)
-and `PRODUCT_2_SERVER.md`.
+HELIOS_PLAN C9) are scoped, not blocking P0–P1. **Status: approved AND P0+P1
+shipped 2026-07-05** (same day) — `Machine`/`MachineRegistry`/`MachineController`
+landed as flat-JSON config + registry + Machines list window + registry-driven
+menu/status reorg, and per-external-host Helios secrets (most of the "external
+hosts" phase) proven against the real ss5. See the "Shipped 2026-07-05" section
+of `MACHINE_MANAGER_REFACTOR.md`. At the reassess boundary now; next candidates
+are the add/edit-machine UI and the MCP bridge (P2 concurrency deferred).
+`SPARCSTATION_PLUGIN.md` ("NOT a VM list") and `PRODUCT_2_SERVER.md` still to be
+updated to match the shipped reframe.
 
 ---
 

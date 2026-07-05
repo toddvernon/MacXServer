@@ -35,6 +35,42 @@ The conversation that turned this from proposal to plan. The decisions:
   under machines. Capture stays a feature of the X server, not a peer surface.
   See "Menus and app flow."
 
+## Shipped 2026-07-05 (P0 + P1 complete)
+
+Built and pushed the same day the direction was approved. Commits on main:
+
+- **P0 — `MachineController` extracted** (d3a30af). The per-machine runtime unit
+  (one `QemuEngine` + `isReady`), keyed by id; AppDelegate routes through it. No
+  behavior change; verified live.
+- **P1a — data layer** (192cf7f, e065a62, +ports polish). `Machine` model, then
+  converted to **flat JSON** (`~/.macxserver-machines.json`) per Todd's call --
+  the INI-with-inheritance was confusing. Lean `MachineLauncher`, terse encode,
+  forgiving decode; one-shot migrator from the legacy launchers file; 12 tests.
+- **P1b — `MachineRegistry`** (d3a3def). The machine home + live controllers +
+  MCP-visible `snapshot()`. AppDelegate loads it at launch (migrating on first
+  run), reaches the bundled controller through it. Still one-at-a-time.
+- **P1c-1 — Machines list window** (f0d4dff). The front door: a row per machine
+  with status dot, launchers, and bundled-VM lifecycle controls. Opens on launch,
+  close != quit (status item persists), doesn't hide on deactivate.
+- **External-host Helios secrets** (1647a02, 10d2fa9, and the Keychain-in-Debug
+  work 7837aac / cb3180e / 6971dd0). Per-external-machine daemon secret entered
+  in-app (with a show/hide toggle), stored in the Keychain (Release) or a 0600
+  dev file (Debug), supplied on every Helios call via `heliosSecret(host:user:)`.
+  **Proven against the real ss5** with a static secret. This is most of the doc's
+  P3 "external hosts" phase, pulled forward.
+- **P1c-2 — menu + status reorg** (24b2a66, 8d61db8). SPARCstation + flat
+  Launchers menus replaced by one registry-driven **Machines** menu; new
+  **Server** menu (listener status + Drop All Clients); status-item "N running"
+  dashboard. Launchers stay editable via the file, reconciled into the registry
+  (`MachineRegistry.reconcile`).
+
+**Reassess boundary reached** (the doc's "stop after P1"). What's next, weighed
+against the golden-master "why": **add/edit-machine UI** (retire the launcher-file
+reconcile, manage machines in-app) and the **MCP bridge** (consume `snapshot()`
+so Claude drives reference→target convergence) lead; **P2 concurrency** is
+deferred as less urgent for a real-hardware-heavy fleet. Transitional debts in
+SHORTCUTS ("Machine manager (P1 transitional)").
+
 ## TL;DR
 
 Turn macXserver from "one bundled Solaris VM, hidden under an X server" into a
