@@ -30,8 +30,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var fileBrowserControllers: [String: FileBrowserWindowController] = [:]
     /// The SPARCstation "Admin" submenu parent; enabled only once the guest is
     /// fully booted (its tasks talk to the Helios daemon, which only answers
-    /// then), gated on `sparcReady` -- NOT mere `.running`, which is true the
-    /// instant the qemu process launches, long before the daemon is up.
+    /// then), gated on the machine's `controller?.isReady` -- NOT mere
+    /// `.running`, which is true the instant the qemu process launches, long
+    /// before the daemon is up.
     private var adminMenuItem: NSMenuItem?
     /// The SPARCstation submenu's leaf items. We turn off auto-enable for that
     /// submenu and drive these directly from the engine callbacks, so dim/undim
@@ -42,11 +43,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var forceQuitMenuItem: NSMenuItem?
     private var showConsoleMenuItem: NSMenuItem?
     private var backUpMenuItem: NSMenuItem?
-    /// True once the guest answered `hello` this run (the authoritative
-    /// daemon-is-up signal). Set in onReady, cleared the moment state leaves
-    /// `.running` (so shutdown dims Admin immediately, and a fresh boot starts
-    /// dimmed until the daemon actually answers).
-    private var sparcReady = false
+    /// Whether the bundled machine's guest has answered `hello` this run lives
+    /// on its `MachineController` now (`controller?.isReady`) -- it's per-machine
+    /// state, not an app-global. Cleared the moment state leaves `.running` (so
+    /// shutdown dims Admin immediately, and a fresh boot starts dimmed until the
+    /// daemon actually answers).
     /// Shared model for the SPARCstation > Config windows (disk image, shared
     /// folder, Claude development). Created lazily; all Config windows bind to
     /// the one instance so they stay consistent. Writes flow to Preferences.
@@ -62,9 +63,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var activeLauncher: RemoteLauncher?
     private var progressController: LaunchProgressWindowController?
 
-    /// The bundled SPARCstation engine controller, and its console window.
-    /// Created once at launch; the engine doesn't run until "Run SPARCstation".
-    private var qemuEngine: QemuEngine?
+    /// The bundled SPARCstation's machine controller (owns its `QemuEngine` +
+    /// readiness), and its console window. Created once at launch; the engine
+    /// doesn't run until "Run SPARCstation". Today there's exactly one; the
+    /// Machine Manager refactor grows a keyed `MachineRegistry` of these.
+    private var controller: MachineController?
     private var sparcConsole: SparcPlugConsoleWindowController?
     private var sparcWelcome: SparcStationWelcomeWindowController?
     /// Set when an orphan's Helios shutdown call fails fast (connection refused,
@@ -175,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // queue: .main means this block runs on the main thread, so the
             // main-actor hop is an assertion, not a dispatch.
             MainActor.assumeIsolated {
-                guard let self = self, self.qemuEngine?.state != .running else { return }
+                guard let self = self, self.controller?.engine.state != .running else { return }
                 self.rebuildSparcEngine()
             }
         }
@@ -207,7 +210,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// window. The closures fire on the main queue (QemuEngine dispatches
     /// them), so touching the console window here is safe.
     private func rebuildSparcEngine() {
-        let engine = QemuEngine(config: makeSparcConfig())
+        let controller = MachineController(config: makeSparcConfig())
+        let engine = controller.engine
         engine.onConsoleData { [weak self] data in
             self?.sparcConsole?.feedConsoleData(data)
         }
@@ -221,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // Anything other than steady .running (boot-in-progress counts as
             // .running too, but shutdown/stop don't) means the daemon isn't
             // answering -- drop readiness so Admin dims. onReady re-enables it.
-            if state != .running { self?.sparcReady = false }
+            if state != .running { self?.controller?.isReady = false }
             self?.refreshSparcMenu()
         }
         engine.onCleanHalt { [weak self] in
@@ -234,7 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self?.sparcConsole?.markReady()
             // Daemon answered -- the guest is fully up. Unlock graceful Shut Down
             // and Admin now (not at process launch).
-            self?.sparcReady = true
+            self?.controller?.isReady = true
             self?.refreshSparcMenu()
         }
         engine.onBootStalled { [weak self] reason in
@@ -252,7 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // The per-launch secret died with the guest; don't leave it on disk.
             self?.clearClaudeDevSecretFile()
         }
-        self.qemuEngine = engine
+        self.controller = controller
         self.sparcConsole?.setState(engine.state)
     }
 
@@ -284,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// is the clean `init 5` sync; the VM keeps managing its own disk, so it's
     /// safe, but a clean shutdown is still tidier.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let engine = qemuEngine,
+        guard let engine = controller?.engine,
               engine.state == .running || engine.state == .shuttingDown else {
             return .terminateNow
         }
@@ -469,7 +473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         //
         // Two stop verbs, deliberately gated differently:
         //  - "Shut Down" is the graceful halt (init 5 via the Helios daemon). It
-        //    only works once the guest is fully up, so it gates on `sparcReady`,
+        //    only works once the guest is fully up, so it gates on `isReady`,
         //    NOT mere `.running` (which is true the instant qemu launches, while
         //    Solaris is still booting and the daemon isn't listening yet).
         //  - "Force Quit" is the hard power-off (QMP quit / SIGTERM). It's always
@@ -594,7 +598,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @MainActor
     private func ensureSparcConfigModel() -> SparcConfigModel {
         if let model = sparcConfigModel { return model }
-        let running = qemuEngine?.state == .running || qemuEngine?.state == .shuttingDown
+        let running = controller?.engine.state == .running || controller?.engine.state == .shuttingDown
         let model = SparcConfigModel(preferences: preferences, engineRunning: running)
         sparcConfigModel = model
         return model
@@ -614,7 +618,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func openDnsAdmin(_ sender: Any?) {
         if dnsAdminController == nil {
             dnsAdminController = DnsAdminWindowController(
-                secretProvider: { [weak self] in self?.qemuEngine?.currentSecret })
+                secretProvider: { [weak self] in self?.controller?.engine.currentSecret })
         }
         dnsAdminController?.showWindow()
     }
@@ -765,8 +769,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// True when a launcher entry points at the bundled emulator's Helios daemon
     /// (the qemu hostfwd on the loopback), rather than a real Sun on the LAN.
-    /// Only a loopback target's readiness (`sparcReady`) and per-launch secret
-    /// (`qemuEngine.currentSecret`) apply -- an external box has its own daemon
+    /// Only a loopback target's readiness (`controller?.isReady`) and per-launch
+    /// secret (`controller?.engine.currentSecret`) apply -- an external box has its own daemon
     /// lifetime and its own (or no) auth, so gating those on the bundled guest
     /// is wrong.
     private func isBundledGuestTarget(_ entry: LauncherEntry) -> Bool {
@@ -807,7 +811,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             let config = HeliosFileBrowserConfig(
                 host: entry.host, port: entry.port, user: entry.user,
                 label: "\(entry.group): \(entry.user)",
-                secretProvider: { [weak self] in bundled ? self?.qemuEngine?.currentSecret : nil })
+                secretProvider: { [weak self] in bundled ? self?.controller?.engine.currentSecret : nil })
             fileBrowserControllers[key] = FileBrowserWindowController(config: config)
         }
         fileBrowserControllers[key]?.showWindow()
@@ -880,7 +884,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // Same bundled-only rule as the file browser: the emulator's
             // per-launch secret goes only to the loopback target, not a real Sun.
             launcher = HeliosLauncher(entry: entry, displayString: display,
-                                      secret: isBundledGuestTarget(entry) ? qemuEngine?.currentSecret : nil)
+                                      secret: isBundledGuestTarget(entry) ? controller?.engine.currentSecret : nil)
         }
         activeLauncher = launcher
 
@@ -927,11 +931,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func ensureSparcConsole() {
         if sparcConsole == nil {
             let console = SparcPlugConsoleWindowController(
-                onShutDown: { [weak self] in self?.qemuEngine?.shutDown() },
+                onShutDown: { [weak self] in self?.controller?.engine.shutDown() },
                 onForceQuit: { [weak self] in self?.confirmForceQuit() },
-                onInput: { [weak self] data in self?.qemuEngine?.sendConsole(data) },
+                onInput: { [weak self] data in self?.controller?.engine.sendConsole(data) },
                 onLaunchXterm: { [weak self] in
-                    self?.qemuEngine?.launchXterm { result in
+                    self?.controller?.engine.launchXterm { result in
                         if case .failure(let error) = result {
                             let alert = NSAlert()
                             alert.messageText = "Couldn't launch xterm"
@@ -942,7 +946,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     }
                 }
             )
-            console.setState(qemuEngine?.state ?? .stopped)
+            console.setState(controller?.engine.state ?? .stopped)
             sparcConsole = console
             refreshSparcMenu()   // "Show Console" can undim now
         }
@@ -955,20 +959,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// assignments are authoritative and there's no validateMenuItem for them.
     @MainActor
     private func refreshSparcMenu() {
-        let state = qemuEngine?.state ?? .notInstalled
+        let state = controller?.engine.state ?? .notInstalled
         startMenuItem?.isEnabled    = (state == .stopped || state == .notInstalled)
         // Graceful halt needs the daemon up; greyed through boot. Force Quit
         // (hard power-off) covers stopping during boot or a wedge.
-        shutDownMenuItem?.isEnabled  = (state == .running && sparcReady)
+        shutDownMenuItem?.isEnabled  = (state == .running && (controller?.isReady ?? false))
         forceQuitMenuItem?.isEnabled = (state == .running || state == .shuttingDown)
         showConsoleMenuItem?.isEnabled = (sparcConsole != nil)
         backUpMenuItem?.isEnabled    = (state == .stopped)
-        adminMenuItem?.isEnabled     = sparcReady
+        adminMenuItem?.isEnabled     = (controller?.isReady ?? false)
     }
 
     @MainActor
     @objc private func startSparcStation(_ sender: Any?) {
-        guard let engine = qemuEngine else { return }
+        guard let engine = controller?.engine else { return }
         switch engine.state {
         case .running, .shuttingDown:
             return                       // menu item is disabled here anyway
@@ -982,7 +986,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func shutDownSparcStation(_ sender: Any?) {
         ensureSparcConsole()
         sparcConsole?.showWindow()      // so the user sees the shutdown progress
-        qemuEngine?.shutDown()
+        controller?.engine.shutDown()
     }
 
     @MainActor
@@ -1004,7 +1008,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         alert.addButton(withTitle: "Cancel")
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            qemuEngine?.kill()
+            controller?.engine.kill()
         case .alertSecondButtonReturn:
             ensureSparcConsole()
             sparcConsole?.showWindow()
@@ -1134,7 +1138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// is offered either way (it just re-attaches the console + control channels;
     /// a still-booting guest comes to "Ready" on its own once Helios answers).
     private func checkForReconnectableOrphanOnLaunch() {
-        guard let engine = qemuEngine, engine.state != .running else { return }
+        guard let engine = controller?.engine, engine.state != .running else { return }
         let image = makeSparcConfig().diskImage
         guard case .localOrphan(let lock) = ImageLockManager.evaluate(imageURL: image) else { return }
         // Probe Helios off-main (it can block up to the timeout), then prompt.
@@ -1206,7 +1210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func reconnectToOrphan(lock: ImageLock, image: URL) {
         ensureSparcConsole()
         sparcConsole?.showWindow()
-        if qemuEngine?.attach(toOrphan: lock) == true {
+        if controller?.engine.attach(toOrphan: lock) == true {
             // Refresh the Claude-dev secret file from the adopted guest's secret
             // (the launch-time wipe cleared it; the engine now carries lock.secret).
             writeClaudeDevSecretFile()
@@ -1221,7 +1225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         ensureSparcConsole()
         sparcConsole?.showWindow()
         do {
-            try qemuEngine?.start()
+            try controller?.engine.start()
             writeClaudeDevSecretFile()
         } catch {
             showLaunchError("Couldn't start SPARCstation: \(error.localizedDescription)")
@@ -1235,7 +1239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// secret to a 0600 file so Claude Code can authenticate to the daemon.
     /// Otherwise make sure no stale secret lingers. Best-effort.
     private func writeClaudeDevSecretFile() {
-        guard preferences.sparcClaudeDevelopment, let secret = qemuEngine?.currentSecret else {
+        guard preferences.sparcClaudeDevelopment, let secret = controller?.engine.currentSecret else {
             clearClaudeDevSecretFile()
             return
         }
@@ -1339,7 +1343,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // records it (persisted at acquire time); fall back to this session's
         // current secret for the same-session case where the lock predates the
         // field. Without a matching secret an authed daemon rejects the call.
-        let secret = lock.secret ?? qemuEngine?.currentSecret
+        let secret = lock.secret ?? controller?.engine.currentSecret
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let client = HeliosClient(timeout: 8, secret: secret)
             defer { client.close() }
@@ -1494,10 +1498,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// auto-enabled menus and still validate the normal way.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
-        case #selector(openDnsAdmin(_:)):         return sparcReady
+        case #selector(openDnsAdmin(_:)):         return (controller?.isReady ?? false)
         case #selector(openFileBrowser(_:)):
             // A helios filebrowser key targeting the BUNDLED guest gates on its
-            // readiness (sparcReady). One pointed at a real Sun on the LAN does
+            // readiness (isReady). One pointed at a real Sun on the LAN does
             // not -- that daemon's availability is independent, so enable it and
             // let the browser window surface any connection error itself. A
             // mis-transported key also stays enabled so clicking shows the
@@ -1505,7 +1509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             let key = item.representedObject as? String
             guard let entry = currentLauncherFile?.entries.first(where: { "\($0.group)/\($0.name)" == key }),
                   entry.transport == .helios else { return true }
-            return isBundledGuestTarget(entry) ? sparcReady : true
+            return isBundledGuestTarget(entry) ? (controller?.isReady ?? false) : true
         default: return true
         }
     }
