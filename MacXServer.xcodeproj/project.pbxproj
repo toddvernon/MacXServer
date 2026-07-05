@@ -78,6 +78,7 @@
 		3F5F406D5099337F54E3CD91 /* SparcConfigModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEFC7BD6CACFBA30C8181E24 /* SparcConfigModel.swift */; };
 		40DAE7B9761570F2DC2A4B58 /* InputEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0F55E248A51B7A196B4FB7 /* InputEvents.swift */; };
 		41242B184A4ED29DEF85D137 /* ResourceSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7374467A89FB169ED5220A3 /* ResourceSyntaxHighlighter.swift */; };
+		420AB3F0F2B59C4B8F77FABA /* MachineController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AFEA4B6C22608A7965AD06A /* MachineController.swift */; };
 		43E39B89377803273D4CFF6F /* GetKeyboardMappingReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E0D63B52EF6BC2D4830256C /* GetKeyboardMappingReply.swift */; };
 		45E5A7F5C7B0FD225F557066 /* RenderGlyphPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D7F5F989DC183873905FFA9 /* RenderGlyphPayload.swift */; };
 		4634B3B48FECE3D204A77A89 /* ShmDumper.swift in Sources */ = {isa = PBXBuildFile; fileRef = D18E227C587C3A9702D779C3 /* ShmDumper.swift */; };
@@ -187,6 +188,7 @@
 		93D6735693E7FFACF0BE8E74 /* PointerOpcodes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 978B041BB3BD0D2AF7AD31F3 /* PointerOpcodes.swift */; };
 		94179B158905B30F50AAB39D /* RegionExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AE6028AE3AA6CFC0BAD8C2E /* RegionExtras.swift */; };
 		946C867ACC0026A5C72D4E2C /* LaunchersWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B05DDDD74359FDF943D3697 /* LaunchersWindowController.swift */; };
+		94CD3F14B1FF3422A2F6480F /* MachinesFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75345EE5C3904FDD4EB06056 /* MachinesFile.swift */; };
 		952169E1A79ED92A2765265F /* CDEResourceManagerFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159D2737C894FEBCB8374D9F /* CDEResourceManagerFixture.swift */; };
 		96593D7B5E4AD9F26D92D28E /* SerialConsoleClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4BB3191FFA5FAB15F816631 /* SerialConsoleClient.swift */; };
 		96E287CFE88A07A994EE63F8 /* FileBrowserWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78BF0DBF7C4EC068F491C51C /* FileBrowserWindowController.swift */; };
@@ -230,6 +232,7 @@
 		B8EF374160A61C646F65B55B /* DnsAdminPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB63974F52A5D72CE6236173 /* DnsAdminPanelView.swift */; };
 		B99E056BA859A551A97D5CB4 /* Dumper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06314C8D76CFD19A97AD74B7 /* Dumper.swift */; };
 		BAE5542A30F0B17951604127 /* MiscRequests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EEE2BF5DA5FE9709630C41E /* MiscRequests.swift */; };
+		BB2953ADC90D9B01636725EB /* Machine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA4751386598E533E3D9E4A /* Machine.swift */; };
 		BBF4AF2857C85A998D5602D3 /* FontMappingFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C4116D63A2C390CDA11C0E6 /* FontMappingFile.swift */; };
 		BCE67B1EB6F17DDB3F115A84 /* Framer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2BBD4D4DAD4A758CA64CEF04 /* Framer.framework */; };
 		BF0DDC8D1A038287CB1646E9 /* RecordModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98C8414A92564449D31C67BA /* RecordModel.swift */; };
@@ -618,6 +621,7 @@
 		73D88FEB83C29D484A115494 /* CaptureEditorController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureEditorController.swift; sourceTree = "<group>"; };
 		73E5D73EEB22199AA3ABA989 /* ServerMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerMessage.swift; sourceTree = "<group>"; };
 		74181E9F09A99474693C608A /* XInputRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XInputRequests.swift; sourceTree = "<group>"; };
+		75345EE5C3904FDD4EB06056 /* MachinesFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachinesFile.swift; sourceTree = "<group>"; };
 		755E7D3A4CD70DB98267EC10 /* MacXCapture.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MacXCapture.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		75863E0E24F928026A6573CB /* XInputFeedbackPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XInputFeedbackPayload.swift; sourceTree = "<group>"; };
 		765EBC989C0D49887C362D4D /* ShapeEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShapeEvents.swift; sourceTree = "<group>"; };
@@ -626,6 +630,7 @@
 		78BF0DBF7C4EC068F491C51C /* FileBrowserWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBrowserWindowController.swift; sourceTree = "<group>"; };
 		79899EF3BFEA18C936A5D2A7 /* CreateGlyphCursor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGlyphCursor.swift; sourceTree = "<group>"; };
 		79EA8765D448F503846DF6EB /* AllowEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AllowEvents.swift; sourceTree = "<group>"; };
+		7AFEA4B6C22608A7965AD06A /* MachineController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineController.swift; sourceTree = "<group>"; };
 		7B2C461591A75948EF37F7B0 /* WMHints.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WMHints.swift; sourceTree = "<group>"; };
 		7BE8F4BB2DE857AB05561760 /* FileBrowserPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBrowserPanelView.swift; sourceTree = "<group>"; };
 		7C11DFDFB0020F8CBFCC0E29 /* Phase1Events.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Phase1Events.swift; sourceTree = "<group>"; };
@@ -654,6 +659,7 @@
 		9B9110C1C1FB8F567AE61674 /* fullwidth.inc */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.pascal; path = fullwidth.inc; sourceTree = "<group>"; };
 		9D8CF306EEFA6C0D4B55F875 /* ResourcesPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourcesPanelView.swift; sourceTree = "<group>"; };
 		9DF3816F21F8223631A5A34F /* SiblingChain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiblingChain.swift; sourceTree = "<group>"; };
+		9EA4751386598E533E3D9E4A /* Machine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Machine.swift; sourceTree = "<group>"; };
 		9F418428E74B2F051B2D245A /* MoreRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoreRequests.swift; sourceTree = "<group>"; };
 		9F9BD4CD5432346740D96ECE /* SetupRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupRequest.swift; sourceTree = "<group>"; };
 		A0F363025B07FE2D36AC27E3 /* PreferencesPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesPanelView.swift; sourceTree = "<group>"; };
@@ -875,6 +881,9 @@
 				C9F771FDFB6E892C7CB0786F /* LauncherFile.swift */,
 				5F9918385314A5EB136A0019 /* LauncherTokenizer.swift */,
 				7F1158F5435634F1A10649BF /* Listener.swift */,
+				9EA4751386598E533E3D9E4A /* Machine.swift */,
+				7AFEA4B6C22608A7965AD06A /* MachineController.swift */,
+				75345EE5C3904FDD4EB06056 /* MachinesFile.swift */,
 				C3648F99980A96688B37AF56 /* MockWindowBridge.swift */,
 				68F90F4DA66B7E9194001904 /* OutboundQueue.swift */,
 				FEAAC6D6AB02404456535F45 /* PixelBuffer.swift */,
@@ -1600,6 +1609,9 @@
 				75F844E86AF97F78E13CA685 /* LauncherFile.swift in Sources */,
 				481D2B89D4AD850C4E9A294B /* LauncherTokenizer.swift in Sources */,
 				524BCFD2085230BAB71EB3A2 /* Listener.swift in Sources */,
+				BB2953ADC90D9B01636725EB /* Machine.swift in Sources */,
+				420AB3F0F2B59C4B8F77FABA /* MachineController.swift in Sources */,
+				94CD3F14B1FF3422A2F6480F /* MachinesFile.swift in Sources */,
 				8C62FCFFB10118172A0D5E7F /* MockWindowBridge.swift in Sources */,
 				F1CEA663AD02884E5632397E /* MotifFramePreferences.swift in Sources */,
 				49B85DF14B69671D744BC4A4 /* MotifFrameView.swift in Sources */,

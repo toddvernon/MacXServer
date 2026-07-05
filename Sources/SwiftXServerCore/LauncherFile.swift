@@ -62,6 +62,46 @@ public struct LauncherEntry: Equatable, Sendable {
     /// VM regardless of what the Mac's real LAN IP is.
     public let display: String?
 
+    /// Build one entry from an already-merged key/value dict (host-block or
+    /// machine-block defaults ∪ per-item overrides). Returns nil when the item
+    /// lacks the minimum -- host + user, and a command unless it's a filebrowser
+    /// item (whose menu item opens the browser rather than launching anything).
+    /// Appends non-fatal warnings (ssh-with-password, filebrowser-on-non-helios)
+    /// to `warnings`. Shared by `LauncherFile` and `MachinesFile` so both parse
+    /// launcher items identically.
+    public static func build(merged: [String: String], name: String, group: String,
+                             warnings: inout [String]) -> LauncherEntry? {
+        let fileBrowser = ["true", "yes", "1"].contains(merged["filebrowser"]?.lowercased() ?? "")
+        guard let host = merged["host"], let user = merged["user"] else { return nil }
+        let command = merged["command"] ?? ""
+        if command.isEmpty && !fileBrowser { return nil }
+
+        let transport = LauncherTransport(rawValue: merged["transport"]?.lowercased() ?? "")
+            ?? .telnet
+        let port = merged["port"].flatMap { UInt16($0) }
+            ?? (transport == .ssh ? 22 : transport == .helios ? 2125 : 23)
+        let verbose = ["true", "yes", "1"].contains(merged["verbose"]?.lowercased() ?? "")
+        if transport == .ssh, let pw = merged["password"], !pw.isEmpty {
+            warnings.append("'\(group)/\(name)' has transport=ssh and a "
+                + "password set; ssh is keys-only here, password ignored")
+        }
+        if fileBrowser && transport != .helios {
+            warnings.append("'\(group)/\(name)' has filebrowser=true but "
+                + "transport=\(transport.rawValue); the file browser only works over "
+                + "transport=helios, so this key can't browse (wrong transport)")
+        }
+        return LauncherEntry(
+            name: name, group: group,
+            host: host, command: command, user: user,
+            port: port, verbose: verbose, fileBrowser: fileBrowser,
+            loginPrompt: merged["login_prompt"] ?? "ogin:",
+            passwordPrompt: merged["password_prompt"] ?? "assword:",
+            shellPrompt: merged["shell_prompt"] ?? "$ ",
+            password: merged["password"],
+            transport: transport,
+            display: merged["display"])
+    }
+
     /// Build an entry. Prompts and port carry the documented defaults when omitted.
     public init(name: String, group: String, host: String, command: String, user: String,
                 port: UInt16 = 23, verbose: Bool = false, fileBrowser: Bool = false,
@@ -177,38 +217,12 @@ public struct LauncherFile: Sendable {
             }
 
             // A normal launcher needs a command; a filebrowser entry doesn't (its
-            // menu item opens the browser, it doesn't launch anything), so we let
-            // it omit command and default to "".
-            let fileBrowser = ["true", "yes", "1"].contains(merged["filebrowser"]?.lowercased() ?? "")
-            guard let host = merged["host"], let user = merged["user"] else { continue }
-            let command = merged["command"] ?? ""
-            if command.isEmpty && !fileBrowser { continue }
-
-            let transport = LauncherTransport(rawValue: merged["transport"]?.lowercased() ?? "")
-                ?? .telnet
-            let port = merged["port"].flatMap { UInt16($0) }
-                ?? (transport == .ssh ? 22 : transport == .helios ? 2125 : 23)
-            let verbose = ["true", "yes", "1"].contains(merged["verbose"]?.lowercased() ?? "")
-            if transport == .ssh, let pw = merged["password"], !pw.isEmpty {
-                warnings.append("'\(group)/\(name)' has transport=ssh and a "
-                    + "password set; ssh is keys-only here, password ignored")
+            // menu item opens the browser, it doesn't launch anything). The shared
+            // builder enforces that and returns nil for an unusable item.
+            if let entry = LauncherEntry.build(merged: merged, name: name, group: group,
+                                               warnings: &warnings) {
+                entries.append(entry)
             }
-            if fileBrowser && transport != .helios {
-                warnings.append("'\(group)/\(name)' has filebrowser=true but "
-                    + "transport=\(transport.rawValue); the file browser only works over "
-                    + "transport=helios, so this key can't browse (wrong transport)")
-            }
-            entries.append(LauncherEntry(
-                name: name, group: group,
-                host: host, command: command, user: user,
-                port: port, verbose: verbose, fileBrowser: fileBrowser,
-                loginPrompt: merged["login_prompt"] ?? "ogin:",
-                passwordPrompt: merged["password_prompt"] ?? "assword:",
-                shellPrompt: merged["shell_prompt"] ?? "$ ",
-                password: merged["password"],
-                transport: transport,
-                display: merged["display"]
-            ))
         }
 
         return LauncherFile(entries: entries, warnings: warnings)
