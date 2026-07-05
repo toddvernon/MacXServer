@@ -94,13 +94,16 @@ public enum MachineMigrator {
         return machines
     }
 
-    /// Port triple for a migrated machine: nil (derive) for emulated so it tracks
-    /// its OS block; for external, the standard defaults with the entry's own port
-    /// dropped into its transport plane.
+    /// Port triple for a migrated machine, or nil to derive (the common case).
+    /// Emulated always derives (tracks its OS block). External derives too unless
+    /// the entry used a non-standard port for its transport, in which case we pin
+    /// just that plane -- so a plain helios/ssh/telnet box carries no ports block.
     static func portsFor(kind: MachineKind, os: MachineOS?,
                          transport: LauncherTransport, port: UInt16) -> ImagePorts? {
         if kind == .emulatedVM { return nil }   // derive from os / defaults
-        var ports = ImagePorts(telnet: 23, ssh: 22, helios: 2125)
+        let standard = ImagePorts(telnet: 23, ssh: 22, helios: 2125)
+        if port == standard.port(for: transport) { return nil }   // nothing to override
+        var ports = standard
         switch transport {
         case .telnet: ports.telnet = port
         case .ssh:    ports.ssh = port
