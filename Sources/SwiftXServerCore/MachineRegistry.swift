@@ -97,6 +97,41 @@ public final class MachineRegistry {
         save()
     }
 
+    /// Merge machines freshly derived from the legacy launcher file into the
+    /// registry: for a match (the emulated VM, or an external host by host string)
+    /// keep the existing machine + its stable id and sync its launchers (and the
+    /// bundled image); an unmatched group becomes a new external machine. Never
+    /// removes a machine -- an external host you configured keeps its Keychain
+    /// secret even if you delete its launchers. Transitional: the launcher file
+    /// stays the editable launcher source until an in-app machine editor exists.
+    public func reconcile(withMigrated migrated: [Machine]) {
+        var changed = false
+        for m in migrated {
+            if let i = indexMatching(m) {
+                if machines[i].launchers != m.launchers {
+                    machines[i].launchers = m.launchers
+                    changed = true
+                }
+                if machines[i].kind == .emulatedVM, m.imagePath != nil,
+                   machines[i].imagePath != m.imagePath {
+                    machines[i].imagePath = m.imagePath
+                    changed = true
+                }
+            } else {
+                machines.append(m)
+                changed = true
+            }
+        }
+        if changed { save() }
+    }
+
+    private func indexMatching(_ m: Machine) -> Int? {
+        if m.kind == .emulatedVM { return machines.firstIndex { $0.kind == .emulatedVM } }
+        return machines.firstIndex {
+            $0.kind == .externalHost && $0.host.lowercased() == m.host.lowercased()
+        }
+    }
+
     public func save() {
         do {
             try MachinesFile(machines: machines).encoded()

@@ -60,6 +60,37 @@ final class MachineRegistryTests: XCTestCase {
         XCTAssertEqual(reloaded.machines[0].id, machine.id)
     }
 
+    func testReconcileSyncsLaunchersAndAddsNewHosts() {
+        let bundled = Machine(name: "solaris", kind: .emulatedVM, os: .solaris26,
+                              host: "127.0.0.1", user: "t", imagePath: "/img.qcow2")
+        let registry = MachineRegistry(machines: [bundled], path: tempPath("recon"))
+        registry.reconcile(withMigrated: [
+            Machine(name: "solaris", kind: .emulatedVM, os: .solaris26, host: "127.0.0.1",
+                    user: "t", imagePath: "/img.qcow2",
+                    launchers: [MachineLauncher(name: "xterm", command: "xterm")]),
+            Machine(name: "u5", kind: .externalHost, host: "u5.example.com", user: "a",
+                    launchers: [MachineLauncher(name: "xterm", command: "xterm")]),
+        ])
+        // Bundled machine keeps its stable id and gains the launcher.
+        XCTAssertEqual(registry.machine(bundled.id)?.launchers.count, 1)
+        // The new external host is added.
+        XCTAssertEqual(registry.machines.count, 2)
+        XCTAssertTrue(registry.machines.contains { $0.name == "u5" && $0.kind == .externalHost })
+    }
+
+    func testReconcileNeverRemovesMachines() {
+        let ss5 = Machine(name: "ss5", kind: .externalHost, host: "192.168.7.19", user: "t",
+                          launchers: [MachineLauncher(name: "x", command: "xterm")])
+        let registry = MachineRegistry(machines: [ss5], path: tempPath("recon2"))
+        // A migration that doesn't mention ss5 must not drop it (it may hold a secret).
+        registry.reconcile(withMigrated: [
+            Machine(name: "solaris", kind: .emulatedVM, os: .solaris26,
+                    host: "127.0.0.1", user: "t", imagePath: "/i"),
+        ])
+        XCTAssertTrue(registry.machines.contains { $0.name == "ss5" })
+        XCTAssertEqual(registry.machine(ss5.id)?.launchers.count, 1)
+    }
+
     func testUpdateIgnoresUnknownId() {
         let registry = MachineRegistry(machines: [
             Machine(name: "a", kind: .externalHost, host: "h", user: "u"),

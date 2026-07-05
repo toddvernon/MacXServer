@@ -28,23 +28,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Helios file-browser windows, one per filebrowser launcher entry, keyed by
     /// "group/name" so reopening reuses the window (and its current folder).
     private var fileBrowserControllers: [String: FileBrowserWindowController] = [:]
-    /// The SPARCstation "Admin" submenu parent; enabled only once the guest is
-    /// fully booted (its tasks talk to the Helios daemon, which only answers
-    /// then), gated on the machine's `controller?.isReady` -- NOT mere
-    /// `.running`, which is true the instant the qemu process launches, long
-    /// before the daemon is up.
-    private var adminMenuItem: NSMenuItem?
     /// The Server menu's listener-status info row; kept in sync with `listenerStatus`.
     private var serverStatusMenuItem: NSMenuItem?
-    /// The SPARCstation submenu's leaf items. We turn off auto-enable for that
-    /// submenu and drive these directly from the engine callbacks, so dim/undim
-    /// happens live -- including while the menu is held open -- instead of only
-    /// at menu-open time the way validateMenuItem works. See refreshSparcMenu().
-    private var startMenuItem: NSMenuItem?
-    private var shutDownMenuItem: NSMenuItem?
-    private var forceQuitMenuItem: NSMenuItem?
-    private var showConsoleMenuItem: NSMenuItem?
-    private var backUpMenuItem: NSMenuItem?
+    /// The top-level Machines menu, rebuilt from the registry whenever machine
+    /// state changes (rebuildMachinesMenu). Per-item enablement is computed at
+    /// rebuild time, so the menu reflects current state each rebuild.
+    private var machinesMenu: NSMenu?
     /// Whether the bundled machine's guest has answered `hello` this run lives
     /// on its `MachineController` now (`controller?.isReady`) -- it's per-machine
     /// state, not an app-global. Cleared the moment state leaves `.running` (so
@@ -61,7 +50,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// several captures can be compared; each removes itself here on close.
     private var captureViewers: [CaptureViewerWindowController] = []
     private var currentLauncherFile: LauncherFile?
-    private var launchersMenu: NSMenu?
     private var activeLauncher: RemoteLauncher?
     private var progressController: LaunchProgressWindowController?
 
@@ -217,12 +205,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// file normally supplies a loopback group), so we derive it best-effort.
     private func loadMachineRegistry() {
         let launchers = LauncherFileLoader.loadOrSeed(seed: DefaultLaunchers.seedContent)
+        currentLauncherFile = launchers
         let bundledUser = launchers.entries.first(where: { Self.isLoopbackHost($0.host) })?.user
             ?? launchers.entries.first?.user ?? ""
         let registry = MachineRegistry.load(bundledImagePath: preferences.sparcDiskImagePath,
                                             bundledUser: bundledUser)
         self.registry = registry
         self.bundledMachineID = registry.bundledMachine?.id
+        // Keep launchers editable via the file: reconcile the registry from it
+        // (sync existing machines' launchers, add new external hosts). The file
+        // stays the launcher source until an in-app editor lands.
+        reconcileMachinesFromLauncherFile(launchers)
+        self.bundledMachineID = registry.bundledMachine?.id
+    }
+
+    /// Re-derive machines from the current launcher file and merge into the
+    /// registry (launcher edits show up without losing machine ids / secrets).
+    private func reconcileMachinesFromLauncherFile(_ launchers: LauncherFile) {
+        guard let registry else { return }
+        let bundledUser = launchers.entries.first(where: { Self.isLoopbackHost($0.host) })?.user
+            ?? launchers.entries.first?.user ?? ""
+        let migrated = MachineMigrator.migrate(launchers: launchers,
+                                               bundledImagePath: preferences.sparcDiskImagePath,
+                                               bundledUser: bundledUser)
+        registry.reconcile(withMigrated: migrated)
     }
 
     private static func isLoopbackHost(_ host: String) -> Bool {
@@ -374,9 +380,143 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func presentAddMachineComingSoon() {
         let alert = NSAlert()
         alert.messageText = "Adding machines isn't available yet"
-        alert.informativeText = "For now, machines are migrated from your launchers. "
-            + "Editing and adding machines from this window lands in a follow-up."
+        alert.informativeText = "For now, machines are migrated from your launchers "
+            + "(edit ~/.macxserver-launchers). Adding and editing machines in-app lands "
+            + "in a follow-up."
         alert.runModal()
+    }
+
+    // MARK: - Machines menu
+
+    /// Rebuild the Machines menu from the registry: the list window, a submenu per
+    /// machine, then add/edit. Per-item enablement is computed here, and the menu
+    /// is rebuilt on every state change (refreshSparcMenu), so it stays current.
+    @MainActor
+    private func rebuildMachinesMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+        menu.autoenablesItems = false
+
+        let listItem = NSMenuItem(title: "Machine List\u{2026}",
+                                  action: #selector(openMachineList(_:)), keyEquivalent: "")
+        listItem.target = self
+        menu.addItem(listItem)
+        menu.addItem(.separator())
+
+        for m in registry?.machines ?? [] {
+            let header = NSMenuItem(title: m.name, action: nil, keyEquivalent: "")
+            let sub = NSMenu(title: m.name)
+            sub.autoenablesItems = false
+            buildMachineSubmenu(sub, machine: m)
+            header.submenu = sub
+            menu.addItem(header)
+        }
+
+        menu.addItem(.separator())
+        let add = NSMenuItem(title: "Add Machine\u{2026}",
+                             action: #selector(addMachineMenu(_:)), keyEquivalent: "")
+        add.target = self
+        menu.addItem(add)
+        let editLaunchers = NSMenuItem(title: "Edit Launchers\u{2026}",
+                                       action: #selector(openLaunchers(_:)), keyEquivalent: "")
+        editLaunchers.target = self
+        menu.addItem(editLaunchers)
+    }
+
+    /// Populate one machine's submenu: lifecycle verbs (bundled emulated VM only,
+    /// gated by state), or the Helios-secret item (external), then its launchers.
+    @MainActor
+    private func buildMachineSubmenu(_ sub: NSMenu, machine m: Machine) {
+        let isBundled = (m.id == bundledMachineID)
+        let ready = controller?.isReady ?? false
+
+        func add(_ title: String, _ action: Selector, enabled: Bool, represented: Any? = nil) {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.isEnabled = enabled
+            item.representedObject = represented
+            sub.addItem(item)
+        }
+
+        if isBundled {
+            // Same gating as the old SPARCstation submenu. Start covers the
+            // not-installed case (it launches the install flow); Shut Down needs
+            // the daemon up; Force Quit is the always-available hard power-off.
+            let state = controller?.engine.state ?? .notInstalled
+            add("Start", #selector(startSparcStation(_:)),
+                enabled: state == .stopped || state == .notInstalled)
+            add("Shut Down", #selector(shutDownSparcStation(_:)),
+                enabled: state == .running && ready)
+            add("Force Quit\u{2026}", #selector(forceQuitSparcStation(_:)),
+                enabled: state == .running || state == .shuttingDown)
+            sub.addItem(.separator())
+            add("Show Console", #selector(showSparcConsole(_:)), enabled: sparcConsole != nil)
+            add("Back Up Disk Image\u{2026}", #selector(backUpDiskImage(_:)), enabled: state == .stopped)
+
+            let configItem = NSMenuItem(title: "Config", action: nil, keyEquivalent: "")
+            let configMenu = NSMenu(title: "Config")
+            configMenu.autoenablesItems = false
+            for section in [SparcConfigSection.diskImage, .sharedFolder, .claudeDev] {
+                let item = NSMenuItem(title: section.menuTitle,
+                                      action: #selector(openSparcConfig(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = section
+                configMenu.addItem(item)
+            }
+            configItem.submenu = configMenu
+            sub.addItem(configItem)
+
+            // Admin (DNS) talks to the daemon, so gate it on readiness.
+            let adminItem = NSMenuItem(title: "Admin", action: nil, keyEquivalent: "")
+            adminItem.isEnabled = ready
+            let adminMenu = NSMenu(title: "Admin")
+            adminMenu.autoenablesItems = false
+            let dns = NSMenuItem(title: "DNS (/etc/resolv.conf)\u{2026}",
+                                 action: #selector(openDnsAdmin(_:)), keyEquivalent: "")
+            dns.target = self
+            dns.isEnabled = ready
+            adminMenu.addItem(dns)
+            adminItem.submenu = adminMenu
+            sub.addItem(adminItem)
+        } else if m.kind == .externalHost {
+            add("Helios Secret\u{2026}", #selector(setHeliosSecretMenu(_:)),
+                enabled: true, represented: m.id.uuidString as NSString)
+        }
+
+        if !m.launchers.isEmpty {
+            sub.addItem(.separator())
+            for l in m.launchers {
+                let title = l.fileBrowser ? "\(l.name)\u{2026}" : l.name
+                let item = NSMenuItem(title: title,
+                                      action: #selector(launchMachineLauncher(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = "\(m.id.uuidString)/\(l.name)" as NSString
+                // A helios launcher on the bundled guest needs the daemon up;
+                // external / non-helios launchers are always enabled.
+                let transport = l.transport ?? m.transport
+                item.isEnabled = !(isBundled && transport == .helios) || ready
+                sub.addItem(item)
+            }
+        }
+    }
+
+    @MainActor
+    @objc private func launchMachineLauncher(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String,
+              let slash = key.firstIndex(of: "/"),
+              let id = UUID(uuidString: String(key[..<slash])) else { return }
+        launchFromMachine(id, launcherName: String(key[key.index(after: slash)...]))
+    }
+
+    @MainActor
+    @objc private func setHeliosSecretMenu(_ sender: NSMenuItem) {
+        guard let idStr = sender.representedObject as? String,
+              let id = UUID(uuidString: idStr) else { return }
+        promptHeliosSecret(for: id)
+    }
+
+    @MainActor
+    @objc private func addMachineMenu(_ sender: Any?) {
+        presentAddMachineComingSoon()
     }
 
     /// Resolve the engine config: the engine binary comes from the app
@@ -702,89 +842,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         serverMenuItem.submenu = serverMenu
         main.addItem(serverMenuItem)
 
-        // Launchers submenu -- one-click launch of X apps on remote Suns.
-        let launchersMenuItem = NSMenuItem()
-        let lMenu = NSMenu(title: "Launchers")
-        self.launchersMenu = lMenu
-        rebuildLaunchersMenu(lMenu)
-        launchersMenuItem.submenu = lMenu
-        main.addItem(launchersMenuItem)
-
-        // SPARCstation menu -- the bundled QEMU SS-5. Start handles the
-        // missing-image case itself (it presents the install flow), so there's
-        // no separate Install item.
-        //
-        // Two stop verbs, deliberately gated differently:
-        //  - "Shut Down" is the graceful halt (init 5 via the Helios daemon). It
-        //    only works once the guest is fully up, so it gates on `isReady`,
-        //    NOT mere `.running` (which is true the instant qemu launches, while
-        //    Solaris is still booting and the daemon isn't listening yet).
-        //  - "Force Quit" is the hard power-off (QMP quit / SIGTERM). It's always
-        //    available while running, so there's a way out during boot or a wedge.
-        let sparcMenuItem = NSMenuItem()
-        let sparcMenu = NSMenu(title: "SPARCstation")
-        // Drive these items' enablement ourselves (see the leaf-item properties
-        // and refreshSparcMenu): auto-enable only revalidates at menu-open, which
-        // leaves dim/undim stale if the guest's state changes while the menu is
-        // held open. The Config/Admin submenus keep their own auto-enable.
-        sparcMenu.autoenablesItems = false
-        let start = NSMenuItem(title: "Start SPARCstation",
-                               action: #selector(startSparcStation(_:)), keyEquivalent: "")
-        start.target = self
-        sparcMenu.addItem(start)
-        startMenuItem = start
-        let shutDown = NSMenuItem(title: "Shut Down SPARCstation",
-                                  action: #selector(shutDownSparcStation(_:)), keyEquivalent: "")
-        shutDown.target = self
-        sparcMenu.addItem(shutDown)
-        shutDownMenuItem = shutDown
-        let forceQuit = NSMenuItem(title: "Force Quit SPARCstation\u{2026}",
-                                   action: #selector(forceQuitSparcStation(_:)), keyEquivalent: "")
-        forceQuit.target = self
-        sparcMenu.addItem(forceQuit)
-        forceQuitMenuItem = forceQuit
-        sparcMenu.addItem(.separator())
-        let showConsole = NSMenuItem(title: "Show Console",
-                                     action: #selector(showSparcConsole(_:)), keyEquivalent: "")
-        showConsole.target = self
-        sparcMenu.addItem(showConsole)
-        showConsoleMenuItem = showConsole
-        let backup = NSMenuItem(title: "Back Up Disk Image\u{2026}",
-                                action: #selector(backUpDiskImage(_:)), keyEquivalent: "")
-        backup.target = self
-        sparcMenu.addItem(backup)
-        backUpMenuItem = backup
-        sparcMenu.addItem(.separator())
-        // Config submenu -- the bundled-SPARCstation setup that used to be the
-        // Preferences "SPARCstation" tab, one window per task. Available
-        // whether or not the guest is running (these are launch-time settings).
-        let configItem = NSMenuItem(title: "Config", action: nil, keyEquivalent: "")
-        let configMenu = NSMenu(title: "Config")
-        for section in [SparcConfigSection.diskImage, .sharedFolder, .claudeDev] {
-            let item = NSMenuItem(title: section.menuTitle,
-                                  action: #selector(openSparcConfig(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = section
-            configMenu.addItem(item)
-        }
-        configItem.submenu = configMenu
-        sparcMenu.addItem(configItem)
-        // Admin submenu -- guided sysadmin tasks run over the Helios daemon.
-        // The daemon only answers while the guest is up, so the DNS item gates
-        // on state == .running in validateMenuItem and the parent grays out
-        // when stopped (kept in sync in onStateChange below).
-        let adminItem = NSMenuItem(title: "Admin", action: nil, keyEquivalent: "")
-        let adminMenu = NSMenu(title: "Admin")
-        let dns = NSMenuItem(title: "DNS (/etc/resolv.conf)\u{2026}",
-                             action: #selector(openDnsAdmin(_:)), keyEquivalent: "")
-        dns.target = self
-        adminMenu.addItem(dns)
-        adminItem.submenu = adminMenu
-        self.adminMenuItem = adminItem
-        sparcMenu.addItem(adminItem)
-        sparcMenuItem.submenu = sparcMenu
-        main.addItem(sparcMenuItem)
-        refreshSparcMenu()   // set the initial enabled states
+        // Machines menu -- rebuilt from the registry: the list window, a submenu
+        // per machine (bundled VM lifecycle verbs, launchers for all, Helios
+        // secret for external hosts), plus add/edit. Replaces the old fixed
+        // SPARCstation menu and the flat Launchers menu.
+        let machinesMenuItem = NSMenuItem()
+        let mMenu = NSMenu(title: "Machines")
+        self.machinesMenu = mMenu
+        rebuildMachinesMenu(mMenu)
+        machinesMenuItem.submenu = mMenu
+        main.addItem(machinesMenuItem)
 
         // Window menu -- minimise / close are handy when an X window is up.
         let windowMenuItem = NSMenuItem()
@@ -966,61 +1033,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: - Launchers
 
-    private func rebuildLaunchersMenu(_ menu: NSMenu) {
-        menu.removeAllItems()
-        let file = LauncherFileLoader.loadOrSeed(seed: DefaultLaunchers.seedContent)
-        currentLauncherFile = file
-        let groups = file.groups()
-        // Single-group case: flatten -- a submenu of one is just an extra
-        // click for no reason.
-        if groups.count == 1 {
-            for entry in groups[0].entries { menu.addItem(launcherMenuItem(for: entry)) }
-        } else {
-            for group in groups {
-                let submenu = NSMenu(title: group.label)
-                for entry in group.entries { submenu.addItem(launcherMenuItem(for: entry)) }
-                let header = NSMenuItem(title: group.label, action: nil, keyEquivalent: "")
-                header.submenu = submenu
-                menu.addItem(header)
-            }
-        }
-        if !file.entries.isEmpty { menu.addItem(.separator()) }
-        let edit = NSMenuItem(title: "Edit Launchers\u{2026}",
-                              action: #selector(openLaunchers(_:)),
-                              keyEquivalent: "")
-        edit.target = self
-        menu.addItem(edit)
-    }
-
-    private func launcherMenuItem(for entry: LauncherEntry) -> NSMenuItem {
-        // A filebrowser entry isn't an app launcher: its menu item opens the
-        // Helios file browser, never runs a command. It has no `command`, so it
-        // must NOT fall through to launchRemoteApp even on a non-helios host
-        // (that would silently telnet in and run an empty line). It wires to
-        // openFileBrowser regardless of transport; the handler explains the
-        // requirement if the transport isn't helios.
-        let item = NSMenuItem(title: entry.fileBrowser ? "\(entry.name)\u{2026}" : entry.name,
-                              action: entry.fileBrowser ? #selector(openFileBrowser(_:))
-                                                        : #selector(launchRemoteApp(_:)),
-                              keyEquivalent: "")
-        item.target = self
-        // group/name disambiguates same-named items across hosts
-        // ("xterm cyan" can live under both u5 and ss2).
-        item.representedObject = "\(entry.group)/\(entry.name)" as NSString
-        return item
-    }
-
-    /// True when a launcher entry points at the bundled emulator's Helios daemon
-    /// (the qemu hostfwd on the loopback), rather than a real Sun on the LAN.
-    /// Only a loopback target's readiness (`controller?.isReady`) and per-launch
-    /// secret (`controller?.engine.currentSecret`) apply -- an external box has its own daemon
-    /// lifetime and its own (or no) auth, so gating those on the bundled guest
-    /// is wrong.
-    private func isBundledGuestTarget(_ entry: LauncherEntry) -> Bool {
-        let h = entry.host.lowercased()
-        return h == "127.0.0.1" || h == "localhost" || h == "::1"
-    }
-
     /// Keychain account under which an external machine's Helios daemon secret is
     /// stored. Keyed by user@host so it survives a machine rename / re-migration
     /// and is shared by every launcher + file-browser call to that box.
@@ -1039,15 +1051,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return controller?.engine.currentSecret
         }
         return KeychainHelper.retrieve(account: heliosSecretAccount(host: host, user: user))
-    }
-
-    @MainActor
-    @objc private func openFileBrowser(_ sender: NSMenuItem) {
-        guard let key = sender.representedObject as? String,
-              let entry = currentLauncherFile?.entries.first(where: { "\($0.group)/\($0.name)" == key }),
-              entry.fileBrowser
-        else { return }
-        openFileBrowser(entry: entry, key: key)
     }
 
     /// Open (or focus) a Helios file browser for a resolved filebrowser entry,
@@ -1086,8 +1089,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         fileBrowserControllers[key]?.showWindow()
     }
 
+    @MainActor
     @objc private func launchersFileChanged(_ note: Notification) {
-        if let menu = launchersMenu { rebuildLaunchersMenu(menu) }
+        let file = LauncherFileLoader.loadOrSeed(seed: DefaultLaunchers.seedContent)
+        currentLauncherFile = file
+        reconcileMachinesFromLauncherFile(file)
+        if let m = machinesMenu { rebuildMachinesMenu(m) }
+        refreshMachineList()
+        updateStatusMenu()
     }
 
     @MainActor
@@ -1098,15 +1107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         launchersController?.showWindow()
     }
 
-    @MainActor
-    @objc private func launchRemoteApp(_ sender: NSMenuItem) {
-        guard let key = sender.representedObject as? String,
-              let entry = currentLauncherFile?.entries.first(where: { "\($0.group)/\($0.name)" == key })
-        else { return }
-        launch(entry)
-    }
-
-    /// Launch one resolved entry (from the Launchers menu or a machine row). Picks
+    /// Launch one resolved entry (from a machine row / the Machines menu). Picks
     /// the auth path by transport: ssh/helios need none; telnet uses the launcher
     /// password, else the Keychain (prompting on first use).
     @MainActor
@@ -1229,22 +1230,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    /// Recompute the SPARCstation submenu's enabled states from the live engine
-    /// state + daemon readiness. Called from the engine callbacks (onStateChange,
-    /// onReady) and when the console is created, so dim/undim tracks reality even
-    /// while the menu is held open -- the submenu has auto-enable off, so these
-    /// assignments are authoritative and there's no validateMenuItem for them.
+    /// Refresh every surface that reflects machine state: the Machines menu
+    /// (rebuilt from the registry with fresh per-item enablement), the list
+    /// window, and the status-item dashboard. Called from the engine callbacks
+    /// (onStateChange, onReady) and when the console is created. Named for its
+    /// history; it now drives all three surfaces, not just the old submenu.
     @MainActor
     private func refreshSparcMenu() {
-        let state = controller?.engine.state ?? .notInstalled
-        startMenuItem?.isEnabled    = (state == .stopped || state == .notInstalled)
-        // Graceful halt needs the daemon up; greyed through boot. Force Quit
-        // (hard power-off) covers stopping during boot or a wedge.
-        shutDownMenuItem?.isEnabled  = (state == .running && (controller?.isReady ?? false))
-        forceQuitMenuItem?.isEnabled = (state == .running || state == .shuttingDown)
-        showConsoleMenuItem?.isEnabled = (sparcConsole != nil)
-        backUpMenuItem?.isEnabled    = (state == .stopped)
-        adminMenuItem?.isEnabled     = (controller?.isReady ?? false)
+        if let m = machinesMenu { rebuildMachinesMenu(m) }
         refreshMachineList()
         updateStatusMenu()
     }
@@ -1770,28 +1763,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         alert.runModal()
     }
 
-    /// Enable the SPARCstation items by engine state. Start is available
-    /// whenever not running (it triggers the install flow if no image yet);
-    /// Most SPARCstation items are driven live by refreshSparcMenu() (auto-enable
-    /// off), so they're intentionally absent here. These remaining items live in
-    /// auto-enabled menus and still validate the normal way.
-    func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        switch item.action {
-        case #selector(openDnsAdmin(_:)):         return (controller?.isReady ?? false)
-        case #selector(openFileBrowser(_:)):
-            // A helios filebrowser key targeting the BUNDLED guest gates on its
-            // readiness (isReady). One pointed at a real Sun on the LAN does
-            // not -- that daemon's availability is independent, so enable it and
-            // let the browser window surface any connection error itself. A
-            // mis-transported key also stays enabled so clicking shows the
-            // config error.
-            let key = item.representedObject as? String
-            guard let entry = currentLauncherFile?.entries.first(where: { "\($0.group)/\($0.name)" == key }),
-                  entry.transport == .helios else { return true }
-            return isBundledGuestTarget(entry) ? (controller?.isReady ?? false) : true
-        default: return true
-        }
-    }
+    /// The Machines menu and its submenus compute enablement explicitly at build
+    /// time (auto-enable off), so they don't route through here. Everything else
+    /// (App-menu actions, standard responder-chain items) is always valid.
+    func validateMenuItem(_ item: NSMenuItem) -> Bool { true }
 }
 
 extension Notification.Name {
