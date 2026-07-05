@@ -104,6 +104,7 @@
 		524FF377489F25AA621755AB /* HeliosClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34AE12DBBBB2FA9C63CB7B79 /* HeliosClient.swift */; };
 		528A50EAC0A4E1E29A65AB16 /* PointerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96CD807BE28C18051D249341 /* PointerConfig.swift */; };
 		541EC48DE5F4E66F7F9A2EA5 /* GetFontPathReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40C14A707F420C54AC079064 /* GetFontPathReply.swift */; };
+		5505A9308FCA644D0AD2776A /* MachineListPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 332269D0D67DC7C052C2E3B8 /* MachineListPanelView.swift */; };
 		55F6DA0112422D7E6D770AC5 /* PutImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65C28CD0E0C9A94E47B4B759 /* PutImage.swift */; };
 		56315B7804BF724D4B3756B7 /* Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BF6DEE9FEFA41D7E7FDF6B0 /* Preferences.swift */; };
 		57D7E4CAF92E68B5CE85F0BB /* SetInputFocus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 178C50C27D7E570AB3CE628C /* SetInputFocus.swift */; };
@@ -150,6 +151,7 @@
 		776272C56F548120E97201C8 /* WMProperties.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A5926D7737845256756EC48 /* WMProperties.swift */; };
 		78F47246BF1BC173E0B0EDC3 /* rect.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = B8A9B7A1C288CAB69ADB94B7 /* rect.h */; };
 		795706AA2466589C43634C4C /* LandmarkDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42C61C93318159452488CEB8 /* LandmarkDetector.swift */; };
+		79E90E76205E25A71269AD86 /* MachineListModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B62B6E53776DCD18634925D4 /* MachineListModel.swift */; };
 		7BF36C425166147EF387CB8B /* LaunchersPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 025DFC747EFBE6A7F2915698 /* LaunchersPanelView.swift */; };
 		7C57F207AFF865CF1F02C3D8 /* GetImageReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D23F905A00E063991355DA2 /* GetImageReply.swift */; };
 		7DC1B22EAEEBA1053CCD0D86 /* FramerError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89CBF14A62BEBE35E6F10D2A /* FramerError.swift */; };
@@ -169,6 +171,7 @@
 		872524E4F60F6FB5EBC38B9F /* Framer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2BBD4D4DAD4A758CA64CEF04 /* Framer.framework */; };
 		87661BEC3946555280C986CB /* ClearArea.swift in Sources */ = {isa = PBXBuildFile; fileRef = C119D24A49FD7C1637E62A3C /* ClearArea.swift */; };
 		87A1DD9EB10D2164474F1FE8 /* FontMappingsPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 800EAF3DF38A3331010EBCEF /* FontMappingsPanelView.swift */; };
+		87DE658A221EBB4010BB6169 /* MachineListWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4AACFE3A3E3E72CAD6937DC /* MachineListWindowController.swift */; };
 		8824B11DE9E2E6D11FB4653B /* TranslateCoordinates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 659FD48DEF2004FA830AF42F /* TranslateCoordinates.swift */; };
 		8849EA29B584496E6B997025 /* ChangeActivePointerGrab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D2BB9CBA520A45B723E5AC5 /* ChangeActivePointerGrab.swift */; };
 		889B2B75F021511F43A1FD7E /* XInputFeedbackPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75863E0E24F928026A6573CB /* XInputFeedbackPayload.swift */; };
@@ -535,6 +538,7 @@
 		2FC5075EA0046A1E7C2B91E4 /* RecordView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordView.swift; sourceTree = "<group>"; };
 		32FD915019AF7F9E20514201 /* GetPointerMappingReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GetPointerMappingReply.swift; sourceTree = "<group>"; };
 		3314A110446CF6CF19916688 /* ByteReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteReader.swift; sourceTree = "<group>"; };
+		332269D0D67DC7C052C2E3B8 /* MachineListPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineListPanelView.swift; sourceTree = "<group>"; };
 		34AE12DBBBB2FA9C63CB7B79 /* HeliosClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeliosClient.swift; sourceTree = "<group>"; };
 		34D34B4B935E7C62AE94A994 /* Proxy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Proxy.swift; sourceTree = "<group>"; };
 		354798A85C6A4F490DF63864 /* RenderDumper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderDumper.swift; sourceTree = "<group>"; };
@@ -691,6 +695,7 @@
 		B346BF76D4A6D677D3D59128 /* AdditionalOpcodes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdditionalOpcodes.swift; sourceTree = "<group>"; };
 		B3CBEEBE7AF2170953119CAE /* SynthesizedFonts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynthesizedFonts.swift; sourceTree = "<group>"; };
 		B4EBC5BAECE3AC68C05D1391 /* XInputDumper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XInputDumper.swift; sourceTree = "<group>"; };
+		B62B6E53776DCD18634925D4 /* MachineListModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineListModel.swift; sourceTree = "<group>"; };
 		B634846013BD23B92F4FDD73 /* pen.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = pen.c; sourceTree = "<group>"; };
 		B6C7155A123546E5D4F4348B /* GetWindowAttributesReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GetWindowAttributesReply.swift; sourceTree = "<group>"; };
 		B86E4BD0296D9950BADD4D36 /* CreateWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateWindow.swift; sourceTree = "<group>"; };
@@ -710,6 +715,7 @@
 		C454C4D8B6F5C18502884BF2 /* XInputEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XInputEvents.swift; sourceTree = "<group>"; };
 		C46AAD7BCDE790C11DD4C3A9 /* CaptureAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = CaptureAssets.xcassets; sourceTree = "<group>"; };
 		C4A99D791F23241E9A33233F /* CreateGC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGC.swift; sourceTree = "<group>"; };
+		C4AACFE3A3E3E72CAD6937DC /* MachineListWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineListWindowController.swift; sourceTree = "<group>"; };
 		C614300F6CCE005F1E1A8679 /* DnsAdminWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DnsAdminWindowController.swift; sourceTree = "<group>"; };
 		C62F63EBF845EE60FC8C7221 /* RemoteLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLauncher.swift; sourceTree = "<group>"; };
 		C692A58FDDA47F11AD813822 /* ServerMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerMain.swift; sourceTree = "<group>"; };
@@ -994,6 +1000,9 @@
 				5B05DDDD74359FDF943D3697 /* LaunchersWindowController.swift */,
 				90F7590AE2D5541F11DA187C /* LauncherSyntaxHighlighter.swift */,
 				0E258256D3272BB2D8791127 /* LaunchProgressWindowController.swift */,
+				B62B6E53776DCD18634925D4 /* MachineListModel.swift */,
+				332269D0D67DC7C052C2E3B8 /* MachineListPanelView.swift */,
+				C4AACFE3A3E3E72CAD6937DC /* MachineListWindowController.swift */,
 				6BF6DEE9FEFA41D7E7FDF6B0 /* Preferences.swift */,
 				A0F363025B07FE2D36AC27E3 /* PreferencesPanelView.swift */,
 				391EA317E2DA038D717C5080 /* PreferencesWindowController.swift */,
@@ -1887,6 +1896,9 @@
 				9BE4F2635B2BBF5821B8FF87 /* LauncherSyntaxHighlighter.swift in Sources */,
 				7BF36C425166147EF387CB8B /* LaunchersPanelView.swift in Sources */,
 				946C867ACC0026A5C72D4E2C /* LaunchersWindowController.swift in Sources */,
+				79E90E76205E25A71269AD86 /* MachineListModel.swift in Sources */,
+				5505A9308FCA644D0AD2776A /* MachineListPanelView.swift in Sources */,
+				87DE658A221EBB4010BB6169 /* MachineListWindowController.swift in Sources */,
 				56315B7804BF724D4B3756B7 /* Preferences.swift in Sources */,
 				FFF54155AA31D610309C2145 /* PreferencesPanelView.swift in Sources */,
 				A84C057C6D06F21BC74016DE /* PreferencesWindowController.swift in Sources */,

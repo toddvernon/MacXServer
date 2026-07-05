@@ -80,6 +80,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
     private var sparcConsole: SparcPlugConsoleWindowController?
     private var sparcWelcome: SparcStationWelcomeWindowController?
+    /// The Machines list window (the front door) + its observable model. Built at
+    /// launch; the model's rows are recomputed by `refreshMachineList` from the
+    /// registry + live controller state, the same source `refreshSparcMenu` reads.
+    private var machineListWindow: MachineListWindowController?
+    private var machineListModel: MachineListModel?
+    /// Boot progress (0...1) of the bundled machine, mirrored into the list row's
+    /// dot. Set from the engine's onProgress, reset when it leaves running.
+    private var bundledBootProgress: Double?
     /// Set when an orphan's Helios shutdown call fails fast (connection refused,
     /// timed out, or auth rejected), so the poll loop can flip the panel to its
     /// failure state without waiting out the full countdown. Reset at the start
@@ -169,6 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         installMainMenu()
         loadMachineRegistry()
         setupSparcEngine()
+        setupMachineListWindow()
         checkForReconnectableOrphanOnLaunch()
         NotificationCenter.default.addObserver(
             self, selector: #selector(launchersFileChanged(_:)),
@@ -229,6 +238,112 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
+    // MARK: - Machines list window
+
+    /// Build the list window + model, wire its actions to the existing lifecycle
+    /// and launch methods, and open it as the front door. In P1 only the bundled
+    /// emulated VM has lifecycle controls; the closures ignore the machine id for
+    /// those (they drive the one wired machine) and use it for launches.
+    private func setupMachineListWindow() {
+        let model = MachineListModel()
+        model.onStart     = { [weak self] _ in self?.startSparcStation(nil) }
+        model.onShutDown  = { [weak self] _ in self?.shutDownSparcStation(nil) }
+        model.onForceQuit = { [weak self] _ in self?.confirmForceQuit() }
+        model.onBackup    = { [weak self] _ in self?.backUpDiskImage(nil) }
+        model.onConsole   = { [weak self] _ in self?.showSparcConsole(nil) }
+        model.onLaunch    = { [weak self] id, name in self?.launchFromMachine(id, launcherName: name) }
+        model.onAddMachine = { [weak self] in self?.presentAddMachineComingSoon() }
+        self.machineListModel = model
+        let controller = MachineListWindowController(model: model)
+        self.machineListWindow = controller
+        refreshMachineList()
+        controller.showWindow()
+    }
+
+    /// Reopen (or focus) the list window -- from the status item / Machines menu.
+    @MainActor
+    @objc private func openMachineList(_ sender: Any?) {
+        machineListWindow?.showWindow()
+    }
+
+    /// Recompute the list rows from the registry + live controller state. Mirrors
+    /// `refreshSparcMenu`'s gating exactly so the window and the menu agree.
+    private func refreshMachineList() {
+        guard let registry, let model = machineListModel else { return }
+        let bundledID = bundledMachineID
+        model.rows = registry.machines.map { m in
+            let isBundled = (m.id == bundledID)
+            let isEmulated = m.kind == .emulatedVM
+            let ctrl = registry.controller(m.id)
+            let state = ctrl?.engine.state ?? .notInstalled
+            let ready = ctrl?.isReady ?? false
+
+            let dot: MachineStatusDot
+            let statusText: String
+            var progress: Double? = nil
+            if !isEmulated {
+                dot = .external; statusText = "external"
+            } else if !m.isInstalledEmulatedVM {
+                dot = .notInstalled; statusText = "not installed"
+            } else if state == .running && ready {
+                dot = .running; statusText = "running"
+            } else if state == .running {
+                dot = .booting; statusText = "booting"
+                progress = isBundled ? bundledBootProgress : nil
+            } else if state == .shuttingDown {
+                dot = .booting; statusText = "shutting down"
+            } else {
+                dot = .stopped; statusText = "stopped"
+            }
+
+            let subtitle = isEmulated
+                ? (m.image.map { $0.lastPathComponent } ?? "no disk image")
+                : "\(m.host) · external"
+
+            let chips = m.launchers.map { l -> MachineLauncherChip in
+                // Same gating as validateMenuItem: a helios launcher on the
+                // bundled guest needs the daemon up; everything else is enabled.
+                let transport = l.transport ?? m.transport
+                let enabled = !(isBundled && transport == .helios) || ready
+                return MachineLauncherChip(id: l.name, name: l.name,
+                                           isFileBrowser: l.fileBrowser, enabled: enabled)
+            }
+
+            return MachineRow(
+                id: m.id, name: m.name, isEmulated: isEmulated,
+                subtitle: subtitle, statusText: statusText, dot: dot, progress: progress,
+                showsLifecycle: isBundled,
+                canStart: (state == .stopped || state == .notInstalled),
+                canShutDown: (state == .running && ready),
+                canForceQuit: (state == .running || state == .shuttingDown),
+                canBackup: (state == .stopped),
+                canConsole: (sparcConsole != nil),
+                launchers: chips)
+        }
+    }
+
+    /// Launch (or open the file browser for) one of a machine's launchers, reusing
+    /// the same paths the Launchers menu uses.
+    private func launchFromMachine(_ machineID: UUID, launcherName: String) {
+        guard let machine = registry?.machine(machineID),
+              let ml = machine.launchers.first(where: { $0.name == launcherName }) else { return }
+        var warnings: [String] = []
+        guard let entry = machine.resolved(ml, warnings: &warnings) else { return }
+        if entry.fileBrowser {
+            openFileBrowser(entry: entry, key: "\(machine.id.uuidString)/\(ml.name)")
+        } else {
+            launch(entry)
+        }
+    }
+
+    private func presentAddMachineComingSoon() {
+        let alert = NSAlert()
+        alert.messageText = "Adding machines isn't available yet"
+        alert.informativeText = "For now, machines are migrated from your launchers. "
+            + "Editing and adding machines from this window lands in a follow-up."
+        alert.runModal()
+    }
+
     /// Resolve the engine config: the engine binary comes from the app
     /// bundle (or SPARCPLUG_ENGINE_DIR in dev), and the disk image from the
     /// Preferences path. Empty path -> the engine reports notInstalled.
@@ -275,7 +390,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // Anything other than steady .running (boot-in-progress counts as
             // .running too, but shutdown/stop don't) means the daemon isn't
             // answering -- drop readiness so Admin dims. onReady re-enables it.
-            if state != .running { self?.controller?.isReady = false }
+            if state != .running {
+                self?.controller?.isReady = false
+                self?.bundledBootProgress = nil
+            }
             self?.refreshSparcMenu()
         }
         engine.onCleanHalt { [weak self] in
@@ -283,6 +401,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         engine.onProgress { [weak self] value in
             self?.sparcConsole?.setProgress(value)
+            self?.bundledBootProgress = value
+            self?.refreshMachineList()
         }
         engine.onReady { [weak self] in
             self?.sparcConsole?.markReady()
@@ -393,6 +513,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let statusRow = NSMenuItem(title: rowTitle, action: nil, keyEquivalent: "")
         statusRow.isEnabled = false
         menu.addItem(statusRow)
+        menu.addItem(.separator())
+
+        let openMgr = NSMenuItem(title: "Open Machine Manager\u{2026}",
+                                 action: #selector(openMachineList(_:)),
+                                 keyEquivalent: "")
+        openMgr.target = self
+        menu.addItem(openMgr)
         menu.addItem(.separator())
 
         let stopRow = NSMenuItem(title: "Stop Server",
@@ -834,7 +961,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
               let entry = currentLauncherFile?.entries.first(where: { "\($0.group)/\($0.name)" == key }),
               entry.fileBrowser
         else { return }
+        openFileBrowser(entry: entry, key: key)
+    }
 
+    /// Open (or focus) a Helios file browser for a resolved filebrowser entry,
+    /// keyed so the window is reused. Shared by the Launchers menu and machine rows.
+    @MainActor
+    private func openFileBrowser(entry: LauncherEntry, key: String) {
         // The browser speaks the Helios protocol, so this key must use
         // transport = helios. filebrowser=true on a telnet/ssh key is a config
         // error -- it's under the wrong transport. This is per-key: a sibling
@@ -884,6 +1017,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard let key = sender.representedObject as? String,
               let entry = currentLauncherFile?.entries.first(where: { "\($0.group)/\($0.name)" == key })
         else { return }
+        launch(entry)
+    }
+
+    /// Launch one resolved entry (from the Launchers menu or a machine row). Picks
+    /// the auth path by transport: ssh/helios need none; telnet uses the launcher
+    /// password, else the Keychain (prompting on first use).
+    @MainActor
+    private func launch(_ entry: LauncherEntry) {
         // ssh (keys-only) and helios (daemon, no auth) need no password: skip
         // the prompt and Keychain entirely. Any password field is ignored.
         if entry.transport == .ssh || entry.transport == .helios {
@@ -1018,6 +1159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showConsoleMenuItem?.isEnabled = (sparcConsole != nil)
         backUpMenuItem?.isEnabled    = (state == .stopped)
         adminMenuItem?.isEnabled     = (controller?.isReady ?? false)
+        refreshMachineList()
     }
 
     @MainActor
