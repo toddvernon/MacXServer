@@ -19,6 +19,11 @@ final class MachineListWindowController: NSWindowController {
         panel.title = "Machines"
         panel.contentView = hostingView
         panel.isReleasedWhenClosed = false      // close != quit; reused on reopen
+        // It's the front door, not a palette: stay visible when another app has
+        // focus. NSPanel defaults hidesOnDeactivate to true, which would make it
+        // vanish every time focus leaves the app (constant, since we're an
+        // accessory app).
+        panel.hidesOnDeactivate = false
         panel.minSize = NSSize(width: 520, height: 320)
         panel.center()
         super.init(window: panel)
