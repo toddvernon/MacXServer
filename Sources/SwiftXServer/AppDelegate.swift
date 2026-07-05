@@ -34,6 +34,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// `.running`, which is true the instant the qemu process launches, long
     /// before the daemon is up.
     private var adminMenuItem: NSMenuItem?
+    /// The Server menu's listener-status info row; kept in sync with `listenerStatus`.
+    private var serverStatusMenuItem: NSMenuItem?
     /// The SPARCstation submenu's leaf items. We turn off auto-enable for that
     /// submenu and drive these directly from the engine callbacks, so dim/undim
     /// happens live -- including while the menu is held open -- instead of only
@@ -115,7 +117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// the listener has bound; we copy it into the menu when the menu is
     /// next built.
     var listenerStatus: String = "MacXServer" {
-        didSet { updateStatusMenu() }
+        didSet {
+            updateStatusMenu()
+            serverStatusMenuItem?.title = listenerStatus
+        }
     }
 
     /// Whether server-side capture is on for this process. Set once at
@@ -545,6 +550,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         menu.addItem(statusRow)
         menu.addItem(.separator())
 
+        // Machine dashboard: a one-line summary + a dot per machine. Info rows
+        // (click "Open Machine Manager" to act). Rebuilt on state change via
+        // refreshSparcMenu, so "N running" stays current.
+        if let snapshots = registry?.snapshot(), !snapshots.isEmpty {
+            let running = snapshots.filter { $0.running == true }.count
+            let header = NSMenuItem(title: "Machines: \(running) running", action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+            for s in snapshots {
+                let dot: String
+                if s.kind == .externalHost { dot = "\u{25C7}" }        // ◇ external
+                else if s.running == true && s.ready == true { dot = "\u{25CF}" }  // ● running+ready
+                else if s.running == true { dot = "\u{25D0}" }         // ◐ booting
+                else if !s.installed { dot = "\u{25CB}" }              // ○ not installed
+                else { dot = "\u{25CB}" }                              // ○ stopped
+                let row = NSMenuItem(title: "  \(dot)  \(s.name)", action: nil, keyEquivalent: "")
+                row.isEnabled = false
+                menu.addItem(row)
+            }
+            menu.addItem(.separator())
+        }
+
         let openMgr = NSMenuItem(title: "Open Machine Manager\u{2026}",
                                  action: #selector(openMachineList(_:)),
                                  keyEquivalent: "")
@@ -619,18 +646,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         appMenu.addItem(discardCaptures)
 
         appMenu.addItem(.separator())
-
-        // One-and-done: cancel every active client read source. Listener
-        // keeps accepting new connections. Useful when a stuck client
-        // (orphan top-levels from a WM-emulation bug, a Sun ssh session
-        // that got wedged) won't clean itself up.
-        let dropClients = NSMenuItem(title: "Drop All Clients",
-                                     action: #selector(dropAllClients(_:)),
-                                     keyEquivalent: "")
-        dropClients.target = self
-        appMenu.addItem(dropClients)
-
-        appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: "Hide MacXServer",
                                    action: #selector(NSApplication.hide(_:)),
                                    keyEquivalent: "h"))
@@ -665,6 +680,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                     keyEquivalent: "a"))
         editMenuItem.submenu = editMenu
         main.addItem(editMenuItem)
+
+        // Server menu -- the X server as a quiet service: its live status and the
+        // occasional control (Drop All Clients, moved here from the App menu). The
+        // config (scale, clipboard, Motif frame) stays in Preferences.
+        let serverMenuItem = NSMenuItem()
+        let serverMenu = NSMenu(title: "Server")
+        serverMenu.autoenablesItems = false
+        let serverStatus = NSMenuItem(title: listenerStatus, action: nil, keyEquivalent: "")
+        serverStatus.isEnabled = false
+        serverMenu.addItem(serverStatus)
+        self.serverStatusMenuItem = serverStatus
+        serverMenu.addItem(.separator())
+        // One-and-done: cancel every active client read source. Listener keeps
+        // accepting new connections. Useful when a stuck client (orphan top-levels
+        // from a WM-emulation bug, a wedged Sun ssh session) won't clean itself up.
+        let drop = NSMenuItem(title: "Drop All Clients",
+                              action: #selector(dropAllClients(_:)), keyEquivalent: "")
+        drop.target = self
+        serverMenu.addItem(drop)
+        serverMenuItem.submenu = serverMenu
+        main.addItem(serverMenuItem)
 
         // Launchers submenu -- one-click launch of X apps on remote Suns.
         let launchersMenuItem = NSMenuItem()
@@ -1210,6 +1246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         backUpMenuItem?.isEnabled    = (state == .stopped)
         adminMenuItem?.isEnabled     = (controller?.isReady ?? false)
         refreshMachineList()
+        updateStatusMenu()
     }
 
     @MainActor
