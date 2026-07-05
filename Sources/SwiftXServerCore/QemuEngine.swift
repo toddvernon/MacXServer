@@ -29,7 +29,7 @@ public enum QemuEngineError: Error, LocalizedError, Sendable {
 /// homebrew qemu and macXserver simultaneously, so sharing one block per OS is
 /// safe, while three different OSes get three different blocks. The `helios`
 /// slot is reserved in every block even where no daemon runs there yet.
-public struct ImagePorts: Sendable, Equatable {
+public struct ImagePorts: Sendable, Equatable, Codable {
     public var telnet: UInt16
     public var ssh: UInt16
     public var helios: UInt16

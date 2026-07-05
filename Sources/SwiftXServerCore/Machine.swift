@@ -5,7 +5,7 @@ import Foundation
 /// launchers). See MACHINE_MANAGER_REFACTOR.md. The two kinds differ by
 /// *capability set*, not a uniform interface -- a real Sun genuinely has no
 /// QMP/start/stop -- so callers gate verbs on `kind` rather than assuming.
-public enum MachineKind: String, Equatable, Sendable {
+public enum MachineKind: String, Equatable, Sendable, Codable {
     case emulatedVM
     case externalHost
 }
@@ -13,14 +13,14 @@ public enum MachineKind: String, Equatable, Sendable {
 /// Guest OS. Drives the per-OS port block, and later `-M`/guest bin dirs/Helios
 /// quirks. Auto-detected from the image where possible; user-set for external
 /// hosts. Nil when unknown (an external box we haven't classified).
-public enum MachineOS: String, Equatable, Sendable {
+public enum MachineOS: String, Equatable, Sendable, Codable {
     case solaris26
     case sunos414
     case netbsd
 
     /// The historical per-OS host-port block. In P1 (one machine at a time) this
-    /// is the machine's static port triple; P2's dynamic allocator supersedes it
-    /// for concurrency. Kept as the shape, per QemuEngine.ImagePorts.
+    /// is the machine's port triple; P2's dynamic allocator supersedes it for
+    /// concurrency. Kept as the shape, per QemuEngine.ImagePorts.
     public var defaultPorts: ImagePorts {
         switch self {
         case .solaris26: return .solaris26
@@ -33,82 +33,150 @@ public enum MachineOS: String, Equatable, Sendable {
 /// How an emulated VM is put on the network. slirp is the zero-config default
 /// (free outbound NAT, localhost hostfwds). See "Networking" in the refactor
 /// doc. Only `.slirp` behavior is wired today; the other two are P2.
-public enum MachineNetworkMode: String, Equatable, Sendable {
-    /// User-mode networking, hostfwds bound to localhost. The default.
-    case slirp
-    /// slirp, but a forward is bound `0.0.0.0` so the LAN can reach the guest.
-    case slirpLanExposed
-    /// slirp on le0 plus a `-netdev socket` fabric on a second NIC so VMs can
-    /// talk to each other.
-    case socketFabric
+public enum MachineNetworkMode: String, Equatable, Sendable, Codable {
+    case slirp             // user-mode, hostfwds bound to localhost (default)
+    case slirpLanExposed   // slirp, a forward bound 0.0.0.0 for LAN reach
+    case socketFabric      // slirp on le0 + a socket fabric on a second NIC
 }
 
-/// Connection identity: how we reach a machine's Helios/ssh/telnet planes, and
-/// the DISPLAY we hand its launched X clients. For an emulated VM these are the
-/// loopback hostfwd ports; for an external host they're the real LAN ports.
-public struct MachineConnection: Equatable, Sendable {
-    public var host: String
-    public var user: String
-    public var ports: ImagePorts
-    public var transport: LauncherTransport
-    /// DISPLAY override; nil = auto-compute from the Mac's LAN IP + display
-    /// number. The canonical override is a slirp guest's `10.0.2.2:0`.
+/// One launcher command belonging to a machine: a named X-client command that
+/// runs *on that machine*. It carries only what's specific to the command;
+/// host / user / transport / port / display come from the owning machine (the
+/// launcher inherits them unless it sets an override). This is the persisted,
+/// configured form. `Machine.resolved(_:)` turns it into the runtime
+/// `LauncherEntry` the launch machinery consumes.
+public struct MachineLauncher: Equatable, Sendable, Codable {
+    /// Menu-item label.
+    public var name: String
+    /// The X client command line. Optional: a filebrowser item opens the Helios
+    /// browser rather than running anything, so it needs no command.
+    public var command: String?
+    /// Override the machine's transport for just this command. nil = inherit.
+    public var transport: LauncherTransport?
+    /// Show the per-launch progress window with the session transcript.
+    public var verbose: Bool
+    /// Add a Helios file-browser item instead of a launch. Only meaningful on a
+    /// helios-transport machine.
+    public var fileBrowser: Bool
+    /// Override the DISPLAY handed to this command. nil = inherit the machine's.
     public var display: String?
+    /// Optional cleartext password (telnet dev convenience; ignored for ssh).
+    public var password: String?
 
-    public init(host: String, user: String, ports: ImagePorts,
-                transport: LauncherTransport, display: String? = nil) {
-        self.host = host; self.user = user; self.ports = ports
-        self.transport = transport; self.display = display
+    public init(name: String, command: String? = nil, transport: LauncherTransport? = nil,
+                verbose: Bool = false, fileBrowser: Bool = false,
+                display: String? = nil, password: String? = nil) {
+        self.name = name; self.command = command; self.transport = transport
+        self.verbose = verbose; self.fileBrowser = fileBrowser
+        self.display = display; self.password = password
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name, command, transport, verbose, fileBrowser, display, password
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        command = try c.decodeIfPresent(String.self, forKey: .command)
+        transport = try c.decodeIfPresent(LauncherTransport.self, forKey: .transport)
+        verbose = try c.decodeIfPresent(Bool.self, forKey: .verbose) ?? false
+        fileBrowser = try c.decodeIfPresent(Bool.self, forKey: .fileBrowser) ?? false
+        display = try c.decodeIfPresent(String.self, forKey: .display)
+        password = try c.decodeIfPresent(String.self, forKey: .password)
+    }
+
+    /// Emit only what's set, so a launcher reads as `{ "name": ..., "command": ... }`.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(name, forKey: .name)
+        try c.encodeIfPresent(command, forKey: .command)
+        try c.encodeIfPresent(transport, forKey: .transport)
+        if verbose { try c.encode(true, forKey: .verbose) }
+        if fileBrowser { try c.encode(true, forKey: .fileBrowser) }
+        try c.encodeIfPresent(display, forKey: .display)
+        try c.encodeIfPresent(password, forKey: .password)
     }
 }
 
 /// A configured machine. Value type -- the persisted config, not the runtime.
 /// The runtime (a `MachineController` wrapping a `QemuEngine`) is held separately
 /// by the registry, keyed by `id`, and is nil until the machine is started.
-public struct Machine: Identifiable, Equatable, Sendable {
+///
+/// Persisted as JSON in `~/.macxserver-machines.json` (a flat, readable object;
+/// see MachinesFile). Connection fields live directly on the machine -- no nested
+/// "connection" object, no bracket-block inheritance -- and ports are derived
+/// from `os` unless explicitly overridden, so the common case stays terse.
+public struct Machine: Identifiable, Equatable, Sendable, Codable {
     /// Stable identity, the registry key. Never the image path or a host string,
-    /// so a machine survives an image move or a rename. Persisted in the file.
-    public let id: UUID
-    /// The `[machine:KEY]` key -- also the `group` on this machine's launcher
-    /// entries, so a launcher item ties back to its machine by string.
-    public var key: String
-    /// User-facing label. Defaults to `key` when unset.
+    /// so a machine survives an image move or a rename. Persisted; generated if
+    /// a hand-written entry omits it.
+    public var id: UUID
+    /// User-facing label. Doubles as the launcher menu group for this machine.
     public var name: String
     public var kind: MachineKind
     public var os: MachineOS?
-    public var connection: MachineConnection
-    /// This machine's launcher commands (the `[KEY/item]` entries). Their `group`
-    /// equals `key`.
-    public var launchers: [LauncherEntry]
 
-    // MARK: emulatedVM-only (nil / defaulted for external hosts)
+    // Connection (flat -- how we reach this machine's Helios/ssh/telnet planes).
+    public var host: String
+    public var user: String
+    public var transport: LauncherTransport
+    /// DISPLAY override handed to launched clients; nil = auto-compute from the
+    /// Mac's LAN IP + display number. The canonical override is a slirp guest's
+    /// `10.0.2.2:0`.
+    public var display: String?
+    /// Explicit port triple. nil = derive from `os` (emulated) or 23/22/2125
+    /// (external). Set only when a machine needs non-standard ports.
+    public var ports: ImagePorts?
 
-    /// Path to the qcow2 -- the lifecycle identity of an emulated VM.
-    public var image: URL?
+    // emulatedVM-only (nil / defaulted for external hosts).
+    /// qcow2 path (raw string; `~` expanded by `image`). The lifecycle identity.
+    public var imagePath: String?
     public var memoryMB: Int
     /// Unique per machine (a duplicate MAC collides the moment two VMs share a
-    /// segment). Nil = derive at start from `id`. Wired in P2.
+    /// segment). nil = derive at start from `id`. Wired in P2.
     public var macAddress: String?
     public var networkMode: MachineNetworkMode
 
-    public init(id: UUID = UUID(), key: String, name: String? = nil,
-                kind: MachineKind, os: MachineOS? = nil,
-                connection: MachineConnection, launchers: [LauncherEntry] = [],
-                image: URL? = nil, memoryMB: Int = 128,
-                macAddress: String? = nil,
-                networkMode: MachineNetworkMode = .slirp) {
-        self.id = id; self.key = key; self.name = name ?? key
-        self.kind = kind; self.os = os
-        self.connection = connection; self.launchers = launchers
-        self.image = image; self.memoryMB = memoryMB
+    /// This machine's launcher commands.
+    public var launchers: [MachineLauncher]
+
+    public init(id: UUID = UUID(), name: String, kind: MachineKind, os: MachineOS? = nil,
+                host: String, user: String, transport: LauncherTransport = .helios,
+                display: String? = nil, ports: ImagePorts? = nil,
+                imagePath: String? = nil, memoryMB: Int = 128, macAddress: String? = nil,
+                networkMode: MachineNetworkMode = .slirp,
+                launchers: [MachineLauncher] = []) {
+        self.id = id; self.name = name; self.kind = kind; self.os = os
+        self.host = host; self.user = user; self.transport = transport
+        self.display = display; self.ports = ports
+        self.imagePath = imagePath; self.memoryMB = memoryMB
         self.macAddress = macAddress; self.networkMode = networkMode
+        self.launchers = launchers
     }
 
-    /// True for an emulated VM with an image path set (i.e. it can actually run).
-    /// An emulatedVM with no image is "not installed."
-    public var isInstalledEmulatedVM: Bool {
-        kind == .emulatedVM && image != nil
+    // MARK: Derived
+
+    /// The image URL (tilde-expanded), or nil when unset.
+    public var image: URL? {
+        guard let p = imagePath, !p.isEmpty else { return nil }
+        return URL(fileURLWithPath: (p as NSString).expandingTildeInPath)
     }
+
+    /// The effective port triple: the explicit override, else the OS block for
+    /// an emulated VM, else the standard external defaults.
+    public var resolvedPorts: ImagePorts {
+        if let ports = ports { return ports }
+        if kind == .emulatedVM { return os?.defaultPorts ?? .solaris26 }
+        return ImagePorts(telnet: 23, ssh: 22, helios: 2125)
+    }
+
+    /// True for an emulated VM with an image set (i.e. it can actually run).
+    public var isInstalledEmulatedVM: Bool {
+        kind == .emulatedVM && (imagePath?.isEmpty == false)
+    }
+
+    // MARK: Runtime resolution
 
     /// Reconstruct the `QemuEngineConfig` for an emulated VM. Helper + firmware
     /// come from the app bundle (via `defaultConfig`); this machine overrides the
@@ -120,8 +188,86 @@ public struct Machine: Identifiable, Equatable, Sendable {
         guard kind == .emulatedVM, let image = image else { return nil }
         var config = QemuEngine.defaultConfig(bundle: bundle, memoryMB: memoryMB)
         config.diskImage = image
-        config.ports = connection.ports
+        config.ports = resolvedPorts
         config.tftpDirectory = tftpDirectory
         return config
+    }
+
+    /// Resolve one launcher to the runtime `LauncherEntry`, filling host / user /
+    /// transport / port / display from this machine (the launcher's own overrides
+    /// win). Returns nil if the result is unusable (no command and not a
+    /// filebrowser). Warnings (ssh-with-password etc.) accrue to `warnings`.
+    public func resolved(_ launcher: MachineLauncher,
+                         warnings: inout [String]) -> LauncherEntry? {
+        let transport = launcher.transport ?? self.transport
+        var merged: [String: String] = [
+            "host": host, "user": user, "transport": transport.rawValue,
+            "port": String(resolvedPorts.port(for: transport)),
+        ]
+        if let d = launcher.display ?? display { merged["display"] = d }
+        if let c = launcher.command { merged["command"] = c }
+        if launcher.fileBrowser { merged["filebrowser"] = "true" }
+        if launcher.verbose { merged["verbose"] = "true" }
+        if let pw = launcher.password { merged["password"] = pw }
+        return LauncherEntry.build(merged: merged, name: launcher.name,
+                                   group: name, warnings: &warnings)
+    }
+
+    /// All of this machine's launchers as runtime entries, plus any warnings.
+    public func resolvedEntries() -> (entries: [LauncherEntry], warnings: [String]) {
+        var warnings: [String] = []
+        var entries: [LauncherEntry] = []
+        for l in launchers {
+            if let e = resolved(l, warnings: &warnings) { entries.append(e) }
+        }
+        return (entries, warnings)
+    }
+
+    // MARK: Codable (forgiving decode + terse encode)
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, kind, os, host, user, transport, display, ports
+        case imagePath = "image", memoryMB, macAddress = "mac", networkMode, launchers
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decode(String.self, forKey: .name)
+        kind = try c.decode(MachineKind.self, forKey: .kind)
+        os = try c.decodeIfPresent(MachineOS.self, forKey: .os)
+        host = try c.decodeIfPresent(String.self, forKey: .host)
+            ?? (kind == .emulatedVM ? "127.0.0.1" : "")
+        user = try c.decodeIfPresent(String.self, forKey: .user) ?? ""
+        transport = try c.decodeIfPresent(LauncherTransport.self, forKey: .transport) ?? .helios
+        display = try c.decodeIfPresent(String.self, forKey: .display)
+        ports = try c.decodeIfPresent(ImagePorts.self, forKey: .ports)
+        imagePath = try c.decodeIfPresent(String.self, forKey: .imagePath)
+        memoryMB = try c.decodeIfPresent(Int.self, forKey: .memoryMB) ?? 128
+        macAddress = try c.decodeIfPresent(String.self, forKey: .macAddress)
+        networkMode = try c.decodeIfPresent(MachineNetworkMode.self, forKey: .networkMode) ?? .slirp
+        launchers = try c.decodeIfPresent([MachineLauncher].self, forKey: .launchers) ?? []
+    }
+
+    /// Emit a clean, flat object: always id/name/kind/host/user; the emulated-only
+    /// fields and any non-default values only when they apply.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(kind, forKey: .kind)
+        try c.encodeIfPresent(os, forKey: .os)
+        try c.encode(host, forKey: .host)
+        try c.encode(user, forKey: .user)
+        if transport != .helios { try c.encode(transport, forKey: .transport) }
+        try c.encodeIfPresent(display, forKey: .display)
+        try c.encodeIfPresent(ports, forKey: .ports)
+        if kind == .emulatedVM {
+            try c.encodeIfPresent(imagePath, forKey: .imagePath)
+            try c.encode(memoryMB, forKey: .memoryMB)
+            try c.encodeIfPresent(macAddress, forKey: .macAddress)
+            if networkMode != .slirp { try c.encode(networkMode, forKey: .networkMode) }
+        }
+        if !launchers.isEmpty { try c.encode(launchers, forKey: .launchers) }
     }
 }

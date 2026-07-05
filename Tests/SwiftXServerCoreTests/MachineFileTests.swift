@@ -3,118 +3,111 @@ import XCTest
 
 final class MachineFileTests: XCTestCase {
 
-    // MARK: - Parse
+    // MARK: - Decode
 
-    func testParsesEmulatedMachineWithLauncher() {
-        let file = MachinesFile.parse("""
-        [machine:solaris]
-        name      = Solaris 2.6
-        kind      = emulatedVM
-        os        = solaris26
-        image     = /tmp/solaris-2.6.qcow2
-        host      = 127.0.0.1
-        user      = tvernon
-        transport = helios
-
-        [solaris/xterm cyan]
-        command   = xterm -fg cyan -bg black
+    func testDecodesEmulatedMachineWithLauncher() throws {
+        let file = try MachinesFile.decode("""
+        {
+          "machines": [
+            {
+              "id": "11111111-2222-3333-4444-555555555555",
+              "name": "Solaris 2.6",
+              "kind": "emulatedVM",
+              "os": "solaris26",
+              "image": "/tmp/solaris-2.6.qcow2",
+              "host": "127.0.0.1",
+              "user": "tvernon",
+              "launchers": [
+                { "name": "xterm cyan", "command": "xterm -fg cyan -bg black" }
+              ]
+            }
+          ]
+        }
         """)
         XCTAssertEqual(file.machines.count, 1)
         let m = file.machines[0]
-        XCTAssertEqual(m.key, "solaris")
+        XCTAssertEqual(m.id, UUID(uuidString: "11111111-2222-3333-4444-555555555555"))
         XCTAssertEqual(m.name, "Solaris 2.6")
         XCTAssertEqual(m.kind, .emulatedVM)
         XCTAssertEqual(m.os, .solaris26)
         XCTAssertEqual(m.image?.path, "/tmp/solaris-2.6.qcow2")
-        XCTAssertEqual(m.connection.host, "127.0.0.1")
-        XCTAssertEqual(m.connection.user, "tvernon")
-        XCTAssertEqual(m.connection.transport, .helios)
-        // emulated Solaris inherits the 2.6 port block
-        XCTAssertEqual(m.connection.ports, .solaris26)
+        XCTAssertEqual(m.host, "127.0.0.1")
+        XCTAssertEqual(m.user, "tvernon")
+        XCTAssertEqual(m.transport, .helios)          // defaulted
+        XCTAssertEqual(m.resolvedPorts, .solaris26)   // derived from os
         XCTAssertEqual(m.launchers.count, 1)
         XCTAssertEqual(m.launchers[0].name, "xterm cyan")
-        XCTAssertEqual(m.launchers[0].group, "solaris")
         XCTAssertEqual(m.launchers[0].command, "xterm -fg cyan -bg black")
     }
 
-    func testLauncherInheritsMachineConnection() {
-        // The launcher item sets only a command; host/user/transport/port come
-        // from the machine block.
-        let file = MachinesFile.parse("""
-        [machine:ss5]
-        kind      = externalHost
-        host      = 192.168.7.19
-        user      = tvernon
-        transport = helios
-
-        [ss5/xterm]
-        command   = xterm
+    func testForgivingDefaultsOnDecode() throws {
+        // Minimal external machine: only kind/name/host/user; everything else defaults.
+        let file = try MachinesFile.decode("""
+        { "machines": [ { "name": "box", "kind": "externalHost", "host": "10.0.0.5", "user": "a" } ] }
         """)
-        let e = file.machines[0].launchers[0]
+        let m = file.machines[0]
+        XCTAssertEqual(m.transport, .helios)
+        XCTAssertEqual(m.memoryMB, 128)
+        XCTAssertEqual(m.networkMode, .slirp)
+        XCTAssertTrue(m.launchers.isEmpty)
+        XCTAssertNil(m.image)
+        // an id is generated when omitted
+        XCTAssertNotEqual(m.id, UUID(uuid: (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)))
+    }
+
+    func testResolvedPortsExternalDefaultsAndOverride() throws {
+        let file = try MachinesFile.decode("""
+        {
+          "machines": [
+            { "name": "a", "kind": "externalHost", "host": "h", "user": "u" },
+            { "name": "b", "kind": "externalHost", "host": "h", "user": "u",
+              "ports": { "telnet": 23, "ssh": 2020, "helios": 2125 } }
+          ]
+        }
+        """)
+        XCTAssertEqual(file.machines[0].resolvedPorts, ImagePorts(telnet: 23, ssh: 22, helios: 2125))
+        XCTAssertEqual(file.machines[1].resolvedPorts.ssh, 2020)
+    }
+
+    // MARK: - Launcher resolution
+
+    func testLauncherInheritsMachineConnection() throws {
+        let m = try MachinesFile.decode("""
+        { "machines": [ { "name": "ss5", "kind": "externalHost", "host": "192.168.7.19",
+          "user": "tvernon", "launchers": [ { "name": "xterm", "command": "xterm" } ] } ] }
+        """).machines[0]
+        let (entries, _) = m.resolvedEntries()
+        XCTAssertEqual(entries.count, 1)
+        let e = entries[0]
         XCTAssertEqual(e.host, "192.168.7.19")
         XCTAssertEqual(e.user, "tvernon")
         XCTAssertEqual(e.transport, .helios)
-        XCTAssertEqual(e.port, 2125)   // helios default, inherited
+        XCTAssertEqual(e.port, 2125)     // helios default, inherited
+        XCTAssertEqual(e.group, "ss5")   // menu group == machine name
     }
 
-    func testKindInferredFromImageWhenUnset() {
-        let file = MachinesFile.parse("""
-        [machine:foo]
-        image = /tmp/x.qcow2
-        host  = 127.0.0.1
-        user  = a
-        """)
-        XCTAssertEqual(file.machines[0].kind, .emulatedVM)
-
-        let ext = MachinesFile.parse("""
-        [machine:bar]
-        host = 10.0.0.5
-        user = a
-        """)
-        XCTAssertEqual(ext.machines[0].kind, .externalHost)
+    func testLauncherTransportOverrideResolvesPort() throws {
+        let m = Machine(name: "m", kind: .externalHost, host: "h", user: "u", transport: .helios,
+                        launchers: [MachineLauncher(name: "shell", command: "xterm", transport: .ssh)])
+        let e = m.resolvedEntries().entries[0]
+        XCTAssertEqual(e.transport, .ssh)
+        XCTAssertEqual(e.port, 22)   // ssh default for the overridden transport
     }
 
-    func testExternalPortOverrideOnTransport() {
-        let file = MachinesFile.parse("""
-        [machine:pi]
-        kind      = externalHost
-        host      = 10.0.0.9
-        user      = pi
-        transport = ssh
-        port      = 2020
-        """)
-        // `port` drops onto the ssh plane; telnet/helios keep defaults.
-        XCTAssertEqual(file.machines[0].connection.ports.ssh, 2020)
-        XCTAssertEqual(file.machines[0].connection.ports.telnet, 23)
-        XCTAssertEqual(file.machines[0].connection.ports.helios, 2125)
-    }
-
-    func testIndividualPortOverrides() {
-        let file = MachinesFile.parse("""
-        [machine:m]
-        kind        = emulatedVM
-        os          = sunos414
-        image       = /tmp/x.qcow2
-        helios_port = 9999
-        """)
-        XCTAssertEqual(file.machines[0].connection.ports.helios, 9999)
-        // the other two keep the sunos414 block
-        XCTAssertEqual(file.machines[0].connection.ports.telnet, ImagePorts.sunos414.telnet)
-        XCTAssertEqual(file.machines[0].connection.ports.ssh, ImagePorts.sunos414.ssh)
+    func testFileBrowserLauncherNeedsNoCommand() throws {
+        let m = Machine(name: "m", kind: .externalHost, host: "h", user: "u", transport: .helios,
+                        launchers: [MachineLauncher(name: "Files", fileBrowser: true)])
+        let e = m.resolvedEntries().entries[0]
+        XCTAssertTrue(e.fileBrowser)
+        XCTAssertEqual(e.command, "")
     }
 
     // MARK: - makeEngineConfig
 
     func testEngineConfigForEmulatedVM() {
-        let file = MachinesFile.parse("""
-        [machine:solaris]
-        kind   = emulatedVM
-        os     = solaris26
-        image  = /tmp/disk.qcow2
-        memory = 256
-        """)
-        let cfg = file.machines[0].makeEngineConfig(tftpDirectory: "/tmp/tftp")
-        XCTAssertNotNil(cfg)
+        let m = Machine(name: "s", kind: .emulatedVM, os: .solaris26,
+                        host: "127.0.0.1", user: "t", imagePath: "/tmp/disk.qcow2", memoryMB: 256)
+        let cfg = m.makeEngineConfig(tftpDirectory: "/tmp/tftp")
         XCTAssertEqual(cfg?.diskImage.path, "/tmp/disk.qcow2")
         XCTAssertEqual(cfg?.memoryMB, 256)
         XCTAssertEqual(cfg?.ports, .solaris26)
@@ -122,56 +115,30 @@ final class MachineFileTests: XCTestCase {
     }
 
     func testEngineConfigNilForExternalAndImageless() {
-        let ext = MachinesFile.parse("[machine:x]\nkind=externalHost\nhost=1.2.3.4\nuser=a\n")
-        XCTAssertNil(ext.machines[0].makeEngineConfig())
-
-        let imageless = MachinesFile.parse("[machine:y]\nkind=emulatedVM\nos=netbsd\n")
-        XCTAssertNil(imageless.machines[0].makeEngineConfig())
-        XCTAssertFalse(imageless.machines[0].isInstalledEmulatedVM)
+        XCTAssertNil(Machine(name: "x", kind: .externalHost, host: "h", user: "u").makeEngineConfig())
+        let imageless = Machine(name: "y", kind: .emulatedVM, os: .netbsd, host: "127.0.0.1", user: "u")
+        XCTAssertNil(imageless.makeEngineConfig())
+        XCTAssertFalse(imageless.isInstalledEmulatedVM)
     }
 
     // MARK: - Round-trip
 
-    func testSerializeParseIdempotent() {
-        let original = MachinesFile.parse("""
-        [machine:solaris]
-        name      = Solaris 2.6
-        kind      = emulatedVM
-        os        = solaris26
-        image     = /tmp/solaris-2.6.qcow2
-        host      = 127.0.0.1
-        user      = tvernon
-        transport = helios
-        display   = 10.0.2.2:0
-
-        [solaris/xterm cyan]
-        command   = xterm -fg cyan
-
-        [solaris/Files]
-        filebrowser = true
-
-        [machine:ss5]
-        kind      = externalHost
-        host      = 192.168.7.19
-        user      = tvernon
-        transport = helios
-        """).machines
-
-        let reparsed = MachinesFile.parse(MachinesFile.serialize(original)).machines
-        XCTAssertEqual(reparsed, original)
-    }
-
-    func testIdPersistsAcrossRoundTrip() {
-        let m = MachinesFile.parse("""
-        [machine:a]
-        id    = 11111111-2222-3333-4444-555555555555
-        kind  = externalHost
-        host  = 1.2.3.4
-        user  = a
-        """).machines[0]
-        XCTAssertEqual(m.id, UUID(uuidString: "11111111-2222-3333-4444-555555555555"))
-        let round = MachinesFile.parse(MachinesFile.serialize([m])).machines[0]
-        XCTAssertEqual(round.id, m.id)
+    func testEncodeDecodeIdempotent() throws {
+        let original = try MachinesFile.decode("""
+        {
+          "machines": [
+            { "id": "AAAAAAAA-0000-0000-0000-000000000001", "name": "Solaris 2.6",
+              "kind": "emulatedVM", "os": "solaris26", "image": "/tmp/s.qcow2",
+              "host": "127.0.0.1", "user": "tvernon", "display": "10.0.2.2:0",
+              "launchers": [ { "name": "xterm cyan", "command": "xterm -fg cyan" },
+                             { "name": "Files", "fileBrowser": true } ] },
+            { "id": "AAAAAAAA-0000-0000-0000-000000000002", "name": "the real SS5",
+              "kind": "externalHost", "host": "192.168.7.19", "user": "tvernon" }
+          ]
+        }
+        """)
+        let round = try MachinesFile.decode(original.encoded())
+        XCTAssertEqual(round, original)
     }
 
     // MARK: - Migration
@@ -197,13 +164,15 @@ final class MachineFileTests: XCTestCase {
         let machines = MachineMigrator.migrate(launchers: launchers,
                                                bundledImagePath: "/tmp/bundled.qcow2",
                                                bundledUser: "tvernon")
-        let solaris = machines.first { $0.key == "solaris" }
-        let u5 = machines.first { $0.key == "u5" }
+        let solaris = machines.first { $0.name == "solaris" }
+        let u5 = machines.first { $0.name == "u5" }
         XCTAssertEqual(solaris?.kind, .emulatedVM)
         XCTAssertEqual(solaris?.image?.path, "/tmp/bundled.qcow2")
         XCTAssertEqual(solaris?.os, .solaris26)
+        XCTAssertEqual(solaris?.launchers.first?.command, "xterm")
         XCTAssertEqual(u5?.kind, .externalHost)
         XCTAssertNil(u5?.image)
+        XCTAssertEqual(u5?.transport, .telnet)
         XCTAssertEqual(u5?.launchers.count, 1)
     }
 
@@ -219,12 +188,10 @@ final class MachineFileTests: XCTestCase {
         let machines = MachineMigrator.migrate(launchers: launchers,
                                                bundledImagePath: "/tmp/b.qcow2",
                                                bundledUser: "tvernon")
-        // A bundled emulated machine is inserted first even though no launcher
-        // group targeted the loopback.
         XCTAssertEqual(machines.first?.kind, .emulatedVM)
         XCTAssertEqual(machines.first?.image?.path, "/tmp/b.qcow2")
-        XCTAssertEqual(machines.first?.connection.user, "tvernon")
-        XCTAssertTrue(machines.contains { $0.key == "u5" && $0.kind == .externalHost })
+        XCTAssertEqual(machines.first?.user, "tvernon")
+        XCTAssertTrue(machines.contains { $0.name == "u5" && $0.kind == .externalHost })
     }
 
     func testMigrationBundledNotInstalledWhenNoImagePath() {

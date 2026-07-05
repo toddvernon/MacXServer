@@ -7,7 +7,7 @@ import Foundation
 /// Helios (added 2026-06-21, C7) runs the client via the Helios daemon's
 /// `run_command` -- no prompt-scraping, no login-shell quirks, a clean exit
 /// code, and no auth to manage. The least-brittle path once the daemon is up.
-public enum LauncherTransport: String, Equatable, Sendable {
+public enum LauncherTransport: String, Equatable, Sendable, Codable {
     case telnet, ssh, helios
 }
 
