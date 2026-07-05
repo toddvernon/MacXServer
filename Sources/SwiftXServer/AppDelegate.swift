@@ -354,12 +354,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             + "daemon's auth on every Helios call to this host."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
-        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        field.stringValue = KeychainHelper.retrieve(account: account) ?? ""
+        let field = SecretEntryField()
+        field.value = KeychainHelper.retrieve(account: account) ?? ""
         alert.accessoryView = field
-        alert.window.initialFirstResponder = field
+        alert.window.initialFirstResponder = field.activeField
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let value = field.stringValue
+        let value = field.value
         if value.isEmpty {
             KeychainHelper.delete(account: account)
         } else {

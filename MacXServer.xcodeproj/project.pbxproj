@@ -198,6 +198,7 @@
 		96E287CFE88A07A994EE63F8 /* FileBrowserWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78BF0DBF7C4EC068F491C51C /* FileBrowserWindowController.swift */; };
 		972F3EE258AC442075DFB6FE /* XkbMapPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 280F23AE470D6D904408207B /* XkbMapPayload.swift */; };
 		97505EDAD43827D812042553 /* ServerMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = C692A58FDDA47F11AD813822 /* ServerMain.swift */; };
+		97C15F9A81F88978A46CC73B /* SecretEntryField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88810E35C04DE11A6F2F4593 /* SecretEntryField.swift */; };
 		98DD525D2E56702953EF468B /* GCState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1117A789AFF21E2BF317C431 /* GCState.swift */; };
 		9A48C3F777EA2702E773B9FC /* SparcPlugConsoleWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5572289CEA5A6228AAD86A49 /* SparcPlugConsoleWindowController.swift */; };
 		9B523B1A46A96772F571953E /* RemoteLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = C62F63EBF845EE60FC8C7221 /* RemoteLauncher.swift */; };
@@ -646,6 +647,7 @@
 		8691A06AF61F8A1AAD3C9122 /* DrawTarget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawTarget.swift; sourceTree = "<group>"; };
 		879DD92FB0B2E7F7ED0D4279 /* RecentRequestSink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentRequestSink.swift; sourceTree = "<group>"; };
 		881FD1878A77E69244329EA9 /* RenderReplies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderReplies.swift; sourceTree = "<group>"; };
+		88810E35C04DE11A6F2F4593 /* SecretEntryField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretEntryField.swift; sourceTree = "<group>"; };
 		88E2FA8704FBC71C8A3C5B5F /* GetProperty.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GetProperty.swift; sourceTree = "<group>"; };
 		89CBF14A62BEBE35E6F10D2A /* FramerError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FramerError.swift; sourceTree = "<group>"; };
 		89D7C2BAA331FB339F9A2CFE /* GetPropertyReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GetPropertyReply.swift; sourceTree = "<group>"; };
@@ -1010,6 +1012,7 @@
 				9D8CF306EEFA6C0D4B55F875 /* ResourcesPanelView.swift */,
 				9105F039F6EA455004282947 /* ResourcesWindowController.swift */,
 				C7374467A89FB169ED5220A3 /* ResourceSyntaxHighlighter.swift */,
+				88810E35C04DE11A6F2F4593 /* SecretEntryField.swift */,
 				D899EE8C17AAED546A288ECA /* ServerEntry.swift */,
 				FEFC7BD6CACFBA30C8181E24 /* SparcConfigModel.swift */,
 				F3E7E9D57468CC49753116B8 /* SparcConfigWindows.swift */,
@@ -1906,6 +1909,7 @@
 				41242B184A4ED29DEF85D137 /* ResourceSyntaxHighlighter.swift in Sources */,
 				F37795F15CEB16896F0E7A1B /* ResourcesPanelView.swift in Sources */,
 				47343C21C5281798EB078782 /* ResourcesWindowController.swift in Sources */,
+				97C15F9A81F88978A46CC73B /* SecretEntryField.swift in Sources */,
 				2D357D8D959034DDAE7AADB5 /* ServerEntry.swift in Sources */,
 				97505EDAD43827D812042553 /* ServerMain.swift in Sources */,
 				3F5F406D5099337F54E3CD91 /* SparcConfigModel.swift in Sources */,
