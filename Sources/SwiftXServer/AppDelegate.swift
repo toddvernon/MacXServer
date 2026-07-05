@@ -63,11 +63,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var activeLauncher: RemoteLauncher?
     private var progressController: LaunchProgressWindowController?
 
-    /// The bundled SPARCstation's machine controller (owns its `QemuEngine` +
-    /// readiness), and its console window. Created once at launch; the engine
-    /// doesn't run until "Run SPARCstation". Today there's exactly one; the
-    /// Machine Manager refactor grows a keyed `MachineRegistry` of these.
-    private var controller: MachineController?
+    /// The machine registry: the configured machines + their live controllers,
+    /// and the MCP-visible discovery layer. Loaded at launch (migrating from the
+    /// legacy launchers file on first run). In P1 only the bundled emulated VM
+    /// (`bundledMachineID`) has its lifecycle wired to the SPARCstation menu; the
+    /// other machines are data awaiting the P1c list window.
+    private var registry: MachineRegistry?
+    /// The bundled emulated VM's id -- the machine the SPARCstation menu drives.
+    private var bundledMachineID: UUID?
+    /// The bundled machine's controller, via the registry. Get-only: the write
+    /// paths are `registry.setController` (rebuildSparcEngine) and the
+    /// controller's own `isReady`. Nil until the registry + controller exist.
+    private var controller: MachineController? {
+        guard let registry, let id = bundledMachineID else { return nil }
+        return registry.controller(id)
+    }
     private var sparcConsole: SparcPlugConsoleWindowController?
     private var sparcWelcome: SparcStationWelcomeWindowController?
     /// Set when an orphan's Helios shutdown call fails fast (connection refused,
@@ -157,6 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         clearClaudeDevSecretFile()
         installStatusItem()
         installMainMenu()
+        loadMachineRegistry()
         setupSparcEngine()
         checkForReconnectableOrphanOnLaunch()
         NotificationCenter.default.addObserver(
@@ -179,8 +190,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // main-actor hop is an assertion, not a dispatch.
             MainActor.assumeIsolated {
                 guard let self = self, self.controller?.engine.state != .running else { return }
+                self.syncBundledMachineImageFromPreferences()
                 self.rebuildSparcEngine()
             }
+        }
+    }
+
+    /// Load the machine registry, migrating the legacy launchers file on first
+    /// run. The bundled emulated VM is the machine the SPARCstation menu drives.
+    /// `bundledUser` is only consulted when migration has to seed a bundled
+    /// machine with no launcher group to copy from (rare -- the seeded launchers
+    /// file normally supplies a loopback group), so we derive it best-effort.
+    private func loadMachineRegistry() {
+        let launchers = LauncherFileLoader.loadOrSeed(seed: DefaultLaunchers.seedContent)
+        let bundledUser = launchers.entries.first(where: { Self.isLoopbackHost($0.host) })?.user
+            ?? launchers.entries.first?.user ?? ""
+        let registry = MachineRegistry.load(bundledImagePath: preferences.sparcDiskImagePath,
+                                            bundledUser: bundledUser)
+        self.registry = registry
+        self.bundledMachineID = registry.bundledMachine?.id
+    }
+
+    private static func isLoopbackHost(_ host: String) -> Bool {
+        ["127.0.0.1", "localhost", "0.0.0.0", "::1"].contains(host.lowercased())
+    }
+
+    /// Keep the registry's bundled machine image in step with the Config UI, which
+    /// still writes `sparcplug.diskImagePath` in P1 (the engine config is built
+    /// from Preferences via makeSparcConfig, not yet from the machine -- see
+    /// SHORTCUTS). Without this the registry's stored image would go stale after
+    /// the user picks a new disk image.
+    private func syncBundledMachineImageFromPreferences() {
+        guard let registry, var m = registry.bundledMachine else { return }
+        let newPath = preferences.sparcDiskImagePath.isEmpty ? nil : preferences.sparcDiskImagePath
+        if m.imagePath != newPath {
+            m.imagePath = newPath
+            registry.update(m)
         }
     }
 
@@ -210,7 +255,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// window. The closures fire on the main queue (QemuEngine dispatches
     /// them), so touching the console window here is safe.
     private func rebuildSparcEngine() {
-        let controller = MachineController(config: makeSparcConfig())
+        // Build the bundled machine's controller keyed by its registry id. Engine
+        // config still comes from Preferences (makeSparcConfig) in P1, not from
+        // machine.makeEngineConfig -- the Config UI writes Preferences, so this
+        // stays the source until the UI moves to the machine (SHORTCUTS).
+        let controller = MachineController(id: bundledMachineID ?? UUID(),
+                                           config: makeSparcConfig())
         let engine = controller.engine
         engine.onConsoleData { [weak self] data in
             self?.sparcConsole?.feedConsoleData(data)
@@ -256,7 +306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // The per-launch secret died with the guest; don't leave it on disk.
             self?.clearClaudeDevSecretFile()
         }
-        self.controller = controller
+        if let id = bundledMachineID { registry?.setController(controller, for: id) }
         self.sparcConsole?.setState(engine.state)
     }
 

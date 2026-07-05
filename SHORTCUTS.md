@@ -24,6 +24,11 @@ a date and rationale.
 
 ## Open
 
+### Machine manager (P1 transitional)
+
+- **Bundled VM engine config comes from Preferences, not its `Machine`.** `AppDelegate.rebuildSparcEngine` still builds the bundled emulated VM's `QemuEngineConfig` via `makeSparcConfig()` (reading `sparcplug.diskImagePath` + the TFTP prefs), even though the machine now lives in the `MachineRegistry` and has an equivalent `machine.makeEngineConfig()`. Why load-bearing: the SPARCstation → Config UI writes Preferences, so Preferences is still the live source of truth for the bundled machine's disk image / shared folder. Not a lie on the wire; the two paths produce identical configs today (verified: both default memoryMB 128 / ports .solaris26), and `syncBundledMachineImageFromPreferences()` keeps the registry's stored `imagePath` truthful. Real version (P1c): move the Config UI to edit the `Machine` in the registry, then build the engine from `machine.makeEngineConfig()` and delete `makeSparcConfig()` + the Preferences disk-image keys.
+- **`bundledUser` migration fallback is best-effort.** When migrating with no loopback launcher group to copy from, the seeded bundled machine's user is derived from the first launcher entry (or ""). Near-dead in practice (the seeded launchers file supplies a loopback group), but a truly empty launchers file yields a userless bundled machine. Real version: the P1c add/edit-machine UI lets the user set it; or read the guest's canonical user from image metadata.
+
 ### WM-proxy contract
 
 - **WM_DELETE_WINDOW force-close path skips recursive inferior teardown.** When the red close button fires on a window whose client never claimed `WM_DELETE_WINDOW` in `WM_PROTOCOLS`, `ServerSession.handleCloseRequest` calls `bridge.destroyTopLevel` directly and `windows.remove(topLevel)` — but it does NOT recursively destroy mapped inferiors the way the `.destroyWindow` opcode handler does. A misbehaving non-ICCCM client with descendant windows would leak those WindowEntries from our table (NSWindow is already orderOut so the visual is gone, but X-side state lingers). Latent — every client we host today claims `WM_DELETE_WINDOW` in `WM_PROTOCOLS` so the force path doesn't fire in practice. Real version: refactor `.destroyWindow` body into a reusable helper and call it from both paths.

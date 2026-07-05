@@ -95,6 +95,7 @@
 		49D5735C4F198471DDF8CA3B /* RegionDebug.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04E29D989AD7FFD7A56AD34A /* RegionDebug.swift */; };
 		4B838CED6AF7D6A7D3165E08 /* Keysyms.swift in Sources */ = {isa = PBXBuildFile; fileRef = E706E43524F684D8DD36A74F /* Keysyms.swift */; };
 		4DC9320C320A5A2AD1BAAA34 /* SimpleResourceRequests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5223062DC438DD6D7D28AB36 /* SimpleResourceRequests.swift */; };
+		4DF714272C541BDD3BDCFC2F /* MachineRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F9510D63E7CB178E3002A07 /* MachineRegistry.swift */; };
 		4F02B5CCB3CFC0346069D8C0 /* FileLogSink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 140669078B4415BC3F9231E7 /* FileLogSink.swift */; };
 		4F78DEE7E171A88F4B7F77D3 /* SwiftXCaptureCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DCC618596FA8C20C15E6B2E9 /* SwiftXCaptureCore.framework */; };
 		4FCE78B59023498DFDA48216 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFA6328DA36A5A04C713B7DA /* SyntaxHighlighter.swift */; };
@@ -661,6 +662,7 @@
 		9DF3816F21F8223631A5A34F /* SiblingChain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiblingChain.swift; sourceTree = "<group>"; };
 		9EA4751386598E533E3D9E4A /* Machine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Machine.swift; sourceTree = "<group>"; };
 		9F418428E74B2F051B2D245A /* MoreRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoreRequests.swift; sourceTree = "<group>"; };
+		9F9510D63E7CB178E3002A07 /* MachineRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineRegistry.swift; sourceTree = "<group>"; };
 		9F9BD4CD5432346740D96ECE /* SetupRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupRequest.swift; sourceTree = "<group>"; };
 		A0F363025B07FE2D36AC27E3 /* PreferencesPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesPanelView.swift; sourceTree = "<group>"; };
 		A18A4B2252A9B93DCC98D850 /* MotifFramePreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotifFramePreferences.swift; sourceTree = "<group>"; };
@@ -883,6 +885,7 @@
 				7F1158F5435634F1A10649BF /* Listener.swift */,
 				9EA4751386598E533E3D9E4A /* Machine.swift */,
 				7AFEA4B6C22608A7965AD06A /* MachineController.swift */,
+				9F9510D63E7CB178E3002A07 /* MachineRegistry.swift */,
 				75345EE5C3904FDD4EB06056 /* MachinesFile.swift */,
 				C3648F99980A96688B37AF56 /* MockWindowBridge.swift */,
 				68F90F4DA66B7E9194001904 /* OutboundQueue.swift */,
@@ -1611,6 +1614,7 @@
 				524BCFD2085230BAB71EB3A2 /* Listener.swift in Sources */,
 				BB2953ADC90D9B01636725EB /* Machine.swift in Sources */,
 				420AB3F0F2B59C4B8F77FABA /* MachineController.swift in Sources */,
+				4DF714272C541BDD3BDCFC2F /* MachineRegistry.swift in Sources */,
 				94CD3F14B1FF3422A2F6480F /* MachinesFile.swift in Sources */,
 				8C62FCFFB10118172A0D5E7F /* MockWindowBridge.swift in Sources */,
 				F1CEA663AD02884E5632397E /* MotifFramePreferences.swift in Sources */,
