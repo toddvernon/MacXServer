@@ -93,8 +93,29 @@ public enum MachineMigrator {
         MachineOS.allCases.map { os in
             Machine(name: os.displayName, kind: .emulatedVM, os: os, bundled: true,
                     host: "127.0.0.1", user: user, transport: .helios,
-                    display: "10.0.2.2:0", imagePath: nil)
+                    display: "10.0.2.2:0", imagePath: nil,
+                    launchers: defaultXtermLaunchers)
         }
+    }
+
+    /// The starter launcher set every bundled fixture seeds with: the color
+    /// xterm palette (mirrors Todd's curated set on the real hosts), so a
+    /// freshly-attached guest has something to click immediately. Helios
+    /// transport needs no password. One-shot seed data -- once a fixture
+    /// exists, its launchers live in machines.json and are edited there.
+    public static let defaultXtermLaunchers: [MachineLauncher] = [
+        ("xterm cyan",   "cyan",    "yellow"),
+        ("xterm green",  "#7ec97e", "#f0c674"),
+        ("xterm blue",   "#6ab8ff", "#f0c674"),
+        ("xterm amber",  "#e5c07b", "#6ab8ff"),
+        ("xterm purple", "#c792ea", "#f0c674"),
+        ("xterm orange", "#ff9966", "#7ec97e"),
+        ("xterm mint",   "#95efaf", "#ff9966"),
+    ].map { (name: String, fg: String, cursor: String) -> MachineLauncher in
+        let quote = { (c: String) in c.hasPrefix("#") ? "\"\(c)\"" : c }
+        return MachineLauncher(
+            name: name,
+            command: "xterm -sb -bg black -fg \(quote(fg)) -cr \(quote(cursor)) -geometry 100x40")
     }
 
     /// Guarantee every bundled fixture is present, injecting only the missing ones

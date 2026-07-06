@@ -221,6 +221,14 @@ final class MachineFileTests: XCTestCase {
         XCTAssertTrue(fixtures.allSatisfy { $0.bundled && $0.kind == .emulatedVM })
         XCTAssertTrue(fixtures.allSatisfy { $0.image == nil && !$0.isInstalledEmulatedVM })
         XCTAssertTrue(fixtures.allSatisfy { $0.user == "tvernon" })
+        // Every fixture seeds the starter xterm palette (helios transport, so
+        // no passwords), giving a freshly-attached guest launchers to click.
+        XCTAssertTrue(fixtures.allSatisfy {
+            $0.launchers == MachineMigrator.defaultXtermLaunchers && !$0.launchers.isEmpty
+        })
+        XCTAssertTrue(MachineMigrator.defaultXtermLaunchers.allSatisfy {
+            $0.password == nil && $0.command?.hasPrefix("xterm ") == true
+        })
     }
 
     func testEnsuringBundledPreservesAttachedFixtureAndIsIdempotent() throws {
