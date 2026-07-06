@@ -183,10 +183,15 @@ public final class MachineRegistry {
     /// Replace a machine's config (matched by id) and persist. Used as the machine
     /// data changes (the list-window editor). A machine edited into being an
     /// emulated VM (kind flipped in the editor) gets its sticky port block here,
-    /// since `add` couldn't have known.
+    /// since `add` couldn't have known; the reverse flip sheds the block (an
+    /// external host is dialed at its REAL ports -- 23/22/2125 defaults -- not a
+    /// loopback hostfwd allocation).
     public func update(_ machine: Machine) {
         guard let i = machines.firstIndex(where: { $0.id == machine.id }) else { return }
         var m = machine
+        if machines[i].kind == .emulatedVM && m.kind == .externalHost {
+            m.ports = nil
+        }
         assignPortsIfNeeded(&m)
         guard machines[i] != m else { return }
         machines[i] = m

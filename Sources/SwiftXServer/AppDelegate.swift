@@ -245,6 +245,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             registry.remove(id)
+            // Drop the machine's per-machine windows with it -- a console or
+            // DNS panel for a machine that no longer exists is a dangling
+            // control surface.
+            self.consoles.removeValue(forKey: id)?.close()
+            self.dnsAdminControllers.removeValue(forKey: id)?.close()
             if self.machinesModel?.selection == id { self.machinesModel?.selection = nil }
             self.afterMachineMutation()
         }
@@ -334,10 +339,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             : "\(m.host) · external"
 
         let chips = m.launchers.map { l -> MachineLauncherChip in
-            // Same gating as the Machines menu: a helios launcher on an emulated
-            // guest needs that guest's daemon up; everything else is enabled.
-            let transport = l.transport ?? m.transport
-            let enabled = !(isEmulated && transport == .helios) || ready
+            // Same gating as the Machines menu: an emulated guest must be up
+            // and ready for ANY transport (telnet/ssh need the guest just as
+            // much as helios -- a launch against a stopped VM only fails
+            // slowly). External hosts stay enabled; we don't own their state.
+            let enabled = !isEmulated || ready
             return MachineLauncherChip(id: l.name, name: l.name,
                                        isFileBrowser: l.fileBrowser, enabled: enabled)
         }
@@ -507,10 +513,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                       action: #selector(launchMachineLauncher(_:)), keyEquivalent: "")
                 item.target = self
                 item.representedObject = "\(m.id.uuidString)/\(l.name)" as NSString
-                // A helios launcher on an emulated guest needs that guest's
-                // daemon up; external / non-helios launchers are always enabled.
-                let transport = l.transport ?? m.transport
-                item.isEnabled = !(isEmulated && transport == .helios) || ready
+                // An emulated guest must be up and ready for ANY transport
+                // (matches the Overview chips); external launchers stay enabled.
+                item.isEnabled = !isEmulated || ready
                 sub.addItem(item)
             }
         }

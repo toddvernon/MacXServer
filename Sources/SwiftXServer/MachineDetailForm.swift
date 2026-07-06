@@ -110,13 +110,16 @@ struct MachineDetailForm: View {
                 helpNote("A name is required before the machine is saved.")
             }
             LabeledField("Kind") {
+                // Bundled: the kind is load-bearing identity. Running (incl.
+                // shutting down): flipping a live VM to external would strand
+                // its lifecycle UI while qemu keeps running.
                 Picker("", selection: $draft.kind) {
                     Text("Emulated VM").tag(MachineKind.emulatedVM)
                     Text("External host").tag(MachineKind.externalHost)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .disabled(bundled)     // the bundled VM's kind is load-bearing
+                .disabled(bundled || running)
             }
             if bundled {
                 helpNote("This is a bundled machine that ships with the app. Its kind, "
@@ -128,10 +131,13 @@ struct MachineDetailForm: View {
     private var connectionSection: some View {
         section("Connection") {
             LabeledField("Host") {
+                // An emulated VM is always dialed at loopback (its qemu's
+                // hostfwds live there), so the field only opens up for
+                // external hosts.
                 TextField(draft.kind == .emulatedVM ? "127.0.0.1" : "hostname or IP",
                           text: $draft.host)
                     .textFieldStyle(.roundedBorder)
-                    .disabled(bundled)
+                    .disabled(draft.kind == .emulatedVM)
             }
             if draft.kind == .externalHost,
                draft.host.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -292,9 +298,11 @@ struct MachineDetailForm: View {
     /// Lock the OS to the detected value only when we're confident (an image-backed
     /// emulated VM whose image identified a known OS).
     private var osLocked: Bool {
-        // A bundled fixture's OS is its fixed identity; otherwise it's locked once
-        // it's been derived from an attached image.
-        bundled
+        // A bundled fixture's OS is its fixed identity; a RUNNING machine's OS
+        // is what it booted with (it drives the port block, boot unit, and
+        // halt command -- changing it mid-run would desync every port lookup);
+        // otherwise it's locked once it's been derived from an attached image.
+        bundled || running
             || (draft.kind == .emulatedVM && draft.imagePath?.isEmpty == false && osDetection?.os != nil)
     }
 
@@ -360,6 +368,19 @@ struct MachineDetailForm: View {
     /// Persist the draft if it's changed and valid. Called at edit boundaries
     /// (Return / leaving the pane); an invalid or unchanged draft is a no-op.
     private func commit() {
+        // The runtime-defining fields are frozen while the VM is live, but a
+        // draft opened BEFORE the start can still carry edits to them (the
+        // machine was started from the menu while this pane sat open). Drop
+        // those back to the committed values so a Return can't swap the
+        // image / memory / OS / kind out from under a running qemu -- the
+        // termination auto-backup reads the CURRENT image path, so a mid-run
+        // image swap would back up a file that never ran.
+        if running {
+            draft.kind = committed.kind
+            draft.os = committed.os
+            draft.imagePath = committed.imagePath
+            draft.memoryMB = committed.memoryMB
+        }
         guard canCommit else { return }
         model.onCommit?(draft)
         committed = draft

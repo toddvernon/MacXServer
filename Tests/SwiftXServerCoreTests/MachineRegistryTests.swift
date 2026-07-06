@@ -217,6 +217,24 @@ final class MachineRegistryTests: XCTestCase {
         XCTAssertEqual(registry.machine(m.id)?.ports, ImagePorts.block(5))
     }
 
+    func testUpdateShedsPortBlockWhenKindFlipsToExternal() {
+        // The reverse flip: an external host is dialed at its REAL ports, so
+        // the loopback hostfwd block must not survive the kind change (it
+        // would send launchers to 2153/2252/2155 instead of 23/22/2125).
+        let registry = MachineRegistry(machines: [], path: tempPath("unflip"))
+        let vm = Machine(name: "vm", kind: .emulatedVM, os: .solaris26,
+                         host: "127.0.0.1", user: "t")
+        registry.add(vm)
+        XCTAssertNotNil(registry.machine(vm.id)?.ports)   // got its block
+        var edited = registry.machine(vm.id)!
+        edited.kind = .externalHost
+        edited.host = "192.168.7.19"
+        registry.update(edited)
+        XCTAssertNil(registry.machine(vm.id)?.ports)
+        XCTAssertEqual(registry.machine(vm.id)?.resolvedPorts,
+                       ImagePorts(telnet: 23, ssh: 22, helios: 2125))
+    }
+
     func testAssignmentIsStickyAcrossUpdates() {
         let registry = MachineRegistry(machines: [], path: tempPath("sticky"))
         let m = Machine(name: "vm", kind: .emulatedVM, os: .solaris26,
