@@ -1464,101 +1464,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// On launch, scan EVERY emulated machine's image for a still-alive qemu
-    /// from a previous run (the Xcode-stop / crash / SIGKILL orphan) and offer
-    /// to reconnect -- the Design 2 flow (VM_CONTROL.md Stage 3), per machine
-    /// since P2. We probe each orphan's Helios daemon first so the prompt leads
-    /// with a graceful **Shut It Down** when the guest is reachable, and only
-    /// falls back to **Force Quit** when it isn't. **Reconnect** is offered
-    /// either way (it just re-attaches the console + control channels; a
-    /// still-booting guest comes to "Ready" on its own once Helios answers).
-    /// Multiple orphans prompt one after another (runModal serializes).
+    /// from a previous run (the Quit-and-Detach / Xcode-stop / crash orphan)
+    /// and offer to reconnect -- the Design 2 flow (VM_CONTROL.md Stage 3).
+    /// ONE dialog covers all of them (mirroring the quit dialog), and
+    /// reconnecting never pops consoles -- the rows go live in the Machines
+    /// window and the consoles reattach in the background (Todd's call
+    /// 2026-07-06). A guest that isn't answering yet just sits in "Booting"
+    /// until Helios answers or the readiness budget stalls it; stopping is a
+    /// normal per-machine Shut Down / Force Quit once reconnected.
     private func checkForReconnectableOrphansOnLaunch() {
         guard let registry else { return }
+        var orphans: [(machine: Machine, lock: ImageLock, image: URL)] = []
         for machine in registry.machines where machine.kind == .emulatedVM {
             guard let image = machine.image,
                   case .localOrphan(let lock) = ImageLockManager.evaluate(imageURL: image)
             else { continue }
-            // The lock's recorded port is authoritative (the orphan runs with
-            // the ports it was LAUNCHED with); fall back to the machine's
-            // current block for pre-P2 locks that didn't record one.
-            let port = lock.heliosPort ?? machine.resolvedPorts.helios
-            let machineID = machine.id
-            // Probe Helios off-main (it can block up to the timeout), then prompt.
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let heliosUp = Self.probeOrphanHelios(secret: lock.secret, port: port)
-                DispatchQueue.main.async {
-                    self?.presentReconnectPrompt(machineID: machineID, lock: lock,
-                                                 image: image, heliosUp: heliosUp)
-                }
-            }
+            orphans.append((machine, lock, image))
         }
-    }
-
-    /// One-shot `hello` to a (possibly orphaned) guest's Helios daemon, using the
-    /// secret + port the lock recorded. True means the guest OS is up and answering.
-    nonisolated private static func probeOrphanHelios(secret: String?, port: UInt16) -> Bool {
-        let client = HeliosClient(port: port, timeout: 3, secret: secret)
-        defer { client.close() }
-        do {
-            try client.connect()
-            _ = try client.hello()
-            return true
-        } catch {
-            return false
-        }
+        guard !orphans.isEmpty else { return }
+        presentReconnectPrompt(orphans)
     }
 
     @MainActor
-    private func presentReconnectPrompt(machineID: UUID, lock: ImageLock, image: URL, heliosUp: Bool) {
-        guard let machine = registry?.machine(machineID) else { return }
-        let since = lock.startedAt.isEmpty ? "" : " (started \(friendlyDate(lock.startedAt)))"
+    private func presentReconnectPrompt(_ orphans: [(machine: Machine, lock: ImageLock, image: URL)]) {
+        let described = orphans.map { o in
+            let since = o.lock.startedAt.isEmpty ? "" : " (started \(friendlyDate(o.lock.startedAt)))"
+            return "\u{201C}\(o.machine.name)\u{201D}\(since)"
+        }.joined(separator: ", ")
+        let one = orphans.count == 1
         let alert = NSAlert()
-        alert.messageText = "Reconnect to the running \u{201C}\(machine.name)\u{201D}?"
-        if heliosUp {
-            alert.informativeText =
-                "\u{201C}\(machine.name)\u{201D} from a previous run (process \(lock.pid))\(since) is "
-                + "still running on this Mac and answering. Reconnect to watch and control it, or "
-                + "shut it down cleanly."
-            alert.addButton(withTitle: "Reconnect")       // first
-            alert.addButton(withTitle: "Shut It Down")    // second
-            alert.addButton(withTitle: "Ignore")          // third
-            switch alert.runModal() {
-            case .alertFirstButtonReturn:  reconnectToOrphan(machine: machine, lock: lock, image: image)
-            case .alertSecondButtonReturn: attemptHeliosShutdown(machine: machine, lock: lock, image: image)
-            default: break
-            }
-        } else {
-            // Daemon isn't answering: graceful shutdown isn't available, so Force
-            // Quit replaces it (per the graceful-first policy). Reconnect still
-            // works -- the guest may just be mid-boot.
-            alert.alertStyle = .warning
-            alert.informativeText =
-                "\u{201C}\(machine.name)\u{201D} from a previous run (process \(lock.pid))\(since) is "
-                + "still running on this Mac but isn't answering yet. Reconnect to watch it (it may "
-                + "still be booting), or force quit it (which risks a disk check on the next boot)."
-            alert.addButton(withTitle: "Reconnect")       // first
-            alert.addButton(withTitle: "Force Quit")      // second
-            alert.addButton(withTitle: "Ignore")          // third
-            switch alert.runModal() {
-            case .alertFirstButtonReturn:  reconnectToOrphan(machine: machine, lock: lock, image: image)
-            case .alertSecondButtonReturn: forceQuitOrphan(machine: machine, lock: lock, image: image)
-            default: break
-            }
+        alert.messageText = one
+            ? "\u{201C}\(orphans[0].machine.name)\u{201D} is still running from a previous session"
+            : "\(orphans.count) machines are still running from a previous session"
+        alert.informativeText = "Still running on this Mac: \(described). Reconnect to manage "
+            + "\(one ? "it" : "them") -- the machines come live in the Machines window and each "
+            + "console reattaches quietly -- or ignore and leave \(one ? "it" : "them") running."
+        alert.addButton(withTitle: "Reconnect")   // first / default
+        alert.addButton(withTitle: "Ignore")      // second
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        for o in orphans {
+            reconnectToOrphan(machine: o.machine, lock: o.lock, image: o.image)
         }
     }
 
-    /// Adopt the orphan as this machine's engine and surface its console. The
-    /// engine callbacks (wired in `buildController`) then drive the window
-    /// exactly as a booted session would -- including clean-halt -> auto-backup.
-    /// If the orphan died between detection and here, clear the stale lock.
+    /// Adopt the orphan as this machine's engine. The engine callbacks (wired
+    /// in `buildController`) then drive everything exactly as a booted session
+    /// would -- including clean-halt -> auto-backup. The console is created but
+    /// NOT shown (no auto-pop); since the serial socket replays no history, a
+    /// reconnection banner with what the lock knows is injected so an opened
+    /// console isn't a black void. If the orphan died between detection and
+    /// here, clear the stale lock instead.
     @MainActor
     private func reconnectToOrphan(machine: Machine, lock: ImageLock, image: URL) {
-        console(for: machine).showWindow()
+        let win = console(for: machine)
         guard let controller = buildController(for: machine),
               controller.engine.attach(toOrphan: lock) else {
             ImageLockManager.forceRemove(imageURL: image)
             return
         }
+        var lines = ["", "** reconnected to console **"]
+        if !lock.startedAt.isEmpty {
+            lines.append("   instance started \(friendlyDate(lock.startedAt))")
+        }
+        var facts = ["qemu pid \(lock.pid)"]
+        if let port = lock.heliosPort { facts.append("helios port \(port)") }
+        facts.append(image.lastPathComponent)
+        lines.append("   " + facts.joined(separator: " \u{00B7} "))
+        lines.append("")
+        win.feedConsoleData(Data(lines.joined(separator: "\r\n").utf8))
     }
 
     /// Actually boot the machine's engine. Assumes the image is set and the
