@@ -306,6 +306,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             : (m.isInstalledEmulatedVM ? .stopped : .notInstalled)
         let ready = ctrl?.isReady ?? false
 
+        // `progress` drives the Overview thermometer (same semantics as the
+        // console's boot bar): grows through boot, pegs at 1.0 once ready,
+        // recedes through shutdown, empty when stopped.
         let dot: MachineStatusDot
         let statusText: String
         var progress: Double? = nil
@@ -315,11 +318,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             dot = .notInstalled; statusText = "Not installed"
         } else if state == .running && ready {
             dot = .running; statusText = "Running"
+            progress = 1.0
         } else if state == .running {
             dot = .booting; statusText = "Booting"
             progress = ctrl?.bootProgress
         } else if state == .shuttingDown {
             dot = .booting; statusText = "Shutting down"
+            progress = ctrl?.bootProgress
         } else {
             dot = .stopped; statusText = "Stopped"
         }
@@ -609,8 +614,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // Anything other than steady .running (boot-in-progress counts as
             // .running too, but shutdown/stop don't) means the daemon isn't
             // answering -- drop readiness so Admin dims. onReady re-enables it.
+            // Progress survives into .shuttingDown (the thermometer recedes
+            // through it) and clears only when the run actually ends.
             if state != .running {
                 self.registry?.controller(id)?.isReady = false
+            }
+            if state != .running && state != .shuttingDown {
                 self.registry?.controller(id)?.bootProgress = nil
             }
             self.refreshSparcMenu()
@@ -1321,7 +1330,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func shutDownMachine(_ id: UUID) {
-        showConsoleWindow(id)      // so the user sees the shutdown progress
+        // No console auto-pop (Todd's call 2026-07-06): the Overview row's
+        // thermometer shows the shutdown receding; Console is a click away.
         registry?.controller(id)?.engine.shutDown()
     }
 
@@ -1551,11 +1561,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    /// Actually boot the machine's engine and bring up its console. Assumes the
-    /// image is set and the lock is clear. A FRESH controller is built per start
-    /// so the machine's current config (image / memory / ports / MAC) applies.
+    /// Actually boot the machine's engine. Assumes the image is set and the
+    /// lock is clear. A FRESH controller is built per start so the machine's
+    /// current config (image / memory / ports / MAC) applies. The console
+    /// window is CREATED (so it records the transcript from byte one and the
+    /// Console buttons enable) but not shown -- no auto-pop on start/stop
+    /// (Todd's call 2026-07-06); the Overview thermometer carries the boot.
     private func proceedLaunch(_ machine: Machine) {
-        console(for: machine).showWindow()
+        _ = console(for: machine)
         guard let controller = buildController(for: machine) else { return }
         do {
             try controller.engine.start()

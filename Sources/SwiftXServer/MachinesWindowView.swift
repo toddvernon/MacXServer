@@ -194,6 +194,7 @@ private struct MachineOverviewPage: View {
             if let row {
                 VStack(alignment: .leading, spacing: 16) {
                     statusLine(row)
+                    bootBar(row)
                     lifecycle(row)
                     launchers(row)
                 }
@@ -212,6 +213,25 @@ private struct MachineOverviewPage: View {
             Spacer()
             Text(row.subtitle).font(.caption).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.middle)
+        }
+    }
+
+    /// The boot/shutdown thermometer, mirroring the console window's bar: grows
+    /// through boot, pegs full and flips green once the guest is ready, recedes
+    /// through shutdown, sits empty when stopped. Emulated machines only (an
+    /// external host has no lifecycle we own).
+    @ViewBuilder private func bootBar(_ row: MachineRow) -> some View {
+        if row.isEmulated {
+            let accent: Color = (row.dot == .running) ? .green : .blue
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(accent.opacity(0.15))
+                    Capsule().fill(accent)
+                        .frame(width: max(0, geo.size.width * (row.progress ?? 0)))
+                }
+            }
+            .frame(height: 6)
+            .animation(.easeInOut(duration: 0.45), value: row.progress)
         }
     }
 
