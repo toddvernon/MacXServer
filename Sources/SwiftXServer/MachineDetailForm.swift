@@ -308,7 +308,7 @@ struct MachineDetailForm: View {
     private var launchersSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                sectionHeader("Launchers")
+                sectionHeader("X11 Launchers")
                 Spacer()
                 Button {
                     launcherEdit = LauncherEditTarget(index: nil,

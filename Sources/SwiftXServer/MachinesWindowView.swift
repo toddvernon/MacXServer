@@ -170,8 +170,11 @@ private struct MachineDetailContainer: View {
             .padding(.vertical, 10)
             Divider()
             switch tab {
-            case .overview: MachineOverviewPage(row: model.row(machine.id), model: model)
-            case .settings: MachineDetailForm(machine: machine, model: model)
+            case .overview:
+                MachineOverviewPage(row: model.row(machine.id), model: model,
+                                    onEditLaunchers: { tab = .settings })
+            case .settings:
+                MachineDetailForm(machine: machine, model: model)
             }
         }
         // Pick the starting tab per machine. Driven from the body (not @State init)
@@ -188,6 +191,9 @@ private struct MachineDetailContainer: View {
 private struct MachineOverviewPage: View {
     let row: MachineRow?
     @ObservedObject var model: MachinesModel
+    /// Hops the detail pane to the Settings tab (the launcher byline's
+    /// Edit link).
+    let onEditLaunchers: () -> Void
 
     var body: some View {
         ScrollView {
@@ -268,14 +274,13 @@ private struct MachineOverviewPage: View {
 
     @ViewBuilder private func launchers(_ row: MachineRow) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            MachineSectionHeader("Launchers")
+            MachineSectionHeader("X11 Launchers")
             // Content inset under the header, matching the Settings tab.
             VStack(alignment: .leading, spacing: 8) {
                 if row.launchers.isEmpty {
-                    Text("No launchers. Add them in Settings.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    editInSettingsLine(prefix: "No launchers.")
                 } else {
-                    Text("Click to run:").font(.caption).foregroundStyle(.secondary)
+                    editInSettingsLine(prefix: "Click to run.")
                     FlowLayout(spacing: 6) {
                         ForEach(row.launchers) { chip in
                             Button {
@@ -292,6 +297,20 @@ private struct MachineOverviewPage: View {
             }
             .padding(.leading, 16)
         }
+    }
+
+    /// "<prefix> Edit in Settings." with Edit as a blue link that hops the
+    /// pane to the Settings tab.
+    private func editInSettingsLine(prefix: String) -> some View {
+        HStack(spacing: 4) {
+            Text(prefix)
+            Button("Edit") { onEditLaunchers() }
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
+            Text("in Settings.")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 }
 
