@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import SwiftXServerCore
 
 /// The right-hand detail form: edits a local `draft` of the selected machine.
@@ -101,10 +102,6 @@ struct MachineDetailForm: View {
             if bundled {
                 helpNote("This is a bundled machine that ships with the app. Its kind, "
                        + "host, and OS are fixed; attach a disk image here to run it.")
-            } else if draft.kind == .emulatedVM {
-                helpNote("Additional emulated VMs can be configured now but can't be "
-                       + "started until the multi-VM runtime lands (P2). External hosts "
-                       + "and launchers work today.")
             }
         }
     }
@@ -155,13 +152,15 @@ struct MachineDetailForm: View {
                     get: { draft.imagePath ?? "" },
                     set: { draft.imagePath = $0.isEmpty ? nil : $0 }))
                     .textFieldStyle(.roundedBorder)
-                    .disabled(bundled && running)
+                    .disabled(running)
                 Button("Choose\u{2026}") {
                     if let path = model.onPickImage?() { draft.imagePath = path }
                 }
-                .disabled(bundled && running)
+                .disabled(running)
+                Button("Reveal in Finder") { revealImageInFinder() }
+                    .disabled((draft.imagePath ?? "").isEmpty)
             }
-            if bundled && running {
+            if running {
                 helpNote("Stop the VM to change its disk image.")
             }
             if let other = imageClaimantName {
@@ -170,7 +169,38 @@ struct MachineDetailForm: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
+            LabeledField("Memory") {
+                HStack(spacing: 6) {
+                    TextField("128", value: $draft.memoryMB, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 70)
+                        .disabled(running)
+                    Text("MB").foregroundStyle(.secondary)
+                }
+            }
+            Toggle("Back up the disk image after each clean shutdown",
+                   isOn: $draft.autoBackup)
+                .onChange(of: draft.autoBackup) { commit() }
+            helpNote("Keeps a dated \u{201C}last known good\u{201D} copy next to the image "
+                   + "whenever this machine shuts down cleanly. Only the most recent few "
+                   + "are kept; manual backups are never pruned.")
+            helpNote(runtimeCaption)
         }
+    }
+
+    /// The machine's assigned runtime identity (host ports + guest MAC), shown
+    /// so the user can see what the tooling should dial. Read-only: ports are
+    /// sticky-assigned by the registry, the MAC derives from the machine's id.
+    private var runtimeCaption: String {
+        let p = draft.resolvedPorts
+        return "Ports: telnet \(p.telnet) \u{00B7} ssh \(p.ssh) \u{00B7} helios \(p.helios)"
+            + "   MAC: \(draft.resolvedMacAddress)"
+    }
+
+    private func revealImageInFinder() {
+        guard let path = draft.imagePath, !path.isEmpty else { return }
+        NSWorkspace.shared.selectFile((path as NSString).expandingTildeInPath,
+                                      inFileViewerRootedAtPath: "")
     }
 
     /// The OS row. For an image-backed emulated VM the OS is *derived from the

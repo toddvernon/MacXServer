@@ -48,10 +48,17 @@ public struct ImageLock: Equatable, Sendable {
     /// Lets a later process re-attach the console *view* to a live orphan.
     /// Local-only, same host caveat as `qmpSocketPath`. nil for older locks.
     public let consoleSocketPath: String?
+    /// The Mac-side hostfwd port of this guest's Helios daemon. With `secret`,
+    /// makes the lock a complete handle for reaching a running guest's daemon --
+    /// the orphan-recovery paths use it (they can't ask a registry which machine
+    /// this was), and it's the interim channel for Claude Code to drive a guest
+    /// (the MCP bridge supersedes it). nil for older locks.
+    public let heliosPort: UInt16?
 
     public init(host: String, pid: Int32, imagePath: String,
                 startedAt: String, appVersion: String, secret: String? = nil,
-                qmpSocketPath: String? = nil, consoleSocketPath: String? = nil) {
+                qmpSocketPath: String? = nil, consoleSocketPath: String? = nil,
+                heliosPort: UInt16? = nil) {
         self.host = host
         self.pid = pid
         self.imagePath = imagePath
@@ -60,6 +67,7 @@ public struct ImageLock: Equatable, Sendable {
         self.secret = secret
         self.qmpSocketPath = qmpSocketPath
         self.consoleSocketPath = consoleSocketPath
+        self.heliosPort = heliosPort
     }
 
     /// Simple `key: value` lines, stable order, so a human can read it. The
@@ -76,6 +84,7 @@ public struct ImageLock: Equatable, Sendable {
         if let secret, !secret.isEmpty { lines.append("secret: \(secret)") }
         if let qmpSocketPath, !qmpSocketPath.isEmpty { lines.append("qmp: \(qmpSocketPath)") }
         if let consoleSocketPath, !consoleSocketPath.isEmpty { lines.append("console: \(consoleSocketPath)") }
+        if let heliosPort { lines.append("heliosPort: \(heliosPort)") }
         return lines.joined(separator: "\n")
     }
 
@@ -100,7 +109,8 @@ public struct ImageLock: Equatable, Sendable {
             appVersion: fields["appVersion"] ?? "",
             secret: fields["secret"].flatMap { $0.isEmpty ? nil : $0 },
             qmpSocketPath: fields["qmp"].flatMap { $0.isEmpty ? nil : $0 },
-            consoleSocketPath: fields["console"].flatMap { $0.isEmpty ? nil : $0 })
+            consoleSocketPath: fields["console"].flatMap { $0.isEmpty ? nil : $0 },
+            heliosPort: fields["heliosPort"].flatMap { UInt16($0) })
     }
 }
 
@@ -160,12 +170,14 @@ public enum ImageLockManager {
     public static func acquire(
         imageURL: URL, pid: Int32, appVersion: String, secret: String? = nil,
         qmpSocketPath: String? = nil, consoleSocketPath: String? = nil,
+        heliosPort: UInt16? = nil,
         host: String = currentHost(), now: Date = Date()
     ) -> ImageLock {
         let stamp = ISO8601DateFormatter().string(from: now)
         let lock = ImageLock(host: host, pid: pid, imagePath: imageURL.path,
                              startedAt: stamp, appVersion: appVersion, secret: secret,
-                             qmpSocketPath: qmpSocketPath, consoleSocketPath: consoleSocketPath)
+                             qmpSocketPath: qmpSocketPath, consoleSocketPath: consoleSocketPath,
+                             heliosPort: heliosPort)
         try? lock.serialized().write(to: lockURL(for: imageURL),
                                      atomically: true, encoding: .utf8)
         return lock

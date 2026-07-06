@@ -18,6 +18,10 @@ public struct MachineSnapshot: Sendable, Equatable {
     public let ready: Bool?
     /// An emulated VM with an image set (can actually run).
     public let installed: Bool
+    /// The Mac-side port this machine's Helios daemon answers on (the hostfwd
+    /// for an emulated VM, the real port for an external host). The MCP bridge
+    /// hands this to Claude as the dial-here half of machine discovery.
+    public let heliosPort: UInt16
 }
 
 /// Owns the configured machines and their live controllers. Replaces AppDelegate's
@@ -54,7 +58,23 @@ public final class MachineRegistry {
         let file = MachinesFileLoader.loadOrMigrate(
             path: path, launchersPath: launchersPath,
             bundledImagePath: bundledImagePath, bundledUser: bundledUser, log: log)
-        return MachineRegistry(machines: file.machines, path: path, log: log)
+        let registry = MachineRegistry(machines: file.machines, path: path, log: log)
+        registry.assignMissingPortBlocks()
+        return registry
+    }
+
+    /// One-shot at load: any non-bundled emulated VM that predates sticky port
+    /// assignment (ports == nil, so it was silently deriving an OS block that
+    /// belongs to a bundled fixture) gets its own block now, persisted. New
+    /// machines get theirs in `add`/`update`; this catches the existing file.
+    private func assignMissingPortBlocks() {
+        var changed = false
+        for i in machines.indices {
+            var m = machines[i]
+            assignPortsIfNeeded(&m)
+            if m != machines[i] { machines[i] = m; changed = true }
+        }
+        if changed { save() }
     }
 
     // MARK: - Lookup
@@ -62,21 +82,10 @@ public final class MachineRegistry {
     public func machine(_ id: UUID) -> Machine? { machines.first { $0.id == id } }
     public func controller(_ id: UUID) -> MachineController? { controllers[id] }
 
-    /// The single emulated VM the P1 engine is wired to. Among the bundled
-    /// fixtures, the one you've attached an image to wins (so attaching an image
-    /// makes that guest the runnable one); else the first bundled fixture; else,
-    /// for a legacy file with no fixtures yet, the first emulated VM. P2's
-    /// per-machine engines retire this single-target notion.
-    public var bundledMachine: Machine? {
-        machines.first { $0.bundled && $0.image != nil }
-            ?? machines.first { $0.bundled }
-            ?? machines.first { $0.kind == .emulatedVM }
-    }
-
-    /// The id of the machine whose controller currently has a live qemu process,
-    /// if any. In P1 at most one is running.
-    public var runningMachineID: UUID? {
-        controllers.first { isRunning($0.value) }?.key
+    /// The ids of every machine whose controller currently has a live qemu
+    /// process. P2: any number of emulated VMs can run at once.
+    public var runningMachineIDs: Set<UUID> {
+        Set(controllers.filter { isRunning($0.value) }.keys)
     }
 
     private func isRunning(_ c: MachineController) -> Bool {
@@ -100,8 +109,50 @@ public final class MachineRegistry {
     /// warn before adding -- not hard-refused, so a half-filled new machine can
     /// exist while the user finishes editing it.
     public func add(_ machine: Machine) {
-        machines.append(machine)
+        var m = machine
+        assignPortsIfNeeded(&m)
+        machines.append(m)
         save()
+    }
+
+    // MARK: - Port assignment (sticky, at creation)
+
+    /// Give a user-created emulated VM its own port block, ONCE, and persist it
+    /// on the machine (Todd's call 2026-07-06: "dynamic by assignment time, not
+    /// by invocation" -- a machine's ports never change once it's associated
+    /// with the app). Bundled fixtures keep deriving their well-known per-OS
+    /// blocks (Solaris 2123/2222/2125 etc., which the whole tooling ecosystem
+    /// assumes); everything else gets the next free block in the same mnemonic
+    /// pattern (2153/2252/2155, 2163/2262/2165, ...). External hosts need no
+    /// assignment (they're dialed at their real LAN ports).
+    private func assignPortsIfNeeded(_ m: inout Machine) {
+        guard m.kind == .emulatedVM, !m.bundled, m.ports == nil else { return }
+        m.ports = nextFreePortBlock()
+    }
+
+    /// The lowest mnemonic block (see `ImagePorts.block`) that doesn't overlap
+    /// any machine's resolved ports. Blocks 2-4 are the per-OS blocks the
+    /// bundled fixtures own, so the scan starts at 5.
+    public func nextFreePortBlock() -> ImagePorts {
+        let taken = machines.filter { $0.kind == .emulatedVM }.map(\.resolvedPorts)
+        var index = 5
+        while taken.contains(where: { $0.overlaps(ImagePorts.block(index)) }) {
+            index += 1
+        }
+        return ImagePorts.block(index)
+    }
+
+    /// The RUNNING machine (if any) whose ports collide with `machine`'s.
+    /// Belt-and-suspenders start guard: sticky assignment means this can't
+    /// happen unless someone hand-edited machines.json into a conflict, but a
+    /// port fight between two live qemus is confusing enough to refuse cleanly.
+    public func portConflict(for machine: Machine) -> Machine? {
+        let ports = machine.resolvedPorts
+        return machines.first { other in
+            other.id != machine.id
+                && runningMachineIDs.contains(other.id)
+                && other.resolvedPorts.overlaps(ports)
+        }
     }
 
     /// Remove a machine (by id), drop any live controller it had, and persist.
@@ -130,12 +181,15 @@ public final class MachineRegistry {
     }
 
     /// Replace a machine's config (matched by id) and persist. Used as the machine
-    /// data changes (e.g. the bundled machine's image tracking Preferences in P1;
-    /// the list-window editor in P1c).
+    /// data changes (the list-window editor). A machine edited into being an
+    /// emulated VM (kind flipped in the editor) gets its sticky port block here,
+    /// since `add` couldn't have known.
     public func update(_ machine: Machine) {
         guard let i = machines.firstIndex(where: { $0.id == machine.id }) else { return }
-        guard machines[i] != machine else { return }
-        machines[i] = machine
+        var m = machine
+        assignPortsIfNeeded(&m)
+        guard machines[i] != m else { return }
+        machines[i] = m
         save()
     }
 
@@ -195,7 +249,8 @@ public final class MachineRegistry {
                 id: m.id, name: m.name, kind: m.kind, os: m.os, host: m.host,
                 running: external ? nil : (controller.map(isRunning) ?? false),
                 ready: external ? nil : (controller?.isReady ?? false),
-                installed: m.isInstalledEmulatedVM)
+                installed: m.isInstalledEmulatedVM,
+                heliosPort: m.resolvedPorts.helios)
         }
     }
 }

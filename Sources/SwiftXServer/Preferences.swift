@@ -30,11 +30,9 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         static let pointerWheelClick     = "pointer.wheelClick"     // int
         static let pointerRightClick     = "pointer.rightClick"     // int
         static let xtermScrollbarThumbOverride = "xterm.scrollbarThumbOverride" // bool
-        static let sparcDiskImagePath = "sparcplug.diskImagePath"   // string, "" = not installed
-        static let sparcAutoBackupOnShutdown = "sparcplug.autoBackupOnShutdown" // bool
+        static let sparcDiskImagePath = "sparcplug.diskImagePath"   // string; LEGACY, migration-read only
         static let sparcTftpEnabled = "sparcplug.tftpEnabled"       // bool
         static let sparcTftpDirectory = "sparcplug.tftpDirectory"   // string (absolute path)
-        static let sparcClaudeDevelopment = "sparcplug.claudeDevelopment" // bool
     }
 
     /// Where server-side captures land when capture is enabled. /tmp is
@@ -71,10 +69,8 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
             Key.pointerRightClick: 3,
             Key.xtermScrollbarThumbOverride: true,
             Key.sparcDiskImagePath: "",
-            Key.sparcAutoBackupOnShutdown: true,
             Key.sparcTftpEnabled: false,
             Key.sparcTftpDirectory: Self.defaultTFTPDirectory,
-            Key.sparcClaudeDevelopment: false,
         ])
     }
 
@@ -213,46 +209,18 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         }
     }
 
-    /// Absolute path to the SPARCstation Solaris disk image (qcow2). Empty
-    /// means "not installed": the SPARCstation menu offers Install and Run is
-    /// disabled. The user can put the image anywhere; this one setting is the
-    /// source of truth for both dev and release. In release the disk-image
-    /// downloader writes the user-chosen path here at download time, so the
-    /// engine resolves the image the same way in both.
+    /// LEGACY (read-only since P2): the pre-machine-registry disk-image path.
+    /// Machines carry their own `imagePath` in `~/.macxserver-machines.json`
+    /// now; this key is only consulted by the one-shot launcher-file migration
+    /// (`MachineRegistry.load`) so an existing install's image lands on the
+    /// migrated machine. Nothing writes it anymore. (The old per-machine
+    /// auto-backup toggle also moved onto the machine: `Machine.autoBackup`,
+    /// edited in the Machines window's Settings tab. The old "Claude
+    /// development" /tmp/sparkplug secret file is retired outright -- the image
+    /// lock next to the qcow2 carries the running guest's secret, and the MCP
+    /// bridge is the coming hand-off to Claude.)
     var sparcDiskImagePath: String {
-        get { defaults.string(forKey: Key.sparcDiskImagePath) ?? "" }
-        set {
-            defaults.set(newValue, forKey: Key.sparcDiskImagePath)
-            NotificationCenter.default.post(name: Self.didChange, object: self)
-        }
-    }
-
-    /// When true (default), macXserver auto-clones the disk image after every
-    /// *clean* SPARCstation shutdown -- a rolling "last known good" restore
-    /// point captured at the one moment the image is guaranteed coherent
-    /// (Solaris synced its filesystems, qemu flushed and closed the qcow2).
-    /// Only fires on the verified clean-halt path, never after a hard kill
-    /// (which could snapshot a dirty image). Auto-backups are pruned to the
-    /// most recent few; manual "Back Up Disk Image" copies are never touched.
-    /// Off = live dangerously: no automatic safety copies.
-    var sparcAutoBackupOnShutdown: Bool {
-        get { defaults.bool(forKey: Key.sparcAutoBackupOnShutdown) }
-        set {
-            defaults.set(newValue, forKey: Key.sparcAutoBackupOnShutdown)
-            NotificationCenter.default.post(name: Self.didChange, object: self)
-        }
-    }
-
-    /// "Claude development" mode. When on, macXserver writes the running guest's
-    /// per-launch Helios secret to `/tmp/sparkplug` (0600) so Claude Code can
-    /// authenticate to the daemon for agentic work. Off by default: it
-    /// deliberately exposes the guest key to anything that can read the file.
-    var sparcClaudeDevelopment: Bool {
-        get { defaults.bool(forKey: Key.sparcClaudeDevelopment) }
-        set {
-            defaults.set(newValue, forKey: Key.sparcClaudeDevelopment)
-            NotificationCenter.default.post(name: Self.didChange, object: self)
-        }
+        defaults.string(forKey: Key.sparcDiskImagePath) ?? ""
     }
 
     /// When true, the SPARCstation engine is launched with slirp's built-in

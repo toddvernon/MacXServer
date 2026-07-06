@@ -47,6 +47,27 @@ public struct ImagePorts: Sendable, Equatable, Codable {
     public static let sunos414  = ImagePorts(telnet: 2133, ssh: 2232, helios: 2135)
     /// NetBSD/sparc -- planned.
     public static let netbsd    = ImagePorts(telnet: 2143, ssh: 2242, helios: 2145)
+
+    /// The block-numbering pattern behind the per-OS triples: block x is
+    /// telnet 21x3 / ssh 22x2 / helios 21x5 (solaris26 = block 2, sunos414 = 3,
+    /// netbsd = 4). User-created VMs get the next free block ASSIGNED ONCE at
+    /// creation and persisted (sticky by assignment, not dynamic by invocation --
+    /// Todd's call 2026-07-06), so a machine's ports never move underneath the
+    /// tooling that dials them. Distinct blocks can never collide with each
+    /// other: the three lines differ mod 10.
+    public static func block(_ index: Int) -> ImagePorts {
+        ImagePorts(telnet: UInt16(2100 + index * 10 + 3),
+                   ssh: UInt16(2200 + index * 10 + 2),
+                   helios: UInt16(2100 + index * 10 + 5))
+    }
+
+    /// The three port numbers as a set, for overlap checks.
+    public var allPorts: Set<UInt16> { [telnet, ssh, helios] }
+
+    /// True when any of the two triples' ports collide.
+    public func overlaps(_ other: ImagePorts) -> Bool {
+        !allPorts.isDisjoint(with: other.allPorts)
+    }
 }
 
 public struct QemuEngineConfig: Sendable, Equatable {
@@ -66,6 +87,10 @@ public struct QemuEngineConfig: Sendable, Equatable {
     /// Defaults to the Solaris 2.6 block; other OSes pass their own block so
     /// multiple images can run without colliding. See `ImagePorts`.
     public var ports: ImagePorts
+    /// The guest NIC's MAC. Per-machine (derived from the machine id) so two
+    /// concurrent guests never collide; the default is the historical bundled-VM
+    /// MAC so a config built without a machine keeps the old guest identity.
+    public var macAddress: String
     /// When non-nil, slirp serves this directory over its built-in TFTP server
     /// on the guest gateway (10.0.2.2). nil = no TFTP (the `-nic` line omits
     /// `tftp=`). The caller is responsible for the directory existing; slirp
@@ -78,13 +103,14 @@ public struct QemuEngineConfig: Sendable, Equatable {
     public var os: MachineOS?
 
     public init(helper: URL, firmwareDir: URL, diskImage: URL, memoryMB: Int = 128,
-                ports: ImagePorts = .solaris26, tftpDirectory: String? = nil,
-                os: MachineOS? = nil) {
+                ports: ImagePorts = .solaris26, macAddress: String = "DE:AD:BE:EF:F3:E5",
+                tftpDirectory: String? = nil, os: MachineOS? = nil) {
         self.helper = helper
         self.firmwareDir = firmwareDir
         self.diskImage = diskImage
         self.memoryMB = memoryMB
         self.ports = ports
+        self.macAddress = macAddress
         self.tftpDirectory = tftpDirectory
         self.os = os
     }
@@ -424,10 +450,15 @@ public final class QemuEngine: @unchecked Sendable {
         // Record the QMP + console socket paths in the lock (VM_CONTROL.md Stage 3,
         // "lock-as-VM-handle"): a later process on this Mac can then clean-stop an
         // orphan via a qcow2-clean QMP `quit` and re-attach the console view.
+        // The helios port rides along too, so the lock is a complete handle for
+        // reaching this guest's daemon (orphan recovery on a non-Solaris guest
+        // needs it; it also lets Claude-side tooling find port + secret in one
+        // place until the MCP bridge lands).
         ImageLockManager.acquire(imageURL: config.diskImage,
                                  pid: p.processIdentifier, appVersion: appVersion,
                                  secret: self.currentSecret,
-                                 qmpSocketPath: qmpPath, consoleSocketPath: consolePath)
+                                 qmpSocketPath: qmpPath, consoleSocketPath: consolePath,
+                                 heliosPort: config.ports.helios)
         progress = 0.05            // a visible sliver the moment qemu launches
         emitState()
         emitProgress()
@@ -872,11 +903,12 @@ public final class QemuEngine: @unchecked Sendable {
         // and the Mac reaches the Helios daemon directly (no ssh tunnel). The
         // block comes from `config.ports` (Solaris 2.6 = 2123/2222/2125 by
         // default; other OSes pass their own block so several images can run at
-        // once). Fixed MAC for stable guest identity across reboots. When a
-        // shared folder is configured, append slirp's built-in TFTP server
-        // pointed at it; the guest pulls files with `tftp 10.0.2.2`.
+        // once). Per-machine MAC (stable across reboots, unique per machine so
+        // concurrent guests never collide). When a shared folder is configured,
+        // append slirp's built-in TFTP server pointed at it; the guest pulls
+        // files with `tftp 10.0.2.2`.
         let p = config.ports
-        var nic = "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::\(p.telnet)-:23,hostfwd=tcp::\(p.ssh)-:22,hostfwd=tcp::\(p.helios)-:2125"
+        var nic = "user,model=lance,mac=\(config.macAddress),hostfwd=tcp::\(p.telnet)-:23,hostfwd=tcp::\(p.ssh)-:22,hostfwd=tcp::\(p.helios)-:2125"
         if let tftp = config.tftpDirectory, !tftp.isEmpty {
             nic += ",tftp=\(tftp)"
         }
@@ -972,19 +1004,10 @@ public final class QemuEngine: @unchecked Sendable {
     /// Track C's downloader must write this name.
     public static let diskImageFilename = "solaris-2.6.qcow2"
 
-    /// Mac-side port forwarded to the guest's telnet (23). Used by launchers
-    /// with `transport = telnet` and by the by-hand shutdown instructions
-    /// (orphan shutdown itself goes over Helios, not telnet). Defaults to the
-    /// bundled Solaris 2.6 image's block; per-image runs carry their own ports
-    /// in `QemuEngineConfig.ports`.
-    public static let telnetHostPort: UInt16 = ImagePorts.solaris26.telnet
-
-    /// Mac-side port forwarded to the guest's Helios daemon (2125). Both clients
-    /// -- macXserver's HeliosClient and Claude Code's bridge -- connect here
-    /// directly over loopback, no ssh tunnel. (DECISIONS 2026-06-21: macXserver
-    /// owns the network path; advertising this port is the discovery follow-up.)
-    /// Defaults to the bundled Solaris 2.6 block; see `ImagePorts`.
-    public static let heliosHostPort: UInt16 = ImagePorts.solaris26.helios
+    // The old `telnetHostPort` / `heliosHostPort` statics (the "which ports?"
+    // globals that hardwired the Solaris block) died in P2: every caller now
+    // takes its ports from the owning machine's `resolvedPorts` (or, for an
+    // orphan, from its image lock's OS-derived block).
 
     /// `~/Library/Application Support/macXserver/`.
     public static func applicationSupportDir() -> URL {

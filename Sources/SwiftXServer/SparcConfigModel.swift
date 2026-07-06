@@ -2,50 +2,23 @@ import SwiftUI
 import AppKit
 import SwiftXServerCore
 
-// Backing model for the SPARCstation "Config" windows (Disk Image, Shared
-// Folder, Claude Development). These settings used to live in a single
-// Preferences tab; they're now broken out into their own menu-driven windows
-// under SPARCstation > Config. All writes still flow through the shared,
+// Backing model for the engine-global Config windows -- since P2, just the
+// Shared Folder (the per-machine Disk Image editor lives in the Machines
+// window's Settings tab; the Claude Development secret-file toggle is retired,
+// the image lock carries the secret). Writes flow through the shared,
 // UserDefaults-backed Preferences object, so the values are the same ones the
-// engine reads at launch -- this just owns the SPARCstation slice of them.
-//
-// One model instance is shared by all three Config windows (held by the
-// AppDelegate), so whichever windows are open stay consistent.
+// engine reads at launch.
 
 @MainActor
 final class SparcConfigModel: ObservableObject {
 
     private let prefs: Preferences
 
-    /// Live mirror of whether the engine is running (or shutting down). The
+    /// Live mirror of whether ANY machine is running (or shutting down). The
     /// Shared Folder window uses it to show a "restart to apply" note, since
-    /// the shared folder is only read when the engine launches. Pushed in by
-    /// the AppDelegate's engine-state observer.
+    /// the shared folder is only read when an engine launches. Pushed in by
+    /// the AppDelegate's engine-state observers.
     @Published var sparcEngineRunning: Bool
-
-    @Published var sparcDiskImagePath: String {
-        didSet {
-            if sparcDiskImagePath != prefs.sparcDiskImagePath {
-                prefs.sparcDiskImagePath = sparcDiskImagePath
-            }
-        }
-    }
-
-    @Published var sparcAutoBackupOnShutdown: Bool {
-        didSet {
-            if sparcAutoBackupOnShutdown != prefs.sparcAutoBackupOnShutdown {
-                prefs.sparcAutoBackupOnShutdown = sparcAutoBackupOnShutdown
-            }
-        }
-    }
-
-    @Published var sparcClaudeDevelopment: Bool {
-        didSet {
-            if sparcClaudeDevelopment != prefs.sparcClaudeDevelopment {
-                prefs.sparcClaudeDevelopment = sparcClaudeDevelopment
-            }
-        }
-    }
 
     @Published var sparcTftpEnabled: Bool {
         didSet {
@@ -70,34 +43,8 @@ final class SparcConfigModel: ObservableObject {
     init(preferences: Preferences, engineRunning: Bool) {
         self.prefs = preferences
         self.sparcEngineRunning = engineRunning
-        self.sparcDiskImagePath = preferences.sparcDiskImagePath
-        self.sparcAutoBackupOnShutdown = preferences.sparcAutoBackupOnShutdown
-        self.sparcClaudeDevelopment = preferences.sparcClaudeDevelopment
         self.sparcTftpEnabled = preferences.sparcTftpEnabled
         self.sparcTftpDirectory = preferences.sparcTftpDirectory
-    }
-
-    // MARK: - Disk image
-
-    /// Pick a Solaris disk image with an open panel and store its path.
-    func chooseSparcDiskImage() {
-        let panel = NSOpenPanel()
-        panel.title = "Choose Solaris Disk Image"
-        panel.prompt = "Choose"
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        if !sparcDiskImagePath.isEmpty {
-            panel.directoryURL = URL(fileURLWithPath: sparcDiskImagePath).deletingLastPathComponent()
-        }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        sparcDiskImagePath = url.path
-    }
-
-    /// Reveal the selected disk image in Finder.
-    func revealSparcDiskImage() {
-        guard !sparcDiskImagePath.isEmpty else { return }
-        NSWorkspace.shared.selectFile(sparcDiskImagePath, inFileViewerRootedAtPath: "")
     }
 
     // MARK: - Shared folder (TFTP)

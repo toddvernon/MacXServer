@@ -35,6 +35,11 @@ public final class MachineController {
     /// `.running`. Reads default to a stopped machine being not-ready.
     public var isReady: Bool = false
 
+    /// 0...1 boot/shutdown progress of the current run, mirrored from the
+    /// engine's onProgress into the list row's dot. nil when not running. Was
+    /// AppDelegate's single `bundledBootProgress`; per-machine in P2.
+    public var bootProgress: Double?
+
     public init(id: UUID = UUID(), config: QemuEngineConfig) {
         self.id = id
         self.engine = QemuEngine(config: config)

@@ -101,6 +101,48 @@ per-id `rows` for the Overview, same gating as the Machines menu. swift test 145
 pass. Remaining transitional debts + the honest deferrals are in SHORTCUTS. Next
 lead: the **MCP bridge**.
 
+## Shipped 2026-07-06 (P2 — the concurrent multi-engine runtime)
+
+Milestone #6 un-deferred and landed. Any number of emulated VMs run at once;
+the console-follows-the-wired-machine steal is gone. What P2 turned out to be
+(with the decisions that refined this doc's original calls — full rationale in
+DECISIONS 2026-07-06):
+
+- **A fresh `MachineController` per start**, built from
+  `machine.makeEngineConfig()` — image, memory, ports, MAC, OS profile all off
+  the machine; config edits apply at the next boot with no rebuild bookkeeping.
+  `makeSparcConfig()`, the Preferences↔machine image sync, and the single
+  `bundledMachine` resolver are deleted.
+- **Per-machine console windows** keyed by machine id (titled by machine,
+  per-machine frame autosave), per-machine DNS-admin windows, per-machine
+  readiness + boot progress on the controller. Every closure resolves the
+  current controller through the registry at fire time.
+- **Sticky port assignment, NOT the dynamic allocator this doc proposed.**
+  Todd's call: "dynamic by assignment time, not by invocation." A user-created
+  emulated VM gets `ImagePorts.block(n)` (n = 5, 6, …; same 21n3/22n2/21n5
+  mnemonic; bundled fixtures keep deriving blocks 2–4) assigned ONCE by the
+  registry and persisted; clones get a fresh block; a start-time
+  `portConflict` guard covers hand-edited JSON. The ecosystem's fixed-port
+  assumption (emu scripts, helios CLI, Claude conventions) holds.
+- **Per-machine MAC derived from the machine id** (locally-administered
+  `02:` + id bytes; explicit override wins). The duplicate-MAC latent bug is
+  dead.
+- **Secrets: /tmp/sparkplug retired** (toggle, Config window, plumbing). The
+  image lock next to the qcow2 now records the **helios port** alongside the
+  per-boot secret, making it the complete reach-the-daemon handle for orphan
+  recovery and the interim Claude-side channel; `MachineRegistry.snapshot()`
+  carries `heliosPort` as MCP-bridge groundwork. `HeliosClient` requires an
+  explicit port (the Solaris-2125 default died).
+- **Whole-fleet flows**: the launch orphan scan walks every machine's image
+  lock (ports from the lock), the quit dialog handles N running guests
+  (detach leaves all their locks/secrets live), auto-backup is per-machine
+  (`Machine.autoBackup`, edited in Settings next to the new memory field and
+  the Reveal-in-Finder button), and the Machines → Config submenu reduced to a
+  top-level global "Shared Folder…" item.
+
+swift test 1481 pass. Next lead unchanged: the **MCP bridge** (the registry
+snapshot + per-machine secrets are the discovery payload it serves).
+
 ## TL;DR
 
 Turn macXserver from "one bundled Solaris VM, hidden under an X server" into a

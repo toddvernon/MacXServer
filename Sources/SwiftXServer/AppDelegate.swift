@@ -24,7 +24,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var resourcesController: ResourcesWindowController?
     private var acknowledgementsController: AcknowledgementsWindowController?
     private var fontMappingsController: FontMappingsWindowController?
-    private var dnsAdminController: DnsAdminWindowController?
     /// Helios file-browser windows, one per filebrowser launcher entry, keyed by
     /// "group/name" so reopening reuses the window (and its current folder).
     private var fileBrowserControllers: [String: FileBrowserWindowController] = [:]
@@ -53,21 +52,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// The machine registry: the configured machines + their live controllers,
     /// and the MCP-visible discovery layer. Loaded at launch (migrating from the
-    /// legacy launchers file on first run). In P1 only the bundled emulated VM
-    /// (`bundledMachineID`) has its lifecycle wired to the SPARCstation menu; the
-    /// other machines are data awaiting the P1c list window.
+    /// legacy launchers file on first run). P2: every emulated VM's lifecycle is
+    /// wired; any number can run at once, each with its own controller.
     private var registry: MachineRegistry?
-    /// The bundled emulated VM's id -- the machine the SPARCstation menu drives.
-    private var bundledMachineID: UUID?
-    /// The bundled machine's controller, via the registry. Get-only: the write
-    /// paths are `registry.setController` (rebuildSparcEngine) and the
-    /// controller's own `isReady`. Nil until the registry + controller exist.
-    private var controller: MachineController? {
-        guard let registry, let id = bundledMachineID else { return nil }
-        return registry.controller(id)
-    }
-    private var sparcConsole: SparcPlugConsoleWindowController?
+    /// Per-machine console windows, keyed by machine id, created lazily the
+    /// first time a machine starts (or its console is asked for). Each window
+    /// is fed only by its own machine's engine, so consoles never follow or
+    /// steal (the P1 single-`sparcConsole` bug).
+    private var consoles: [UUID: SparcPlugConsoleWindowController] = [:]
+    /// Per-machine DNS-admin windows, keyed by machine id (the panel talks to
+    /// one machine's Helios daemon).
+    private var dnsAdminControllers: [UUID: DnsAdminWindowController] = [:]
     private var sparcWelcome: SparcStationWelcomeWindowController?
+    /// The machine the welcome/install flow was opened for (Start pressed on an
+    /// image-less VM); chooseImageThenStart attaches the picked image to it.
+    private var installTargetID: UUID?
     /// The unified Machines window (the front door) + its observable model. Built
     /// at launch. `refreshMachines` mirrors the registry + live controller state
     /// into the model (both the `machines` list for the master/Settings and the
@@ -75,19 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// reads, so window and menu never disagree.
     private var machinesWindow: MachinesWindowController?
     private var machinesModel: MachinesModel?
-    /// Boot progress (0...1) of the bundled machine, mirrored into the list row's
-    /// dot. Set from the engine's onProgress, reset when it leaves running.
-    private var bundledBootProgress: Double?
     /// Set when an orphan's Helios shutdown call fails fast (connection refused,
     /// timed out, or auth rejected), so the poll loop can flip the panel to its
     /// failure state without waiting out the full countdown. Reset at the start
     /// of each attempt.
     private var orphanShutdownFailed = false
-    /// Set when the user chose "Quit and Detach" with the VM still running. Tells
-    /// `applicationWillTerminate` to PRESERVE the Claude-dev secret file: the guest
-    /// keeps running after we quit, so Claude Code must still be able to reach its
-    /// daemon. (A normal quit / guest exit clears it -- the secret is then dead.)
-    private var detachingSparcOnQuit = false
     /// Live progress panel shown while we wait for an orphan to power off.
     /// Non-nil only during an in-flight "Try to Shut It Down"; its presence is
     /// also the poll loop's keep-going signal (cleared the instant the user
@@ -162,51 +153,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Installs the status-bar item and main menu, and starts watching the
     /// launchers file for changes.
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Wipe any dev-secret file left by a prior crashed session before we do
-        // anything -- it's stale (a new guest gets a new secret) and shouldn't
-        // outlive the session that wrote it.
-        clearClaudeDevSecretFile()
         installStatusItem()
         installMainMenu()
         loadMachineRegistry()
-        setupSparcEngine()
         setupMachinesWindow()
-        checkForReconnectableOrphanOnLaunch()
-    }
-
-    /// Build the engine controller and keep it in sync with the disk-image
-    /// path in Preferences (the source of truth for where the image lives).
-    private func setupSparcEngine() {
-        rebuildSparcEngine()
-        // When the disk-image path changes in Preferences, rebuild so the
-        // menu state and the next Run pick it up. Don't yank the config out
-        // from under a running VM.
-        NotificationCenter.default.addObserver(
-            forName: Preferences.didChange, object: nil, queue: .main
-        ) { [weak self] _ in
-            // queue: .main means this block runs on the main thread, so the
-            // main-actor hop is an assertion, not a dispatch.
-            MainActor.assumeIsolated {
-                guard let self = self, self.controller?.engine.state != .running else { return }
-                self.syncBundledMachineImageFromPreferences()
-                self.rebuildSparcEngine()
-            }
-        }
+        checkForReconnectableOrphansOnLaunch()
     }
 
     /// Load the machine registry, migrating the legacy launchers file on first
-    /// run. The bundled emulated VM is the machine the SPARCstation menu drives.
-    /// `bundledUser` is only consulted when migration has to seed a bundled
+    /// run. `bundledUser` is only consulted when migration has to seed a bundled
     /// machine with no launcher group to copy from (rare -- the seeded launchers
     /// file normally supplies a loopback group), so we derive it best-effort.
     private func loadMachineRegistry() {
         let launchers = LauncherFileLoader.loadOrSeed(seed: DefaultLaunchers.seedContent)
         let bundledUser = launchers.entries.first(where: { Self.isLoopbackHost($0.host) })?.user
             ?? launchers.entries.first?.user ?? ""
-        let registry = MachineRegistry.load(bundledImagePath: preferences.sparcDiskImagePath,
-                                            bundledUser: bundledUser)
-        self.registry = registry
-        self.bundledMachineID = registry.bundledMachine?.id
+        self.registry = MachineRegistry.load(bundledImagePath: preferences.sparcDiskImagePath,
+                                             bundledUser: bundledUser)
         // The launcher file is imported ONCE (MachinesFileLoader.loadOrMigrate, on
         // the first run when machines.json doesn't exist yet). After that the JSON
         // registry is authoritative and edited in-app via the Machine Editor -- we
@@ -217,20 +180,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private static func isLoopbackHost(_ host: String) -> Bool {
         ["127.0.0.1", "localhost", "0.0.0.0", "::1"].contains(host.lowercased())
-    }
-
-    /// Keep the registry's bundled machine image in step with the Config UI, which
-    /// still writes `sparcplug.diskImagePath` in P1 (the engine config is built
-    /// from Preferences via makeSparcConfig, not yet from the machine -- see
-    /// SHORTCUTS). Without this the registry's stored image would go stale after
-    /// the user picks a new disk image.
-    private func syncBundledMachineImageFromPreferences() {
-        guard let registry, var m = registry.bundledMachine else { return }
-        let newPath = preferences.sparcDiskImagePath.isEmpty ? nil : preferences.sparcDiskImagePath
-        if m.imagePath != newPath {
-            m.imagePath = newPath
-            registry.update(m)
-        }
     }
 
     // MARK: - Machines list window
@@ -254,20 +203,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// lifecycle/launch methods; edit actions (add/remove/clone/commit) mutate the
     /// registry and refresh every surface.
     private func wireMachines(_ model: MachinesModel) {
-        // Operate (Overview page + master list).
-        model.onStart     = { [weak self] _ in self?.startSparcStation(nil) }
-        model.onShutDown  = { [weak self] _ in self?.shutDownSparcStation(nil) }
-        model.onForceQuit = { [weak self] _ in self?.confirmForceQuit() }
-        model.onBackup    = { [weak self] _ in self?.backUpDiskImage(nil) }
-        model.onConsole   = { [weak self] _ in self?.showSparcConsole(nil) }
+        // Operate (Overview page + master list) -- all per machine id now.
+        model.onStart     = { [weak self] id in self?.startMachine(id) }
+        model.onShutDown  = { [weak self] id in self?.shutDownMachine(id) }
+        model.onForceQuit = { [weak self] id in self?.confirmForceQuit(id) }
+        model.onBackup    = { [weak self] id in self?.backUpDiskImage(id) }
+        model.onConsole   = { [weak self] id in self?.showConsoleWindow(id) }
         model.onLaunch    = { [weak self] id, name in self?.launchFromMachine(id, launcherName: name) }
         model.onSetHeliosSecret = { [weak self] id in self?.promptHeliosSecret(for: id) }
 
         // Edit (master toolbar + Settings tab).
         model.onAddNew = { [weak self] in
             guard let self, let registry = self.registry else { return nil }
-            // Default to an external host: it's immediately usable (just needs a
-            // host + user), unlike an emulated VM which can't start until P2.
+            // Default to an external host: it's immediately usable with just a
+            // host + user. Flipping the kind to emulated VM in the editor gets
+            // the machine its sticky port block (registry.update assigns it).
             let m = Machine(name: "New Machine", kind: .externalHost,
                             host: "", user: "", transport: .helios)
             registry.add(m)
@@ -277,9 +227,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.onCommit = { [weak self] machine in
             guard let self, let registry = self.registry else { return }
             registry.update(machine)
-            // afterMachineMutation -> resolveBundledMachine re-resolves which
-            // emulated VM is engine-wired and mirrors its image into Preferences,
-            // so assigning an image here makes the VM runnable now (not at relaunch).
             self.afterMachineMutation()
         }
         model.onRemove = { [weak self] id in
@@ -287,7 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // Never remove a bundled fixture (one of the machines we ship) or a
             // machine with a live qemu process. The window also disables the button
             // in these cases; this is the belt-and-suspenders guard.
-            if registry.machine(id)?.bundled == true || registry.runningMachineID == id { return }
+            if registry.machine(id)?.bundled == true || registry.runningMachineIDs.contains(id) { return }
             let name = registry.machine(id)?.name ?? "this machine"
             let alert = NSAlert()
             alert.messageText = "Remove \u{201c}\(name)\u{201d}?"
@@ -335,63 +282,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// window and the menu agree.
     private func refreshMachines() {
         guard let registry, let model = machinesModel else { return }
-        let bundledID = bundledMachineID
         model.machines = registry.machines
-        model.bundledMachineID = bundledID
-        model.runningMachineID = registry.runningMachineID
+        model.runningMachineIDs = registry.runningMachineIDs
 
         var rows: [UUID: MachineRow] = [:]
         for m in registry.machines {
-            let isBundled = (m.id == bundledID)
-            let isEmulated = m.kind == .emulatedVM
-            let ctrl = registry.controller(m.id)
-            let state = ctrl?.engine.state ?? .notInstalled
-            let ready = ctrl?.isReady ?? false
-
-            let dot: MachineStatusDot
-            let statusText: String
-            var progress: Double? = nil
-            if !isEmulated {
-                dot = .external; statusText = "external"
-            } else if !m.isInstalledEmulatedVM {
-                dot = .notInstalled; statusText = "not installed"
-            } else if state == .running && ready {
-                dot = .running; statusText = "running"
-            } else if state == .running {
-                dot = .booting; statusText = "booting"
-                progress = isBundled ? bundledBootProgress : nil
-            } else if state == .shuttingDown {
-                dot = .booting; statusText = "shutting down"
-            } else {
-                dot = .stopped; statusText = "stopped"
-            }
-
-            let subtitle = isEmulated
-                ? (m.image.map { $0.lastPathComponent } ?? "no disk image")
-                : "\(m.host) · external"
-
-            let chips = m.launchers.map { l -> MachineLauncherChip in
-                // Same gating as validateMenuItem: a helios launcher on the
-                // bundled guest needs the daemon up; everything else is enabled.
-                let transport = l.transport ?? m.transport
-                let enabled = !(isBundled && transport == .helios) || ready
-                return MachineLauncherChip(id: l.name, name: l.name,
-                                           isFileBrowser: l.fileBrowser, enabled: enabled)
-            }
-
-            rows[m.id] = MachineRow(
-                id: m.id, name: m.name, isEmulated: isEmulated,
-                subtitle: subtitle, statusText: statusText, dot: dot, progress: progress,
-                showsLifecycle: isBundled,
-                canStart: (state == .stopped || state == .notInstalled),
-                canShutDown: (state == .running && ready),
-                canForceQuit: (state == .running || state == .shuttingDown),
-                canBackup: (state == .stopped),
-                canConsole: (sparcConsole != nil),
-                canSetHeliosSecret: !isEmulated,
-                launchers: chips)
+            rows[m.id] = machineRow(for: m, registry: registry)
         }
         model.rows = rows
+    }
+
+    /// One machine's live operate-state. The controller is authoritative while
+    /// its qemu is live; otherwise the state derives from the machine's own data
+    /// (so a stopped machine whose config was just edited never shows a stale
+    /// controller's view of the world).
+    private func machineRow(for m: Machine, registry: MachineRegistry) -> MachineRow {
+        let isEmulated = m.kind == .emulatedVM
+        let ctrl = registry.controller(m.id)
+        let live = ctrl.map { $0.engine.state == .running || $0.engine.state == .shuttingDown } ?? false
+        let state: QemuEngine.State = live
+            ? ctrl!.engine.state
+            : (m.isInstalledEmulatedVM ? .stopped : .notInstalled)
+        let ready = ctrl?.isReady ?? false
+
+        let dot: MachineStatusDot
+        let statusText: String
+        var progress: Double? = nil
+        if !isEmulated {
+            dot = .external; statusText = "external"
+        } else if !m.isInstalledEmulatedVM {
+            dot = .notInstalled; statusText = "not installed"
+        } else if state == .running && ready {
+            dot = .running; statusText = "running"
+        } else if state == .running {
+            dot = .booting; statusText = "booting"
+            progress = ctrl?.bootProgress
+        } else if state == .shuttingDown {
+            dot = .booting; statusText = "shutting down"
+        } else {
+            dot = .stopped; statusText = "stopped"
+        }
+
+        let subtitle = isEmulated
+            ? (m.image.map { $0.lastPathComponent } ?? "no disk image")
+            : "\(m.host) · external"
+
+        let chips = m.launchers.map { l -> MachineLauncherChip in
+            // Same gating as the Machines menu: a helios launcher on an emulated
+            // guest needs that guest's daemon up; everything else is enabled.
+            let transport = l.transport ?? m.transport
+            let enabled = !(isEmulated && transport == .helios) || ready
+            return MachineLauncherChip(id: l.name, name: l.name,
+                                       isFileBrowser: l.fileBrowser, enabled: enabled)
+        }
+
+        return MachineRow(
+            id: m.id, name: m.name, isEmulated: isEmulated,
+            subtitle: subtitle, statusText: statusText, dot: dot, progress: progress,
+            showsLifecycle: isEmulated,
+            canStart: (state == .stopped || state == .notInstalled),
+            canShutDown: (state == .running && ready),
+            canForceQuit: (state == .running || state == .shuttingDown),
+            canBackup: (state == .stopped),
+            canConsole: (consoles[m.id] != nil),
+            canSetHeliosSecret: !isEmulated,
+            launchers: chips)
     }
 
     /// Launch (or open the file browser for) one of a machine's launchers, reusing
@@ -404,7 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if entry.fileBrowser {
             openFileBrowser(entry: entry, key: "\(machine.id.uuidString)/\(ml.name)")
         } else {
-            launch(entry)
+            launch(entry, os: machine.os)
         }
     }
 
@@ -438,36 +393,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// Refresh every machine surface after an add/edit/remove/clone: the window
     /// model (master list + Overview rows + Settings), the Machines menu, and the
-    /// status dashboard.
+    /// status dashboard. Config edits (name / OS / image) also reflect into any
+    /// existing console window; the engine itself picks them up on the next start
+    /// (a fresh controller is built per start).
     private func afterMachineMutation() {
-        resolveBundledMachine()     // before refresh, so rows/menu see the new wiring
+        for m in registry?.machines ?? [] {
+            consoles[m.id]?.setOSName(m.os?.displayName)
+            consoles[m.id]?.setMachineName(m.name)
+        }
         refreshMachines()
         if let m = machinesMenu { rebuildMachinesMenu(m) }
         updateStatusMenu()
-    }
-
-    /// Resolve which emulated VM is the single (P1) engine-wired "bundled" machine,
-    /// and keep Preferences -- the disk-image source `makeSparcConfig` reads -- in
-    /// step with it. Called after every machine mutation (add / remove / clone /
-    /// image pick, and later download completion), NOT just at launch: the moment
-    /// you assign an image to a freshly-added VM it becomes the runnable one, no
-    /// relaunch needed. When the resolved machine or its image changes, the
-    /// Preferences write fires the didChange observer, which rebuilds the engine
-    /// against the new id/image; a pure id change (same path, different owner --
-    /// e.g. the bundled VM was removed and another took its place) rebuilds directly.
-    private func resolveBundledMachine() {
-        guard let registry else { return }
-        let newID = registry.bundledMachine?.id
-        let idChanged = (newID != bundledMachineID)
-        bundledMachineID = newID
-        sparcConsole?.setOSName(registry.bundledMachine?.os?.displayName)
-
-        let desiredPath = registry.bundledMachine?.imagePath ?? ""
-        if preferences.sparcDiskImagePath != desiredPath {
-            preferences.sparcDiskImagePath = desiredPath
-        } else if idChanged {
-            rebuildSparcEngine()
-        }
     }
 
     // MARK: - Machines menu
@@ -484,6 +420,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                   action: #selector(openMachinesWindow(_:)), keyEquivalent: "")
         listItem.target = self
         menu.addItem(listItem)
+        // Shared Folder is a global engine setting (one TFTP dir served to every
+        // guest), so it lives at the menu's top level, not under a machine. It
+        // moved here when the per-machine Config submenu retired (P2).
+        let sharedFolder = NSMenuItem(title: "Shared Folder\u{2026}",
+                                      action: #selector(openSparcConfig(_:)), keyEquivalent: "")
+        sharedFolder.target = self
+        sharedFolder.representedObject = SparcConfigSection.sharedFolder
+        menu.addItem(sharedFolder)
         menu.addItem(.separator())
 
         for m in registry?.machines ?? [] {
@@ -496,50 +440,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    /// Populate one machine's submenu: lifecycle verbs (bundled emulated VM only,
-    /// gated by state), or the Helios-secret item (external), then its launchers.
+    /// Populate one machine's submenu: lifecycle verbs (every emulated VM, gated
+    /// by its own state), or the Helios-secret item (external), then its launchers.
     @MainActor
     private func buildMachineSubmenu(_ sub: NSMenu, machine m: Machine) {
-        let isBundled = (m.id == bundledMachineID)
-        let ready = controller?.isReady ?? false
+        let isEmulated = m.kind == .emulatedVM
+        let ctrl = registry?.controller(m.id)
+        let live = ctrl.map { $0.engine.state == .running || $0.engine.state == .shuttingDown } ?? false
+        let state: QemuEngine.State = live
+            ? ctrl!.engine.state
+            : (m.isInstalledEmulatedVM ? .stopped : .notInstalled)
+        let ready = ctrl?.isReady ?? false
+        let idString = m.id.uuidString as NSString
 
-        func add(_ title: String, _ action: Selector, enabled: Bool, represented: Any? = nil) {
+        func add(_ title: String, _ action: Selector, enabled: Bool) {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
             item.isEnabled = enabled
-            item.representedObject = represented
+            item.representedObject = idString
             sub.addItem(item)
         }
 
-        if isBundled {
-            // Same gating as the old SPARCstation submenu. Start covers the
-            // not-installed case (it launches the install flow); Shut Down needs
-            // the daemon up; Force Quit is the always-available hard power-off.
-            let state = controller?.engine.state ?? .notInstalled
-            add("Start", #selector(startSparcStation(_:)),
+        if isEmulated {
+            // Same gating as the old SPARCstation submenu, per machine. Start
+            // covers the not-installed case (it opens the install flow); Shut
+            // Down needs the daemon up; Force Quit is the hard power-off.
+            add("Start", #selector(startMachineMenu(_:)),
                 enabled: state == .stopped || state == .notInstalled)
-            add("Shut Down", #selector(shutDownSparcStation(_:)),
+            add("Shut Down", #selector(shutDownMachineMenu(_:)),
                 enabled: state == .running && ready)
-            add("Force Quit\u{2026}", #selector(forceQuitSparcStation(_:)),
+            add("Force Quit\u{2026}", #selector(forceQuitMachineMenu(_:)),
                 enabled: state == .running || state == .shuttingDown)
             sub.addItem(.separator())
-            add("Show Console", #selector(showSparcConsole(_:)), enabled: sparcConsole != nil)
-            add("Back Up Disk Image\u{2026}", #selector(backUpDiskImage(_:)), enabled: state == .stopped)
+            add("Show Console", #selector(showConsoleMenu(_:)), enabled: consoles[m.id] != nil)
+            add("Back Up Disk Image\u{2026}", #selector(backUpDiskImageMenu(_:)), enabled: state == .stopped)
 
-            let configItem = NSMenuItem(title: "Config", action: nil, keyEquivalent: "")
-            let configMenu = NSMenu(title: "Config")
-            configMenu.autoenablesItems = false
-            for section in [SparcConfigSection.diskImage, .sharedFolder, .claudeDev] {
-                let item = NSMenuItem(title: section.menuTitle,
-                                      action: #selector(openSparcConfig(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = section
-                configMenu.addItem(item)
-            }
-            configItem.submenu = configMenu
-            sub.addItem(configItem)
-
-            // Admin (DNS) talks to the daemon, so gate it on readiness.
+            // Admin (DNS) talks to the machine's daemon, so gate it on readiness.
             let adminItem = NSMenuItem(title: "Admin", action: nil, keyEquivalent: "")
             adminItem.isEnabled = ready
             let adminMenu = NSMenu(title: "Admin")
@@ -548,12 +484,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                  action: #selector(openDnsAdmin(_:)), keyEquivalent: "")
             dns.target = self
             dns.isEnabled = ready
+            dns.representedObject = idString
             adminMenu.addItem(dns)
             adminItem.submenu = adminMenu
             sub.addItem(adminItem)
-        } else if m.kind == .externalHost {
-            add("Helios Secret\u{2026}", #selector(setHeliosSecretMenu(_:)),
-                enabled: true, represented: m.id.uuidString as NSString)
+        } else {
+            add("Helios Secret\u{2026}", #selector(setHeliosSecretMenu(_:)), enabled: true)
         }
 
         if !m.launchers.isEmpty {
@@ -564,13 +500,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                       action: #selector(launchMachineLauncher(_:)), keyEquivalent: "")
                 item.target = self
                 item.representedObject = "\(m.id.uuidString)/\(l.name)" as NSString
-                // A helios launcher on the bundled guest needs the daemon up;
-                // external / non-helios launchers are always enabled.
+                // A helios launcher on an emulated guest needs that guest's
+                // daemon up; external / non-helios launchers are always enabled.
                 let transport = l.transport ?? m.transport
-                item.isEnabled = !(isBundled && transport == .helios) || ready
+                item.isEnabled = !(isEmulated && transport == .helios) || ready
                 sub.addItem(item)
             }
         }
+    }
+
+    // MARK: - Machines menu actions (machine id in representedObject)
+
+    /// The machine id a menu item carries. All the per-machine menu verbs route
+    /// through this.
+    private func machineID(from sender: Any?) -> UUID? {
+        guard let idStr = (sender as? NSMenuItem)?.representedObject as? String else { return nil }
+        return UUID(uuidString: idStr)
+    }
+
+    @MainActor @objc private func startMachineMenu(_ sender: NSMenuItem) {
+        if let id = machineID(from: sender) { startMachine(id) }
+    }
+
+    @MainActor @objc private func shutDownMachineMenu(_ sender: NSMenuItem) {
+        if let id = machineID(from: sender) { shutDownMachine(id) }
+    }
+
+    @MainActor @objc private func forceQuitMachineMenu(_ sender: NSMenuItem) {
+        if let id = machineID(from: sender) { confirmForceQuit(id) }
+    }
+
+    @MainActor @objc private func showConsoleMenu(_ sender: NSMenuItem) {
+        if let id = machineID(from: sender) { showConsoleWindow(id) }
+    }
+
+    @MainActor @objc private func backUpDiskImageMenu(_ sender: NSMenuItem) {
+        if let id = machineID(from: sender) { backUpDiskImage(id) }
     }
 
     @MainActor
@@ -589,111 +554,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
 
-    /// Resolve the engine config: the engine binary comes from the app
-    /// bundle (or SPARCPLUG_ENGINE_DIR in dev), and the disk image from the
-    /// Preferences path. Empty path -> the engine reports notInstalled.
-    private func makeSparcConfig() -> QemuEngineConfig {
-        var config = QemuEngine.defaultConfig()
-        let path = preferences.sparcDiskImagePath
-        if !path.isEmpty {
-            config.diskImage = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-        }
-        // Per-OS wiring from the bundled machine's detected OS: the host-port block
-        // (so telnet/ssh/helios forwards match the guest), the boot-disk SCSI unit,
-        // and any boot-command. Without this a non-Solaris guest boots wrong --
-        // SunOS 4.1.4 needs unit=3 + `boot sd@3,0` or /usr won't mount. Transitional:
-        // the engine config still comes from Preferences here, not the machine (see
-        // SHORTCUTS); this threads just the OS-derived bits through.
-        if let m = registry?.bundledMachine {
-            config.ports = m.resolvedPorts
-            config.os = m.os
-        }
-        // Shared folder (TFTP): only wire it when the toggle is on. Create the
-        // directory if it's missing so slirp (read-only, won't create it) has
-        // something to serve. Failure to create just means no shared folder
-        // this run, not a failed launch.
+    /// Resolve one machine's engine config: helper + firmware from the app
+    /// bundle (or SPARCPLUG_ENGINE_DIR in dev), everything else -- image, memory,
+    /// ports, MAC, OS profile -- from the machine itself. The shared folder
+    /// (TFTP) is a global preference served to every guest. nil for an external
+    /// host or an image-less VM.
+    private func engineConfig(for machine: Machine) -> QemuEngineConfig? {
+        // Create the shared dir if it's missing so slirp (read-only, won't
+        // create it) has something to serve. Failure to create just means no
+        // shared folder this run, not a failed launch.
+        var tftpDir: String? = nil
         if preferences.sparcTftpEnabled {
             let dir = (preferences.sparcTftpDirectory as NSString).expandingTildeInPath
             try? FileManager.default.createDirectory(
                 atPath: dir, withIntermediateDirectories: true)
-            config.tftpDirectory = dir
+            tftpDir = dir
         }
-        return config
+        return machine.makeEngineConfig(tftpDirectory: tftpDir)
     }
 
-    /// (Re)create the engine and route its console + state to the observation
-    /// window. The closures fire on the main queue (QemuEngine dispatches
-    /// them), so touching the console window here is safe.
-    private func rebuildSparcEngine() {
-        // Build the bundled machine's controller keyed by its registry id. Engine
-        // config still comes from Preferences (makeSparcConfig) in P1, not from
-        // machine.makeEngineConfig -- the Config UI writes Preferences, so this
-        // stays the source until the UI moves to the machine (SHORTCUTS).
-        let controller = MachineController(id: bundledMachineID ?? UUID(),
-                                           config: makeSparcConfig())
-        let engine = controller.engine
+    /// Build a FRESH controller for one machine from its current config and wire
+    /// its engine callbacks to that machine's console + the shared surfaces. A
+    /// fresh controller per start (rather than one long-lived one) is what makes
+    /// config edits -- image, memory, ports -- take effect on the next boot with
+    /// no rebuild bookkeeping. Returns nil for a machine that can't run (no
+    /// image / external host).
+    @discardableResult
+    private func buildController(for machine: Machine) -> MachineController? {
+        guard let registry, let config = engineConfig(for: machine) else { return nil }
+        let controller = MachineController(id: machine.id, config: config)
+        wireEngine(controller.engine, machineID: machine.id)
+        registry.setController(controller, for: machine.id)
+        return controller
+    }
+
+    /// Route one engine's callbacks to its machine's console window (keyed
+    /// lookup -- the window may not exist yet or may have been created later)
+    /// and the shared surfaces (menus, list rows, status item). The closures
+    /// fire on the main queue (QemuEngine dispatches them).
+    private func wireEngine(_ engine: QemuEngine, machineID id: UUID) {
         engine.onConsoleData { [weak self] data in
-            self?.sparcConsole?.feedConsoleData(data)
+            self?.consoles[id]?.feedConsoleData(data)
         }
         engine.onStateChange { [weak self] state in
-            self?.sparcConsole?.setState(state)
-            // Keep the Preferences "restart to apply" note in sync if the
-            // window is open. Running or shutting-down both mean a shared-
-            // folder change can't take effect until the next clean start.
-            self?.sparcConfigModel?.sparcEngineRunning =
-                (state == .running || state == .shuttingDown)
+            guard let self else { return }
+            self.consoles[id]?.setState(state)
+            // Keep the Shared Folder window's "restart to apply" note in sync:
+            // the folder is read at engine launch, so it can't take effect
+            // while ANY guest is up (they all serve the same dir).
+            self.sparcConfigModel?.sparcEngineRunning =
+                !(self.registry?.runningMachineIDs.isEmpty ?? true)
             // Anything other than steady .running (boot-in-progress counts as
             // .running too, but shutdown/stop don't) means the daemon isn't
             // answering -- drop readiness so Admin dims. onReady re-enables it.
             if state != .running {
-                self?.controller?.isReady = false
-                self?.bundledBootProgress = nil
+                self.registry?.controller(id)?.isReady = false
+                self.registry?.controller(id)?.bootProgress = nil
             }
-            self?.refreshSparcMenu()
+            self.refreshSparcMenu()
         }
         engine.onCleanHalt { [weak self] in
-            self?.sparcConsole?.markCleanHalt()
+            self?.consoles[id]?.markCleanHalt()
         }
         engine.onProgress { [weak self] value in
-            self?.sparcConsole?.setProgress(value)
-            self?.bundledBootProgress = value
+            self?.consoles[id]?.setProgress(value)
+            self?.registry?.controller(id)?.bootProgress = value
             self?.refreshMachines()
         }
         engine.onReady { [weak self] in
-            self?.sparcConsole?.markReady()
+            self?.consoles[id]?.markReady()
             // Daemon answered -- the guest is fully up. Unlock graceful Shut Down
             // and Admin now (not at process launch).
-            self?.controller?.isReady = true
+            self?.registry?.controller(id)?.isReady = true
             self?.refreshSparcMenu()
         }
         engine.onBootStalled { [weak self] reason in
             // Wedged guest -- make sure the user sees it and can Force Quit.
-            self?.ensureSparcConsole()
-            self?.sparcConsole?.showWindow()
-            self?.sparcConsole?.markBootStalled(reason)
+            self?.showConsoleWindow(id)
+            self?.consoles[id]?.markBootStalled(reason)
         }
         engine.onShutdownUnavailable { [weak self] in
             // Graceful path couldn't reach the daemon -- surface Force Quit.
-            self?.sparcConsole?.markShutdownUnavailable()
+            self?.consoles[id]?.markShutdownUnavailable()
         }
         engine.onTerminated { [weak self] wasCleanHalt in
-            self?.autoBackupAfterCleanShutdown(wasCleanHalt: wasCleanHalt)
-            // The per-launch secret died with the guest; don't leave it on disk.
-            self?.clearClaudeDevSecretFile()
-        }
-        if let id = bundledMachineID { registry?.setController(controller, for: id) }
-        self.sparcConsole?.setState(engine.state)
-    }
-
-    /// Last gasp on a graceful quit: make sure the dev-secret file doesn't
-    /// outlive the app. (The guest-exit path usually clears it first, since we
-    /// block quitting while the VM runs; this covers the rest.)
-    func applicationWillTerminate(_ notification: Notification) {
-        // On a "Quit and Detach" the guest stays up, so its secret is still live --
-        // leave the file so Claude Code keeps its daemon access. Every other quit
-        // clears it (the secret dies with the guest, or there was none).
-        if !detachingSparcOnQuit {
-            clearClaudeDevSecretFile()
+            self?.autoBackupAfterCleanShutdown(machineID: id, wasCleanHalt: wasCleanHalt)
         }
     }
 
@@ -704,38 +649,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         false
     }
 
-    /// Quitting macXserver with a SPARCstation still running is now a real choice,
-    /// not a footgun: detaching leaves qemu running in the background (the serial
-    /// console is on a socket, so there's no orphan CPU-spin), and macXserver will
-    /// offer to reconnect next launch (VM_CONTROL.md Stage 3). So the dialog offers
-    /// both -- **Quit and Detach** (leave it running) or **Go to Console** (shut
-    /// Solaris down cleanly first) -- plus Cancel. The only thing detaching skips
-    /// is the clean `init 5` sync; the VM keeps managing its own disk, so it's
-    /// safe, but a clean shutdown is still tidier.
+    /// Quitting macXserver with machines still running is a real choice, not a
+    /// footgun: detaching leaves the qemus running in the background (the serial
+    /// consoles are on sockets, so there's no orphan CPU-spin), and macXserver
+    /// will offer to reconnect to each next launch (VM_CONTROL.md Stage 3). The
+    /// dialog offers **Quit and Detach** (leave them running) or **Go to Console**
+    /// (shut them down cleanly first) plus Cancel. The only thing detaching skips
+    /// is the clean guest halt; each VM keeps managing its own disk, so it's
+    /// safe, but a clean shutdown is still tidier. Their per-boot secrets stay
+    /// available in the image locks, so a detached guest remains reachable.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let engine = controller?.engine,
-              engine.state == .running || engine.state == .shuttingDown else {
-            return .terminateNow
-        }
+        guard let registry else { return .terminateNow }
+        let running = registry.runningMachineIDs.compactMap { registry.machine($0) }
+        guard !running.isEmpty else { return .terminateNow }
+
+        let names = running.map(\.name).sorted().joined(separator: ", ")
         let alert = NSAlert()
-        alert.messageText = "The SPARCstation is still running"
-        alert.informativeText = "You can quit and leave it running in the background -- macXserver "
-            + "will offer to reconnect the next time you launch -- or go to its console to shut "
-            + "Solaris down cleanly first. Detaching is safe; the VM keeps managing its own disk."
+        alert.messageText = running.count == 1
+            ? "\u{201C}\(names)\u{201D} is still running"
+            : "\(running.count) machines are still running (\(names))"
+        alert.informativeText = "You can quit and leave the guest(s) running in the background -- "
+            + "macXserver will offer to reconnect the next time you launch -- or go to the console "
+            + "to shut down cleanly first. Detaching is safe; each VM keeps managing its own disk."
         alert.addButton(withTitle: "Quit and Detach")   // first / default
         alert.addButton(withTitle: "Go to Console")      // second
         alert.addButton(withTitle: "Cancel")             // third
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            // Detach: let the app terminate. qemu reparents to launchd and keeps
-            // running; the image lock persists so the next launch can reconnect.
-            // Preserve the Claude-dev secret file so Claude Code can still reach
-            // the still-running guest while we're quit.
-            detachingSparcOnQuit = true
+            // Detach: let the app terminate. The qemus reparent to launchd and
+            // keep running; each image lock persists (pid + secret + helios
+            // port), so the next launch can reconnect and Claude-side tooling
+            // can still reach the daemons.
             return .terminateNow
         case .alertSecondButtonReturn:
-            ensureSparcConsole()
-            sparcConsole?.showWindow()
+            for m in running { showConsoleWindow(m.id) }
             return .terminateCancel
         default:
             return .terminateCancel
@@ -984,11 +931,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// Shared Config model, created on first use and seeded with the current
     /// engine-running state so the Shared Folder window's "restart to apply"
-    /// note is correct the instant it opens.
+    /// note is correct the instant it opens. Any running guest counts: they all
+    /// serve the same shared dir, read at their own launch.
     @MainActor
     private func ensureSparcConfigModel() -> SparcConfigModel {
         if let model = sparcConfigModel { return model }
-        let running = controller?.engine.state == .running || controller?.engine.state == .shuttingDown
+        let running = !(registry?.runningMachineIDs.isEmpty ?? true)
         let model = SparcConfigModel(preferences: preferences, engineRunning: running)
         sparcConfigModel = model
         return model
@@ -1006,13 +954,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @MainActor
     @objc private func openDnsAdmin(_ sender: Any?) {
-        if dnsAdminController == nil {
-            dnsAdminController = DnsAdminWindowController(
-                secretProvider: { [weak self] in self?.controller?.engine.currentSecret },
-                portProvider: { [weak self] in
-                    self?.registry?.bundledMachine?.resolvedPorts.helios ?? QemuEngine.heliosHostPort })
+        guard let id = machineID(from: sender), let m = registry?.machine(id) else { return }
+        if dnsAdminControllers[id] == nil {
+            let port = m.resolvedPorts.helios
+            dnsAdminControllers[id] = DnsAdminWindowController(
+                secretProvider: { [weak self] in self?.registry?.controller(id)?.engine.currentSecret },
+                portProvider: { port })
         }
-        dnsAdminController?.showWindow()
+        dnsAdminControllers[id]?.showWindow()
     }
 
     @MainActor
@@ -1122,15 +1071,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         "helios:\(user)@\(host)"
     }
 
-    /// The Helios `auth` secret to present to a box's daemon. The bundled emulator
-    /// uses its per-boot `-prom-env` secret from the engine; an external host uses
-    /// the secret the user saved in the Keychain (nil = none saved -- an open
-    /// daemon still works, a secured one rejects until the user sets it). Supplying
-    /// a secret to an open daemon is harmless, so this is safe against both.
-    private func heliosSecret(host: String, user: String) -> String? {
+    /// The Helios `auth` secret to present to a box's daemon. An emulated guest
+    /// uses its per-boot `-prom-env` secret from its engine -- with several
+    /// loopback guests up at once, the helios PORT is what identifies which
+    /// machine (and so which secret) a call targets. An external host uses the
+    /// secret the user saved in the Keychain (nil = none saved -- an open
+    /// daemon still works, a secured one rejects until the user sets it).
+    /// Supplying a secret to an open daemon is harmless, so this is safe
+    /// against both.
+    private func heliosSecret(host: String, user: String, port: UInt16) -> String? {
         let h = host.lowercased()
         if h == "127.0.0.1" || h == "localhost" || h == "::1" {
-            return controller?.engine.currentSecret
+            guard let registry else { return nil }
+            let owner = registry.machines.first {
+                $0.kind == .emulatedVM && $0.resolvedPorts.helios == port
+            }
+            return owner.flatMap { registry.controller($0.id)?.engine.currentSecret }
         }
         return KeychainHelper.retrieve(account: heliosSecretAccount(host: host, user: user))
     }
@@ -1159,13 +1115,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         if fileBrowserControllers[key] == nil {
-            // Bundled → its per-boot engine secret; external → the Keychain secret
-            // for that box (see heliosSecret). Resolved live each call.
-            let host = entry.host, user = entry.user
+            // Emulated guest → its per-boot engine secret (found by helios port);
+            // external → the Keychain secret for that box (see heliosSecret).
+            // Resolved live each call.
+            let host = entry.host, user = entry.user, port = entry.port
             let config = HeliosFileBrowserConfig(
                 host: entry.host, port: entry.port, user: entry.user,
                 label: "\(entry.group): \(entry.user)",
-                secretProvider: { [weak self] in self?.heliosSecret(host: host, user: user) })
+                secretProvider: { [weak self] in
+                    self?.heliosSecret(host: host, user: user, port: port) })
             fileBrowserControllers[key] = FileBrowserWindowController(config: config)
         }
         fileBrowserControllers[key]?.showWindow()
@@ -1173,31 +1131,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// Launch one resolved entry (from a machine row / the Machines menu). Picks
     /// the auth path by transport: ssh/helios need none; telnet uses the launcher
-    /// password, else the Keychain (prompting on first use).
+    /// password, else the Keychain (prompting on first use). `os` is the owning
+    /// machine's guest OS (drives the helios launcher's X bin dirs).
     @MainActor
-    private func launch(_ entry: LauncherEntry) {
+    private func launch(_ entry: LauncherEntry, os: MachineOS?) {
         // ssh (keys-only) and helios (daemon, no auth) need no password: skip
         // the prompt and Keychain entirely. Any password field is ignored.
         if entry.transport == .ssh || entry.transport == .helios {
-            executeLaunch(entry: entry, password: "")
+            executeLaunch(entry: entry, os: os, password: "")
             return
         }
         // Telnet path: explicit password in the launcher file wins (dev
         // convenience — skips the prompt every launch). Otherwise fall back
         // to the Keychain, prompting and storing on first use.
         if let pw = entry.password, !pw.isEmpty {
-            executeLaunch(entry: entry, password: pw)
+            executeLaunch(entry: entry, os: os, password: pw)
             return
         }
         let account = "\(entry.user)@\(entry.host)"
         if let password = KeychainHelper.retrieve(account: account) {
-            executeLaunch(entry: entry, password: password)
+            executeLaunch(entry: entry, os: os, password: password)
         } else {
-            promptForPassword(entry: entry, account: account)
+            promptForPassword(entry: entry, os: os, account: account)
         }
     }
 
-    private func promptForPassword(entry: LauncherEntry, account: String) {
+    private func promptForPassword(entry: LauncherEntry, os: MachineOS?, account: String) {
         let alert = NSAlert()
         alert.messageText = "Password for \(account)"
         alert.informativeText = "Enter the login password for \(entry.user) on \(entry.host).\nIt will be stored in the macOS Keychain."
@@ -1211,10 +1170,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let password = field.stringValue
         guard !password.isEmpty else { return }
         try? KeychainHelper.store(account: account, password: password)
-        executeLaunch(entry: entry, password: password)
+        executeLaunch(entry: entry, os: os, password: password)
     }
 
-    private func executeLaunch(entry: LauncherEntry, password: String) {
+    private func executeLaunch(entry: LauncherEntry, os: MachineOS?, password: String) {
         let display = entry.display ?? "\(advertisedHost):\(displayNumber)"
         let launcher: RemoteLauncher
         switch entry.transport {
@@ -1223,11 +1182,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case .ssh:
             launcher = SSHLauncher(entry: entry, displayString: display)
         case .helios:
-            // Same bundled-only rule as the file browser: the emulator's
-            // per-launch secret goes only to the loopback target, not a real Sun.
+            // Same loopback-only rule as the file browser: an emulated guest's
+            // per-launch secret goes only to its loopback hostfwd, not a real
+            // Sun. The X bin dirs come from the owning machine's OS profile.
             launcher = HeliosLauncher(entry: entry, displayString: display,
-                                      secret: heliosSecret(host: entry.host, user: entry.user),
-                                      xBinDirs: (registry?.bundledMachine?.os ?? .solaris26).xBinDirs)
+                                      secret: heliosSecret(host: entry.host, user: entry.user,
+                                                           port: entry.port),
+                                      xBinDirs: (os ?? .solaris26).xBinDirs)
         }
         activeLauncher = launcher
 
@@ -1269,31 +1230,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         alert.runModal()
     }
 
-    // MARK: - SPARCstation
+    // MARK: - Machine lifecycle (per machine id)
 
-    private func ensureSparcConsole() {
-        if sparcConsole == nil {
-            let console = SparcPlugConsoleWindowController(
-                onShutDown: { [weak self] in self?.controller?.engine.shutDown() },
-                onForceQuit: { [weak self] in self?.confirmForceQuit() },
-                onInput: { [weak self] data in self?.controller?.engine.sendConsole(data) },
-                onLaunchXterm: { [weak self] in
-                    self?.controller?.engine.launchXterm { result in
-                        if case .failure(let error) = result {
-                            let alert = NSAlert()
-                            alert.messageText = "Couldn't launch xterm"
-                            alert.informativeText = error.localizedDescription
-                            alert.alertStyle = .warning
-                            alert.runModal()
-                        }
+    /// The machine's console window, created on first use and reused for the
+    /// machine's lifetime (it survives stop/start so the transcript persists).
+    /// Every closure resolves the CURRENT controller through the registry at
+    /// fire time, so a fresh controller per start needs no console re-wiring.
+    @discardableResult
+    private func console(for machine: Machine) -> SparcPlugConsoleWindowController {
+        if let existing = consoles[machine.id] { return existing }
+        let id = machine.id
+        let console = SparcPlugConsoleWindowController(
+            machineName: machine.name,
+            onShutDown: { [weak self] in self?.registry?.controller(id)?.engine.shutDown() },
+            onForceQuit: { [weak self] in self?.confirmForceQuit(id) },
+            onInput: { [weak self] data in
+                self?.registry?.controller(id)?.engine.sendConsole(data)
+            },
+            onLaunchXterm: { [weak self] in
+                self?.registry?.controller(id)?.engine.launchXterm { result in
+                    if case .failure(let error) = result {
+                        let alert = NSAlert()
+                        alert.messageText = "Couldn't launch xterm"
+                        alert.informativeText = error.localizedDescription
+                        alert.alertStyle = .warning
+                        alert.runModal()
                     }
                 }
-            )
-            console.setState(controller?.engine.state ?? .stopped)
-            console.setOSName(registry?.bundledMachine?.os?.displayName)
-            sparcConsole = console
-            refreshSparcMenu()   // "Show Console" can undim now
-        }
+            }
+        )
+        console.setState(registry?.controller(id)?.engine.state ?? .stopped)
+        console.setOSName(machine.os?.displayName)
+        consoles[id] = console
+        refreshSparcMenu()   // "Show Console" can undim now
+        return console
+    }
+
+    /// Open (or focus) one machine's console window.
+    private func showConsoleWindow(_ id: UUID) {
+        guard let machine = registry?.machine(id) else { return }
+        console(for: machine).showWindow()
     }
 
     /// Refresh every surface that reflects machine state: the Machines menu
@@ -1308,61 +1284,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         updateStatusMenu()
     }
 
+    /// Start one machine: route an image-less VM to the install flow, guard the
+    /// (hand-edit-only) port conflict, then run the image-lock preflight and
+    /// boot. Every path is per machine.
     @MainActor
-    @objc private func startSparcStation(_ sender: Any?) {
-        guard let engine = controller?.engine else { return }
-        switch engine.state {
-        case .running, .shuttingDown:
-            return                       // menu item is disabled here anyway
-        case .stopped:
-            launchSparcStation()
-        case .notInstalled:
-            presentInstallFlow()         // no image yet -> first-run install
+    private func startMachine(_ id: UUID) {
+        guard let registry, let machine = registry.machine(id),
+              machine.kind == .emulatedVM else { return }
+        let state = registry.controller(id)?.engine.state
+        if state == .running || state == .shuttingDown { return }
+        guard machine.image != nil else {
+            presentInstallFlow(for: machine)     // no image yet -> install flow
+            return
         }
+        if let other = registry.portConflict(for: machine) {
+            let alert = NSAlert()
+            alert.messageText = "Port conflict with \u{201C}\(other.name)\u{201D}"
+            alert.informativeText = "\u{201C}\(machine.name)\u{201D} and the running "
+                + "\u{201C}\(other.name)\u{201D} share host ports (machines.json was probably "
+                + "hand-edited). Give one of them its own ports in Settings, or stop "
+                + "\u{201C}\(other.name)\u{201D} first."
+            alert.alertStyle = .warning
+            alert.runModal()
+            return
+        }
+        launchMachine(machine)
     }
 
-    @objc private func shutDownSparcStation(_ sender: Any?) {
-        ensureSparcConsole()
-        sparcConsole?.showWindow()      // so the user sees the shutdown progress
-        controller?.engine.shutDown()
+    private func shutDownMachine(_ id: UUID) {
+        showConsoleWindow(id)      // so the user sees the shutdown progress
+        registry?.controller(id)?.engine.shutDown()
     }
 
     @MainActor
-    @objc private func forceQuitSparcStation(_ sender: Any?) {
-        confirmForceQuit()
-    }
-
-    @MainActor
-    private func confirmForceQuit() {
+    private func confirmForceQuit(_ id: UUID) {
+        guard let machine = registry?.machine(id) else { return }
         let alert = NSAlert()
-        alert.messageText = "Force quit the SPARCstation?"
+        alert.messageText = "Force quit \u{201C}\(machine.name)\u{201D}?"
         alert.informativeText = "This pulls the power without a clean shutdown, like yanking the "
-            + "cord. Solaris will run fsck on the next boot.\n\nIf it's wedged mid-boot, try the "
-            + "console first -- it's a real terminal now, so you can often recover by hand at the "
-            + "ok prompt or in single-user. Force Quit only if you can't."
+            + "cord. The guest will run a disk check on the next boot.\n\nIf it's wedged mid-boot, "
+            + "try the console first -- it's a real terminal, so you can often recover by hand at "
+            + "the ok prompt or in single-user. Force Quit only if you can't."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Force Quit")
         alert.addButton(withTitle: "Show Console")
         alert.addButton(withTitle: "Cancel")
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            controller?.engine.kill()
+            registry?.controller(id)?.engine.kill()
         case .alertSecondButtonReturn:
-            ensureSparcConsole()
-            sparcConsole?.showWindow()
+            showConsoleWindow(id)
         default:
             break
         }
     }
 
     @MainActor
-    @objc private func backUpDiskImage(_ sender: Any?) {
-        // Only valid when stopped (validateMenuItem enforces it). Copy the
-        // qcow2 alongside itself with a dated name and reveal it in Finder.
-        // Manual backups use the "backup" marker and are never auto-pruned.
-        let path = (preferences.sparcDiskImagePath as NSString).expandingTildeInPath
-        guard !path.isEmpty else { return }
-        let src = URL(fileURLWithPath: path)
+    private func backUpDiskImage(_ id: UUID) {
+        // Only valid when stopped (the row/menu gating enforces it). Copy the
+        // machine's qcow2 alongside itself with a dated name and reveal it in
+        // Finder. Manual backups use the "backup" marker and are never
+        // auto-pruned.
+        guard let src = registry?.machine(id)?.image else { return }
         let dest = Self.backupDestination(for: src, marker: "backup")
         do {
             try FileManager.default.copyItem(at: src, to: dest)
@@ -1378,16 +1361,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     nonisolated private static let autoBackupKeepCount = 5
 
     /// Fired from `QemuEngine.onTerminated` after every run. Makes a "last
-    /// known good" copy of the image, but only when the run ended via a
-    /// verified clean halt (so we never snapshot a possibly-dirty image after
-    /// a hard kill) and the user hasn't opted out. Runs off the main thread:
-    /// same-volume APFS makes this an instant clonefile, but a cross-volume
-    /// image would be a full copy we don't want to block the UI on.
-    private func autoBackupAfterCleanShutdown(wasCleanHalt: Bool) {
-        guard wasCleanHalt, preferences.sparcAutoBackupOnShutdown else { return }
-        let path = (preferences.sparcDiskImagePath as NSString).expandingTildeInPath
-        guard !path.isEmpty else { return }
-        let src = URL(fileURLWithPath: path)
+    /// known good" copy of the machine's image, but only when the run ended via
+    /// a verified clean halt (so we never snapshot a possibly-dirty image after
+    /// a hard kill) and the machine's auto-backup setting is on (per-machine
+    /// since P2 -- was the global `sparcplug.autoBackupOnShutdown`). Runs off
+    /// the main thread: same-volume APFS makes this an instant clonefile, but a
+    /// cross-volume image would be a full copy we don't want to block the UI on.
+    private func autoBackupAfterCleanShutdown(machineID: UUID, wasCleanHalt: Bool) {
+        guard wasCleanHalt, let machine = registry?.machine(machineID),
+              machine.autoBackup, let src = machine.image else { return }
         DispatchQueue.global(qos: .utility).async {
             Self.writeAutoBackup(of: src)
         }
@@ -1443,55 +1425,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
 
-    @MainActor
-    @objc private func showSparcConsole(_ sender: Any?) {
-        ensureSparcConsole()
-        sparcConsole?.showWindow()
-    }
-
-    /// Pre-flight the image lock, then boot. The lock guards against opening
-    /// the same qcow2 twice (corruption) — including across the two Macs that
-    /// share the image via Dropbox. See ImageLock / PLUGIN_V1_PUNCHLIST L1.
-    private func launchSparcStation() {
-        let image = makeSparcConfig().diskImage
+    /// Pre-flight the machine's image lock, then boot. The lock guards against
+    /// opening the same qcow2 twice (corruption) — including across the two Macs
+    /// that share an image via Dropbox. See ImageLock / PLUGIN_V1_PUNCHLIST L1.
+    private func launchMachine(_ machine: Machine) {
+        guard let image = machine.image else { return }
         switch ImageLockManager.evaluate(imageURL: image) {
         case .free:
-            proceedSparcLaunch()
+            proceedLaunch(machine)
         case .staleSameHost:
             // Leftover lock from a crash on this Mac; the process is gone.
             ImageLockManager.forceRemove(imageURL: image)
-            proceedSparcLaunch()
+            proceedLaunch(machine)
         case .localOrphan(let lock):
-            presentLocalOrphanDialog(lock: lock, image: image)
+            presentLocalOrphanDialog(machine: machine, lock: lock, image: image)
         case .remoteLocked(let lock):
             presentRemoteLockedDialog(lock: lock, image: image)
         }
     }
 
-    /// On launch, if a SPARCstation from a previous run is still alive on this
-    /// Mac (the Xcode-stop / crash / SIGKILL orphan), offer to reconnect to it --
-    /// the Design 2 flow (VM_CONTROL.md Stage 3). We probe the Helios daemon first
-    /// so the prompt leads with a graceful **Shut It Down** when the guest is
-    /// reachable, and only falls back to **Force Quit** when it isn't. **Reconnect**
-    /// is offered either way (it just re-attaches the console + control channels;
-    /// a still-booting guest comes to "Ready" on its own once Helios answers).
-    private func checkForReconnectableOrphanOnLaunch() {
-        guard let engine = controller?.engine, engine.state != .running else { return }
-        let image = makeSparcConfig().diskImage
-        guard case .localOrphan(let lock) = ImageLockManager.evaluate(imageURL: image) else { return }
-        // Probe Helios off-main (it can block up to the timeout), then prompt.
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let heliosUp = Self.probeOrphanHelios(secret: lock.secret)
-            DispatchQueue.main.async {
-                self?.presentReconnectPrompt(lock: lock, image: image, heliosUp: heliosUp)
+    /// On launch, scan EVERY emulated machine's image for a still-alive qemu
+    /// from a previous run (the Xcode-stop / crash / SIGKILL orphan) and offer
+    /// to reconnect -- the Design 2 flow (VM_CONTROL.md Stage 3), per machine
+    /// since P2. We probe each orphan's Helios daemon first so the prompt leads
+    /// with a graceful **Shut It Down** when the guest is reachable, and only
+    /// falls back to **Force Quit** when it isn't. **Reconnect** is offered
+    /// either way (it just re-attaches the console + control channels; a
+    /// still-booting guest comes to "Ready" on its own once Helios answers).
+    /// Multiple orphans prompt one after another (runModal serializes).
+    private func checkForReconnectableOrphansOnLaunch() {
+        guard let registry else { return }
+        for machine in registry.machines where machine.kind == .emulatedVM {
+            guard let image = machine.image,
+                  case .localOrphan(let lock) = ImageLockManager.evaluate(imageURL: image)
+            else { continue }
+            // The lock's recorded port is authoritative (the orphan runs with
+            // the ports it was LAUNCHED with); fall back to the machine's
+            // current block for pre-P2 locks that didn't record one.
+            let port = lock.heliosPort ?? machine.resolvedPorts.helios
+            let machineID = machine.id
+            // Probe Helios off-main (it can block up to the timeout), then prompt.
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let heliosUp = Self.probeOrphanHelios(secret: lock.secret, port: port)
+                DispatchQueue.main.async {
+                    self?.presentReconnectPrompt(machineID: machineID, lock: lock,
+                                                 image: image, heliosUp: heliosUp)
+                }
             }
         }
     }
 
     /// One-shot `hello` to a (possibly orphaned) guest's Helios daemon, using the
-    /// secret the lock recorded. True means the guest OS is up and answering.
-    nonisolated private static func probeOrphanHelios(secret: String?) -> Bool {
-        let client = HeliosClient(timeout: 3, secret: secret)
+    /// secret + port the lock recorded. True means the guest OS is up and answering.
+    nonisolated private static func probeOrphanHelios(secret: String?, port: UInt16) -> Bool {
+        let client = HeliosClient(port: port, timeout: 3, secret: secret)
         defer { client.close() }
         do {
             try client.connect()
@@ -1503,20 +1490,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @MainActor
-    private func presentReconnectPrompt(lock: ImageLock, image: URL, heliosUp: Bool) {
+    private func presentReconnectPrompt(machineID: UUID, lock: ImageLock, image: URL, heliosUp: Bool) {
+        guard let machine = registry?.machine(machineID) else { return }
         let since = lock.startedAt.isEmpty ? "" : " (started \(friendlyDate(lock.startedAt)))"
         let alert = NSAlert()
-        alert.messageText = "Reconnect to the running SPARCstation?"
+        alert.messageText = "Reconnect to the running \u{201C}\(machine.name)\u{201D}?"
         if heliosUp {
             alert.informativeText =
-                "A SPARCstation from a previous run (process \(lock.pid))\(since) is still running on "
-                + "this Mac and answering. Reconnect to watch and control it, or shut it down cleanly."
+                "\u{201C}\(machine.name)\u{201D} from a previous run (process \(lock.pid))\(since) is "
+                + "still running on this Mac and answering. Reconnect to watch and control it, or "
+                + "shut it down cleanly."
             alert.addButton(withTitle: "Reconnect")       // first
             alert.addButton(withTitle: "Shut It Down")    // second
             alert.addButton(withTitle: "Ignore")          // third
             switch alert.runModal() {
-            case .alertFirstButtonReturn:  reconnectToOrphan(lock: lock, image: image)
-            case .alertSecondButtonReturn: attemptHeliosShutdown(lock: lock, image: image)
+            case .alertFirstButtonReturn:  reconnectToOrphan(machine: machine, lock: lock, image: image)
+            case .alertSecondButtonReturn: attemptHeliosShutdown(machine: machine, lock: lock, image: image)
             default: break
             }
         } else {
@@ -1525,76 +1514,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // works -- the guest may just be mid-boot.
             alert.alertStyle = .warning
             alert.informativeText =
-                "A SPARCstation from a previous run (process \(lock.pid))\(since) is still running on "
-                + "this Mac but isn't answering yet. Reconnect to watch it (it may still be booting), "
-                + "or force quit it (which risks a disk check on the next boot)."
+                "\u{201C}\(machine.name)\u{201D} from a previous run (process \(lock.pid))\(since) is "
+                + "still running on this Mac but isn't answering yet. Reconnect to watch it (it may "
+                + "still be booting), or force quit it (which risks a disk check on the next boot)."
             alert.addButton(withTitle: "Reconnect")       // first
             alert.addButton(withTitle: "Force Quit")      // second
             alert.addButton(withTitle: "Ignore")          // third
             switch alert.runModal() {
-            case .alertFirstButtonReturn:  reconnectToOrphan(lock: lock, image: image)
-            case .alertSecondButtonReturn: forceQuitOrphan(lock: lock, image: image)
+            case .alertFirstButtonReturn:  reconnectToOrphan(machine: machine, lock: lock, image: image)
+            case .alertSecondButtonReturn: forceQuitOrphan(machine: machine, lock: lock, image: image)
             default: break
             }
         }
     }
 
-    /// Adopt the orphan as this session's engine and surface its console. The
-    /// existing engine callbacks (wired in `rebuildSparcEngine`) then drive the
-    /// window exactly as a booted session would -- including clean-halt ->
-    /// auto-backup. If the orphan died between detection and here, clear the
-    /// stale lock instead.
+    /// Adopt the orphan as this machine's engine and surface its console. The
+    /// engine callbacks (wired in `buildController`) then drive the window
+    /// exactly as a booted session would -- including clean-halt -> auto-backup.
+    /// If the orphan died between detection and here, clear the stale lock.
     @MainActor
-    private func reconnectToOrphan(lock: ImageLock, image: URL) {
-        ensureSparcConsole()
-        sparcConsole?.showWindow()
-        if controller?.engine.attach(toOrphan: lock) == true {
-            // Refresh the Claude-dev secret file from the adopted guest's secret
-            // (the launch-time wipe cleared it; the engine now carries lock.secret).
-            writeClaudeDevSecretFile()
-        } else {
+    private func reconnectToOrphan(machine: Machine, lock: ImageLock, image: URL) {
+        console(for: machine).showWindow()
+        guard let controller = buildController(for: machine),
+              controller.engine.attach(toOrphan: lock) else {
             ImageLockManager.forceRemove(imageURL: image)
-        }
-    }
-
-    /// Actually boot the engine and bring up the console. Assumes the image is
-    /// set and the lock is clear.
-    private func proceedSparcLaunch() {
-        ensureSparcConsole()
-        sparcConsole?.showWindow()
-        do {
-            try controller?.engine.start()
-            writeClaudeDevSecretFile()
-        } catch {
-            showLaunchError("Couldn't start SPARCstation: \(error.localizedDescription)")
-        }
-    }
-
-    /// Path the "Claude development" secret is written to (per Todd's design).
-    private static let claudeDevSecretPath = "/tmp/sparkplug"
-
-    /// When "Claude development" is on, write the just-launched guest's Helios
-    /// secret to a 0600 file so Claude Code can authenticate to the daemon.
-    /// Otherwise make sure no stale secret lingers. Best-effort.
-    private func writeClaudeDevSecretFile() {
-        guard preferences.sparcClaudeDevelopment, let secret = controller?.engine.currentSecret else {
-            clearClaudeDevSecretFile()
             return
         }
-        // Create 0600 up front so the secret is never briefly world-readable.
-        FileManager.default.createFile(
-            atPath: Self.claudeDevSecretPath,
-            contents: Data(secret.utf8),
-            attributes: [.posixPermissions: 0o600])
     }
 
-    /// Remove the dev-secret file. Called everywhere the secret could go stale:
-    /// app launch (wipe a prior crash's leftover), guest exit, and app quit --
-    /// EXCEPT a "Quit and Detach", where the guest keeps running and the secret is
-    /// still live (see `detachingSparcOnQuit`). We can't catch a kill -9, but this
-    /// guarantees a dead secret is never left readable on disk.
-    private func clearClaudeDevSecretFile() {
-        try? FileManager.default.removeItem(atPath: Self.claudeDevSecretPath)
+    /// Actually boot the machine's engine and bring up its console. Assumes the
+    /// image is set and the lock is clear. A FRESH controller is built per start
+    /// so the machine's current config (image / memory / ports / MAC) applies.
+    private func proceedLaunch(_ machine: Machine) {
+        console(for: machine).showWindow()
+        guard let controller = buildController(for: machine) else { return }
+        do {
+            try controller.engine.start()
+        } catch {
+            showLaunchError("Couldn't start \u{201C}\(machine.name)\u{201D}: \(error.localizedDescription)")
+        }
+        refreshSparcMenu()
     }
 
     // MARK: - Image-lock dialogs
@@ -1621,11 +1580,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Same machine, a previous qemu is still alive (the Xcode-stop / crash
     /// orphan). Offer best-effort graceful shutdown, force quit, or manual
     /// instructions.
-    private func presentLocalOrphanDialog(lock: ImageLock, image: URL) {
+    private func presentLocalOrphanDialog(machine: Machine, lock: ImageLock, image: URL) {
         let alert = NSAlert()
-        alert.messageText = "A SPARCstation is already running"
+        alert.messageText = "\u{201C}\(machine.name)\u{201D} is already running"
         alert.informativeText =
-            "A SPARCstation from a previous run (process \(lock.pid)) is still running on this "
+            "A guest from a previous run (process \(lock.pid)) is still running on this "
             + "Mac and holding the disk image. Starting another would corrupt it.\n\nTry to shut "
             + "it down cleanly, or force quit it (which risks a disk check on the next boot)."
         alert.alertStyle = .warning
@@ -1634,9 +1593,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         alert.addButton(withTitle: "Show Me How")           // third
         alert.addButton(withTitle: "Cancel")                // fourth
         switch alert.runModal() {
-        case .alertFirstButtonReturn:  attemptHeliosShutdown(lock: lock, image: image)
-        case .alertSecondButtonReturn: forceQuitOrphan(lock: lock, image: image)
-        case .alertThirdButtonReturn:  showManualShutdownInstructions()
+        case .alertFirstButtonReturn:  attemptHeliosShutdown(machine: machine, lock: lock, image: image)
+        case .alertSecondButtonReturn: forceQuitOrphan(machine: machine, lock: lock, image: image)
+        case .alertThirdButtonReturn:  showManualShutdownInstructions(telnetPort: machine.resolvedPorts.telnet)
         default: break
         }
     }
@@ -1649,7 +1608,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// the channel is wedged. The guest filesystem is dirty either way (no
     /// `init 5`), so it still fscks next boot -- the win is container integrity.
     /// The QMP attempt blocks, so it runs off-main.
-    private func forceQuitOrphan(lock: ImageLock, image: URL) {
+    private func forceQuitOrphan(machine: Machine, lock: ImageLock, image: URL) {
         let qmp = lock.qmpSocketPath ?? ""
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let cleanStopped = QemuEngine.quitOrphanViaQmp(qmpSocketPath: qmp)
@@ -1661,13 +1620,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // Give it a beat to die, then clear the (now-stale) lock and launch.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 ImageLockManager.forceRemove(imageURL: image)
-                self?.proceedSparcLaunch()
+                self?.proceedLaunch(machine)
             }
         }
     }
 
-    /// Ask the orphan's Helios daemon to `init 5` over the 2125 hostfwd, then
-    /// poll for the pid to die behind a live progress panel. This is the C4
+    /// Ask the orphan's Helios daemon to halt over its recorded hostfwd port,
+    /// then poll for the pid to die behind a live progress panel. This is the C4
     /// replacement for the old telnet path: the daemon runs as root and answers
     /// on the hostfwd even for an orphan (the forwarded port belongs to that
     /// still-running qemu), so it sidesteps the root-over-telnet refusal that
@@ -1675,15 +1634,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// dying, not the call's ACK (the daemon ACKs before the guest goes down).
     /// On a fast daemon failure the poll loop flips the panel to Force Quit /
     /// Show Me How / Cancel. See PLUGIN_V1_PUNCHLIST L2.
-    private func attemptHeliosShutdown(lock: ImageLock, image: URL) {
+    private func attemptHeliosShutdown(machine: Machine, lock: ImageLock, image: URL) {
         orphanShutdownFailed = false
-        // The orphan's daemon requires the secret it was launched with. The lock
-        // records it (persisted at acquire time); fall back to this session's
-        // current secret for the same-session case where the lock predates the
-        // field. Without a matching secret an authed daemon rejects the call.
-        let secret = lock.secret ?? controller?.engine.currentSecret
+        // The orphan's daemon requires the secret it was launched with; the lock
+        // records it (persisted at acquire time) along with the helios port.
+        // Without a matching secret an authed daemon rejects the call.
+        let secret = lock.secret
+        let port = lock.heliosPort ?? machine.resolvedPorts.helios
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let client = HeliosClient(timeout: 8, secret: secret)
+            let client = HeliosClient(port: port, timeout: 8, secret: secret)
             defer { client.close() }
             do {
                 try client.connect()
@@ -1696,16 +1655,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let total = 35
         let progress = SparcShutdownProgressWindowController(
             totalSeconds: total,
-            onForceQuit: { [weak self] in self?.forceQuitFromProgress(lock: lock, image: image) },
-            onShowManual: { [weak self] in self?.showManualFromProgress() },
+            onForceQuit: { [weak self] in self?.forceQuitFromProgress(machine: machine, lock: lock, image: image) },
+            onShowManual: { [weak self] in self?.showManualFromProgress(telnetPort: machine.resolvedPorts.telnet) },
             onCancel: { [weak self] in self?.cancelShutdownWait() })
         sparcShutdownProgress = progress
         progress.showWindow()
 
-        pollOrphanDeath(lock: lock, image: image, deadline: Date().addingTimeInterval(TimeInterval(total)))
+        pollOrphanDeath(machine: machine, lock: lock, image: image,
+                        deadline: Date().addingTimeInterval(TimeInterval(total)))
     }
 
-    private func pollOrphanDeath(lock: ImageLock, image: URL, deadline: Date) {
+    private func pollOrphanDeath(machine: Machine, lock: ImageLock, image: URL, deadline: Date) {
         // The user cancelled or escalated; the panel is gone, so stop polling.
         guard sparcShutdownProgress != nil else { return }
 
@@ -1716,7 +1676,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
                 self?.sparcShutdownProgress?.close()
                 self?.sparcShutdownProgress = nil
-                self?.proceedSparcLaunch()
+                self?.proceedLaunch(machine)
             }
             return
         }
@@ -1728,23 +1688,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         sparcShutdownProgress?.updateRemaining(Int(deadline.timeIntervalSinceNow.rounded(.up)))
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.pollOrphanDeath(lock: lock, image: image, deadline: deadline)
+            self?.pollOrphanDeath(machine: machine, lock: lock, image: image, deadline: deadline)
         }
     }
 
     /// Force Quit chosen from the progress panel: tear the panel down, then run
     /// the verified SIGKILL path. The Helios shutdown call is one-shot and needs
     /// no cancellation -- the poll loop stops once the panel is gone.
-    private func forceQuitFromProgress(lock: ImageLock, image: URL) {
+    private func forceQuitFromProgress(machine: Machine, lock: ImageLock, image: URL) {
         sparcShutdownProgress?.close(); sparcShutdownProgress = nil
-        forceQuitOrphan(lock: lock, image: image)
+        forceQuitOrphan(machine: machine, lock: lock, image: image)
     }
 
     /// Show Me How chosen from the progress panel: tear down and show the
     /// manual telnet steps.
-    private func showManualFromProgress() {
+    private func showManualFromProgress(telnetPort: UInt16) {
         sparcShutdownProgress?.close(); sparcShutdownProgress = nil
-        showManualShutdownInstructions()
+        showManualShutdownInstructions(telnetPort: telnetPort)
     }
 
     /// Cancel chosen from the progress panel: stop waiting and leave the orphan
@@ -1753,19 +1713,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sparcShutdownProgress?.close(); sparcShutdownProgress = nil
     }
 
-    private func showManualShutdownInstructions() {
+    private func showManualShutdownInstructions(telnetPort: UInt16) {
         let alert = NSAlert()
-        alert.messageText = "Shut down the running SPARCstation by hand"
-        alert.informativeText =
-            "In Terminal, connect to the running guest and halt it. Solaris 2.6 "
-            + "refuses a direct root telnet login, so log in as a normal user and "
-            + "then su to root:\n\n"
-            + "    telnet 127.0.0.1 \(QemuEngine.telnetHostPort)\n"
-            + "    (log in as a user, then:)\n"
-            + "    su -\n"
-            + "    init 5\n\n"
-            + "Once it powers off, start the SPARCstation again. If telnet won’t connect, use "
-            + "Force Quit instead (it risks a disk check on the next boot)."
+        alert.messageText = "Shut down the running guest by hand"
+        var text = "In Terminal, connect to the running guest and halt it. Solaris 2.6 "
+        text += "refuses a direct root telnet login, so log in as a normal user and "
+        text += "then su to root:\n\n"
+        text += "    telnet 127.0.0.1 \(telnetPort)\n"
+        text += "    (log in as a user, then:)\n"
+        text += "    su -\n"
+        text += "    init 5\n\n"
+        text += "(On a BSD guest, use halt instead of init 5.) Once it powers off, start the "
+        text += "machine again. If telnet won\u{2019}t connect, use Force Quit instead (it risks "
+        text += "a disk check on the next boot)."
+        alert.informativeText = text
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
@@ -1779,12 +1740,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return out.string(from: date)
     }
 
-    /// First-run / no-image flow: a friendly hero-panel window (not the
-    /// Settings tab, not a system error alert) explaining the bundled emulator
-    /// and offering to pick an existing image or download a starter image. If
-    /// the user dismisses, nothing changes and they'll see it again next
-    /// Start. Changing the location later is done in Preferences.
-    private func presentInstallFlow() {
+    /// No-image flow for a machine whose Start was pressed: a friendly
+    /// hero-panel window (not the Settings tab, not a system error alert)
+    /// explaining the bundled emulator and offering to pick an existing image
+    /// or download a starter image. If the user dismisses, nothing changes and
+    /// they'll see it again next Start. The image can also be set any time in
+    /// the machine's Settings tab.
+    private func presentInstallFlow(for machine: Machine) {
+        installTargetID = machine.id
         if sparcWelcome == nil {
             sparcWelcome = SparcStationWelcomeWindowController(
                 onChooseImage: { [weak self] in self?.chooseImageThenStart() },
@@ -1794,18 +1757,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sparcWelcome?.showWindow()
     }
 
-    /// Pick an existing qcow2, store it as the image path, and boot.
+    /// Pick an existing qcow2, attach it to the install-flow machine, and boot.
     private func chooseImageThenStart() {
+        guard let registry, let id = installTargetID, var m = registry.machine(id) else { return }
         let panel = NSOpenPanel()
-        panel.title = "Choose Solaris Disk Image"
+        panel.title = "Choose Disk Image"
         panel.prompt = "Choose"
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        preferences.sparcDiskImagePath = url.path
-        rebuildSparcEngine()             // pick up the new path now, not on the async notification
-        launchSparcStation()
+        if let claimant = registry.imageClaimant(imagePath: url.path, excluding: id) {
+            showLaunchError("That image is already used by \u{201C}\(claimant.name)\u{201D} "
+                            + "\u{2014} one machine per image.")
+            return
+        }
+        m.imagePath = url.path
+        registry.update(m)
+        afterMachineMutation()
+        startMachine(id)
     }
 
     /// Download flow: ask where to put the image, then fetch it. The fetch

@@ -141,6 +141,23 @@ final class MachineFileTests: XCTestCase {
         XCTAssertEqual(round, original)
     }
 
+    func testAutoBackupDefaultsTrueAndRoundTripsOnlyWhenOff() throws {
+        // Missing key (every pre-P2 file) -> on, matching the old global default.
+        let decoded = try MachinesFile.decode("""
+        { "machines": [ { "name": "vm", "kind": "emulatedVM",
+                          "host": "127.0.0.1", "user": "t" } ] }
+        """)
+        XCTAssertTrue(decoded.machines[0].autoBackup)
+        // Default true isn't emitted (terse encode)...
+        XCTAssertFalse(MachinesFile(machines: decoded.machines).encoded()
+            .contains("autoBackup"))
+        // ...but false is, and round-trips.
+        var off = decoded.machines[0]
+        off.autoBackup = false
+        let round = try MachinesFile.decode(MachinesFile(machines: [off]).encoded())
+        XCTAssertFalse(round.machines[0].autoBackup)
+    }
+
     // MARK: - Migration
 
     func testMigrationClassifiesLoopbackAndExternal() {

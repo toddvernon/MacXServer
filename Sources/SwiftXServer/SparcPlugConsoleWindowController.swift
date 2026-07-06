@@ -2,17 +2,19 @@ import AppKit
 import SwiftUI
 import SwiftXServerCore
 
-// Interactive console window for the bundled SPARCstation engine's serial
-// console (qemu `-serial unix:`). An NSWindow hosting a SwiftUI chrome (boot
-// thermometer, header, status + Shut Down / Force Quit) wrapped around a real
-// terminal: the TerminalView renders libvterm's screen grid and sends the
-// user's keystrokes back to the guest console, so vi/top/format work here when
-// the graphical path is down. See CONSOLE_TERMINAL.md.
+// Interactive console window for one machine's serial console (qemu
+// `-serial unix:`). An NSWindow hosting a SwiftUI chrome (boot thermometer,
+// header, status + Shut Down / Force Quit) wrapped around a real terminal:
+// the TerminalView renders libvterm's screen grid and sends the user's
+// keystrokes back to the guest console, so vi/top/format work here when the
+// graphical path is down. P2: one instance per machine, titled by the machine
+// so concurrent consoles are tellable apart. See CONSOLE_TERMINAL.md.
 final class SparcPlugConsoleWindowController: NSWindowController {
 
     private let model = SparcPlugConsoleModel()
 
-    init(onShutDown: @escaping () -> Void,
+    init(machineName: String,
+         onShutDown: @escaping () -> Void,
          onForceQuit: @escaping () -> Void,
          onInput: @escaping (Data) -> Void,
          onLaunchXterm: @escaping () -> Void) {
@@ -61,11 +63,14 @@ final class SparcPlugConsoleWindowController: NSWindowController {
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false
         )
-        window.title = "SPARCstation Console"
+        window.title = "\(machineName) Console"
         window.contentView = hostingView
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 480, height: 240)
         window.center()
+        // Remember this machine's console position across launches -- it also
+        // keeps several machines' consoles from stacking exactly on center.
+        window.setFrameAutosaveName("MachineConsole-\(machineName)")
         super.init(window: window)
     }
 
@@ -91,6 +96,11 @@ final class SparcPlugConsoleWindowController: NSWindowController {
     /// The running machine's OS display name for the header (nil = unknown).
     func setOSName(_ name: String?) {
         model.osName = name
+    }
+
+    /// Keep the window title in step when the machine is renamed.
+    func setMachineName(_ name: String) {
+        window?.title = "\(name) Console"
     }
 
     func setState(_ state: QemuEngine.State) {

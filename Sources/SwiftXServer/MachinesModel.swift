@@ -65,12 +65,10 @@ final class MachinesModel: ObservableObject {
     /// The selected machine in the master list.
     @Published var selection: UUID?
 
-    /// The bundled emulated VM's id: special (kind + host locked, can't be
-    /// removed, image tracks Preferences). nil if there's no bundled machine.
-    var bundledMachineID: UUID?
-    /// The id of the machine whose qemu is currently live (if any). Its image
-    /// can't be edited out from under it and it can't be removed.
-    var runningMachineID: UUID?
+    /// The ids of every machine whose qemu is currently live. A running
+    /// machine's image can't be edited out from under it and it can't be
+    /// removed. P2: any number can run at once.
+    var runningMachineIDs: Set<UUID> = []
 
     // Operate actions (Overview page + master list).
     var onStart: ((UUID) -> Void)?
@@ -100,8 +98,7 @@ final class MachinesModel: ObservableObject {
 
     var selectedMachine: Machine? { machines.first { $0.id == selection } }
     func row(_ id: UUID) -> MachineRow? { rows[id] }
-    func isBundled(_ id: UUID) -> Bool { id == bundledMachineID }
-    func isRunning(_ id: UUID) -> Bool { id == runningMachineID }
+    func isRunning(_ id: UUID) -> Bool { runningMachineIDs.contains(id) }
 
     // The master list's three sections, each sorted by name (case-insensitive).
     // A machine you create lands in Virtual (emulated) or External by its kind;

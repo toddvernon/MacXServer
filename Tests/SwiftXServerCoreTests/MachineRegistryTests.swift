@@ -21,8 +21,9 @@ final class MachineRegistryTests: XCTestCase {
         XCTAssertEqual(registry.machines.count, MachineOS.allCases.count)
         XCTAssertTrue(registry.machines.allSatisfy { $0.bundled && $0.image == nil })
         XCTAssertEqual(Set(registry.machines.compactMap { $0.os }), Set(MachineOS.allCases))
-        // With no image attached yet, the engine target is the first bundled fixture.
-        XCTAssertEqual(registry.bundledMachine?.kind, .emulatedVM)
+        // Bundled fixtures keep deriving their well-known per-OS port blocks --
+        // the load-time sticky assignment must not materialize blocks on them.
+        XCTAssertTrue(registry.machines.allSatisfy { $0.ports == nil })
         XCTAssertTrue(FileManager.default.fileExists(atPath: path))
     }
 
@@ -148,19 +149,143 @@ final class MachineRegistryTests: XCTestCase {
 
     func testClonedCopiesConfigButNotImageOrIdentity() {
         let sol = Machine(name: "solaris", kind: .emulatedVM, os: .solaris26,
-                          host: "127.0.0.1", user: "t", imagePath: "~/img/solaris.qcow2",
+                          host: "127.0.0.1", user: "t",
+                          ports: ImagePorts.block(5), imagePath: "~/img/solaris.qcow2",
                           macAddress: "02:00:00:00:00:01",
                           launchers: [MachineLauncher(name: "xterm", command: "xterm")])
         let clone = sol.cloned()
-        // Fresh identity, "copy" name, image + MAC dropped (not the VM).
+        // Fresh identity, "copy" name, image + MAC + port block dropped (not the
+        // VM, and never a shared block -- the registry assigns the clone its own).
         XCTAssertNotEqual(clone.id, sol.id)
         XCTAssertEqual(clone.name, "solaris copy")
         XCTAssertNil(clone.imagePath)
         XCTAssertNil(clone.macAddress)
+        XCTAssertNil(clone.ports)
         // Everything else carries over, including launchers.
         XCTAssertEqual(clone.kind, .emulatedVM)
         XCTAssertEqual(clone.os, .solaris26)
         XCTAssertEqual(clone.user, "t")
         XCTAssertEqual(clone.launchers, sol.launchers)
+    }
+
+    func testClonedExternalHostKeepsExplicitPorts() {
+        let ext = Machine(name: "ss5", kind: .externalHost, host: "192.168.7.19", user: "t",
+                          ports: ImagePorts(telnet: 23, ssh: 22, helios: 2125))
+        // External ports are the box's REAL LAN ports, not an allocation; a
+        // clone points at the same class of box, so they carry over.
+        XCTAssertEqual(ext.cloned().ports, ext.ports)
+    }
+
+    // MARK: - Sticky port assignment (P2)
+
+    func testAddAssignsNextFreeBlockToUserVM() {
+        let registry = MachineRegistry(machines: [
+            Machine(name: "Solaris 2.6", kind: .emulatedVM, os: .solaris26,
+                    bundled: true, host: "127.0.0.1", user: "t"),
+        ], path: tempPath("ports"))
+        let a = Machine(name: "my solaris", kind: .emulatedVM, os: .solaris26,
+                        host: "127.0.0.1", user: "t")
+        let b = Machine(name: "another", kind: .emulatedVM, os: .netbsd,
+                        host: "127.0.0.1", user: "t")
+        registry.add(a)
+        registry.add(b)
+        // Blocks 2-4 belong to the per-OS bundled fixtures; user VMs get 5, 6, ...
+        // regardless of their OS (two Solaris VMs must not share a block).
+        XCTAssertEqual(registry.machine(a.id)?.ports, ImagePorts.block(5))
+        XCTAssertEqual(registry.machine(b.id)?.ports, ImagePorts.block(6))
+        XCTAssertEqual(ImagePorts.block(5),
+                       ImagePorts(telnet: 2153, ssh: 2252, helios: 2155))
+    }
+
+    func testAddNeverAssignsPortsToBundledOrExternal() {
+        let registry = MachineRegistry(machines: [], path: tempPath("ports2"))
+        let bundled = Machine(name: "NetBSD", kind: .emulatedVM, os: .netbsd,
+                              bundled: true, host: "127.0.0.1", user: "t")
+        let ext = Machine(name: "ss5", kind: .externalHost, host: "h", user: "t")
+        registry.add(bundled)
+        registry.add(ext)
+        XCTAssertNil(registry.machine(bundled.id)?.ports)   // derives the OS block
+        XCTAssertNil(registry.machine(ext.id)?.ports)       // real LAN ports
+    }
+
+    func testUpdateAssignsPortsWhenKindFlipsToEmulated() {
+        let m = Machine(name: "box", kind: .externalHost, host: "h", user: "t")
+        let registry = MachineRegistry(machines: [m], path: tempPath("flip"))
+        var edited = m
+        edited.kind = .emulatedVM
+        registry.update(edited)
+        XCTAssertEqual(registry.machine(m.id)?.ports, ImagePorts.block(5))
+    }
+
+    func testAssignmentIsStickyAcrossUpdates() {
+        let registry = MachineRegistry(machines: [], path: tempPath("sticky"))
+        let m = Machine(name: "vm", kind: .emulatedVM, os: .solaris26,
+                        host: "127.0.0.1", user: "t")
+        registry.add(m)
+        let assigned = registry.machine(m.id)?.ports
+        var edited = registry.machine(m.id)!
+        edited.name = "renamed"
+        registry.update(edited)
+        XCTAssertEqual(registry.machine(m.id)?.ports, assigned)
+    }
+
+    func testLoadAssignsBlocksToLegacyUserVMs() throws {
+        let path = tempPath("legacy")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        // A pre-P2 file: a non-bundled emulated VM with no explicit ports (it
+        // was silently deriving the Solaris block that the fixture owns).
+        let legacy = Machine(name: "my vm", kind: .emulatedVM, os: .solaris26,
+                             host: "127.0.0.1", user: "t")
+        try MachinesFile(machines: [legacy]).encoded()
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        let registry = MachineRegistry.load(
+            path: path, launchersPath: "/nonexistent-launchers",
+            bundledImagePath: "", bundledUser: "t")
+        XCTAssertEqual(registry.machine(legacy.id)?.ports, ImagePorts.block(5))
+    }
+
+    func testBlockPatternNeverOverlaps() {
+        // Distinct block indices can never collide with each other or the
+        // per-OS blocks (which ARE blocks 2/3/4 in the same pattern).
+        let blocks = (2...20).map { ImagePorts.block($0) }
+        for (i, a) in blocks.enumerated() {
+            for b in blocks[(i + 1)...] {
+                XCTAssertFalse(a.overlaps(b), "\(a) overlaps \(b)")
+            }
+        }
+        XCTAssertEqual(ImagePorts.block(2), .solaris26)
+        XCTAssertEqual(ImagePorts.block(3), .sunos414)
+        XCTAssertEqual(ImagePorts.block(4), .netbsd)
+    }
+
+    // MARK: - Per-machine MAC (P2)
+
+    func testDerivedMacIsStableUniqueAndLocallyAdministered() {
+        let a = Machine(name: "a", kind: .emulatedVM, host: "127.0.0.1", user: "t")
+        let b = Machine(name: "b", kind: .emulatedVM, host: "127.0.0.1", user: "t")
+        // Deterministic per machine (stable guest identity across boots)...
+        XCTAssertEqual(a.resolvedMacAddress, a.resolvedMacAddress)
+        // ...unique across machines (concurrent guests must not collide)...
+        XCTAssertNotEqual(a.resolvedMacAddress, b.resolvedMacAddress)
+        // ...in the locally-administered range, and an explicit MAC still wins.
+        XCTAssertTrue(a.resolvedMacAddress.hasPrefix("02:"))
+        var pinned = a
+        pinned.macAddress = "02:AA:BB:CC:DD:EE"
+        XCTAssertEqual(pinned.resolvedMacAddress, "02:AA:BB:CC:DD:EE")
+    }
+
+    func testEngineConfigCarriesMachineMacAndPorts() throws {
+        var m = Machine(name: "vm", kind: .emulatedVM, os: .netbsd,
+                        host: "127.0.0.1", user: "t",
+                        ports: ImagePorts.block(7), imagePath: "/tmp/x.qcow2")
+        m.memoryMB = 256
+        let config = try XCTUnwrap(m.makeEngineConfig())
+        XCTAssertEqual(config.macAddress, m.resolvedMacAddress)
+        XCTAssertEqual(config.ports, ImagePorts.block(7))
+        XCTAssertEqual(config.memoryMB, 256)
+        let args = QemuEngine.buildArguments(config: config)
+        let nic = try XCTUnwrap(args.first { $0.hasPrefix("user,model=lance") })
+        XCTAssertTrue(nic.contains("mac=\(m.resolvedMacAddress)"))
+        XCTAssertTrue(nic.contains("hostfwd=tcp::\(ImagePorts.block(7).helios)-:2125"))
     }
 }

@@ -6,7 +6,7 @@ import Darwin
 // heliosAgent runs inside the SPARCplug guest and speaks a line-oriented JSON
 // request/response protocol over one persistent TCP connection (see the daemon's
 // PROTOCOL.md). macXserver reaches it directly over the qemu hostfwd at
-// 127.0.0.1:`QemuEngine.heliosHostPort` -- no ssh tunnel. This is the Swift
+// 127.0.0.1:<the machine's helios port> -- no ssh tunnel. This is the Swift
 // twin of the Python `helios_client.py` bridge.
 //
 // Protocol shape:
@@ -58,10 +58,13 @@ public final class HeliosClient {
     /// Bytes read past the end of the last response line, kept for the next read.
     private var readBuffer: [UInt8] = []
 
-    /// `host`/`port` default to the loopback hostfwd the qemu launch opens for the
-    /// guest daemon. `timeout` bounds the connect and every read/write.
+    /// `host` defaults to the loopback hostfwd the qemu launch opens for the
+    /// guest daemon; `port` is required -- it must come from the owning machine's
+    /// port block (the old Solaris-2125 default silently dialed the wrong guest
+    /// once several machines could run). `timeout` bounds the connect and every
+    /// read/write.
     public init(host: String = "127.0.0.1",
-                port: UInt16 = QemuEngine.heliosHostPort,
+                port: UInt16,
                 timeout: TimeInterval = 30.0,
                 secret: String? = nil) {
         self.host = host

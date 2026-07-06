@@ -1165,6 +1165,78 @@ updated to match the shipped reframe.
 
 ---
 
+## 2026-07-06: P2 concurrency — sticky port assignment (not dynamic), per-machine MACs, secrets via the image lock (not /tmp/sparkplug), one image editor
+
+**Decision**: the multi-VM runtime (the refactor doc's P2, milestone #6) shipped
+with four calls that refine or supersede pieces of the 2026-07-04 doc:
+
+1. **Host ports are assigned once, at machine creation — "dynamic by assignment
+   time, not by invocation" (Todd's framing).** The doc's original call was a
+   dynamic allocator that hands out ports at every start. Rejected: since that
+   doc was written, the fixed per-OS blocks became load-bearing across the whole
+   tooling ecosystem (SPARCplug emu scripts, the helios CLI, Claude-side
+   conventions — a given machine is always at its ports). Instead the registry
+   materializes a persistent block onto a user-created emulated VM the moment it
+   exists (`MachineRegistry.assignPortsIfNeeded` → `ImagePorts.block(n)`,
+   n = 5, 6, … in the same mnemonic pattern 21n3/22n2/21n5; blocks 2–4 stay the
+   bundled fixtures' well-known per-OS blocks, still derived, never moved). A
+   machine's ports never change for its lifetime; clones get a fresh block; a
+   start-time `portConflict` check is a belt-and-suspenders guard that can only
+   fire on a hand-edited machines.json.
+
+2. **The /tmp/sparkplug Claude-dev secret file is retired outright** (the
+   Preferences toggle, the Config window, and the write/clear plumbing are
+   deleted). It was redundant since 2026-06-22: the image lock next to the qcow2
+   already records the per-boot secret, and as of P2 it records the **helios
+   hostfwd port** too, so the lock is a complete reach-the-daemon handle
+   (pid + secret + port). Claude-side tooling reads the lock (or takes
+   HELIOS_SECRET); the **MCP bridge is the real hand-off channel** and is the
+   next work item — `MachineRegistry.snapshot()` now carries `heliosPort` as
+   groundwork. (The SPARCplug repo's emu scripts still write their own
+   /tmp/sparkplug for standalone runs; unaffected.)
+
+3. **One image editor.** The Machines window's Settings tab is the only place a
+   machine's disk image is set. The old Machines → Config → "Disk Image" window
+   died with the Preferences path it edited (`sparcplug.diskImagePath` is now
+   migration-read-only legacy); its auto-backup toggle moved onto the machine
+   (`Machine.autoBackup`, per-machine — you can auto-back-up the precious
+   Solaris image and not a throwaway NetBSD experiment). "Shared Folder" is the
+   only Config window left (genuinely global) and moved to the Machines menu's
+   top level. The welcome/install flow now attaches its picked image to the
+   machine whose Start was pressed.
+
+4. **Guest MACs derive from the machine id** (locally-administered
+   `02:` + five id bytes, `Machine.resolvedMacAddress`; explicit override still
+   wins). Deterministic per machine (stable guest identity across boots), unique
+   across machines — kills the latent duplicate-`DE:AD:BE:EF:F3:E5` collision
+   the doc flagged. The old MAC survives only as the default for a config built
+   without a machine (tests, bare `defaultConfig`).
+
+Mechanically, P2 is: a fresh `MachineController` per start built from
+`machine.makeEngineConfig()` (so config edits apply at next boot with no rebuild
+bookkeeping), per-machine console windows keyed by machine id (fixes the
+console-follows-the-wired-machine steal), per-machine DNS-admin windows,
+per-machine readiness/progress on the controller, the orphan
+scan/reconnect/shutdown flows iterating every machine (ports from the lock), the
+quit dialog covering N running guests, and `heliosSecret` keyed by helios port
+so several loopback guests' secrets can't cross. The single-target
+`bundledMachine` resolver and the `telnetHostPort`/`heliosHostPort` globals are
+gone; `HeliosClient` now requires an explicit port.
+
+**Considered + rejected**: (a) the doc's dynamic port allocator — see above;
+(b) per-port secret files (/tmp/sparkplug-2125 etc.) as a transitional bridge —
+rejected by Todd as redundant with the lock file; (c) keeping the Disk Image
+config window rebound to the machine — two editors for one field plus permanent
+sync glue for zero gain.
+
+**Trade accepted**: the helios CLI's auto-read of /tmp/sparkplug no longer works
+against app-launched guests until it learns the lock file or the MCP bridge
+lands (emu-script-launched guests are unchanged). User-VM blocks above n = 9
+climb into the 2200s; the pattern's arithmetic keeps them collision-free, and
+nobody should be running 8+ concurrent sun4m guests on one Mac anyway.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

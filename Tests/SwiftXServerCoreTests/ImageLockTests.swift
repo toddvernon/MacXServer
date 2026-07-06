@@ -90,6 +90,31 @@ final class ImageLockTests: XCTestCase {
         XCTAssertEqual(lock?.consoleSocketPath, "/tmp/c.sock")
     }
 
+    // The helios hostfwd port rides in the lock (P2): with the secret it makes
+    // the lock a complete handle for reaching the guest's daemon -- orphan
+    // recovery on a non-Solaris guest needs it, and it's the interim channel
+    // for Claude-side tooling until the MCP bridge lands.
+    func testHeliosPortRoundTripsAndIsOptional() {
+        let with = ImageLock(host: "MacA", pid: 7, imagePath: image.path,
+                             startedAt: "2026-07-06T10:00:00Z", appVersion: "dev",
+                             secret: "abc", heliosPort: 2135)
+        let reparsed = ImageLock.parse(with.serialized())
+        XCTAssertEqual(reparsed?.heliosPort, 2135)
+        XCTAssertEqual(reparsed, with)
+
+        // Omitted when absent; pre-P2 locks parse to nil (callers fall back to
+        // the machine's current block).
+        let without = ImageLock(host: "MacA", pid: 7, imagePath: image.path,
+                                startedAt: "2026-07-06T10:00:00Z", appVersion: "dev")
+        XCTAssertFalse(without.serialized().contains("heliosPort:"))
+        XCTAssertNil(ImageLock.parse("host: MacA\npid: 7")?.heliosPort)
+
+        ImageLockManager.acquire(imageURL: image, pid: 321, appVersion: "9",
+                                 secret: "s", heliosPort: 2155, host: "MacA")
+        let text2 = try! String(contentsOf: ImageLockManager.lockURL(for: image), encoding: .utf8)
+        XCTAssertEqual(ImageLock.parse(text2)?.heliosPort, 2155)
+    }
+
     /// A lock written by a different machine is a hard stop regardless of the
     /// recorded pid (we can't verify a remote pid).
     func testRemoteHostLocked() {

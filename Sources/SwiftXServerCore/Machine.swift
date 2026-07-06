@@ -221,9 +221,13 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
     public var imagePath: String?
     public var memoryMB: Int
     /// Unique per machine (a duplicate MAC collides the moment two VMs share a
-    /// segment). nil = derive at start from `id`. Wired in P2.
+    /// segment). nil = derive from `id` (see `resolvedMacAddress`).
     public var macAddress: String?
     public var networkMode: MachineNetworkMode
+    /// Keep a dated "last known good" copy of the disk image after each clean
+    /// shutdown (the old global `sparcplug.autoBackupOnShutdown`, per-machine
+    /// now that several images can run). Emulated VMs only.
+    public var autoBackup: Bool
 
     /// This machine's launcher commands.
     public var launchers: [MachineLauncher]
@@ -233,7 +237,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
                 host: String, user: String, transport: LauncherTransport = .helios,
                 display: String? = nil, ports: ImagePorts? = nil,
                 imagePath: String? = nil, memoryMB: Int = 128, macAddress: String? = nil,
-                networkMode: MachineNetworkMode = .slirp,
+                networkMode: MachineNetworkMode = .slirp, autoBackup: Bool = true,
                 launchers: [MachineLauncher] = []) {
         self.id = id; self.name = name; self.kind = kind; self.os = os
         self.bundled = bundled
@@ -241,19 +245,21 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         self.display = display; self.ports = ports
         self.imagePath = imagePath; self.memoryMB = memoryMB
         self.macAddress = macAddress; self.networkMode = networkMode
+        self.autoBackup = autoBackup
         self.launchers = launchers
     }
 
     // MARK: Derived
 
     /// A copy of this machine for the "Clone" action: a fresh identity, the same
-    /// connection + launchers, but **not the VM itself**. The disk image and MAC
-    /// are dropped (you can't have two live openers on one qcow2, and a MAC must
-    /// be unique per machine), so a cloned emulated VM comes up "not installed"
-    /// until you point it at its own image; a cloned external host is fully usable
-    /// as soon as you set its host. Everything else -- kind, os, user, transport,
-    /// display, ports, memory, network mode, and every launcher command -- carries
-    /// over. `name` defaults to "<name> copy".
+    /// connection + launchers, but **not the VM itself**. The disk image, MAC,
+    /// and port block are dropped (you can't have two live openers on one qcow2,
+    /// and a MAC / host-port block must be unique per machine -- the registry
+    /// assigns the clone its own block on add), so a cloned emulated VM comes up
+    /// "not installed" until you point it at its own image; a cloned external
+    /// host is fully usable as soon as you set its host. Everything else -- kind,
+    /// os, user, transport, display, memory, network mode, and every launcher
+    /// command -- carries over. `name` defaults to "<name> copy".
     public func cloned(named newName: String? = nil) -> Machine {
         var copy = self
         copy.id = UUID()
@@ -261,6 +267,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         copy.bundled = false        // a clone is your machine, never a shipped fixture
         copy.imagePath = nil
         copy.macAddress = nil
+        if kind == .emulatedVM { copy.ports = nil }   // external ports are real LAN ports; keep those
         return copy
     }
 
@@ -276,6 +283,17 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         if let ports = ports { return ports }
         if kind == .emulatedVM { return os?.defaultPorts ?? .solaris26 }
         return ImagePorts(telnet: 23, ssh: 22, helios: 2125)
+    }
+
+    /// The effective guest MAC: the explicit override, else derived from `id` in
+    /// the locally-administered range (02:xx:...). Deterministic -- the same
+    /// machine keeps the same MAC across boots (stable guest identity) -- and
+    /// unique per machine, so two guests on one segment (or one Mac's slirp)
+    /// never collide the way the old single hardcoded MAC did.
+    public var resolvedMacAddress: String {
+        if let mac = macAddress, !mac.isEmpty { return mac }
+        let b = id.uuid
+        return String(format: "02:%02X:%02X:%02X:%02X:%02X", b.0, b.1, b.2, b.3, b.4)
     }
 
     /// True for an emulated VM with an image set (i.e. it can actually run).
@@ -296,6 +314,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         var config = QemuEngine.defaultConfig(bundle: bundle, memoryMB: memoryMB)
         config.diskImage = image
         config.ports = resolvedPorts
+        config.macAddress = resolvedMacAddress
         config.tftpDirectory = tftpDirectory
         config.os = os
         return config
@@ -335,7 +354,8 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, os, bundled, host, user, transport, display, ports
-        case imagePath = "image", memoryMB, macAddress = "mac", networkMode, launchers
+        case imagePath = "image", memoryMB, macAddress = "mac", networkMode
+        case autoBackup, launchers
     }
 
     public init(from decoder: Decoder) throws {
@@ -355,6 +375,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         memoryMB = try c.decodeIfPresent(Int.self, forKey: .memoryMB) ?? 128
         macAddress = try c.decodeIfPresent(String.self, forKey: .macAddress)
         networkMode = try c.decodeIfPresent(MachineNetworkMode.self, forKey: .networkMode) ?? .slirp
+        autoBackup = try c.decodeIfPresent(Bool.self, forKey: .autoBackup) ?? true
         launchers = try c.decodeIfPresent([MachineLauncher].self, forKey: .launchers) ?? []
     }
 
@@ -377,6 +398,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
             try c.encode(memoryMB, forKey: .memoryMB)
             try c.encodeIfPresent(macAddress, forKey: .macAddress)
             if networkMode != .slirp { try c.encode(networkMode, forKey: .networkMode) }
+            if !autoBackup { try c.encode(false, forKey: .autoBackup) }
         }
         if !launchers.isEmpty { try c.encode(launchers, forKey: .launchers) }
     }
