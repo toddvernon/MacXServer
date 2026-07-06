@@ -87,9 +87,20 @@ struct MachineDetailForm: View {
 
     // MARK: Sections
 
-    private var identitySection: some View {
+    /// One titled section: the blue header sits at the left edge, the content
+    /// is inset beneath it so the sections read as header + body (Todd's
+    /// aesthetics pass 2026-07-06).
+    private func section<Content: View>(_ title: String,
+                                        @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionHeader("Identity")
+            sectionHeader(title)
+            VStack(alignment: .leading, spacing: 10, content: content)
+                .padding(.leading, 16)
+        }
+    }
+
+    private var identitySection: some View {
+        section("Identity") {
             LabeledField("Name") {
                 TextField("Machine name", text: $draft.name)
                     .textFieldStyle(.roundedBorder)
@@ -114,8 +125,7 @@ struct MachineDetailForm: View {
     }
 
     private var connectionSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionHeader("Connection")
+        section("Connection") {
             LabeledField("Host") {
                 TextField(draft.kind == .emulatedVM ? "127.0.0.1" : "hostname or IP",
                           text: $draft.host)
@@ -133,14 +143,16 @@ struct MachineDetailForm: View {
             LabeledField("Transport") {
                 // A bundled machine's management plane is Helios by design (its
                 // per-boot secret + hostfwd are wired for it), so the picker is
-                // locked there.
+                // locked there. Explicit .leading: a bare frame(width:) centers
+                // the narrow picker, drifting it right of the text fields above.
                 Picker("", selection: $draft.transport) {
                     ForEach(LauncherTransport.allCases, id: \.self) { t in
                         Text(t.rawValue).tag(t)
                     }
                 }
                 .labelsHidden()
-                .frame(width: 140)
+                .fixedSize()
+                .frame(width: 140, alignment: .leading)
                 .disabled(bundled)
             }
             osField
@@ -156,8 +168,7 @@ struct MachineDetailForm: View {
     }
 
     private var imageSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionHeader("Disk image")
+        section("Disk image") {
             HStack(spacing: 8) {
                 TextField("path to .qcow2", text: Binding(
                     get: { draft.imagePath ?? "" },
@@ -204,8 +215,7 @@ struct MachineDetailForm: View {
     /// id; stable across boots, unique per machine). Read-only by design.
     private var runtimeSection: some View {
         let p = draft.resolvedPorts
-        return VStack(alignment: .leading, spacing: 10) {
-            sectionHeader("Runtime")
+        return section("Runtime") {
             LabeledField("Ports") {
                 Text("telnet \(String(p.telnet)) \u{00B7} ssh \(String(p.ssh)) \u{00B7} helios \(String(p.helios))")
                     .font(.system(.body, design: .monospaced))
@@ -286,14 +296,18 @@ struct MachineDetailForm: View {
                 } label: { Label("Add Command", systemImage: "plus") }
                     .controlSize(.small)
             }
-            if draft.launchers.isEmpty {
-                helpNote("No launchers. Add an X-client command or a Helios file browser.")
-            } else {
-                ForEach(Array(draft.launchers.enumerated()), id: \.offset) { idx, l in
-                    launcherRow(idx: idx, launcher: l)
-                    if idx < draft.launchers.count - 1 { Divider() }
+            // Same content inset as the other sections (see `section`).
+            VStack(alignment: .leading, spacing: 10) {
+                if draft.launchers.isEmpty {
+                    helpNote("No launchers. Add an X-client command or a Helios file browser.")
+                } else {
+                    ForEach(Array(draft.launchers.enumerated()), id: \.offset) { idx, l in
+                        launcherRow(idx: idx, launcher: l)
+                        if idx < draft.launchers.count - 1 { Divider() }
+                    }
                 }
             }
+            .padding(.leading, 16)
         }
     }
 
@@ -434,7 +448,8 @@ struct LauncherEditorView: View {
                         }
                     }
                     .labelsHidden()
-                    .frame(width: 200)
+                    .fixedSize()
+                    .frame(width: 200, alignment: .leading)
                 }
                 GridRow {
                     Text("DISPLAY").gridColumnAlignment(.trailing).foregroundStyle(.secondary)

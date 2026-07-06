@@ -273,24 +273,28 @@ private struct MachineOverviewPage: View {
     @ViewBuilder private func launchers(_ row: MachineRow) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             MachineSectionHeader("Launchers")
-            if row.launchers.isEmpty {
-                Text("No launchers. Add them in Settings.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                Text("Click to run:").font(.caption).foregroundStyle(.secondary)
-                FlowLayout(spacing: 6) {
-                    ForEach(row.launchers) { chip in
-                        Button {
-                            model.onLaunch?(row.id, chip.id)
-                        } label: {
-                            Label(chip.name, systemImage: chip.isFileBrowser ? "folder" : "terminal")
-                                .labelStyle(.titleAndIcon)
+            // Content inset under the header, matching the Settings tab.
+            VStack(alignment: .leading, spacing: 8) {
+                if row.launchers.isEmpty {
+                    Text("No launchers. Add them in Settings.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Click to run:").font(.caption).foregroundStyle(.secondary)
+                    FlowLayout(spacing: 6) {
+                        ForEach(row.launchers) { chip in
+                            Button {
+                                model.onLaunch?(row.id, chip.id)
+                            } label: {
+                                Label(chip.name, systemImage: chip.isFileBrowser ? "folder" : "terminal")
+                                    .labelStyle(.titleAndIcon)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(!chip.enabled)
                         }
-                        .buttonStyle(.bordered)
-                        .disabled(!chip.enabled)
                     }
                 }
             }
+            .padding(.leading, 16)
         }
     }
 }
