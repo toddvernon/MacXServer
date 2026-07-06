@@ -176,7 +176,10 @@ final class MachineFileTests: XCTestCase {
         XCTAssertEqual(u5?.launchers.count, 1)
     }
 
-    func testMigrationSeedsBundledWhenNoLoopbackGroup() {
+    func testMigrationClassifiesWithoutSeedingBundled() {
+        // migrate no longer force-seeds a bundled VM -- that moved to
+        // `ensuringBundled`, so a launchers file with no loopback group migrates to
+        // just the external host.
         let launchers = LauncherFile.parse("""
         [host:u5]
         host = u5.example.com
@@ -188,19 +191,33 @@ final class MachineFileTests: XCTestCase {
         let machines = MachineMigrator.migrate(launchers: launchers,
                                                bundledImagePath: "/tmp/b.qcow2",
                                                bundledUser: "tvernon")
-        XCTAssertEqual(machines.first?.kind, .emulatedVM)
-        XCTAssertEqual(machines.first?.image?.path, "/tmp/b.qcow2")
-        XCTAssertEqual(machines.first?.user, "tvernon")
+        XCTAssertEqual(machines.count, 1)
         XCTAssertTrue(machines.contains { $0.name == "u5" && $0.kind == .externalHost })
+        XCTAssertFalse(machines.contains { $0.bundled })
     }
 
-    func testMigrationBundledNotInstalledWhenNoImagePath() {
-        let machines = MachineMigrator.migrate(launchers: LauncherFile(entries: [], warnings: []),
-                                               bundledImagePath: "",
-                                               bundledUser: "tvernon")
-        XCTAssertEqual(machines.count, 1)
-        XCTAssertEqual(machines[0].kind, .emulatedVM)
-        XCTAssertNil(machines[0].image)
-        XCTAssertFalse(machines[0].isInstalledEmulatedVM)
+    func testEnsuringBundledSeedsOneImagelessFixturePerOS() throws {
+        let seeded = MachineMigrator.ensuringBundled([], user: "tvernon")
+        let fixtures = try XCTUnwrap(seeded)
+        XCTAssertEqual(fixtures.count, MachineOS.allCases.count)
+        XCTAssertEqual(Set(fixtures.compactMap { $0.os }), Set(MachineOS.allCases))
+        XCTAssertTrue(fixtures.allSatisfy { $0.bundled && $0.kind == .emulatedVM })
+        XCTAssertTrue(fixtures.allSatisfy { $0.image == nil && !$0.isInstalledEmulatedVM })
+        XCTAssertTrue(fixtures.allSatisfy { $0.user == "tvernon" })
+    }
+
+    func testEnsuringBundledPreservesAttachedFixtureAndIsIdempotent() throws {
+        // A bundled Solaris the user has attached an image to must survive by id +
+        // image; only the two missing fixtures get injected.
+        let solaris = Machine(name: "Solaris 2.6", kind: .emulatedVM, os: .solaris26,
+                              bundled: true, host: "127.0.0.1", user: "tvernon",
+                              imagePath: "/tmp/solaris.qcow2")
+        let grown = try XCTUnwrap(MachineMigrator.ensuringBundled([solaris], user: "tvernon"))
+        XCTAssertEqual(grown.count, MachineOS.allCases.count)
+        let kept = grown.first { $0.os == .solaris26 }
+        XCTAssertEqual(kept?.id, solaris.id)
+        XCTAssertEqual(kept?.image?.path, "/tmp/solaris.qcow2")
+        // Once all three exist, it's a no-op.
+        XCTAssertNil(MachineMigrator.ensuringBundled(grown, user: "tvernon"))
     }
 }

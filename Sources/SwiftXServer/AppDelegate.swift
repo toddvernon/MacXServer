@@ -284,10 +284,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         model.onRemove = { [weak self] id in
             guard let self, let registry = self.registry else { return }
-            // Never remove the bundled VM (load-bearing for the engine wiring) or
-            // a machine with a live qemu process. The window also disables the
-            // button in these cases; this is the belt-and-suspenders guard.
-            if id == self.bundledMachineID || registry.runningMachineID == id { return }
+            // Never remove a bundled fixture (one of the machines we ship) or a
+            // machine with a live qemu process. The window also disables the button
+            // in these cases; this is the belt-and-suspenders guard.
+            if registry.machine(id)?.bundled == true || registry.runningMachineID == id { return }
             let name = registry.machine(id)?.name ?? "this machine"
             let alert = NSAlert()
             alert.messageText = "Remove \u{201c}\(name)\u{201d}?"

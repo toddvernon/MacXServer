@@ -1,16 +1,21 @@
 import SwiftUI
 import SwiftXServerCore
 
-/// The right-hand detail form: edits a local `draft` of the selected machine and
-/// commits it via `model.onCommit` on Save. Kept a value-draft (not a live
-/// binding into the registry) so half-finished edits and an invalid name don't
-/// leak onto the wire; Save is gated on validity + an actual change. The bundled
-/// VM locks the fields that are load-bearing for the engine wiring (kind, host)
-/// and its image (edited via Preferences lockstep in AppDelegate) is frozen while
-/// it's running.
+/// The right-hand detail form: edits a local `draft` of the selected machine.
+/// There's no Save button -- the draft auto-commits at natural edit boundaries
+/// (Return in any field, and on leaving the pane: switching machine/tab or
+/// closing the window), so you can't lose an edit by forgetting to save. The
+/// draft is still a value-copy (not a live binding into the registry) so a
+/// half-finished or invalid edit -- empty name, empty external host, an image two
+/// machines both claim -- simply doesn't commit and says why inline; navigating
+/// away from an invalid edit drops it (a nameless machine can't exist). A bundled
+/// fixture locks the fields that are its identity (kind, host, OS); its image is
+/// frozen while it's running.
 struct MachineDetailForm: View {
     @ObservedObject var model: MachinesModel
-    private let committed: Machine
+    /// The last-committed value, tracked so an auto-commit is a no-op when nothing
+    /// changed (and so a re-commit after Return doesn't re-fire needlessly).
+    @State private var committed: Machine
     @State private var draft: Machine
     /// Launcher being added/edited in the sheet, if any.
     @State private var launcherEdit: LauncherEditTarget?
@@ -20,11 +25,13 @@ struct MachineDetailForm: View {
 
     init(machine: Machine, model: MachinesModel) {
         self.model = model
-        self.committed = machine
+        _committed = State(initialValue: machine)
         _draft = State(initialValue: machine)
     }
 
-    private var bundled: Bool { model.isBundled(draft.id) }
+    /// A shipped bundled fixture: its kind/host/OS are load-bearing identity, so
+    /// they're locked; you can still attach an image and edit launchers.
+    private var bundled: Bool { draft.bundled }
     private var running: Bool { model.isRunning(draft.id) }
 
     var body: some View {
@@ -38,7 +45,6 @@ struct MachineDetailForm: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .safeAreaInset(edge: .bottom) { footer }
         .sheet(item: $launcherEdit) { target in
             LauncherEditorView(
                 initial: target.launcher,
@@ -49,6 +55,10 @@ struct MachineDetailForm: View {
         }
         // Re-detect whenever the image (or kind) changes -- i.e. at pick time.
         .task(id: "\(draft.kind.rawValue):\(draft.imagePath ?? "")") { await runOSDetection() }
+        // Auto-commit: Return in any field, and on leaving the pane (switch
+        // machine/tab, close window). No Save button -- see the type doc.
+        .onSubmit { commit() }
+        .onDisappear { commit() }
     }
 
     /// Query the assigned image for its guest OS (off the main thread) and, when
@@ -76,6 +86,9 @@ struct MachineDetailForm: View {
                 TextField("Machine name", text: $draft.name)
                     .textFieldStyle(.roundedBorder)
             }
+            if draft.name.trimmingCharacters(in: .whitespaces).isEmpty {
+                helpNote("A name is required before the machine is saved.")
+            }
             LabeledField("Kind") {
                 Picker("", selection: $draft.kind) {
                     Text("Emulated VM").tag(MachineKind.emulatedVM)
@@ -86,8 +99,8 @@ struct MachineDetailForm: View {
                 .disabled(bundled)     // the bundled VM's kind is load-bearing
             }
             if bundled {
-                helpNote("This is the bundled emulated VM. Its kind and host are fixed; "
-                       + "its disk image is set here and mirrored to Preferences.")
+                helpNote("This is a bundled machine that ships with the app. Its kind, "
+                       + "host, and OS are fixed; attach a disk image here to run it.")
             } else if draft.kind == .emulatedVM {
                 helpNote("Additional emulated VMs can be configured now but can't be "
                        + "started until the multi-VM runtime lands (P2). External hosts "
@@ -104,6 +117,10 @@ struct MachineDetailForm: View {
                           text: $draft.host)
                     .textFieldStyle(.roundedBorder)
                     .disabled(bundled)
+            }
+            if draft.kind == .externalHost,
+               draft.host.trimmingCharacters(in: .whitespaces).isEmpty {
+                helpNote("A host is required before an external machine is saved.")
             }
             LabeledField("User") {
                 TextField("login user", text: $draft.user)
@@ -190,7 +207,10 @@ struct MachineDetailForm: View {
     /// Lock the OS to the detected value only when we're confident (an image-backed
     /// emulated VM whose image identified a known OS).
     private var osLocked: Bool {
-        draft.kind == .emulatedVM && draft.imagePath?.isEmpty == false && osDetection?.os != nil
+        // A bundled fixture's OS is its fixed identity; otherwise it's locked once
+        // it's been derived from an attached image.
+        bundled
+            || (draft.kind == .emulatedVM && draft.imagePath?.isEmpty == false && osDetection?.os != nil)
     }
 
     /// Caption under the OS row, only for an image-backed emulated VM (the derived
@@ -238,6 +258,7 @@ struct MachineDetailForm: View {
                 .buttonStyle(.borderless)
             Button {
                 draft.launchers.remove(at: idx)
+                commit()
             } label: { Image(systemName: "minus.circle") }
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
@@ -245,26 +266,17 @@ struct MachineDetailForm: View {
         .padding(.vertical, 2)
     }
 
-    private var footer: some View {
-        HStack {
-            if bundled {
-                Text("Bundled VM").font(.caption).foregroundStyle(.tertiary)
-            }
-            Spacer()
-            Button("Revert") { draft = committed }
-                .disabled(draft == committed)
-            Button("Save") { model.onCommit?(draft) }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!canSave)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .background(.bar)
+    // MARK: Commit + validation
+
+    /// Persist the draft if it's changed and valid. Called at edit boundaries
+    /// (Return / leaving the pane); an invalid or unchanged draft is a no-op.
+    private func commit() {
+        guard canCommit else { return }
+        model.onCommit?(draft)
+        committed = draft
     }
 
-    // MARK: Validation + helpers
-
-    private var canSave: Bool {
+    private var canCommit: Bool {
         guard draft != committed else { return false }
         guard !draft.name.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
         if draft.kind == .externalHost,
@@ -285,6 +297,7 @@ struct MachineDetailForm: View {
         } else {
             draft.launchers.append(edited)
         }
+        commit()   // a launcher edit is a deliberate action; persist it now
     }
 
     private func sectionHeader(_ text: String) -> some View {

@@ -62,9 +62,16 @@ public final class MachineRegistry {
     public func machine(_ id: UUID) -> Machine? { machines.first { $0.id == id } }
     public func controller(_ id: UUID) -> MachineController? { controllers[id] }
 
-    /// The bundled emulated VM -- the first (and, in P1, only) emulatedVM machine.
-    /// This is what the existing SPARCstation menu drives.
-    public var bundledMachine: Machine? { machines.first { $0.kind == .emulatedVM } }
+    /// The single emulated VM the P1 engine is wired to. Among the bundled
+    /// fixtures, the one you've attached an image to wins (so attaching an image
+    /// makes that guest the runnable one); else the first bundled fixture; else,
+    /// for a legacy file with no fixtures yet, the first emulated VM. P2's
+    /// per-machine engines retire this single-target notion.
+    public var bundledMachine: Machine? {
+        machines.first { $0.bundled && $0.image != nil }
+            ?? machines.first { $0.bundled }
+            ?? machines.first { $0.kind == .emulatedVM }
+    }
 
     /// The id of the machine whose controller currently has a live qemu process,
     /// if any. In P1 at most one is running.

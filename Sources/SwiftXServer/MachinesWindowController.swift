@@ -15,7 +15,7 @@ final class MachinesWindowController: NSWindowController {
         self.model = model
         let hostingView = NSHostingView(rootView: MachinesWindowView(model: model))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 820, height: 540),
+            contentRect: NSRect(x: 0, y: 0, width: 984, height: 1080),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false
         )

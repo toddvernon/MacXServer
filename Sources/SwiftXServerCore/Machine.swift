@@ -197,6 +197,12 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
     public var name: String
     public var kind: MachineKind
     public var os: MachineOS?
+    /// True for the machines we ship (the bundled fixtures: one per guest OS).
+    /// Bundled machines are protected from removal and grouped in the "Bundled
+    /// Machines" section; a machine you create in the editor is always false, so
+    /// it sorts into Virtual (emulated) or External by its kind. Persisted only
+    /// when true (see encode).
+    public var bundled: Bool
 
     // Connection (flat -- how we reach this machine's Helios/ssh/telnet planes).
     public var host: String
@@ -223,12 +229,14 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
     public var launchers: [MachineLauncher]
 
     public init(id: UUID = UUID(), name: String, kind: MachineKind, os: MachineOS? = nil,
+                bundled: Bool = false,
                 host: String, user: String, transport: LauncherTransport = .helios,
                 display: String? = nil, ports: ImagePorts? = nil,
                 imagePath: String? = nil, memoryMB: Int = 128, macAddress: String? = nil,
                 networkMode: MachineNetworkMode = .slirp,
                 launchers: [MachineLauncher] = []) {
         self.id = id; self.name = name; self.kind = kind; self.os = os
+        self.bundled = bundled
         self.host = host; self.user = user; self.transport = transport
         self.display = display; self.ports = ports
         self.imagePath = imagePath; self.memoryMB = memoryMB
@@ -250,6 +258,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         var copy = self
         copy.id = UUID()
         copy.name = newName ?? "\(name) copy"
+        copy.bundled = false        // a clone is your machine, never a shipped fixture
         copy.imagePath = nil
         copy.macAddress = nil
         return copy
@@ -325,7 +334,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
     // MARK: Codable (forgiving decode + terse encode)
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, os, host, user, transport, display, ports
+        case id, name, kind, os, bundled, host, user, transport, display, ports
         case imagePath = "image", memoryMB, macAddress = "mac", networkMode, launchers
     }
 
@@ -335,6 +344,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         name = try c.decode(String.self, forKey: .name)
         kind = try c.decode(MachineKind.self, forKey: .kind)
         os = try c.decodeIfPresent(MachineOS.self, forKey: .os)
+        bundled = try c.decodeIfPresent(Bool.self, forKey: .bundled) ?? false
         host = try c.decodeIfPresent(String.self, forKey: .host)
             ?? (kind == .emulatedVM ? "127.0.0.1" : "")
         user = try c.decodeIfPresent(String.self, forKey: .user) ?? ""
@@ -356,6 +366,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         try c.encode(name, forKey: .name)
         try c.encode(kind, forKey: .kind)
         try c.encodeIfPresent(os, forKey: .os)
+        if bundled { try c.encode(true, forKey: .bundled) }
         try c.encode(host, forKey: .host)
         try c.encode(user, forKey: .user)
         if transport != .helios { try c.encode(transport, forKey: .transport) }

@@ -102,4 +102,14 @@ final class MachinesModel: ObservableObject {
     func row(_ id: UUID) -> MachineRow? { rows[id] }
     func isBundled(_ id: UUID) -> Bool { id == bundledMachineID }
     func isRunning(_ id: UUID) -> Bool { id == runningMachineID }
+
+    // The master list's three sections, each sorted by name (case-insensitive).
+    // A machine you create lands in Virtual (emulated) or External by its kind;
+    // the machines we ship carry `bundled` and group at the top.
+    private func sorted(_ ms: [Machine]) -> [Machine] {
+        ms.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+    var bundledMachines: [Machine]  { sorted(machines.filter { $0.bundled }) }
+    var virtualMachines: [Machine]  { sorted(machines.filter { $0.kind == .emulatedVM && !$0.bundled }) }
+    var externalMachines: [Machine] { sorted(machines.filter { $0.kind == .externalHost }) }
 }

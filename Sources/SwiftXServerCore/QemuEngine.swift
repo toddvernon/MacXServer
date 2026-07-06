@@ -244,7 +244,6 @@ public final class QemuEngine: @unchecked Sendable {
         let secret = currentSecret
         let port = config.ports.helios
         let xBinDirs = config.profile.xBinDirs
-        emitDiagnostic("xterm: helios port \(port), secret len \(secret?.count ?? -1)")
         DispatchQueue.global(qos: .userInitiated).async {
             let client = HeliosClient(port: port, timeout: 10, secret: secret)
             defer { client.close() }
@@ -466,7 +465,6 @@ public final class QemuEngine: @unchecked Sendable {
     private func requestShutdownViaDaemon() {
         let secret = currentSecret
         let port = config.ports.helios
-        emitDiagnostic("shutdown: helios port \(port), secret len \(secret?.count ?? -1)")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             let daemonError = Self.performDaemonShutdown(secret: secret, port: port)

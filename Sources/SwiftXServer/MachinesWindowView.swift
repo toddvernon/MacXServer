@@ -27,17 +27,27 @@ struct MachinesWindowView: View {
                 emptyState
             } else {
                 List(selection: $model.selection) {
-                    ForEach(model.machines) { m in
-                        MasterRow(machine: m,
-                                  dot: model.row(m.id)?.dot ?? .stopped,
-                                  bundled: model.isBundled(m.id))
-                            .tag(m.id)
-                    }
+                    machineSection("Bundled Machines", model.bundledMachines)
+                    machineSection("Virtual Machines", model.virtualMachines)
+                    machineSection("External Machines", model.externalMachines)
                 }
                 .listStyle(.sidebar)
             }
             Divider()
             toolbar
+        }
+    }
+
+    /// One titled section of the master list, or nothing when it's empty (so a
+    /// section header never appears over zero rows).
+    @ViewBuilder private func machineSection(_ title: String, _ items: [Machine]) -> some View {
+        if !items.isEmpty {
+            Section(title) {
+                ForEach(items) { m in
+                    MasterRow(machine: m, dot: model.row(m.id)?.dot ?? .stopped)
+                        .tag(m.id)
+                }
+            }
         }
     }
 
@@ -77,11 +87,11 @@ struct MachinesWindowView: View {
         .padding(.vertical, 6)
     }
 
-    /// The bundled VM and any running machine can't be removed. (Stop it first;
-    /// the bundled machine is load-bearing for the engine wiring.)
+    /// Bundled fixtures (the machines we ship) and any running machine can't be
+    /// removed. Your own virtual and external machines delete freely when stopped.
     private var canRemoveSelection: Bool {
-        guard let id = model.selection else { return false }
-        return !model.isBundled(id) && !model.isRunning(id)
+        guard let m = model.selectedMachine else { return false }
+        return !m.bundled && !model.isRunning(m.id)
     }
 
     // MARK: Detail (tabbed)
@@ -105,7 +115,6 @@ struct MachinesWindowView: View {
 private struct MasterRow: View {
     let machine: Machine
     let dot: MachineStatusDot
-    let bundled: Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -115,9 +124,6 @@ private struct MasterRow: View {
                 Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
-            if bundled {
-                Text("bundled").font(.caption2).foregroundStyle(.tertiary)
-            }
         }
         .padding(.vertical, 2)
     }
@@ -137,6 +143,12 @@ private struct MachineDetailContainer: View {
     @State private var tab: DetailTab = .overview
 
     enum DetailTab: Hashable { case overview, settings }
+
+    /// A VM with no disk image can't run, so its Overview is a dead end — open
+    /// straight to Settings where the image gets set.
+    private var defaultTab: DetailTab {
+        (machine.kind == .emulatedVM && machine.image == nil) ? .settings : .overview
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -160,6 +172,11 @@ private struct MachineDetailContainer: View {
             case .settings: MachineDetailForm(machine: machine, model: model)
             }
         }
+        // Pick the starting tab per machine. Driven from the body (not @State init)
+        // because this window is NSPanel-hosted, where @State-on-.id() reset is
+        // unreliable. Fires only when the selected machine changes, so a manual
+        // Overview/Settings click afterward sticks.
+        .onChange(of: machine.id, initial: true) { tab = defaultTab }
     }
 }
 

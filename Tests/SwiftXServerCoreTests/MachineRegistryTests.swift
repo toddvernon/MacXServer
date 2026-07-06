@@ -9,7 +9,7 @@ final class MachineRegistryTests: XCTestCase {
             .appendingPathComponent("\(name)-\(UUID().uuidString).json")
     }
 
-    func testLoadMigratesBundledMachineOnFirstRun() {
+    func testLoadSeedsBundledFixturesOnFirstRun() {
         let path = tempPath("machines")
         defer { try? FileManager.default.removeItem(atPath: path) }
         let registry = MachineRegistry.load(
@@ -17,11 +17,12 @@ final class MachineRegistryTests: XCTestCase {
             launchersPath: "/nonexistent-launchers",   // force the empty-launchers path
             bundledImagePath: "/tmp/bundled.qcow2",
             bundledUser: "tvernon")
-        // Migration always seeds a bundled emulated VM, and it's persisted.
-        XCTAssertEqual(registry.machines.count, 1)
-        let bundled = registry.bundledMachine
-        XCTAssertEqual(bundled?.kind, .emulatedVM)
-        XCTAssertEqual(bundled?.image?.path, "/tmp/bundled.qcow2")
+        // First run seeds one imageless bundled fixture per guest OS, persisted.
+        XCTAssertEqual(registry.machines.count, MachineOS.allCases.count)
+        XCTAssertTrue(registry.machines.allSatisfy { $0.bundled && $0.image == nil })
+        XCTAssertEqual(Set(registry.machines.compactMap { $0.os }), Set(MachineOS.allCases))
+        // With no image attached yet, the engine target is the first bundled fixture.
+        XCTAssertEqual(registry.bundledMachine?.kind, .emulatedVM)
         XCTAssertTrue(FileManager.default.fileExists(atPath: path))
     }
 

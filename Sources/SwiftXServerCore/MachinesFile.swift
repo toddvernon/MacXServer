@@ -55,7 +55,6 @@ public enum MachineMigrator {
     public static func migrate(launchers: LauncherFile, bundledImagePath: String,
                                bundledUser: String) -> [Machine] {
         var machines: [Machine] = []
-        var haveBundled = false
 
         for group in launchers.groups() {
             guard let first = group.entries.first else { continue }
@@ -81,17 +80,35 @@ public enum MachineMigrator {
                 ports: portsFor(kind: kind, os: os, transport: machineTransport, port: first.port),
                 imagePath: (loopback && !bundledImagePath.isEmpty) ? bundledImagePath : nil,
                 launchers: launchers))
-            if loopback { haveBundled = true }
-        }
-
-        if !haveBundled {
-            machines.insert(Machine(
-                name: "Solaris 2.6", kind: .emulatedVM, os: .solaris26,
-                host: "127.0.0.1", user: bundledUser, transport: .helios,
-                display: "10.0.2.2:0",
-                imagePath: bundledImagePath.isEmpty ? nil : bundledImagePath), at: 0)
         }
         return machines
+    }
+
+    /// The machines we ship: one bundled fixture per guest OS, imageless (the user
+    /// attaches a disk image, then runs it). Stable identity is the `bundled` flag
+    /// plus `os`, so `ensuringBundled` never duplicates a fixture the user has
+    /// already attached an image to. All the per-OS behavior (ports, boot command,
+    /// halt) derives from `os`, so this stays a terse list.
+    public static func bundledFixtures(user: String) -> [Machine] {
+        MachineOS.allCases.map { os in
+            Machine(name: os.displayName, kind: .emulatedVM, os: os, bundled: true,
+                    host: "127.0.0.1", user: user, transport: .helios,
+                    display: "10.0.2.2:0", imagePath: nil)
+        }
+    }
+
+    /// Guarantee every bundled fixture is present, injecting only the missing ones
+    /// (matched by `bundled && os`, so an already-attached fixture is preserved).
+    /// Returns nil when nothing was added, so the caller can skip a needless write.
+    public static func ensuringBundled(_ machines: [Machine], user: String) -> [Machine]? {
+        var result = machines
+        var added = false
+        for fixture in bundledFixtures(user: user)
+        where !machines.contains(where: { $0.bundled && $0.os == fixture.os }) {
+            result.append(fixture)
+            added = true
+        }
+        return added ? result : nil
     }
 
     /// Port triple for a migrated machine, or nil to derive (the common case).
@@ -135,8 +152,10 @@ public enum MachinesFileLoader {
         if !fm.fileExists(atPath: path) {
             let launchers: LauncherFile = (try? String(contentsOfFile: launchersPath, encoding: .utf8))
                 .map { LauncherFile.parse($0) } ?? LauncherFile(entries: [], warnings: [])
-            let file = MachinesFile(machines: MachineMigrator.migrate(
-                launchers: launchers, bundledImagePath: bundledImagePath, bundledUser: bundledUser))
+            var machines = MachineMigrator.migrate(
+                launchers: launchers, bundledImagePath: bundledImagePath, bundledUser: bundledUser)
+            machines = MachineMigrator.ensuringBundled(machines, user: bundledUser) ?? machines
+            let file = MachinesFile(machines: machines)
             do {
                 try file.encoded().write(toFile: path, atomically: true, encoding: .utf8)
                 log?.log("machines: migrated \(launchers.entries.count) launcher entries -> \(path)")
@@ -146,7 +165,19 @@ public enum MachinesFileLoader {
             return file
         }
         do {
-            return try MachinesFile.decode(String(contentsOfFile: path, encoding: .utf8))
+            let file = try MachinesFile.decode(String(contentsOfFile: path, encoding: .utf8))
+            // Existing installs predate the bundled fixtures; inject any that are
+            // missing and persist so their ids are stable from here on.
+            guard let grown = MachineMigrator.ensuringBundled(file.machines, user: bundledUser)
+            else { return file }
+            let updated = MachinesFile(machines: grown)
+            do {
+                try updated.encoded().write(toFile: path, atomically: true, encoding: .utf8)
+                log?.log("machines: added \(grown.count - file.machines.count) bundled fixture(s) -> \(path)")
+            } catch {
+                log?.log("machines: bundled-fixture write failed: \(error)")
+            }
+            return updated
         } catch {
             log?.log("machines: read/decode failed (\(error)); ignoring file")
             return MachinesFile(machines: [])

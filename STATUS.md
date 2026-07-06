@@ -1,69 +1,89 @@
-# Status 2026-07-05 (late)
+# Status 2026-07-06
 
-## Headline: Machine Manager P1c shipped (in-app editor, OS detection, per-OS boot). SunOS 4.1.4 boots + runs through the app. Graceful shutdown of 4.1.4 is the one open bug — daemon proven innocent, it's a macXserver-side thing, parked with a diagnostic in place.
+## Headline: The BSD graceful-shutdown bug is FIXED and validated on all 3 emulated guests + the real SS5. Plus a Machine-manager UI pass (bundled machines, sections, no Save button) in swift-x.
 
-## Shipped + committed (pushed to origin/main)
+Two threads this session. The big one: ran down why Helios graceful shutdown
+never powered off the BSD guests, fixed it in the daemon, and validated the whole
+per-OS daemon build+deploy+shutdown loop end to end. The other: polished the
+Machines window (bundled-machine model, list sections, auto-commit editor).
 
-- **`cba8a81` — Machine Manager P1c.** One unified Machines window (master list +
-  Overview/Settings tabs): add / edit / remove / clone machines + launchers in-app,
-  registry is authoritative, launcher-file reconcile retired. `GuestOSDetector`
-  (qcow2 banner scan) locks the OS at image-pick time. Per-OS boot wiring
-  (`unit=3` + `boot sd@3,0` for 4.1.4) — validated to multiuser via a headless
-  snapshot boot. Per-OS Helios host port (readiness/xterm/DNS-admin now hit the
-  right block). Console header shows the running OS.
+## What's working / done this session
 
-## Shipped this session (committing now, see the guest-OS-profile commit)
+### heliosAgent per-OS daemon fix (cx repo -- committed + pushed)
+- **Root cause found + fixed:** `performShutdown` hardcoded Solaris
+  `/usr/sbin/init 5` for every guest -> a silent no-op on the BSDs (the daemon
+  ACKs before running the command, so it looked like it worked). This was the
+  NetBSD bug AND the parked 4.1.4 bug -- the old "macXserver sends a bad secret"
+  theory was wrong (it trusted the ACK).
+- **Fix:** per-OS **compiled** shutdown default (`_NETBSD_` -> /sbin/halt,
+  `_SUNOS_` -> /usr/etc/halt, else /usr/sbin/init 5) -- can't be forgotten in an
+  rc script the way the env var was. `HELIOS_SHUTDOWN_CMD` still overrides.
+  `system()`'s return is now checked + logged. No `-p` needed (proven: /sbin/halt
+  exits qemu on NetBSD).
+- **Same-class fixes in one pass:** `search` uses an absolute per-OS grep
+  (`HELIOS_GREP` override) and returns ok:false on grep error instead of a silent
+  empty result; bounded search timeout (60s default) + max clamp; `eeprom`
+  resolved to an absolute path in the init script + deploy.sh (fixes 4.1.4
+  deny-all-on-reboot); deploy.sh chmod 600s the secret file; PROTOCOL.md per-OS
+  shutdown table + "ACK is not power-off" caveat. `make test` 133/0.
+- **Validated build -> deploy -> authenticated shutdown -> power off on ALL
+  THREE emulated guests** (NetBSD /sbin/halt ~9s, Solaris init 5 ~27s, SunOS
+  4.1.4 /usr/etc/halt ~18s) **and the real SS5** (running the 4.1.4 image; Todd
+  built+deployed there with secret "test", works).
+- Removed the stale `[macXserver] ... secret len` diagnostic from
+  QemuEngine.swift (it was chasing the wrong theory).
 
-- **Guest OS profile** (`MachineOS`, exhaustive switches; `GUEST_OS_PROFILE.md`).
-  The forcing function so a Solaris assumption can't silently break a BSD guest —
-  grew out of the shutdown bug. `QemuEngineConfig` carries a single `os` and
-  derives disk unit / boot-command / clean-halt markers / X bin dirs from it.
-  Routed the scattered Solaris literals (halt marker, X PATH in `launchXterm` +
-  `HeliosLauncher`) through it.
-- **Shutdown watchdog** — if the guest doesn't halt within 90s of an ACK'd
-  shutdown, surface "use Force Quit" instead of hanging (the no-silent-failure
-  half).
-- **Temporary diagnostic (REMOVE once shutdown is fixed):** `launchXterm` +
-  `requestShutdownViaDaemon` emit `[macXserver] {xterm,shutdown}: helios port N,
-  secret len M` to the console, to catch the shutdown-secret bug below.
+### Emu scripts set a helios secret (SPARCplug repo -- committed + pushed)
+- All three `emu/*-full.sh` inject `-prom-env helios-secret=$HELIOS_SECRET`
+  (default `sparcplug-emu-dev`) and write it to `/tmp/sparkplug` so the helios
+  CLI drives a booted guest agentically with no flags. This is what made the
+  ssh-less 4.1.4 build/deploy/test fully scriptable.
 
-## The one open bug: 4.1.4 graceful shutdown (Shut Down → Force Quit, VM never exits)
+### Machine-manager UI (swift-x -- committing now)
+- Non-runnable VM (no image) opens on the **Settings** tab, not Overview.
+- Machines window is 2x taller / 20% wider (984x1080).
+- **Bundled machines:** new persisted `bundled` flag on `Machine`; three imageless
+  bundled fixtures (Solaris 2.6 / SunOS 4.1.4 / NetBSD) seeded via
+  `MachineMigrator.ensuringBundled`; three master-list **sections** (Bundled /
+  Virtual / External), each sorted by name; bundled fixtures are protected from
+  removal (this is the real fix for "can't delete my VM" -- the old first-emulated
+  heuristic mis-tagged user VMs); editor locks a bundled machine's kind/host/OS;
+  engine wires to whichever bundled machine has an image attached.
+- **No Save button:** the detail form auto-commits at edit boundaries (Return,
+  leaving the pane, launcher edits) with inline validation. Uses `.onChange` /
+  `.onDisappear` (not @State-init) because the window is NSPanel-hosted.
+- swift test green throughout; `swift build` clean.
 
-**Symptom:** Start 4.1.4 → green → xterm works → click Shut Down → button flips to
-Force Quit, VM stays green, never exits. (Workaround: console login → `su` →
-`sync; sync; halt`, the gold path; or Force Quit.)
+## What's broken / open
 
-**Proven today (not guessed):**
-- The **daemon is innocent.** Hitting it directly via `~/dev/SPARCplug/helios/helios
-  --port 2135 shutdown` with the running guest's real secret (`/tmp/sparkplug`,
-  matches the qemu `-prom-env`) returns a clean `{"ok":true,"result":{"status":
-  "shutting down"}}`. Auth is uniform across verbs (`Dispatch.cpp` authOk before
-  dispatch); `hello`/`run`/`shutdown` are the same request shape. So the daemon
-  accepts shutdown with the correct secret.
-- Therefore **macXserver is sending a bad shutdown request** — almost certainly a
-  wrong/empty secret (or, if the secret turns out correct, a read race against the
-  daemon closing the connection right after the ACK — the daemon DOES stop
-  listening post-shutdown, confirmed).
-- Every static code path says shutdown should send the same `currentSecret` that
-  xterm/readiness use (same engine, `controller?.engine`), so the divergence is a
-  runtime state I couldn't pin statically.
+- **macXserver console + engine are single-instance (P2 not done).** Diagnosed
+  but NOT fixed: one `sparcConsole` + one engine wired to a single resolved
+  machine, so attaching images to multiple bundled machines makes the console
+  follow/steal and non-wired machines lose their Console button. This is the P2
+  concurrency work (per-machine console + engine). Todd hasn't picked an approach
+  yet (asked: full P2 / plan-first / interim). The per-OS host-port blocks already
+  make concurrent bundled VMs collision-free, so the groundwork is there.
+- **Bundled fixtures need images.** On next macXserver launch the three bundled
+  fixtures appear imageless; Todd deletes his old migrated machines and attaches
+  images to test. (His call, in-app.)
 
-**Tomorrow, first thing:** rebuild, repro (Start → green → xterm → Shut Down), read
-the two `[macXserver] … secret len` lines in the console.
-- `shutdown secret len == 0/-1` → empty secret at shutdown → hunt the engine/secret
-  mismatch (suspect: two engine instances, or `currentSecret` nil on the engine the
-  console's `controller?.engine` resolves to). Then remove the diagnostic.
-- `shutdown secret len == xterm's (~32)` → NOT the secret → fix is in
-  `HeliosClient.readEnvelope` racing the daemon's close-after-ACK.
+## What's next
+- Decide + do the P2 per-machine console/engine (the console-hijack fix).
+- Rebuild macXserver in Xcode to see all the Machine-manager UI changes.
+- Optional real-SS5 shutdown-verb test (powers off the live machine -- Todd's to run).
+- Deferred daemon items (noted in memory): `-b` bind-addr option, accept()
+  backoff, NUL-truncation in cx/process, search colon-in-name parser nit.
 
-Then: land the real per-OS shutdown command guest-side (`HELIOS_SHUTDOWN_CMD=
-/usr/etc/halt` on 4.1.4, `/sbin/halt` NetBSD, in the SPARCplug guest-config
-deploy — see SHORTCUTS "per-OS shutdown"), so once auth is fixed the daemon runs a
-command that actually halts 4.1.4 (today it runs Solaris `/usr/sbin/init 5`, a
-no-op there).
+## Committed this session (all pushed to origin/main)
+- cx `heliosAgent` **685f705** -- per-OS shutdown/grep/eeprom daemon fixes.
+- SPARCplug **b54073a** -- emu scripts inject helios secret + /tmp/sparkplug.
+- swift-x (this commit) -- Machine-manager UI + bundled machines + diagnostic removal.
 
-## Housekeeping / gotchas
-- I killed the running 4.1.4 daemon with a CLI `shutdown` test — the VM's qemu is
-  still up but its daemon is dead (connection refused). Force Quit or `sync;sync;
-  halt` it before tomorrow's clean repro.
-- swift test 1469 pass. No new source files → no xcodegen needed.
+## Switching Macs
+- All three affected repos pushed to origin/main; `git pull` on the other Mac.
+- Let Dropbox finish syncing the memory dir + the cx tree before opening the
+  other Mac (memory rides Dropbox now, not git).
+- No VM running (all guests powered off by the shutdown tests). No image locks.
+- The real SS5 on the LAN is running the 4.1.4 image with the fixed agent
+  (secret "test"); leave its /etc/helios/helios.json alone on any redeploy.
+- macXserver must be rebuilt in Xcode on the other Mac to pick up the UI work.
