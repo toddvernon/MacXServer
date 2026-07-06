@@ -23,6 +23,10 @@ struct MachineDetailForm: View {
     /// The guest-OS detection for the current image, run off-main at pick time (and
     /// on appear) for an image-backed emulated VM. nil until it has run.
     @State private var osDetection: GuestOSDetection?
+    /// Set when an image was REFUSED because it doesn't match a bundled
+    /// fixture's fixed OS (fool-proofing: you can't attach the NetBSD image to
+    /// the Solaris machine). Cleared on the next pick.
+    @State private var imageMismatchNote: String?
 
     init(machine: Machine, model: MachinesModel) {
         self.model = model
@@ -73,17 +77,33 @@ struct MachineDetailForm: View {
     /// Query the assigned image for its guest OS (off the main thread) and, when
     /// confident, adopt it -- the image is the source of truth, so this corrects a
     /// config that drifted (e.g. migration's guessed `solaris26` on a SunOS image).
-    /// Non-emulated / image-less machines clear the detection and keep a free picker.
+    /// On a BUNDLED fixture the OS is fixed identity, so the logic inverts: a
+    /// confidently-detected MISMATCH refuses the image outright (fool-proofing --
+    /// the wrong image can never attach to the wrong machine) instead of
+    /// mutating the fixture. Non-emulated / image-less machines clear the
+    /// detection and keep a free picker.
     @MainActor
     private func runOSDetection() async {
         guard draft.kind == .emulatedVM, let path = draft.imagePath, !path.isEmpty else {
             osDetection = nil
             return
         }
+        imageMismatchNote = nil
         let result = await Task.detached { GuestOSDetector.detect(imagePath: path) }.value
         guard draft.imagePath == path else { return }   // path changed mid-scan
         osDetection = result
-        if let detected = result.os, draft.os != detected { draft.os = detected }
+        if bundled {
+            if let detected = result.os, let fixed = draft.os, detected != fixed {
+                draft.imagePath = nil
+                osDetection = nil
+                imageMismatchNote = "That image contains \(detected.displayName), but this "
+                    + "is the \(fixed.displayName) machine \u{2014} not attached. Use the "
+                    + "\(detected.displayName) machine for it (or a new machine)."
+                commit()   // persist the refusal so the bad path never lands
+            }
+        } else if let detected = result.os, draft.os != detected {
+            draft.os = detected
+        }
     }
 
     // MARK: Sections
@@ -197,6 +217,12 @@ struct MachineDetailForm: View {
                       systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
+            }
+            if let mismatch = imageMismatchNote {
+                Label(mismatch, systemImage: "xmark.octagon.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             LabeledField("Memory") {
                 HStack(spacing: 6) {
