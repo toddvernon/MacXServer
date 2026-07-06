@@ -12,11 +12,16 @@ import SwiftXCaptureUI
 struct DnsAdminPanelView: View {
 
     @StateObject private var model: DnsAdminPanelModel
+    private let machineName: String
 
-    init(secretProvider: @escaping () -> String?,
-         portProvider: @escaping () -> UInt16) {
+    init(machineName: String,
+         secretProvider: @escaping () -> String?,
+         portProvider: @escaping () -> UInt16,
+         onApplied: (() -> Void)? = nil) {
+        self.machineName = machineName
         _model = StateObject(wrappedValue: DnsAdminPanelModel(
-            secretProvider: secretProvider, portProvider: portProvider))
+            secretProvider: secretProvider, portProvider: portProvider,
+            onApplied: onApplied))
     }
 
     var body: some View {
@@ -49,7 +54,7 @@ struct DnsAdminPanelView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("DNS")
                     .font(.title2)
-                Text("Edit /etc/resolv.conf on the running SPARCstation.")
+                Text("Edit /etc/resolv.conf on \(machineName).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -109,15 +114,19 @@ final class DnsAdminPanelModel: ObservableObject {
     // permission bits rather than guessing.
     private var loadedMode: Int?
     private let secretProvider: () -> String?
-    /// The bundled guest's Helios host port (per-OS: 2125 Solaris, 2135 SunOS
-    /// 4.1.4, ...). Without this the admin call would hit the Solaris default and
-    /// silently fail against a non-Solaris guest.
+    /// The machine's Helios host port (per-machine: 2125 Solaris, 2135 SunOS
+    /// 4.1.4, ...). Without this the admin call would dial the wrong guest.
     private let portProvider: () -> UInt16
+    /// Fired on the main actor after a successful Apply; the window controller
+    /// uses it to dismiss the panel (applying is the end of the task).
+    private let onApplied: (() -> Void)?
 
     init(secretProvider: @escaping () -> String?,
-         portProvider: @escaping () -> UInt16) {
+         portProvider: @escaping () -> UInt16,
+         onApplied: (() -> Void)? = nil) {
         self.secretProvider = secretProvider
         self.portProvider = portProvider
+        self.onApplied = onApplied
     }
 
     // MARK: - Helios I/O
@@ -187,7 +196,8 @@ final class DnsAdminPanelModel: ObservableObject {
                 switch outcome {
                 case .success:
                     self.dirty = false
-                    self.setBanner("Applied. \(Self.remotePath) written to the SPARCstation.", error: false)
+                    self.setBanner("Applied. \(Self.remotePath) written to the guest.", error: false)
+                    self.onApplied?()
                 case .failure(let error):
                     self.setBanner("Apply failed: \(Self.describe(error))", error: true)
                 }

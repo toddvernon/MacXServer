@@ -10,18 +10,23 @@ import SwiftXServerCore
 
 final class DnsAdminWindowController: NSWindowController {
 
-    init(secretProvider: @escaping () -> String?,
+    init(machineName: String,
+         secretProvider: @escaping () -> String?,
          portProvider: @escaping () -> UInt16) {
-        let hostingView = NSHostingView(rootView: DnsAdminPanelView(
-            secretProvider: secretProvider, portProvider: portProvider))
-
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .utilityWindow],
             backing: .buffered,
             defer: false
         )
-        panel.title = "SPARCstation Admin: DNS"
+        // A successful Apply is the natural end of the task, so the window
+        // dismisses itself; failures keep it open with the error banner.
+        let hostingView = NSHostingView(rootView: DnsAdminPanelView(
+            machineName: machineName,
+            secretProvider: secretProvider, portProvider: portProvider,
+            onApplied: { [weak panel] in panel?.close() }))
+
+        panel.title = "\(machineName) Admin: DNS"
         panel.contentView = hostingView
         panel.isReleasedWhenClosed = false
         panel.minSize = NSSize(width: 560, height: 420)

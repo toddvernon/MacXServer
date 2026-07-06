@@ -248,7 +248,7 @@ private struct MachineOverviewPage: View {
 
     @ViewBuilder private func launchers(_ row: MachineRow) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Launchers").font(.headline)
+            MachineSectionHeader("Launchers")
             if row.launchers.isEmpty {
                 Text("No launchers. Add them in Settings.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -268,6 +268,19 @@ private struct MachineOverviewPage: View {
                 }
             }
         }
+    }
+}
+
+/// Section header shared by the Overview and Settings pages: larger than body
+/// text and accent-blue, so the sections read at a glance (Todd's call
+/// 2026-07-06 -- the .headline versions disappeared into the form).
+struct MachineSectionHeader: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text)
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(.blue)
     }
 }
 

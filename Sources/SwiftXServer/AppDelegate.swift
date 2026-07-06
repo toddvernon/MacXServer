@@ -850,11 +850,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         editMenuItem.submenu = editMenu
         main.addItem(editMenuItem)
 
-        // Server menu -- the X server as a quiet service: its live status and the
-        // occasional control (Drop All Clients, moved here from the App menu). The
-        // config (scale, clipboard, Motif frame) stays in Preferences.
+        // X11Server menu -- the X server as a quiet service: its live status and
+        // the occasional control (Drop All Clients, moved here from the App menu).
+        // The config (scale, clipboard, Motif frame) stays in Preferences.
         let serverMenuItem = NSMenuItem()
-        let serverMenu = NSMenu(title: "Server")
+        let serverMenu = NSMenu(title: "X11Server")
         serverMenu.autoenablesItems = false
         let serverStatus = NSMenuItem(title: listenerStatus, action: nil, keyEquivalent: "")
         serverStatus.isEnabled = false
@@ -966,6 +966,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if dnsAdminControllers[id] == nil {
             let port = m.resolvedPorts.helios
             dnsAdminControllers[id] = DnsAdminWindowController(
+                machineName: m.name,
                 secretProvider: { [weak self] in self?.registry?.controller(id)?.engine.currentSecret },
                 portProvider: { port })
         }

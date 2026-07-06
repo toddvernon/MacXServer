@@ -348,7 +348,7 @@ struct MachineDetailForm: View {
     }
 
     private func sectionHeader(_ text: String) -> some View {
-        Text(text).font(.headline)
+        MachineSectionHeader(text)
     }
 
     private func helpNote(_ text: String) -> some View {
