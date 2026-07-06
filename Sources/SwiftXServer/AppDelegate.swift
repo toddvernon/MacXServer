@@ -211,6 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.onConsole   = { [weak self] id in self?.showConsoleWindow(id) }
         model.onLaunch    = { [weak self] id, name in self?.launchFromMachine(id, launcherName: name) }
         model.onSetHeliosSecret = { [weak self] id in self?.promptHeliosSecret(for: id) }
+        model.onDnsAdmin  = { [weak self] id in self?.openDnsAdmin(machineID: id) }
 
         // Edit (master toolbar + Settings tab).
         model.onAddNew = { [weak self] in
@@ -345,6 +346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             canForceQuit: (state == .running || state == .shuttingDown),
             canBackup: (state == .stopped),
             canConsole: (consoles[m.id] != nil),
+            canDnsAdmin: (isEmulated && state == .running && ready),
             canSetHeliosSecret: !isEmulated,
             launchers: chips)
     }
@@ -954,7 +956,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @MainActor
     @objc private func openDnsAdmin(_ sender: Any?) {
-        guard let id = machineID(from: sender), let m = registry?.machine(id) else { return }
+        guard let id = machineID(from: sender) else { return }
+        openDnsAdmin(machineID: id)
+    }
+
+    @MainActor
+    private func openDnsAdmin(machineID id: UUID) {
+        guard let m = registry?.machine(id) else { return }
         if dnsAdminControllers[id] == nil {
             let port = m.resolvedPorts.helios
             dnsAdminControllers[id] = DnsAdminWindowController(

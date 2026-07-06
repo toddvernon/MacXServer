@@ -38,6 +38,9 @@ struct MachineRow: Identifiable, Equatable {
     let canForceQuit: Bool
     let canBackup: Bool
     let canConsole: Bool
+    /// DNS admin talks to the guest's Helios daemon, so it needs the machine
+    /// running and ready. Emulated VMs only.
+    let canDnsAdmin: Bool
 
     /// External hosts carry a Helios daemon secret the user enters (bundled VMs
     /// get theirs per-boot automatically). True → show the "Helios Secret" control.
@@ -79,6 +82,8 @@ final class MachinesModel: ObservableObject {
     /// (machineID, launcherName)
     var onLaunch: ((UUID, String) -> Void)?
     var onSetHeliosSecret: ((UUID) -> Void)?
+    /// Open the machine's DNS (/etc/resolv.conf) admin window.
+    var onDnsAdmin: ((UUID) -> Void)?
 
     // Edit actions (master toolbar + Settings page).
     /// Add a fresh default machine, persist it, and return its id to select.

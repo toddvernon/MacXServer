@@ -228,6 +228,10 @@ private struct MachineOverviewPage: View {
                 }
                 Button("Console") { model.onConsole?(row.id) }.disabled(!row.canConsole)
                 Button("Back Up") { model.onBackup?(row.id) }.disabled(!row.canBackup)
+                Button("DNS\u{2026}") { model.onDnsAdmin?(row.id) }
+                    .disabled(!row.canDnsAdmin)
+                    .help("Edit the guest's /etc/resolv.conf over Helios (needs the "
+                        + "machine running and ready)")
             }
             .buttonStyle(.bordered)
             .controlSize(.large)

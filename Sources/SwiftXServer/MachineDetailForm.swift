@@ -40,7 +40,10 @@ struct MachineDetailForm: View {
             VStack(alignment: .leading, spacing: 16) {
                 identitySection
                 connectionSection
-                if draft.kind == .emulatedVM { imageSection }
+                if draft.kind == .emulatedVM {
+                    imageSection
+                    runtimeSection
+                }
                 launchersSection
             }
             .padding(20)
@@ -184,17 +187,31 @@ struct MachineDetailForm: View {
             helpNote("Keeps a dated \u{201C}last known good\u{201D} copy next to the image "
                    + "whenever this machine shuts down cleanly. Only the most recent few "
                    + "are kept; manual backups are never pruned.")
-            helpNote(runtimeCaption)
         }
     }
 
-    /// The machine's assigned runtime identity (host ports + guest MAC), shown
-    /// so the user can see what the tooling should dial. Read-only: ports are
-    /// sticky-assigned by the registry, the MAC derives from the machine's id.
-    private var runtimeCaption: String {
+    /// The machine's assigned runtime identity: the Mac-side host ports the
+    /// tooling dials (sticky -- assigned once by the registry, never move for
+    /// the life of the machine) and the guest MAC (derived from the machine's
+    /// id; stable across boots, unique per machine). Read-only by design.
+    private var runtimeSection: some View {
         let p = draft.resolvedPorts
-        return "Ports: telnet \(p.telnet) \u{00B7} ssh \(p.ssh) \u{00B7} helios \(p.helios)"
-            + "   MAC: \(draft.resolvedMacAddress)"
+        return VStack(alignment: .leading, spacing: 10) {
+            sectionHeader("Runtime")
+            LabeledField("Ports") {
+                Text("telnet \(String(p.telnet)) \u{00B7} ssh \(String(p.ssh)) \u{00B7} helios \(String(p.helios))")
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+            }
+            LabeledField("MAC") {
+                Text(draft.resolvedMacAddress)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+            }
+            helpNote("Assigned to this machine when it was created and never change, "
+                   + "so scripts and tooling can rely on them. Ports are this Mac's "
+                   + "forwards into the guest (telnet/ssh/helios).")
+        }
     }
 
     private func revealImageInFinder() {
