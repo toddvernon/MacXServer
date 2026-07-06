@@ -1,89 +1,115 @@
 # Status 2026-07-06
 
-## Headline: The BSD graceful-shutdown bug is FIXED and validated on all 3 emulated guests + the real SS5. Plus a Machine-manager UI pass (bundled machines, sections, no Save button) in swift-x.
+## Headline: P2 concurrency SHIPPED. N machines run at once with per-machine engines, consoles, sticky ports, and derived MACs. Plus a big UI polish pass from live testing, a state-vs-editability audit, and the image-download design settled.
 
-Two threads this session. The big one: ran down why Helios graceful shutdown
-never powered off the BSD guests, fixed it in the daemon, and validated the whole
-per-OS daemon build+deploy+shutdown loop end to end. The other: polished the
-Machines window (bundled-machine model, list sections, auto-commit editor).
+One long session, one theme: the multi-VM runtime (the refactor doc's P2,
+deferred milestone #6) went from open question to shipped and polished. Todd
+live-tested all three guests booting concurrently on this Mac during the
+session.
 
 ## What's working / done this session
 
-### heliosAgent per-OS daemon fix (cx repo -- committed + pushed)
-- **Root cause found + fixed:** `performShutdown` hardcoded Solaris
-  `/usr/sbin/init 5` for every guest -> a silent no-op on the BSDs (the daemon
-  ACKs before running the command, so it looked like it worked). This was the
-  NetBSD bug AND the parked 4.1.4 bug -- the old "macXserver sends a bad secret"
-  theory was wrong (it trusted the ACK).
-- **Fix:** per-OS **compiled** shutdown default (`_NETBSD_` -> /sbin/halt,
-  `_SUNOS_` -> /usr/etc/halt, else /usr/sbin/init 5) -- can't be forgotten in an
-  rc script the way the env var was. `HELIOS_SHUTDOWN_CMD` still overrides.
-  `system()`'s return is now checked + logged. No `-p` needed (proven: /sbin/halt
-  exits qemu on NetBSD).
-- **Same-class fixes in one pass:** `search` uses an absolute per-OS grep
-  (`HELIOS_GREP` override) and returns ok:false on grep error instead of a silent
-  empty result; bounded search timeout (60s default) + max clamp; `eeprom`
-  resolved to an absolute path in the init script + deploy.sh (fixes 4.1.4
-  deny-all-on-reboot); deploy.sh chmod 600s the secret file; PROTOCOL.md per-OS
-  shutdown table + "ACK is not power-off" caveat. `make test` 133/0.
-- **Validated build -> deploy -> authenticated shutdown -> power off on ALL
-  THREE emulated guests** (NetBSD /sbin/halt ~9s, Solaris init 5 ~27s, SunOS
-  4.1.4 /usr/etc/halt ~18s) **and the real SS5** (running the 4.1.4 image; Todd
-  built+deployed there with secret "test", works).
-- Removed the stale `[macXserver] ... secret len` diagnostic from
-  QemuEngine.swift (it was chasing the wrong theory).
+### P2 concurrency (swift-x -- the big one, ab998ea)
+- Every emulated VM has full lifecycle; any number run at once. Fresh
+  MachineController per start built from machine.makeEngineConfig() (image /
+  memory / ports / MAC / OS all off the machine; makeSparcConfig and the
+  Preferences image sync are deleted; sparcplug.diskImagePath is
+  migration-read-only legacy now).
+- Per-machine console windows keyed by machine id -- the console follow/steal
+  bug is structurally gone. Per-machine DNS admin windows too.
+- **Sticky port assignment** (Todd's call: "dynamic by assignment time, not by
+  invocation"). User VMs get ImagePorts.block(n>=5) = 21n3/22n2/21n5 assigned
+  ONCE by the registry and persisted; bundled fixtures keep deriving their
+  well-known per-OS blocks 2-4; clones get fresh blocks; start-time
+  portConflict guard covers hand-edited JSON.
+- Guest MAC derives from machine id (02: + five id bytes) -- the shared
+  DE:AD:BE:EF:F3:E5 duplicate-MAC latent bug is dead.
+- **/tmp/sparkplug is retired** (toggle + Config window + plumbing deleted).
+  The image lock now records heliosPort next to the secret, so the lock is
+  the complete reach-the-daemon handle and the interim Claude channel until
+  the MCP bridge. HeliosClient requires an explicit port. snapshot() carries
+  heliosPort as bridge groundwork.
+- Whole-fleet flows: launch orphan scan per machine, quit dialog covers N
+  running guests, per-machine autoBackup (was the global pref).
+- DECISIONS.md 2026-07-06 entry; SHORTCUTS P1-transitional entries closed;
+  MACHINE_MANAGER_REFACTOR.md "Shipped 2026-07-06" section.
 
-### Emu scripts set a helios secret (SPARCplug repo -- committed + pushed)
-- All three `emu/*-full.sh` inject `-prom-env helios-secret=$HELIOS_SECRET`
-  (default `sparcplug-emu-dev`) and write it to `/tmp/sparkplug` so the helios
-  CLI drives a booted guest agentically with no flags. This is what made the
-  ssh-less 4.1.4 build/deploy/test fully scriptable.
+### UI polish rounds (Todd live-testing, ~9 commits)
+- Runtime section (ports + MAC, monospace, selectable) + Machine DNS section
+  (Edit gated on ready) in Settings; DNS button removed from Overview.
+- DNS window: titled per machine, Apply dismisses on success, explicit
+  Dismiss button (Esc). Todd's dialog conventions saved to memory.
+- Section headers: dark blue, title3 semibold, air above; machine-name title
+  outranks them (title2). Content inset 16pt under every section header;
+  transport pickers left-aligned (frame-centering bug).
+- Menu bar "Server" -> "X11Server". Overview states capitalized. Status dot
+  dropped from Overview; boot/shutdown **thermometer** added instead (yellow
+  while moving, green at ready, recedes through shutdown).
+- **No console auto-pop** on start/stop/reconnect (consoles are created
+  silently so they record from byte one; boot-stalled still pops). Launch
+  reconnect is ONE dialog for all orphans; reconnected consoles get an
+  injected "** reconnected to console **" banner with the lock's instance
+  facts (the old diagnostic went down a path the terminal never rendered --
+  that was the black-window mystery).
+- "X11 Launchers" section name; Overview byline has a blue Edit link that
+  hops to Settings.
+- Bundled fixtures seed the seven-color xterm palette (from the ipc set, no
+  passwords); Todd's live machines.json seeded by hand in the same change
+  (backup at ~/.macxserver-machines.json.bak-xterm-seed).
 
-### Machine-manager UI (swift-x -- committing now)
-- Non-runnable VM (no image) opens on the **Settings** tab, not Overview.
-- Machines window is 2x taller / 20% wider (984x1080).
-- **Bundled machines:** new persisted `bundled` flag on `Machine`; three imageless
-  bundled fixtures (Solaris 2.6 / SunOS 4.1.4 / NetBSD) seeded via
-  `MachineMigrator.ensuringBundled`; three master-list **sections** (Bundled /
-  Virtual / External), each sorted by name; bundled fixtures are protected from
-  removal (this is the real fix for "can't delete my VM" -- the old first-emulated
-  heuristic mis-tagged user VMs); editor locks a bundled machine's kind/host/OS;
-  engine wires to whichever bundled machine has an image attached.
-- **No Save button:** the detail form auto-commits at edit boundaries (Return,
-  leaving the pane, launcher edits) with inline validation. Uses `.onChange` /
-  `.onDisappear` (not @State-init) because the window is NSPanel-hosted.
-- swift test green throughout; `swift build` clean.
+### State-vs-editability audit (pre-test-phase deep dive, 524a310)
+Seven findings, all fixed: kind/OS frozen while live; host locked on all
+emulated VMs; the stale-draft race closed (commit() drops runtime-frozen
+edits -- a Return could previously swap the image under a running qemu and
+poison the termination auto-backup); ALL launcher transports gate on ready
+for emulated machines; kind flip emulated->external sheds the port block;
+removing a machine closes its console/DNS windows. Matrix recorded in
+SHORTCUTS under "Machine editor: validation gaps".
+
+### Fool-proof image attach + download design (af8cd85, 4dd181c)
+- Bundled fixtures now REFUSE a picked image whose detected OS mismatches
+  (used to silently mutate the fixture's OS).
+- IMAGE_DOWNLOAD_PLAN.md: per-OS catalog on **oldsilicon.com** (settled: all
+  three OSes ship -- Todd already distributes them there for ZuluSCSI),
+  zero-choice bundled download (only knob is a global images dir),
+  identity-derived filenames so a user can download a second copy and run
+  two NetBSDs, three-layer verification (gz sha256, raw sha256, banner
+  check). Build after the test phase (~a day + SPARCplug build-catalog.sh).
+
+### SPARCplug: emu-script port preflight (ef32e68)
+emu/portcheck.sh (sourced like imagelock.sh) refuses to launch when the OS
+block's ports are already bound (the same-OS-different-image clash the image
+lock can't catch), naming the holder. Verified against a live listener.
 
 ## What's broken / open
-
-- **macXserver console + engine are single-instance (P2 not done).** Diagnosed
-  but NOT fixed: one `sparcConsole` + one engine wired to a single resolved
-  machine, so attaching images to multiple bundled machines makes the console
-  follow/steal and non-wired machines lose their Console button. This is the P2
-  concurrency work (per-machine console + engine). Todd hasn't picked an approach
-  yet (asked: full P2 / plan-first / interim). The per-OS host-port blocks already
-  make concurrent bundled VMs collision-free, so the groundwork is there.
-- **Bundled fixtures need images.** On next macXserver launch the three bundled
-  fixtures appear imageless; Todd deletes his old migrated machines and attaches
-  images to test. (His call, in-app.)
+- Nothing known-broken. swift build clean, **swift test 1482 pass**.
+- Rebuild in Xcode to pick up everything (many UI changes since the last
+  rebuild).
+- SHORTCUTS still tracks: image collision warns-not-blocks at pick time,
+  networkMode not editable (only slirp wired), external-host reachability
+  dot, BSD cleanHaltMarkers best-effort.
 
 ## What's next
-- Decide + do the P2 per-machine console/engine (the console-hijack fix).
-- Rebuild macXserver in Xcode to see all the Machine-manager UI changes.
-- Optional real-SS5 shutdown-verb test (powers off the live machine -- Todd's to run).
-- Deferred daemon items (noted in memory): `-b` bind-addr option, accept()
-  backoff, NUL-truncation in cx/process, search colon-in-name parser nit.
+- **Todd's test phase** on the P2 build (the audit matrix in SHORTCUTS is the
+  checklist).
+- **MCP bridge** (next lead): consume MachineRegistry.snapshot() (already
+  carries heliosPort) + hand Claude per-machine secrets.
+- Image download implementation per IMAGE_DOWNLOAD_PLAN.md (after testing).
+- Deferred daemon items unchanged (-b bind-addr, accept() backoff, NUL
+  truncation in cx/process).
 
 ## Committed this session (all pushed to origin/main)
-- cx `heliosAgent` **685f705** -- per-OS shutdown/grep/eeprom daemon fixes.
-- SPARCplug **b54073a** -- emu scripts inject helios secret + /tmp/sparkplug.
-- swift-x (this commit) -- Machine-manager UI + bundled machines + diagnostic removal.
+- swift-x: ab998ea (P2), 87b4d20, fe36496, ea23102, 2a05b16, 26750f9,
+  7a83c81, c1df852, f7c74bf, e579c3f, 4d2da5c, 07a44e2 (xterm seed),
+  524a310 (audit), af8cd85 (mismatch guard + download plan), 4dd181c.
+- SPARCplug: ef32e68 (port preflight).
 
 ## Switching Macs
-- All three affected repos pushed to origin/main; `git pull` on the other Mac.
-- Let Dropbox finish syncing the memory dir + the cx tree before opening the
-  other Mac (memory rides Dropbox now, not git).
-- No VM running (all guests powered off by the shutdown tests). No image locks.
-- The real SS5 on the LAN is running the 4.1.4 image with the fixed agent
+- git pull on the other Mac; rebuild macXserver in Xcode there.
+- Let Dropbox finish syncing the memory dir before opening the other Mac
+  (memory got: machine-manager P2 update, /tmp/sparkplug retirement,
+  dialog-conventions feedback).
+- All guests are powered off; no image locks. Todd's machines.json has the
+  seeded xterm launchers (pre-seed backup sits next to it).
+- The real SS5 on the LAN still runs the 4.1.4 image with the fixed agent
   (secret "test"); leave its /etc/helios/helios.json alone on any redeploy.
-- macXserver must be rebuilt in Xcode on the other Mac to pick up the UI work.
