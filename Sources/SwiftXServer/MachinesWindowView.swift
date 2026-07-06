@@ -206,9 +206,10 @@ private struct MachineOverviewPage: View {
         }
     }
 
+    /// No dot here (the master list carries it); the thermometer below is the
+    /// Overview's state color.
     private func statusLine(_ row: MachineRow) -> some View {
         HStack(spacing: 10) {
-            StatusDotView(dot: row.dot, progress: row.progress)
             Text(row.statusText).font(.system(size: 15, weight: .medium))
             Spacer()
             Text(row.subtitle).font(.caption).foregroundStyle(.secondary)
@@ -217,12 +218,13 @@ private struct MachineOverviewPage: View {
     }
 
     /// The boot/shutdown thermometer, mirroring the console window's bar: grows
-    /// through boot, pegs full and flips green once the guest is ready, recedes
-    /// through shutdown, sits empty when stopped. Emulated machines only (an
-    /// external host has no lifecycle we own).
+    /// yellow through boot (matching the booting dot), pegs full and flips green
+    /// once the guest is ready, recedes through shutdown, sits empty when
+    /// stopped. Emulated machines only (an external host has no lifecycle we
+    /// own).
     @ViewBuilder private func bootBar(_ row: MachineRow) -> some View {
         if row.isEmulated {
-            let accent: Color = (row.dot == .running) ? .green : .blue
+            let accent: Color = (row.dot == .running) ? .green : .yellow
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(accent.opacity(0.15))
