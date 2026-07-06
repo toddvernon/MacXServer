@@ -93,6 +93,9 @@ public struct CreateWindow: Equatable, Sendable {
         let visual = try r.readUInt32()
         let valueMask = try r.readUInt32()
         let valueListBytes = (lenIn4 - 8) * 4
+        try validateValueList(byteCount: valueListBytes,
+                              maskPopcount: valueMask.nonzeroBitCount,
+                              request: "CreateWindow")
         let valueList = try r.readBytes(valueListBytes)
         return CreateWindow(
             depth: depth,

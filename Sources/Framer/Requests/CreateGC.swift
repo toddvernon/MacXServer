@@ -41,6 +41,9 @@ public struct CreateGC: Equatable, Sendable {
         let drawable = try r.readUInt32()
         let valueMask = try r.readUInt32()
         let valueListBytes = (lenIn4 - 4) * 4
+        try validateValueList(byteCount: valueListBytes,
+                              maskPopcount: valueMask.nonzeroBitCount,
+                              request: "CreateGC")
         let valueList = try r.readBytes(valueListBytes)
         return CreateGC(cid: cid, drawable: drawable, valueMask: valueMask, valueList: valueList)
     }

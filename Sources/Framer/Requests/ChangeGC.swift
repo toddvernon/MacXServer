@@ -32,7 +32,11 @@ public struct ChangeGC: Equatable, Sendable {
         let lenIn4 = Int(try r.readUInt16())
         let gc = try r.readUInt32()
         let valueMask = try r.readUInt32()
-        let valueList = try r.readBytes((lenIn4 - 3) * 4)
+        let valueListBytes = (lenIn4 - 3) * 4
+        try validateValueList(byteCount: valueListBytes,
+                              maskPopcount: valueMask.nonzeroBitCount,
+                              request: "ChangeGC")
+        let valueList = try r.readBytes(valueListBytes)
         return ChangeGC(gc: gc, valueMask: valueMask, valueList: valueList)
     }
 }

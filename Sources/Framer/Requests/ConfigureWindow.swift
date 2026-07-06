@@ -36,7 +36,11 @@ public struct ConfigureWindow: Equatable, Sendable {
         let window = try r.readUInt32()
         let valueMask = try r.readUInt16()
         _ = try r.readUInt16()
-        let valueList = try r.readBytes((lenIn4 - 3) * 4)
+        let valueListBytes = (lenIn4 - 3) * 4
+        try validateValueList(byteCount: valueListBytes,
+                              maskPopcount: valueMask.nonzeroBitCount,
+                              request: "ConfigureWindow")
+        let valueList = try r.readBytes(valueListBytes)
         return ConfigureWindow(window: window, valueMask: valueMask, valueList: valueList)
     }
 }

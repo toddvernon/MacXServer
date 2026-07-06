@@ -37,6 +37,9 @@ public struct ChangeWindowAttributes: Equatable, Sendable {
         let window = try r.readUInt32()
         let valueMask = try r.readUInt32()
         let valueListBytes = (lenIn4 - 3) * 4
+        try validateValueList(byteCount: valueListBytes,
+                              maskPopcount: valueMask.nonzeroBitCount,
+                              request: "ChangeWindowAttributes")
         let valueList = try r.readBytes(valueListBytes)
         return ChangeWindowAttributes(window: window, valueMask: valueMask, valueList: valueList)
     }

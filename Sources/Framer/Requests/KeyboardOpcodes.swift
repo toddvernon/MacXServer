@@ -45,6 +45,11 @@ public struct ChangeKeyboardMapping: Equatable, Sendable {
         _ = try r.readUInt16()
         let firstKeyCode = try r.readUInt8()
         let keysymsPerKeycode = try r.readUInt8()
+        guard keysymsPerKeycode > 0 else {
+            // A zero per-keycode count would trap the init precondition (and
+            // its modulo). Malformed request → BadValue, not a crash.
+            throw FramerError.malformedRequest(name: "ChangeKeyboardMapping")
+        }
         try r.skip(2)
         var keysyms: [UInt32] = []
         keysyms.reserveCapacity(n * Int(keysymsPerKeycode))
@@ -95,7 +100,11 @@ public struct ChangeKeyboardControl: Equatable, Sendable {
         _ = try r.readUInt8()
         let lenIn4 = Int(try r.readUInt16())
         let valueMask = try r.readUInt32()
-        let valueList = try r.readBytes((lenIn4 - 2) * 4)
+        let valueListBytes = (lenIn4 - 2) * 4
+        try validateValueList(byteCount: valueListBytes,
+                              maskPopcount: valueMask.nonzeroBitCount,
+                              request: "ChangeKeyboardControl")
+        let valueList = try r.readBytes(valueListBytes)
         return ChangeKeyboardControl(valueMask: valueMask, valueList: valueList)
     }
 }
