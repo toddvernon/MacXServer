@@ -32,6 +32,10 @@ public final class HeliosLauncher: @unchecked Sendable {
     private let displayString: String
     /// The running guest's per-launch Helios secret (from `QemuEngine.currentSecret`).
     private let secret: String?
+    /// The guest's X bin dirs, prepended to PATH so a bare `xterm` resolves under
+    /// the daemon's minimal env. Per-OS (from `MachineOS.xBinDirs`); defaults to
+    /// the Solaris set for callers that don't specify.
+    private let xBinDirs: String
     /// Serializes the launcher's own state (callbacks, completion, cancelled);
     /// the blocking daemon call runs off this queue so cancel() stays responsive.
     private let queue = DispatchQueue(label: "swiftx.helios-launcher")
@@ -40,10 +44,12 @@ public final class HeliosLauncher: @unchecked Sendable {
     private var textCallback: ((String, Bool) -> Void)?
     private var cancelled = false
 
-    public init(entry: LauncherEntry, displayString: String, secret: String? = nil) {
+    public init(entry: LauncherEntry, displayString: String, secret: String? = nil,
+                xBinDirs: String = "/usr/openwin/bin:/usr/dt/bin:/usr/bin/X11") {
         self.entry = entry
         self.displayString = displayString
         self.secret = secret
+        self.xBinDirs = xBinDirs
     }
 
     public func onStatus(_ callback: @escaping (String) -> Void) {
@@ -58,8 +64,9 @@ public final class HeliosLauncher: @unchecked Sendable {
     /// Solaris X bin dirs (OpenWindows/CDE) so a bare `xterm` etc. resolves under
     /// the daemon's minimal env, sets DISPLAY, and backgrounds the client
     /// detached so run_command returns at once. Static and pure for unit testing.
-    public static func remoteCommand(entry: LauncherEntry, displayString: String) -> String {
-        "PATH=/usr/openwin/bin:/usr/dt/bin:/usr/bin/X11:$PATH; export PATH; " +
+    public static func remoteCommand(entry: LauncherEntry, displayString: String,
+                                     xBinDirs: String = "/usr/openwin/bin:/usr/dt/bin:/usr/bin/X11") -> String {
+        "PATH=\(xBinDirs):$PATH; export PATH; " +
         "DISPLAY=\(displayString); export DISPLAY; " +
         // The daemon's `run_command --user` is a bare setuid: it sets HOME but
         // leaves cwd at the daemon's `/`, so a launched xterm would open in /
@@ -76,7 +83,8 @@ public final class HeliosLauncher: @unchecked Sendable {
             self.completion = completion
             if self.cancelled { self.finish(.failure(HeliosLauncherError.cancelled)); return }
 
-            let cmd = Self.remoteCommand(entry: self.entry, displayString: self.displayString)
+            let cmd = Self.remoteCommand(entry: self.entry, displayString: self.displayString,
+                                         xBinDirs: self.xBinDirs)
             self.reportStatus("Connecting to Helios daemon at \(self.entry.host):\(self.entry.port)\u{2026}")
             self.reportText("# run as \(self.entry.user), DISPLAY=\(self.displayString)\n", bold: true)
             self.reportText("$ \(cmd)\n", bold: true)

@@ -539,8 +539,7 @@ final class QemuEngineTests: XCTestCase {
     func testBuildArgumentsSunOS414UnitAndBootCommand() {
         var c = cfg()
         c.diskImage = URL(fileURLWithPath: "/img/sunos414-boot.qcow2")
-        c.diskUnit = MachineOS.sunos414.bootDiskUnit
-        c.bootCommand = MachineOS.sunos414.bootCommand
+        c.os = .sunos414                              // the single per-OS input
         let args = QemuEngine.buildArguments(config: c)
         XCTAssertTrue(args.contains("file=/img/sunos414-boot.qcow2,bus=0,unit=3,media=disk"))
         XCTAssertTrue(args.contains("auto-boot?=true"))
@@ -566,14 +565,29 @@ final class QemuEngineTests: XCTestCase {
         XCTAssertEqual(MachineOS.netbsd.bootCommand, "boot /iommu/sbus/espdma/esp/sd@0,0")
     }
 
-    /// The machine-driven config path carries the OS wiring end to end.
-    func testMakeEngineConfigThreadsOSBootWiring() {
+    /// The machine-driven config path carries the OS end to end: the config's
+    /// single `os` input drives the per-OS argv (unit 3 + boot-command) and ports.
+    func testMakeEngineConfigThreadsOS() {
         let m = Machine(name: "s", kind: .emulatedVM, os: .sunos414,
                         host: "127.0.0.1", user: "t", imagePath: "/img/s.qcow2")
         let config = m.makeEngineConfig(bundle: .main)
-        XCTAssertEqual(config?.diskUnit, 3)
-        XCTAssertEqual(config?.bootCommand, "boot /iommu/sbus/espdma/esp/sd@3,0")
+        XCTAssertEqual(config?.os, .sunos414)
         XCTAssertEqual(config?.ports, .sunos414)   // per-OS host-port block too
+        let args = QemuEngine.buildArguments(config: config!)
+        XCTAssertTrue(args.contains(where: { $0.hasSuffix("bus=0,unit=3,media=disk") }))
+        XCTAssertTrue(args.contains("boot-command=boot /iommu/sbus/espdma/esp/sd@3,0"))
+    }
+
+    /// The guest profile is exhaustive and self-consistent (the forcing function
+    /// that turns a silent per-OS gap into a compile error lives in the switches;
+    /// this pins the current values).
+    func testGuestProfileValues() {
+        XCTAssertEqual(MachineOS.solaris26.shutdownCommand, "/usr/sbin/init 5")
+        XCTAssertEqual(MachineOS.sunos414.shutdownCommand, "/usr/etc/halt")
+        XCTAssertEqual(MachineOS.netbsd.shutdownCommand, "/sbin/halt")
+        XCTAssertTrue(MachineOS.solaris26.cleanHaltMarkers.contains("syncing file systems"))
+        XCTAssertFalse(MachineOS.sunos414.xBinDirs.contains("/usr/dt/bin"))  // no CDE on 4.1.4
+        XCTAssertTrue(MachineOS.netbsd.xBinDirs.contains("/usr/X11R7/bin"))
     }
 
     // MARK: - helpers

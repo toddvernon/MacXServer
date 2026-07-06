@@ -606,10 +606,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // SHORTCUTS); this threads just the OS-derived bits through.
         if let m = registry?.bundledMachine {
             config.ports = m.resolvedPorts
-            if let os = m.os {
-                config.diskUnit = os.bootDiskUnit
-                config.bootCommand = os.bootCommand
-            }
+            config.os = m.os
         }
         // Shared folder (TFTP): only wire it when the toggle is on. Create the
         // directory if it's missing so slirp (read-only, won't create it) has
@@ -1229,7 +1226,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // Same bundled-only rule as the file browser: the emulator's
             // per-launch secret goes only to the loopback target, not a real Sun.
             launcher = HeliosLauncher(entry: entry, displayString: display,
-                                      secret: heliosSecret(host: entry.host, user: entry.user))
+                                      secret: heliosSecret(host: entry.host, user: entry.user),
+                                      xBinDirs: (registry?.bundledMachine?.os ?? .solaris26).xBinDirs)
         }
         activeLauncher = launcher
 

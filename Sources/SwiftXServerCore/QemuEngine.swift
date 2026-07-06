@@ -71,28 +71,27 @@ public struct QemuEngineConfig: Sendable, Equatable {
     /// `tftp=`). The caller is responsible for the directory existing; slirp
     /// is read-only and won't create it.
     public var tftpDirectory: String?
-    /// The qemu SCSI unit (= ESP target) the boot disk attaches at. Default 0
-    /// (Solaris, NetBSD); SunOS 4.1.4 needs 3 because its kernel reverses the
-    /// target<->sd naming (target 3 = sd0) and its fstab is written for sd0. See
-    /// `MachineOS.bootDiskUnit` + expand_414_fs.md.
-    public var diskUnit: Int
-    /// An explicit OpenBOOT `boot-command` to bake in (with `auto-boot?=true`),
-    /// for guests the default auto-boot wouldn't land correctly. nil = rely on the
-    /// default auto-boot (Solaris). See `MachineOS.bootCommand`.
-    public var bootCommand: String?
+    /// The guest OS. The single per-OS input to the engine: the SCSI boot unit,
+    /// boot-command, clean-halt markers, and X bin dirs all derive from it via the
+    /// `MachineOS` guest profile. nil = unknown -> the engine falls back to Solaris
+    /// behavior (the historical default). See MachineOS + GUEST_OS_PROFILE.md.
+    public var os: MachineOS?
 
     public init(helper: URL, firmwareDir: URL, diskImage: URL, memoryMB: Int = 128,
                 ports: ImagePorts = .solaris26, tftpDirectory: String? = nil,
-                diskUnit: Int = 0, bootCommand: String? = nil) {
+                os: MachineOS? = nil) {
         self.helper = helper
         self.firmwareDir = firmwareDir
         self.diskImage = diskImage
         self.memoryMB = memoryMB
         self.ports = ports
         self.tftpDirectory = tftpDirectory
-        self.diskUnit = diskUnit
-        self.bootCommand = bootCommand
+        self.os = os
     }
+
+    /// The engine's effective guest profile: the config's OS, or Solaris as the
+    /// historical fallback when unknown. One place that resolves the default.
+    var profile: MachineOS { os ?? .solaris26 }
 }
 
 /// Locates and runs the bundled SPARCplug qemu engine as a subprocess, and
@@ -115,10 +114,10 @@ public final class QemuEngine: @unchecked Sendable {
         case shuttingDown
     }
 
-    /// Console line Solaris prints once filesystems are flushed and unmounted
-    /// -- the positive "safe to power off" signal (verified empirically with
-    /// `init 5` on this image). qemu then powers off and exits on its own.
-    private static let cleanHaltMarker = "syncing file systems"
+    // The positive "clean halt in progress" console markers are now per-OS in the
+    // guest profile (`MachineOS.cleanHaltMarkers`) -- Solaris prints "syncing file
+    // systems", the BSD guests differ. The authoritative "it stopped" signal is
+    // qemu exiting; the markers only refine the clean/unclean label.
 
     /// Console phrase Solaris prints when boot-time fsck can't preen a dirty
     /// filesystem and drops to the maintenance shell for a human. The guest
@@ -132,6 +131,9 @@ public final class QemuEngine: @unchecked Sendable {
     /// boot stalled. ~4 min covers a slow emulated-SPARC 2.6 boot (close enough
     /// for the real box); an fsck drop preempts it well before this.
     private static let readinessBudget: TimeInterval = 240
+    /// How long to wait for the guest to actually halt after a shutdown is ACK'd
+    /// before declaring it stuck (a no-op daemon shutdown) and offering Force Quit.
+    private static let shutdownBudget: TimeInterval = 90
     /// Gap between `hello` probes while waiting for readiness.
     private static let readinessPollInterval: TimeInterval = 2
 
@@ -241,12 +243,15 @@ public final class QemuEngine: @unchecked Sendable {
     public func launchXterm(completion: ((Result<Void, Error>) -> Void)? = nil) {
         let secret = currentSecret
         let port = config.ports.helios
+        let xBinDirs = config.profile.xBinDirs
+        emitDiagnostic("xterm: helios port \(port), secret len \(secret?.count ?? -1)")
         DispatchQueue.global(qos: .userInitiated).async {
             let client = HeliosClient(port: port, timeout: 10, secret: secret)
             defer { client.close() }
-            // Same shape as HeliosLauncher: prepend the Solaris X bin dirs, set
-            // DISPLAY, and background detached so run_command returns at once.
-            let cmd = "PATH=/usr/openwin/bin:/usr/dt/bin:/usr/bin/X11:$PATH; export PATH; " +
+            // Same shape as HeliosLauncher: prepend the guest's X bin dirs (per-OS,
+            // from the profile), set DISPLAY, background detached so run_command
+            // returns at once.
+            let cmd = "PATH=\(xBinDirs):$PATH; export PATH; " +
                       "DISPLAY=10.0.2.2:0; export DISPLAY; " +
                       "nohup xterm </dev/null >/dev/null 2>&1 &"
             do {
@@ -461,6 +466,7 @@ public final class QemuEngine: @unchecked Sendable {
     private func requestShutdownViaDaemon() {
         let secret = currentSecret
         let port = config.ports.helios
+        emitDiagnostic("shutdown: helios port \(port), secret len \(secret?.count ?? -1)")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             let daemonError = Self.performDaemonShutdown(secret: secret, port: port)
@@ -478,8 +484,27 @@ public final class QemuEngine: @unchecked Sendable {
                     DispatchQueue.main.async { cb?() }
                 } else {
                     self.emitDiagnostic("shutdown requested via Helios daemon, give it a second")
+                    self.scheduleShutdownWatchdog()
                 }
             }
+        }
+    }
+
+    /// After a shutdown is ACK'd, watch for the guest to actually go down. If it
+    /// doesn't within the budget -- e.g. the daemon's shutdown command no-op'd on
+    /// this OS (a hardcoded Solaris `init 5` on a BSD guest) -- surface it and
+    /// offer Force Quit rather than hanging in "shutting down" forever. A real
+    /// halt resets `shuttingDown` in finishRun, so this becomes a no-op.
+    private func scheduleShutdownWatchdog() {
+        queue.asyncAfter(deadline: .now() + Self.shutdownBudget) { [weak self] in
+            guard let self = self, self.shuttingDown, self.isRunning else { return }
+            self.shuttingDown = false
+            self.emitState()
+            self.emitDiagnostic("guest didn't halt within \(Int(Self.shutdownBudget))s of the "
+                                + "shutdown request (daemon shutdown may be a no-op on this OS) "
+                                + "-- use Force Quit.")
+            let cb = self.shutdownUnavailableCallback
+            DispatchQueue.main.async { cb?() }
         }
     }
 
@@ -894,7 +919,7 @@ public final class QemuEngine: @unchecked Sendable {
             // runtime-only (never persisted to the image).
             "-prom-env", "ttya-mode=115200,8,n,1,-",
         ]
-        if let bootCommand = config.bootCommand {
+        if let bootCommand = config.profile.bootCommand {
             // Some guests need the boot disk's OpenBOOT path baked in: qemu's
             // OpenBIOS ignores `boot-device`/the `disk` alias but honors
             // `boot-command` on auto-boot. SunOS 4.1.4 must boot the disk at SCSI
@@ -916,7 +941,7 @@ public final class QemuEngine: @unchecked Sendable {
         }
         args += [
             "-nic", nic,
-            "-drive", "file=\(config.diskImage.path),bus=0,unit=\(config.diskUnit),media=disk",
+            "-drive", "file=\(config.diskImage.path),bus=0,unit=\(config.profile.bootDiskUnit),media=disk",
         ]
         return args
     }
@@ -1029,7 +1054,8 @@ public final class QemuEngine: @unchecked Sendable {
             consoleTail = String(consoleTail.suffix(8192))
         }
 
-        if shuttingDown, !sawCleanHalt, consoleTail.contains(Self.cleanHaltMarker) {
+        if shuttingDown, !sawCleanHalt,
+           config.profile.cleanHaltMarkers.contains(where: { consoleTail.contains($0) }) {
             sawCleanHalt = true
             let cb = cleanHaltCallback
             DispatchQueue.main.async { cb?() }

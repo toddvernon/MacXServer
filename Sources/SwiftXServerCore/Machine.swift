@@ -62,6 +62,53 @@ public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
         case .netbsd:    return "boot /iommu/sbus/espdma/esp/sd@0,0"
         }
     }
+
+    // MARK: - Guest profile
+    //
+    // Everything the host does that DIFFERS by guest OS lives here, one exhaustive
+    // `switch` per behavior, so adding an OS (or a new divergent behavior) won't
+    // compile until every case is filled in -- the forcing function that turns a
+    // silent per-OS gap into a build error. Grew out of the 2026-07-05 shutdown
+    // bug, where a hardcoded Solaris `init 5` silently no-op'd on SunOS 4.1.4.
+    // The OS × behavior matrix is documented in GUEST_OS_PROFILE.md.
+
+    /// The command that halts the guest. Solaris uses SVR4 `init 5` (syncs +
+    /// powers off); the BSD guests use `halt`. Consumed guest-side by the Helios
+    /// daemon's `HELIOS_SHUTDOWN_CMD` (set per-OS at deploy) -- this is the
+    /// host-side source of truth the deploy must match, and what a future
+    /// pass-the-command shutdown verb would send.
+    public var shutdownCommand: String {
+        switch self {
+        case .solaris26: return "/usr/sbin/init 5"
+        case .sunos414:  return "/usr/etc/halt"
+        case .netbsd:    return "/sbin/halt"
+        }
+    }
+
+    /// Console phrases that positively signal a clean halt in progress, so the
+    /// stop is labeled clean rather than a crash. Matched as substrings (any one).
+    /// The authoritative "it stopped" signal is qemu exiting; this only refines
+    /// the clean/unclean label. NOTE: the BSD phrases are best-effort and should
+    /// be tightened against real console output; a miss just mislabels a clean
+    /// stop, it doesn't hang anything.
+    public var cleanHaltMarkers: [String] {
+        switch self {
+        case .solaris26: return ["syncing file systems"]
+        case .sunos414:  return ["syncing file systems", "halted"]
+        case .netbsd:    return ["syncing disks", "halted", "rebooting"]
+        }
+    }
+
+    /// PATH prefix so a bare `xterm` / `dtterm` resolves under the daemon's
+    /// minimal env. Solaris ships OpenWindows + CDE; SunOS 4.1.4 has OpenWindows +
+    /// MIT X but no CDE (`/usr/dt`); NetBSD ships X under `/usr/X11R7`.
+    public var xBinDirs: String {
+        switch self {
+        case .solaris26: return "/usr/openwin/bin:/usr/dt/bin:/usr/bin/X11"
+        case .sunos414:  return "/usr/openwin/bin:/usr/bin/X11"
+        case .netbsd:    return "/usr/X11R7/bin"
+        }
+    }
 }
 
 /// How an emulated VM is put on the network. slirp is the zero-config default
@@ -241,8 +288,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         config.diskImage = image
         config.ports = resolvedPorts
         config.tftpDirectory = tftpDirectory
-        config.diskUnit = os?.bootDiskUnit ?? 0
-        config.bootCommand = os?.bootCommand
+        config.os = os
         return config
     }
 
