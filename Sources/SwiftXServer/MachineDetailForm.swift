@@ -47,6 +47,7 @@ struct MachineDetailForm: View {
                 if draft.kind == .emulatedVM {
                     imageSection
                     runtimeSection
+                    dnsSection
                 }
                 launchersSection
             }
@@ -229,6 +230,25 @@ struct MachineDetailForm: View {
             helpNote("Assigned to this machine when it was created and never change, "
                    + "so scripts and tooling can rely on them. Ports are this Mac's "
                    + "forwards into the guest (telnet/ssh/helios).")
+        }
+    }
+
+    /// Guest-OS administration over the Helios daemon. Editing needs the guest
+    /// up and its daemon answering, so the button rides the same readiness gate
+    /// as the Machines menu's Admin submenu.
+    private var dnsSection: some View {
+        let canEdit = model.row(draft.id)?.canDnsAdmin ?? false
+        return section("Machine DNS") {
+            HStack(spacing: 10) {
+                Button("Edit\u{2026}") { model.onDnsAdmin?(draft.id) }
+                    .disabled(!canEdit)
+                Text("/etc/resolv.conf")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            helpNote("Edits the guest's DNS configuration over the Helios daemon. "
+                   + "Only available while the machine is running and ready "
+                   + "(the daemon has answered).")
         }
     }
 
