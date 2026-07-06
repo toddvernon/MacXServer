@@ -71,6 +71,36 @@ so Claude drives reference→target convergence) lead; **P2 concurrency** is
 deferred as less urgent for a real-hardware-heavy fleet. Transitional debts in
 SHORTCUTS ("Machine manager (P1 transitional)").
 
+### Shipped 2026-07-05 (P1c — in-app machine management, one unified window)
+
+The first of those two leads landed. The Machines list and the add/edit editor
+are **one window** (`MachinesWindowView`, HSplitView per the NSPanel gotcha): a
+master list of machines on the left (`[+] [−] [clone]` toolbar), and a
+per-machine detail pane on the right that switches between an **Overview** tab
+(operate: status + lifecycle buttons + launcher buttons you click to *run*) and a
+**Settings** tab (edit: the config form + add/edit/remove launchers). This
+restores the doc's original "The list window" sketch, which always described a
+single Machines surface doing both — the first cut built the editor as a second
+window and Todd (rightly) called out the redundancy; the two collapsed into one
+the same day. (The X Server stays its own separate window per "Menus and app
+flow"; only the *Machines* editor folded in.)
+
+In-app **add / edit / remove / clone** writes straight through a new
+`MachineRegistry.add` / `remove` / `imageClaimant` surface. **The per-launch
+launcher-file reconcile is retired** — `~/.macxserver-launchers` is imported once
+on first run (`loadOrMigrate`) and then ignored; the JSON registry is
+authoritative. The old launcher-file editor UI was deleted with it. **Clone**
+(Todd's ask) copies a machine's config + all its launchers but not the disk image
+or MAC (`Machine.cloned()`), so it seeds a new external host or a VM skeleton
+without duplicating a qcow2. Honest scope guards: the bundled VM's kind/host are
+locked and its image stays in Preferences lockstep (disabled while running);
+memory/MAC/network-mode stay out of the UI (they'd be no-ops pre-P2); additional
+emulated VMs can be configured but are flagged un-startable until P2. One model
+(`MachinesModel`) backs the whole window: `machines` for the master/Settings,
+per-id `rows` for the Overview, same gating as the Machines menu. swift test 1458
+pass. Remaining transitional debts + the honest deferrals are in SHORTCUTS. Next
+lead: the **MCP bridge**.
+
 ## TL;DR
 
 Turn macXserver from "one bundled Solaris VM, hidden under an X server" into a

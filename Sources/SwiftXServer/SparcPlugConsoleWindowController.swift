@@ -88,6 +88,11 @@ final class SparcPlugConsoleWindowController: NSWindowController {
         model.feed(data)
     }
 
+    /// The running machine's OS display name for the header (nil = unknown).
+    func setOSName(_ name: String?) {
+        model.osName = name
+    }
+
     func setState(_ state: QemuEngine.State) {
         if state == .running, model.state != .running {
             model.safeToQuit = false   // fresh boot
@@ -141,6 +146,10 @@ final class SparcPlugConsoleModel: ObservableObject {
     @Published var shutdownUnavailable = false
     /// 0...1 boot/shutdown progress for the top thermometer.
     @Published var progress: Double = 0
+    /// The guest OS display name for the header (e.g. "Solaris 2.6", "SunOS
+    /// 4.1.4"), from the running machine. nil when unknown -> the header drops the
+    /// OS segment rather than lying with a hardcoded one.
+    @Published var osName: String?
     /// True when the window has been resized since the last tty sync, so the
     /// guest's winsize is stale. Highlights the Resize TTY button; cleared when
     /// the user pushes the size (Resize TTY).
@@ -208,6 +217,15 @@ struct SparcPlugConsoleView: View {
         .animation(.easeInOut(duration: 0.3), value: model.ready)
     }
 
+    /// "SPARCstation 5 — <OS> — 115200 baud", dropping the OS segment when the
+    /// running machine's OS is unknown (rather than hardcoding one).
+    private var headerTitle: String {
+        if let os = model.osName, !os.isEmpty {
+            return "SPARCstation 5 — \(os) — 115200 baud"
+        }
+        return "SPARCstation 5 — 115200 baud"
+    }
+
     private var content: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center, spacing: 12) {
@@ -218,7 +236,7 @@ struct SparcPlugConsoleView: View {
                     .frame(height: 30)
                     .accessibilityLabel("Sun SPARCstation 5")
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("SPARCstation 5 — Solaris 2.6 — 115200 baud")
+                    Text(headerTitle)
                         .font(.title2)
                     Text("Interactive serial console.")
                         .font(.caption)

@@ -71,15 +71,27 @@ public struct QemuEngineConfig: Sendable, Equatable {
     /// `tftp=`). The caller is responsible for the directory existing; slirp
     /// is read-only and won't create it.
     public var tftpDirectory: String?
+    /// The qemu SCSI unit (= ESP target) the boot disk attaches at. Default 0
+    /// (Solaris, NetBSD); SunOS 4.1.4 needs 3 because its kernel reverses the
+    /// target<->sd naming (target 3 = sd0) and its fstab is written for sd0. See
+    /// `MachineOS.bootDiskUnit` + expand_414_fs.md.
+    public var diskUnit: Int
+    /// An explicit OpenBOOT `boot-command` to bake in (with `auto-boot?=true`),
+    /// for guests the default auto-boot wouldn't land correctly. nil = rely on the
+    /// default auto-boot (Solaris). See `MachineOS.bootCommand`.
+    public var bootCommand: String?
 
     public init(helper: URL, firmwareDir: URL, diskImage: URL, memoryMB: Int = 128,
-                ports: ImagePorts = .solaris26, tftpDirectory: String? = nil) {
+                ports: ImagePorts = .solaris26, tftpDirectory: String? = nil,
+                diskUnit: Int = 0, bootCommand: String? = nil) {
         self.helper = helper
         self.firmwareDir = firmwareDir
         self.diskImage = diskImage
         self.memoryMB = memoryMB
         self.ports = ports
         self.tftpDirectory = tftpDirectory
+        self.diskUnit = diskUnit
+        self.bootCommand = bootCommand
     }
 }
 
@@ -228,8 +240,9 @@ public final class QemuEngine: @unchecked Sendable {
     /// a background queue; the optional completion reports on the main queue.
     public func launchXterm(completion: ((Result<Void, Error>) -> Void)? = nil) {
         let secret = currentSecret
+        let port = config.ports.helios
         DispatchQueue.global(qos: .userInitiated).async {
-            let client = HeliosClient(timeout: 10, secret: secret)
+            let client = HeliosClient(port: port, timeout: 10, secret: secret)
             defer { client.close() }
             // Same shape as HeliosLauncher: prepend the Solaris X bin dirs, set
             // DISPLAY, and background detached so run_command returns at once.
@@ -447,9 +460,10 @@ public final class QemuEngine: @unchecked Sendable {
     /// flowing while we wait on connect/ACK.
     private func requestShutdownViaDaemon() {
         let secret = currentSecret
+        let port = config.ports.helios
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            let daemonError = Self.performDaemonShutdown(secret: secret)
+            let daemonError = Self.performDaemonShutdown(secret: secret, port: port)
             self.queue.async {
                 guard self.shuttingDown else { return } // raced with terminate/kill
                 if let daemonError {
@@ -471,8 +485,8 @@ public final class QemuEngine: @unchecked Sendable {
 
     /// One-shot daemon shutdown. Returns nil on success, or a short description
     /// of why the daemon couldn't be reached so the caller can fall back.
-    private static func performDaemonShutdown(secret: String?) -> String? {
-        let client = HeliosClient(timeout: 8, secret: secret)
+    private static func performDaemonShutdown(secret: String?, port: UInt16) -> String? {
+        let client = HeliosClient(port: port, timeout: 8, secret: secret)
         defer { client.close() }
         do {
             try client.connect()
@@ -749,8 +763,9 @@ public final class QemuEngine: @unchecked Sendable {
             guard let self = self, self.isRunning, !self.ready, !self.bootStalled else { return }
             let deadline = self.readinessDeadline ?? Date()
             let secret = self.currentSecret
+            let port = self.config.ports.helios
             DispatchQueue.global(qos: .utility).async {
-                let answered = Self.probeHello(secret: secret)
+                let answered = Self.probeHello(secret: secret, port: port)
                 self.queue.async {
                     guard self.isRunning, !self.ready, !self.bootStalled else { return }
                     if answered {
@@ -769,8 +784,8 @@ public final class QemuEngine: @unchecked Sendable {
     /// One-shot `hello`. A fresh connect each probe IS the liveness test, so a
     /// short timeout keeps probes from overlapping. Matches the one-shot style
     /// of the shutdown call.
-    private static func probeHello(secret: String?) -> Bool {
-        let client = HeliosClient(timeout: 2, secret: secret)
+    private static func probeHello(secret: String?, port: UInt16) -> Bool {
+        let client = HeliosClient(port: port, timeout: 2, secret: secret)
         defer { client.close() }
         do {
             try client.connect()
@@ -879,6 +894,18 @@ public final class QemuEngine: @unchecked Sendable {
             // runtime-only (never persisted to the image).
             "-prom-env", "ttya-mode=115200,8,n,1,-",
         ]
+        if let bootCommand = config.bootCommand {
+            // Some guests need the boot disk's OpenBOOT path baked in: qemu's
+            // OpenBIOS ignores `boot-device`/the `disk` alias but honors
+            // `boot-command` on auto-boot. SunOS 4.1.4 must boot the disk at SCSI
+            // target 3 (sd@3,0) so its kernel names it sd0, matching its fstab
+            // (sd0a / , sd0g /usr); at the default unit 0 it comes up sd3 and /usr
+            // won't mount (drops to single-user). See emu/sunos414-full.sh +
+            // expand_414_fs.md. Solaris boots fine on the default auto-boot, so it
+            // leaves bootCommand nil.
+            args += ["-prom-env", "auto-boot?=true",
+                     "-prom-env", "boot-command=\(bootCommand)"]
+        }
         if !heliosSecret.isEmpty {
             args += ["-prom-env", "helios-secret=\(heliosSecret)"]
         }
@@ -889,7 +916,7 @@ public final class QemuEngine: @unchecked Sendable {
         }
         args += [
             "-nic", nic,
-            "-drive", "file=\(config.diskImage.path),bus=0,unit=0,media=disk",
+            "-drive", "file=\(config.diskImage.path),bus=0,unit=\(config.diskUnit),media=disk",
         ]
         return args
     }

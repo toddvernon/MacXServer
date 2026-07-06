@@ -100,4 +100,66 @@ final class MachineRegistryTests: XCTestCase {
         XCTAssertEqual(registry.machines.count, 1)
         XCTAssertEqual(registry.machines[0].name, "a")
     }
+
+    // MARK: - add / remove / clone / imageClaimant (P1c editor)
+
+    func testAddPersistsAndReloads() throws {
+        let path = tempPath("add")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let registry = MachineRegistry(machines: [], path: path)
+        let m = Machine(name: "u5", kind: .externalHost, host: "u5.example.com", user: "a")
+        registry.add(m)
+        XCTAssertEqual(registry.machines.count, 1)
+        let reloaded = try MachinesFile.decode(String(contentsOfFile: path, encoding: .utf8))
+        XCTAssertEqual(reloaded.machines.map(\.id), [m.id])
+    }
+
+    func testRemovePersistsAndDropsController() throws {
+        let path = tempPath("remove")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let a = Machine(name: "a", kind: .externalHost, host: "h1", user: "u")
+        let b = Machine(name: "b", kind: .externalHost, host: "h2", user: "u")
+        let registry = MachineRegistry(machines: [a, b], path: path)
+
+        XCTAssertTrue(registry.remove(a.id))
+        XCTAssertEqual(registry.machines.map(\.name), ["b"])
+        // Removing an unknown id is a no-op that reports false.
+        XCTAssertFalse(registry.remove(a.id))
+
+        let reloaded = try MachinesFile.decode(String(contentsOfFile: path, encoding: .utf8))
+        XCTAssertEqual(reloaded.machines.map(\.id), [b.id])
+    }
+
+    func testImageClaimantDetectsCollisionAndIgnoresSelf() {
+        let sol = Machine(name: "solaris", kind: .emulatedVM, os: .solaris26,
+                          host: "127.0.0.1", user: "t", imagePath: "~/img/solaris.qcow2")
+        let ext = Machine(name: "ss5", kind: .externalHost, host: "h", user: "t")
+        let registry = MachineRegistry(machines: [sol, ext], path: tempPath("claim"))
+
+        // A different machine claiming the same image (tilde-normalized) is found.
+        let expanded = ("~/img/solaris.qcow2" as NSString).expandingTildeInPath
+        XCTAssertEqual(registry.imageClaimant(imagePath: expanded, excluding: nil)?.name, "solaris")
+        // Excluding the owner itself reports no collision (editing your own image).
+        XCTAssertNil(registry.imageClaimant(imagePath: "~/img/solaris.qcow2", excluding: sol.id))
+        // An unclaimed path is free; an external host never claims an image.
+        XCTAssertNil(registry.imageClaimant(imagePath: "~/img/other.qcow2", excluding: nil))
+    }
+
+    func testClonedCopiesConfigButNotImageOrIdentity() {
+        let sol = Machine(name: "solaris", kind: .emulatedVM, os: .solaris26,
+                          host: "127.0.0.1", user: "t", imagePath: "~/img/solaris.qcow2",
+                          macAddress: "02:00:00:00:00:01",
+                          launchers: [MachineLauncher(name: "xterm", command: "xterm")])
+        let clone = sol.cloned()
+        // Fresh identity, "copy" name, image + MAC dropped (not the VM).
+        XCTAssertNotEqual(clone.id, sol.id)
+        XCTAssertEqual(clone.name, "solaris copy")
+        XCTAssertNil(clone.imagePath)
+        XCTAssertNil(clone.macAddress)
+        // Everything else carries over, including launchers.
+        XCTAssertEqual(clone.kind, .emulatedVM)
+        XCTAssertEqual(clone.os, .solaris26)
+        XCTAssertEqual(clone.user, "t")
+        XCTAssertEqual(clone.launchers, sol.launchers)
+    }
 }

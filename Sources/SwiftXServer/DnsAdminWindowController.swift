@@ -10,8 +10,10 @@ import SwiftXServerCore
 
 final class DnsAdminWindowController: NSWindowController {
 
-    init(secretProvider: @escaping () -> String?) {
-        let hostingView = NSHostingView(rootView: DnsAdminPanelView(secretProvider: secretProvider))
+    init(secretProvider: @escaping () -> String?,
+         portProvider: @escaping () -> UInt16) {
+        let hostingView = NSHostingView(rootView: DnsAdminPanelView(
+            secretProvider: secretProvider, portProvider: portProvider))
 
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),

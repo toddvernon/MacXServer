@@ -530,6 +530,52 @@ final class QemuEngineTests: XCTestCase {
         XCTAssertEqual(QemuEngine.slirpWaitMessage(4), QemuEngine.slirpWaitMessage(3))
     }
 
+    // MARK: - per-OS boot wiring (SunOS 4.1.4 disk-unit / boot-command)
+
+    /// SunOS 4.1.4 must attach the boot disk at qemu unit 3 (its kernel reverses
+    /// target<->sd naming, so target 3 = sd0, matching its fstab), plus an explicit
+    /// boot-command since OpenBIOS ignores boot-device. Without unit=3 the guest
+    /// names the disk sd3 and /usr (fstab sd0g) won't mount -> single-user.
+    func testBuildArgumentsSunOS414UnitAndBootCommand() {
+        var c = cfg()
+        c.diskImage = URL(fileURLWithPath: "/img/sunos414-boot.qcow2")
+        c.diskUnit = MachineOS.sunos414.bootDiskUnit
+        c.bootCommand = MachineOS.sunos414.bootCommand
+        let args = QemuEngine.buildArguments(config: c)
+        XCTAssertTrue(args.contains("file=/img/sunos414-boot.qcow2,bus=0,unit=3,media=disk"))
+        XCTAssertTrue(args.contains("auto-boot?=true"))
+        XCTAssertTrue(args.contains("boot-command=boot /iommu/sbus/espdma/esp/sd@3,0"))
+    }
+
+    /// Solaris (the default) stays at unit 0 with no baked boot-command -- it boots
+    /// fine on OpenBIOS's default auto-boot. Guards against regressing the common path.
+    func testBuildArgumentsSolarisNoBootCommand() {
+        let args = QemuEngine.buildArguments(config: cfg())
+        XCTAssertTrue(args.contains(where: { $0.hasSuffix("bus=0,unit=0,media=disk") }))
+        XCTAssertFalse(args.contains("auto-boot?=true"))
+        XCTAssertFalse(args.contains(where: { $0.hasPrefix("boot-command=") }))
+    }
+
+    /// The per-OS mapping the config builders read.
+    func testMachineOSBootWiring() {
+        XCTAssertEqual(MachineOS.solaris26.bootDiskUnit, 0)
+        XCTAssertNil(MachineOS.solaris26.bootCommand)
+        XCTAssertEqual(MachineOS.sunos414.bootDiskUnit, 3)
+        XCTAssertEqual(MachineOS.sunos414.bootCommand, "boot /iommu/sbus/espdma/esp/sd@3,0")
+        XCTAssertEqual(MachineOS.netbsd.bootDiskUnit, 0)
+        XCTAssertEqual(MachineOS.netbsd.bootCommand, "boot /iommu/sbus/espdma/esp/sd@0,0")
+    }
+
+    /// The machine-driven config path carries the OS wiring end to end.
+    func testMakeEngineConfigThreadsOSBootWiring() {
+        let m = Machine(name: "s", kind: .emulatedVM, os: .sunos414,
+                        host: "127.0.0.1", user: "t", imagePath: "/img/s.qcow2")
+        let config = m.makeEngineConfig(bundle: .main)
+        XCTAssertEqual(config?.diskUnit, 3)
+        XCTAssertEqual(config?.bootCommand, "boot /iommu/sbus/espdma/esp/sd@3,0")
+        XCTAssertEqual(config?.ports, .sunos414)   // per-OS host-port block too
+    }
+
     // MARK: - helpers
 
     /// Set/clear env vars around a block. A nil value unsets the var.

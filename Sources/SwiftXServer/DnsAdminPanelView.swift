@@ -13,8 +13,10 @@ struct DnsAdminPanelView: View {
 
     @StateObject private var model: DnsAdminPanelModel
 
-    init(secretProvider: @escaping () -> String?) {
-        _model = StateObject(wrappedValue: DnsAdminPanelModel(secretProvider: secretProvider))
+    init(secretProvider: @escaping () -> String?,
+         portProvider: @escaping () -> UInt16) {
+        _model = StateObject(wrappedValue: DnsAdminPanelModel(
+            secretProvider: secretProvider, portProvider: portProvider))
     }
 
     var body: some View {
@@ -107,9 +109,15 @@ final class DnsAdminPanelModel: ObservableObject {
     // permission bits rather than guessing.
     private var loadedMode: Int?
     private let secretProvider: () -> String?
+    /// The bundled guest's Helios host port (per-OS: 2125 Solaris, 2135 SunOS
+    /// 4.1.4, ...). Without this the admin call would hit the Solaris default and
+    /// silently fail against a non-Solaris guest.
+    private let portProvider: () -> UInt16
 
-    init(secretProvider: @escaping () -> String?) {
+    init(secretProvider: @escaping () -> String?,
+         portProvider: @escaping () -> UInt16) {
         self.secretProvider = secretProvider
+        self.portProvider = portProvider
     }
 
     // MARK: - Helios I/O
@@ -124,9 +132,10 @@ final class DnsAdminPanelModel: ObservableObject {
         busy = true
         setBanner("Reading \(Self.remotePath) from the SPARCstation\u{2026}", error: false)
         let secret = secretProvider()
+        let port = portProvider()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let outcome: Result<(String, Int), Error>
-            let client = HeliosClient(secret: secret)
+            let client = HeliosClient(port: port, secret: secret)
             defer { client.close() }
             do {
                 try client.connect()
@@ -158,11 +167,12 @@ final class DnsAdminPanelModel: ObservableObject {
         busy = true
         setBanner("Writing \(Self.remotePath) to the SPARCstation\u{2026}", error: false)
         let secret = secretProvider()
+        let port = portProvider()
         let payload = Data(text.utf8)
         let mode = loadedMode
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let outcome: Result<Void, Error>
-            let client = HeliosClient(secret: secret)
+            let client = HeliosClient(port: port, secret: secret)
             defer { client.close() }
             do {
                 try client.connect()

@@ -45,11 +45,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var sparcConfigModel: SparcConfigModel?
     /// One reused window controller per Config section.
     private var sparcConfigWindows: [SparcConfigSection: SparcConfigWindowController] = [:]
-    private var launchersController: LaunchersWindowController?
     /// Open capture-viewer windows. The viewer supports multiple windows so
     /// several captures can be compared; each removes itself here on close.
     private var captureViewers: [CaptureViewerWindowController] = []
-    private var currentLauncherFile: LauncherFile?
     private var activeLauncher: RemoteLauncher?
     private var progressController: LaunchProgressWindowController?
 
@@ -70,11 +68,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
     private var sparcConsole: SparcPlugConsoleWindowController?
     private var sparcWelcome: SparcStationWelcomeWindowController?
-    /// The Machines list window (the front door) + its observable model. Built at
-    /// launch; the model's rows are recomputed by `refreshMachineList` from the
-    /// registry + live controller state, the same source `refreshSparcMenu` reads.
-    private var machineListWindow: MachineListWindowController?
-    private var machineListModel: MachineListModel?
+    /// The unified Machines window (the front door) + its observable model. Built
+    /// at launch. `refreshMachines` mirrors the registry + live controller state
+    /// into the model (both the `machines` list for the master/Settings and the
+    /// per-machine `rows` for the Overview), the same source the Machines menu
+    /// reads, so window and menu never disagree.
+    private var machinesWindow: MachinesWindowController?
+    private var machinesModel: MachinesModel?
     /// Boot progress (0...1) of the bundled machine, mirrored into the list row's
     /// dot. Set from the engine's onProgress, reset when it leaves running.
     private var bundledBootProgress: Double?
@@ -170,12 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         installMainMenu()
         loadMachineRegistry()
         setupSparcEngine()
-        setupMachineListWindow()
+        setupMachinesWindow()
         checkForReconnectableOrphanOnLaunch()
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(launchersFileChanged(_:)),
-            name: .launchersFileDidChange, object: nil
-        )
     }
 
     /// Build the engine controller and keep it in sync with the disk-image
@@ -205,30 +201,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// file normally supplies a loopback group), so we derive it best-effort.
     private func loadMachineRegistry() {
         let launchers = LauncherFileLoader.loadOrSeed(seed: DefaultLaunchers.seedContent)
-        currentLauncherFile = launchers
         let bundledUser = launchers.entries.first(where: { Self.isLoopbackHost($0.host) })?.user
             ?? launchers.entries.first?.user ?? ""
         let registry = MachineRegistry.load(bundledImagePath: preferences.sparcDiskImagePath,
                                             bundledUser: bundledUser)
         self.registry = registry
         self.bundledMachineID = registry.bundledMachine?.id
-        // Keep launchers editable via the file: reconcile the registry from it
-        // (sync existing machines' launchers, add new external hosts). The file
-        // stays the launcher source until an in-app editor lands.
-        reconcileMachinesFromLauncherFile(launchers)
-        self.bundledMachineID = registry.bundledMachine?.id
-    }
-
-    /// Re-derive machines from the current launcher file and merge into the
-    /// registry (launcher edits show up without losing machine ids / secrets).
-    private func reconcileMachinesFromLauncherFile(_ launchers: LauncherFile) {
-        guard let registry else { return }
-        let bundledUser = launchers.entries.first(where: { Self.isLoopbackHost($0.host) })?.user
-            ?? launchers.entries.first?.user ?? ""
-        let migrated = MachineMigrator.migrate(launchers: launchers,
-                                               bundledImagePath: preferences.sparcDiskImagePath,
-                                               bundledUser: bundledUser)
-        registry.reconcile(withMigrated: migrated)
+        // The launcher file is imported ONCE (MachinesFileLoader.loadOrMigrate, on
+        // the first run when machines.json doesn't exist yet). After that the JSON
+        // registry is authoritative and edited in-app via the Machine Editor -- we
+        // deliberately no longer reconcile from the file on every launch, so in-app
+        // edits aren't clobbered by a stale ~/.macxserver-launchers. See
+        // MACHINE_MANAGER_REFACTOR.md / SHORTCUTS.md.
     }
 
     private static func isLoopbackHost(_ host: String) -> Bool {
@@ -251,12 +235,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: - Machines list window
 
-    /// Build the list window + model, wire its actions to the existing lifecycle
-    /// and launch methods, and open it as the front door. In P1 only the bundled
-    /// emulated VM has lifecycle controls; the closures ignore the machine id for
-    /// those (they drive the one wired machine) and use it for launches.
-    private func setupMachineListWindow() {
-        let model = MachineListModel()
+    /// Build the unified Machines window + model, wire every action (operate +
+    /// edit) to the registry / lifecycle methods, and open it as the front door.
+    /// In P1 only the bundled emulated VM has lifecycle controls; the operate
+    /// closures ignore the machine id for those (they drive the one wired machine)
+    /// and use it for launches.
+    private func setupMachinesWindow() {
+        let model = MachinesModel()
+        wireMachines(model)
+        self.machinesModel = model
+        let controller = MachinesWindowController(model: model)
+        self.machinesWindow = controller
+        refreshMachines()
+        controller.showWindow()
+    }
+
+    /// Wire the model's action closures. Operate actions drive the existing
+    /// lifecycle/launch methods; edit actions (add/remove/clone/commit) mutate the
+    /// registry and refresh every surface.
+    private func wireMachines(_ model: MachinesModel) {
+        // Operate (Overview page + master list).
         model.onStart     = { [weak self] _ in self?.startSparcStation(nil) }
         model.onShutDown  = { [weak self] _ in self?.shutDownSparcStation(nil) }
         model.onForceQuit = { [weak self] _ in self?.confirmForceQuit() }
@@ -264,26 +262,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.onConsole   = { [weak self] _ in self?.showSparcConsole(nil) }
         model.onLaunch    = { [weak self] id, name in self?.launchFromMachine(id, launcherName: name) }
         model.onSetHeliosSecret = { [weak self] id in self?.promptHeliosSecret(for: id) }
-        model.onAddMachine = { [weak self] in self?.presentAddMachineComingSoon() }
-        self.machineListModel = model
-        let controller = MachineListWindowController(model: model)
-        self.machineListWindow = controller
-        refreshMachineList()
-        controller.showWindow()
+
+        // Edit (master toolbar + Settings tab).
+        model.onAddNew = { [weak self] in
+            guard let self, let registry = self.registry else { return nil }
+            // Default to an external host: it's immediately usable (just needs a
+            // host + user), unlike an emulated VM which can't start until P2.
+            let m = Machine(name: "New Machine", kind: .externalHost,
+                            host: "", user: "", transport: .helios)
+            registry.add(m)
+            self.afterMachineMutation()
+            return m.id
+        }
+        model.onCommit = { [weak self] machine in
+            guard let self, let registry = self.registry else { return }
+            registry.update(machine)
+            // afterMachineMutation -> resolveBundledMachine re-resolves which
+            // emulated VM is engine-wired and mirrors its image into Preferences,
+            // so assigning an image here makes the VM runnable now (not at relaunch).
+            self.afterMachineMutation()
+        }
+        model.onRemove = { [weak self] id in
+            guard let self, let registry = self.registry else { return }
+            // Never remove the bundled VM (load-bearing for the engine wiring) or
+            // a machine with a live qemu process. The window also disables the
+            // button in these cases; this is the belt-and-suspenders guard.
+            if id == self.bundledMachineID || registry.runningMachineID == id { return }
+            let name = registry.machine(id)?.name ?? "this machine"
+            let alert = NSAlert()
+            alert.messageText = "Remove \u{201c}\(name)\u{201d}?"
+            alert.informativeText = "This removes the machine and its launchers from "
+                + "macXserver. The disk image file, if any, is left on disk."
+            alert.addButton(withTitle: "Remove")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            registry.remove(id)
+            if self.machinesModel?.selection == id { self.machinesModel?.selection = nil }
+            self.afterMachineMutation()
+        }
+        model.onClone = { [weak self] id in
+            guard let self, let registry = self.registry,
+                  let m = registry.machine(id) else { return nil }
+            let clone = m.cloned()
+            registry.add(clone)
+            self.afterMachineMutation()
+            return clone.id
+        }
+        model.onPickImage = {
+            let panel = NSOpenPanel()
+            panel.title = "Choose Disk Image"
+            panel.prompt = "Choose"
+            panel.allowsMultipleSelection = false
+            panel.canChooseDirectories = false
+            panel.canChooseFiles = true
+            guard panel.runModal() == .OK, let url = panel.url else { return nil }
+            return url.path
+        }
+        model.imageClaimant = { [weak self] path, excluding in
+            self?.registry?.imageClaimant(imagePath: path, excluding: excluding)?.name
+        }
     }
 
-    /// Reopen (or focus) the list window -- from the status item / Machines menu.
+    /// Reopen (or focus) the Machines window -- from the status item / Machines menu.
     @MainActor
-    @objc private func openMachineList(_ sender: Any?) {
-        machineListWindow?.showWindow()
+    @objc private func openMachinesWindow(_ sender: Any?) {
+        machinesWindow?.showWindow()
     }
 
-    /// Recompute the list rows from the registry + live controller state. Mirrors
-    /// `refreshSparcMenu`'s gating exactly so the window and the menu agree.
-    private func refreshMachineList() {
-        guard let registry, let model = machineListModel else { return }
+    /// Recompute the model from the registry + live controller state: the
+    /// `machines` list (master + Settings) and the per-machine operate `rows`
+    /// (Overview + master dot). Mirrors the Machines menu's gating exactly so the
+    /// window and the menu agree.
+    private func refreshMachines() {
+        guard let registry, let model = machinesModel else { return }
         let bundledID = bundledMachineID
-        model.rows = registry.machines.map { m in
+        model.machines = registry.machines
+        model.bundledMachineID = bundledID
+        model.runningMachineID = registry.runningMachineID
+
+        var rows: [UUID: MachineRow] = [:]
+        for m in registry.machines {
             let isBundled = (m.id == bundledID)
             let isEmulated = m.kind == .emulatedVM
             let ctrl = registry.controller(m.id)
@@ -321,7 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                            isFileBrowser: l.fileBrowser, enabled: enabled)
             }
 
-            return MachineRow(
+            rows[m.id] = MachineRow(
                 id: m.id, name: m.name, isEmulated: isEmulated,
                 subtitle: subtitle, statusText: statusText, dot: dot, progress: progress,
                 showsLifecycle: isBundled,
@@ -333,6 +391,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 canSetHeliosSecret: !isEmulated,
                 launchers: chips)
         }
+        model.rows = rows
     }
 
     /// Launch (or open the file browser for) one of a machine's launchers, reusing
@@ -374,16 +433,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         } else {
             try? KeychainHelper.store(account: account, password: value)
         }
-        refreshMachineList()
+        refreshMachines()
     }
 
-    private func presentAddMachineComingSoon() {
-        let alert = NSAlert()
-        alert.messageText = "Adding machines isn't available yet"
-        alert.informativeText = "For now, machines are migrated from your launchers "
-            + "(edit ~/.macxserver-launchers). Adding and editing machines in-app lands "
-            + "in a follow-up."
-        alert.runModal()
+    /// Refresh every machine surface after an add/edit/remove/clone: the window
+    /// model (master list + Overview rows + Settings), the Machines menu, and the
+    /// status dashboard.
+    private func afterMachineMutation() {
+        resolveBundledMachine()     // before refresh, so rows/menu see the new wiring
+        refreshMachines()
+        if let m = machinesMenu { rebuildMachinesMenu(m) }
+        updateStatusMenu()
+    }
+
+    /// Resolve which emulated VM is the single (P1) engine-wired "bundled" machine,
+    /// and keep Preferences -- the disk-image source `makeSparcConfig` reads -- in
+    /// step with it. Called after every machine mutation (add / remove / clone /
+    /// image pick, and later download completion), NOT just at launch: the moment
+    /// you assign an image to a freshly-added VM it becomes the runnable one, no
+    /// relaunch needed. When the resolved machine or its image changes, the
+    /// Preferences write fires the didChange observer, which rebuilds the engine
+    /// against the new id/image; a pure id change (same path, different owner --
+    /// e.g. the bundled VM was removed and another took its place) rebuilds directly.
+    private func resolveBundledMachine() {
+        guard let registry else { return }
+        let newID = registry.bundledMachine?.id
+        let idChanged = (newID != bundledMachineID)
+        bundledMachineID = newID
+        sparcConsole?.setOSName(registry.bundledMachine?.os?.displayName)
+
+        let desiredPath = registry.bundledMachine?.imagePath ?? ""
+        if preferences.sparcDiskImagePath != desiredPath {
+            preferences.sparcDiskImagePath = desiredPath
+        } else if idChanged {
+            rebuildSparcEngine()
+        }
     }
 
     // MARK: - Machines menu
@@ -396,8 +480,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         menu.removeAllItems()
         menu.autoenablesItems = false
 
-        let listItem = NSMenuItem(title: "Machine List\u{2026}",
-                                  action: #selector(openMachineList(_:)), keyEquivalent: "")
+        let listItem = NSMenuItem(title: "Machines\u{2026}",
+                                  action: #selector(openMachinesWindow(_:)), keyEquivalent: "")
         listItem.target = self
         menu.addItem(listItem)
         menu.addItem(.separator())
@@ -410,16 +494,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             header.submenu = sub
             menu.addItem(header)
         }
-
-        menu.addItem(.separator())
-        let add = NSMenuItem(title: "Add Machine\u{2026}",
-                             action: #selector(addMachineMenu(_:)), keyEquivalent: "")
-        add.target = self
-        menu.addItem(add)
-        let editLaunchers = NSMenuItem(title: "Edit Launchers\u{2026}",
-                                       action: #selector(openLaunchers(_:)), keyEquivalent: "")
-        editLaunchers.target = self
-        menu.addItem(editLaunchers)
     }
 
     /// Populate one machine's submenu: lifecycle verbs (bundled emulated VM only,
@@ -514,10 +588,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         promptHeliosSecret(for: id)
     }
 
-    @MainActor
-    @objc private func addMachineMenu(_ sender: Any?) {
-        presentAddMachineComingSoon()
-    }
 
     /// Resolve the engine config: the engine binary comes from the app
     /// bundle (or SPARCPLUG_ENGINE_DIR in dev), and the disk image from the
@@ -527,6 +597,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let path = preferences.sparcDiskImagePath
         if !path.isEmpty {
             config.diskImage = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        }
+        // Per-OS wiring from the bundled machine's detected OS: the host-port block
+        // (so telnet/ssh/helios forwards match the guest), the boot-disk SCSI unit,
+        // and any boot-command. Without this a non-Solaris guest boots wrong --
+        // SunOS 4.1.4 needs unit=3 + `boot sd@3,0` or /usr won't mount. Transitional:
+        // the engine config still comes from Preferences here, not the machine (see
+        // SHORTCUTS); this threads just the OS-derived bits through.
+        if let m = registry?.bundledMachine {
+            config.ports = m.resolvedPorts
+            if let os = m.os {
+                config.diskUnit = os.bootDiskUnit
+                config.bootCommand = os.bootCommand
+            }
         }
         // Shared folder (TFTP): only wire it when the toggle is on. Create the
         // directory if it's missing so slirp (read-only, won't create it) has
@@ -577,7 +660,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         engine.onProgress { [weak self] value in
             self?.sparcConsole?.setProgress(value)
             self?.bundledBootProgress = value
-            self?.refreshMachineList()
+            self?.refreshMachines()
         }
         engine.onReady { [weak self] in
             self?.sparcConsole?.markReady()
@@ -713,7 +796,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         let openMgr = NSMenuItem(title: "Open Machine Manager\u{2026}",
-                                 action: #selector(openMachineList(_:)),
+                                 action: #selector(openMachinesWindow(_:)),
                                  keyEquivalent: "")
         openMgr.target = self
         menu.addItem(openMgr)
@@ -928,7 +1011,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func openDnsAdmin(_ sender: Any?) {
         if dnsAdminController == nil {
             dnsAdminController = DnsAdminWindowController(
-                secretProvider: { [weak self] in self?.controller?.engine.currentSecret })
+                secretProvider: { [weak self] in self?.controller?.engine.currentSecret },
+                portProvider: { [weak self] in
+                    self?.registry?.bundledMachine?.resolvedPorts.helios ?? QemuEngine.heliosHostPort })
         }
         dnsAdminController?.showWindow()
     }
@@ -1089,24 +1174,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         fileBrowserControllers[key]?.showWindow()
     }
 
-    @MainActor
-    @objc private func launchersFileChanged(_ note: Notification) {
-        let file = LauncherFileLoader.loadOrSeed(seed: DefaultLaunchers.seedContent)
-        currentLauncherFile = file
-        reconcileMachinesFromLauncherFile(file)
-        if let m = machinesMenu { rebuildMachinesMenu(m) }
-        refreshMachineList()
-        updateStatusMenu()
-    }
-
-    @MainActor
-    @objc private func openLaunchers(_ sender: Any?) {
-        if launchersController == nil {
-            launchersController = LaunchersWindowController()
-        }
-        launchersController?.showWindow()
-    }
-
     /// Launch one resolved entry (from a machine row / the Machines menu). Picks
     /// the auth path by transport: ssh/helios need none; telnet uses the launcher
     /// password, else the Keychain (prompting on first use).
@@ -1225,6 +1292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 }
             )
             console.setState(controller?.engine.state ?? .stopped)
+            console.setOSName(registry?.bundledMachine?.os?.displayName)
             sparcConsole = console
             refreshSparcMenu()   // "Show Console" can undim now
         }
@@ -1238,7 +1306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @MainActor
     private func refreshSparcMenu() {
         if let m = machinesMenu { rebuildMachinesMenu(m) }
-        refreshMachineList()
+        refreshMachines()
         updateStatusMenu()
     }
 
@@ -1767,8 +1835,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// time (auto-enable off), so they don't route through here. Everything else
     /// (App-menu actions, standard responder-chain items) is always valid.
     func validateMenuItem(_ item: NSMenuItem) -> Bool { true }
-}
-
-extension Notification.Name {
-    static let launchersFileDidChange = Notification.Name("SwiftXLaunchersFileDidChange")
 }

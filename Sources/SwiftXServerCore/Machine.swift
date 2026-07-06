@@ -5,7 +5,7 @@ import Foundation
 /// launchers). See MACHINE_MANAGER_REFACTOR.md. The two kinds differ by
 /// *capability set*, not a uniform interface -- a real Sun genuinely has no
 /// QMP/start/stop -- so callers gate verbs on `kind` rather than assuming.
-public enum MachineKind: String, Equatable, Sendable, Codable {
+public enum MachineKind: String, Equatable, Sendable, Codable, CaseIterable {
     case emulatedVM
     case externalHost
 }
@@ -13,7 +13,7 @@ public enum MachineKind: String, Equatable, Sendable, Codable {
 /// Guest OS. Drives the per-OS port block, and later `-M`/guest bin dirs/Helios
 /// quirks. Auto-detected from the image where possible; user-set for external
 /// hosts. Nil when unknown (an external box we haven't classified).
-public enum MachineOS: String, Equatable, Sendable, Codable {
+public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
     case solaris26
     case sunos414
     case netbsd
@@ -26,6 +26,40 @@ public enum MachineOS: String, Equatable, Sendable, Codable {
         case .solaris26: return .solaris26
         case .sunos414:  return .sunos414
         case .netbsd:    return .netbsd
+        }
+    }
+
+    /// Human label for UI (the console header, etc.) -- the `rawValue` is a terse
+    /// JSON key, not something to show a user.
+    public var displayName: String {
+        switch self {
+        case .solaris26: return "Solaris 2.6"
+        case .sunos414:  return "SunOS 4.1.4"
+        case .netbsd:    return "NetBSD"
+        }
+    }
+
+    /// The qemu SCSI unit (= ESP target) the boot disk must attach at for this
+    /// guest. SunOS 4.1.4's kernel reverses target<->sd naming (target 3 = sd0),
+    /// and its fstab is written for sd0, so the disk must sit at unit 3; Solaris
+    /// and NetBSD use unit 0. Mirrors the standalone run scripts (unit=3 in
+    /// emu/sunos414-full.sh, unit=0 elsewhere). See expand_414_fs.md.
+    public var bootDiskUnit: Int {
+        switch self {
+        case .sunos414: return 3
+        case .solaris26, .netbsd: return 0
+        }
+    }
+
+    /// The OpenBOOT `boot-command` to bake in (qemu's OpenBIOS ignores
+    /// `boot-device` but honors `boot-command` on auto-boot). nil = default
+    /// auto-boot (Solaris boots fine that way). SunOS 4.1.4 and NetBSD pin the
+    /// explicit SCSI path, matching their run scripts.
+    public var bootCommand: String? {
+        switch self {
+        case .solaris26: return nil
+        case .sunos414:  return "boot /iommu/sbus/espdma/esp/sd@3,0"
+        case .netbsd:    return "boot /iommu/sbus/espdma/esp/sd@0,0"
         }
     }
 }
@@ -157,6 +191,23 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
 
     // MARK: Derived
 
+    /// A copy of this machine for the "Clone" action: a fresh identity, the same
+    /// connection + launchers, but **not the VM itself**. The disk image and MAC
+    /// are dropped (you can't have two live openers on one qcow2, and a MAC must
+    /// be unique per machine), so a cloned emulated VM comes up "not installed"
+    /// until you point it at its own image; a cloned external host is fully usable
+    /// as soon as you set its host. Everything else -- kind, os, user, transport,
+    /// display, ports, memory, network mode, and every launcher command -- carries
+    /// over. `name` defaults to "<name> copy".
+    public func cloned(named newName: String? = nil) -> Machine {
+        var copy = self
+        copy.id = UUID()
+        copy.name = newName ?? "\(name) copy"
+        copy.imagePath = nil
+        copy.macAddress = nil
+        return copy
+    }
+
     /// The image URL (tilde-expanded), or nil when unset.
     public var image: URL? {
         guard let p = imagePath, !p.isEmpty else { return nil }
@@ -190,6 +241,8 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         config.diskImage = image
         config.ports = resolvedPorts
         config.tftpDirectory = tftpDirectory
+        config.diskUnit = os?.bootDiskUnit ?? 0
+        config.bootCommand = os?.bootCommand
         return config
     }
 

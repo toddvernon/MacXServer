@@ -87,6 +87,41 @@ public final class MachineRegistry {
 
     // MARK: - Mutation + persistence
 
+    /// Append a new machine and persist. The caller (the in-app editor) is
+    /// responsible for a sensible id/name; the registry just stores it. Image
+    /// uniqueness among emulated VMs is advisory here -- use `imageClaimant` to
+    /// warn before adding -- not hard-refused, so a half-filled new machine can
+    /// exist while the user finishes editing it.
+    public func add(_ machine: Machine) {
+        machines.append(machine)
+        save()
+    }
+
+    /// Remove a machine (by id), drop any live controller it had, and persist.
+    /// Returns false if no such machine. The caller must not remove a running
+    /// machine (stop it first); the registry doesn't own lifecycle here.
+    @discardableResult
+    public func remove(_ id: UUID) -> Bool {
+        guard let i = machines.firstIndex(where: { $0.id == id }) else { return false }
+        machines.remove(at: i)
+        controllers[id] = nil
+        save()
+        return true
+    }
+
+    /// The emulated VM (if any) already pointing at `imagePath`, ignoring the
+    /// machine with id `excluding` (the one being edited). Tilde-expanded so
+    /// `~/x.qcow2` and the absolute form match. Lets the editor warn before two
+    /// machines claim the same qcow2 (the "one live opener per image" invariant).
+    public func imageClaimant(imagePath: String, excluding: UUID?) -> Machine? {
+        let target = (imagePath as NSString).expandingTildeInPath
+        guard !target.isEmpty else { return nil }
+        return machines.first { m in
+            m.kind == .emulatedVM && m.id != excluding
+                && (m.imagePath.map { ($0 as NSString).expandingTildeInPath }) == target
+        }
+    }
+
     /// Replace a machine's config (matched by id) and persist. Used as the machine
     /// data changes (e.g. the bundled machine's image tracking Preferences in P1;
     /// the list-window editor in P1c).
