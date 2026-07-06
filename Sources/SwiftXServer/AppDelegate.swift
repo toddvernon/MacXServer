@@ -310,18 +310,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let statusText: String
         var progress: Double? = nil
         if !isEmulated {
-            dot = .external; statusText = "external"
+            dot = .external; statusText = "External"
         } else if !m.isInstalledEmulatedVM {
-            dot = .notInstalled; statusText = "not installed"
+            dot = .notInstalled; statusText = "Not installed"
         } else if state == .running && ready {
-            dot = .running; statusText = "running"
+            dot = .running; statusText = "Running"
         } else if state == .running {
-            dot = .booting; statusText = "booting"
+            dot = .booting; statusText = "Booting"
             progress = ctrl?.bootProgress
         } else if state == .shuttingDown {
-            dot = .booting; statusText = "shutting down"
+            dot = .booting; statusText = "Shutting down"
         } else {
-            dot = .stopped; statusText = "stopped"
+            dot = .stopped; statusText = "Stopped"
         }
 
         let subtitle = isEmulated

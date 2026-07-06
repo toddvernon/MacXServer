@@ -26,8 +26,12 @@ struct MachineDetailForm: View {
 
     init(machine: Machine, model: MachinesModel) {
         self.model = model
+        // A bundled machine is managed over Helios, full stop -- snap a drifted
+        // transport (hand-edited JSON) back so the locked picker shows the truth.
+        var m = machine
+        if m.bundled { m.transport = .helios }
         _committed = State(initialValue: machine)
-        _draft = State(initialValue: machine)
+        _draft = State(initialValue: m)
     }
 
     /// A shipped bundled fixture: its kind/host/OS are load-bearing identity, so
@@ -127,6 +131,9 @@ struct MachineDetailForm: View {
                     .textFieldStyle(.roundedBorder)
             }
             LabeledField("Transport") {
+                // A bundled machine's management plane is Helios by design (its
+                // per-boot secret + hostfwd are wired for it), so the picker is
+                // locked there.
                 Picker("", selection: $draft.transport) {
                     ForEach(LauncherTransport.allCases, id: \.self) { t in
                         Text(t.rawValue).tag(t)
@@ -134,6 +141,7 @@ struct MachineDetailForm: View {
                 }
                 .labelsHidden()
                 .frame(width: 140)
+                .disabled(bundled)
             }
             osField
             LabeledField("DISPLAY") {

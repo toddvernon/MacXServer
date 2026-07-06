@@ -153,8 +153,10 @@ private struct MachineDetailContainer: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
+                // The machine name outranks the blue section headers (title3),
+                // so it gets title2.
                 Text(machine.name.isEmpty ? "Untitled" : machine.name)
-                    .font(.headline).lineLimit(1)
+                    .font(.title2.weight(.semibold)).lineLimit(1)
                 Spacer()
                 Picker("", selection: $tab) {
                     Text("Overview").tag(DetailTab.overview)
@@ -272,15 +274,21 @@ private struct MachineOverviewPage: View {
 }
 
 /// Section header shared by the Overview and Settings pages: larger than body
-/// text and accent-blue, so the sections read at a glance (Todd's call
-/// 2026-07-06 -- the .headline versions disappeared into the form).
+/// text, a darker blue than the system accent, with breathing room above so
+/// the sections read at a glance (Todd's calls 2026-07-06 -- the .headline
+/// versions disappeared into the form, plain .blue was too bright).
 struct MachineSectionHeader: View {
+    /// Dark enough to read as a label on light backgrounds, still legible in
+    /// dark mode.
+    static let color = Color(red: 0.08, green: 0.28, blue: 0.62)
+
     let text: String
     init(_ text: String) { self.text = text }
     var body: some View {
         Text(text)
             .font(.title3.weight(.semibold))
-            .foregroundStyle(.blue)
+            .foregroundStyle(Self.color)
+            .padding(.top, 10)
     }
 }
 
