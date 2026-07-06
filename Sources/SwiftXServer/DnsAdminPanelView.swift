@@ -13,12 +13,17 @@ struct DnsAdminPanelView: View {
 
     @StateObject private var model: DnsAdminPanelModel
     private let machineName: String
+    /// Explicit Dismiss button (Todd doesn't rely on the window-manager close
+    /// button for dialogs). Closes without applying; unsaved edits are dropped.
+    private let onDismiss: (() -> Void)?
 
     init(machineName: String,
          secretProvider: @escaping () -> String?,
          portProvider: @escaping () -> UInt16,
-         onApplied: (() -> Void)? = nil) {
+         onApplied: (() -> Void)? = nil,
+         onDismiss: (() -> Void)? = nil) {
         self.machineName = machineName
+        self.onDismiss = onDismiss
         _model = StateObject(wrappedValue: DnsAdminPanelModel(
             secretProvider: secretProvider, portProvider: portProvider,
             onApplied: onApplied))
@@ -71,6 +76,8 @@ struct DnsAdminPanelView: View {
                     .controlSize(.small)
             }
             Spacer()
+            Button("Dismiss") { onDismiss?() }
+                .keyboardShortcut(.cancelAction)
             Button("Reload") { model.load() }
                 .disabled(model.busy)
             Button("Apply") { model.apply() }

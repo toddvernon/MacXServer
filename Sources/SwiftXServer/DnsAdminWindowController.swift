@@ -20,11 +20,13 @@ final class DnsAdminWindowController: NSWindowController {
             defer: false
         )
         // A successful Apply is the natural end of the task, so the window
-        // dismisses itself; failures keep it open with the error banner.
+        // dismisses itself; failures keep it open with the error banner. The
+        // Dismiss button (Esc) closes without applying.
         let hostingView = NSHostingView(rootView: DnsAdminPanelView(
             machineName: machineName,
             secretProvider: secretProvider, portProvider: portProvider,
-            onApplied: { [weak panel] in panel?.close() }))
+            onApplied: { [weak panel] in panel?.close() },
+            onDismiss: { [weak panel] in panel?.close() }))
 
         panel.title = "\(machineName) Admin: DNS"
         panel.contentView = hostingView
