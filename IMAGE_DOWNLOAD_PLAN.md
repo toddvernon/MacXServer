@@ -38,8 +38,9 @@ Preferences (it goes on the `Machine` now).
 
 ## The catalog
 
-One `catalog.json` at a pinned URL (hosting: **OPEN — macxserver.com vs
-oldsilicon.com CDN, Todd's call**), one entry per curated OS:
+One `catalog.json` at a pinned URL on **oldsilicon.com** (settled 2026-07-06
+— Todd already distributes these images there for the ZuluSCSI workflow; only
+the exact path is still open), one entry per curated OS:
 
 ```json
 { "formatVersion": 1,
@@ -62,9 +63,9 @@ oldsilicon.com CDN, Todd's call**), one entry per curated OS:
   2026-07-04 NAS lesson: size-correct files can still be silently corrupt —
   never trust size).
 - An OS absent from the catalog simply has no Download button (BYO-image
-  only). This is the licensing dial: NetBSD is freely distributable; shipping
-  Solaris 2.6 / SunOS 4.1.4 payloads is **OPEN — Todd's licensing judgment**,
-  and the catalog shape doesn't care which way it goes.
+  only) — the shape supports it, but it's not needed: **all three OSes ship
+  (Todd, 2026-07-06).** He already distributes these images publicly on
+  oldsilicon.com for the ZuluSCSI workflow; 30-year-old OSes, nobody cares.
 
 SPARCplug side: a `build-catalog.sh` that gzips the three `<os>-boot.qcow2`
 images, computes both sha256s, and emits `catalog.json`, so publishing an
@@ -156,9 +157,11 @@ v0.
 
 ## Open questions
 
-1. Hosting/pinned catalog URL (macxserver.com vs oldsilicon.com CDN).
-2. Which OSes ship in the public catalog (licensing; NetBSD is the safe
-   first).
+1. The exact pinned catalog URL. Hosting is oldsilicon.com (Todd already
+   distributes these images there for ZuluSCSI); just needs the final path
+   picked when `build-catalog.sh` lands.
+2. ~~Which OSes ship~~ — settled 2026-07-06: **all three** (Solaris 2.6,
+   SunOS 4.1.4, NetBSD).
 3. Resume of interrupted downloads: v1 = restart from zero (250 MB is small
    enough), revisit if it annoys.
 4. Catalog `version` → update UX (the old "Manage Plugins…" sketch).
