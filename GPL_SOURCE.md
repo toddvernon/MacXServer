@@ -8,6 +8,9 @@ complete corresponding source available alongside the binary.
 The app menu **MacXServer → Acknowledgements…** shows the full license texts;
 this file is the "where to get the source" companion.
 
+The corresponding-source bundle this statement promises is assembled by
+`Tools/make-gpl-source-bundle.sh`.
+
 ## QEMU 9.2.4 (GPL-2.0-or-later)
 
 MacXServer ships a SPARC-only build of QEMU as a helper binary

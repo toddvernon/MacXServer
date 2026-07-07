@@ -8,17 +8,18 @@ import Framer
 //      and we route the resulting bytes back to the requestor.
 //
 //   2. Server-internal stub owns the selection (window id ≥ 0xFFFE_0000):
-//      the stub has no client behind it, so the standard SelectionRequest
-//      forwarding wedges. We short-circuit: write empty bytes to the
-//      requestor's property and emit SelectionNotify(property=r.property)
-//      signalling "successfully converted to empty data." The dt-apps
-//      pattern uses this — they read the actual payload (e.g. SDT Pixel
-//      Set) via a direct GetProperty on the stub BEFORE the
-//      ConvertSelection, so the ConvertSelection itself is a formality.
+//      write empty bytes to the requestor's property and emit
+//      SelectionNotify(property=r.property) signalling "converted to empty."
 //
-// The mediator owns the CDE customization daemon impersonation setup —
-// previously a wall of inline init code in ServerSession.init. Future
-// stub mediations (drag-drop, additional selections) plug in here.
+// IMPORTANT — path 2 is DEFENSIVE, NOT CURRENTLY EXERCISED. The only thing
+// that ever registered a stub selection owner was the CDE customization
+// daemon impersonation, which is RETIRED (see the sealed block at the bottom
+// of this file and its DO-NOT-REVIVE banner). No production code path
+// registers a stub owner today, so convertSelection never returns
+// .stubOwnerReplyEmpty in the running server. The branch + its test are kept
+// as documented graceful-degradation for the id range, not as live behavior.
+// Do NOT read this as "dt-apps rely on it" — they don't; dt-apps work via the
+// MATCH_SELECT time fix, not any stub impersonation.
 
 /// What ConvertSelection resolved to. Caller (ServerSession) executes
 /// the action, encoding bytes with its byteOrder + sequence number.

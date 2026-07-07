@@ -591,7 +591,7 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// already in the backing should move with it. Sources are passed in
     /// DEVICE-pixel coords (matching clipList / borderClip on the entry).
     ///
-    /// Opt-in: callers must check `SWIFTX_BLIT_PURE_MOVE=1` before invoking.
+    /// Default ON since 2026-06-04 (opt OUT with `SWIFTX_BLIT_PURE_MOVE=0`).
     /// Default no-op for mocks (tests don't assert on backing bytes).
     /// See SHORTCUTS.md "Step F" for history and exit plan.
     func blitWindowRegion(

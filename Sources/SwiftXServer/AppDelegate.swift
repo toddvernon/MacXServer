@@ -38,9 +38,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// state, not an app-global. Cleared the moment state leaves `.running` (so
     /// shutdown dims Admin immediately, and a fresh boot starts dimmed until the
     /// daemon actually answers).
-    /// Shared model for the SPARCstation > Config windows (disk image, shared
-    /// folder, Claude development). Created lazily; all Config windows bind to
-    /// the one instance so they stay consistent. Writes flow to Preferences.
+    /// Shared model for the SPARCstation Config window (shared folder; the
+    /// disk-image and Claude-development sections were removed in the P2 /
+    /// /tmp/sparkplug-retirement work). Created lazily; binds to the one
+    /// instance so windows stay consistent. Writes flow to Preferences.
     private var sparcConfigModel: SparcConfigModel?
     /// One reused window controller per Config section.
     private var sparcConfigWindows: [SparcConfigSection: SparcConfigWindowController] = [:]
@@ -150,8 +151,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: - NSApplicationDelegate
 
-    /// Installs the status-bar item and main menu, and starts watching the
-    /// launchers file for changes.
+    /// Installs the status-bar item and main menu, loads the machine registry,
+    /// and scans for reconnectable orphan guests.
     func applicationDidFinishLaunching(_ notification: Notification) {
         installStatusItem()
         installMainMenu()

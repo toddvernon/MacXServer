@@ -3034,14 +3034,12 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         flushTopLevel(topLevel)
     }
 
-    /// Revived 2026-06-04 behind `SWIFTX_BLIT_PURE_MOVE=1` for the
-    /// xmmap scrolling-region bug. The dormant predecessor (Step F first
-    /// attempt, 2026-05-25) painted bleed colors into siblings during
-    /// the quickplot resize cascade; this revival is opt-in and the
-    /// caller (ServerSession's ConfigureWindow handler) only invokes
-    /// on pure-move where no sibling clipList changed. Default OFF
-    /// until validated against xmmap + dtpad + quickplot on live Sun.
-    /// See SHORTCUTS.md "Step F" for history.
+    /// Revived 2026-06-04 for the xmmap scrolling-region bug. The dormant
+    /// predecessor (Step F first attempt, 2026-05-25) painted bleed colors
+    /// into siblings during the quickplot resize cascade; the caller
+    /// (ServerSession's ConfigureWindow handler) only invokes on pure-move
+    /// where no sibling clipList changed. Default ON since later that same day
+    /// (opt OUT with `SWIFTX_BLIT_PURE_MOVE=0`). See SHORTCUTS.md "Step F".
     public func blitWindowRegion(
         topLevel: UInt32,
         srcDeviceRects: [BoxRec],

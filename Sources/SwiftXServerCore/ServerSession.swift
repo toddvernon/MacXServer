@@ -65,7 +65,8 @@ public final class ServerSession: @unchecked Sendable {
     /// server-global resources; pixel 17 means the same RGB to every
     /// session. Pre-2026-05-19 this lived on the session, which let two
     /// clients allocate the same pixel ID with different RGB values
-    /// (SHORTCUTS:32, retired with the coordinator move).
+    /// (retired with the coordinator move; see the SHORTCUTS "Closed"
+    /// server-global-colormap entry).
     public var colors: ColorTable { coordinator.colors }
 
     /// This session's window resource table (id -> WindowEntry).
