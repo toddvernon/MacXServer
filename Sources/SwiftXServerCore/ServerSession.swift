@@ -4389,7 +4389,7 @@ public final class ServerSession: @unchecked Sendable {
             // CWBackPixel (bit 1) wins when both are supplied with CWBackPixmap
             // (bit 0). Resolve here: pixmap first, then let an explicit
             // backPixel override.
-            var backPixel = read(CW.backPixel)
+            let backPixel = read(CW.backPixel)
             var backPixmapId: UInt32? = nil
             var backPixmapParentRelative = false
             var bgValidationError: XErrorCode? = nil

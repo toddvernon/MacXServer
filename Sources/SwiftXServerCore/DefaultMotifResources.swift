@@ -3,10 +3,10 @@
 // root window decides which fonts XmText / XmLabel / XmPushButton /
 // XmList / XmCascadeButton widgets request via OpenFont. We curate that.
 //
-// This replaces the 2026-05-18-retired CDE-flavored fixture
-// (CDEResourceManagerFixture). That fixture's purpose was to impersonate
-// Solaris CDE; cut once we settled on "be SS2 with mwm, not SS2 with
-// CDE." Our purpose now is different — drive Motif's widget-class
+// This replaced the 2026-05-18-retired CDE-flavored fixture (the old
+// CDEResourceManagerFixture, deleted 2026-07-06). That fixture's purpose was
+// to impersonate Solaris CDE; cut once we settled on "be SS2 with mwm, not SS2
+// with CDE." Our purpose now is different — drive Motif's widget-class
 // defaults toward Helvetica/Courier XLFDs that map cleanly through
 // FontResolver's substitution table to Mac fonts that render nicely
 // at retina scaling.

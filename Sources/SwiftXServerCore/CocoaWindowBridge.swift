@@ -3065,11 +3065,11 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
             // Same pattern as blitCroppedImage: top-down Y in crop (CGImage
             // image-coords are origin-top-left), drawImageRespectingYFlip
-            // on draw. The `srcCGY = bh - …` Cartesian flip in the prior
-            // `_unused_blitWindowRegion` was a latent bug — it would crop
-            // from a vertically-mirrored row range, dragging pixels from
-            // the opposite side of the backing into the blit. xmmap
-            // surfaced this 2026-06-04.
+            // on draw. Do NOT reintroduce a `srcCGY = bh - …` Cartesian flip
+            // here — that crops from a vertically-mirrored row range, dragging
+            // pixels from the opposite side of the backing into the blit (the
+            // bug in the since-deleted first-attempt blit; xmmap surfaced it
+            // 2026-06-04).
             ctx.saveGState()
             let scale = view.scaleFactor
             for src in srcDeviceRects {
@@ -3105,117 +3105,6 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             view.setNeedsDisplay(view.bounds)
         }
         flushTopLevel(topLevel)
-    }
-
-    /// (2026-05-25) Reverted. Caused widget bg colors to bleed into
-    /// adjacent siblings' regions in quickplot during resize. The
-    /// snapshot/paint/blit logic is plausibly correct on paper but
-    /// interacts with our clipList / paintRectsForWindow output in some
-    /// way that paints past the moved widget's actual visible extent.
-    /// Keep the implementation around (rather than fully delete) so we
-    /// can re-enable behind a config flag once we've capture-diffed the
-    /// bleed source.
-    private func _unused_blitWindowRegion(
-        topLevel: UInt32,
-        fromX: Int32, fromY: Int32,
-        width: UInt32, height: UInt32,
-        toX: Int32, toY: Int32,
-        fallbackBgRects: [WindowBackgroundRect]
-    ) {
-        guard width > 0, height > 0 else { return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self,
-                  let view = self.slot(topLevel)?.view,
-                  let ctx = view.backing else { return }
-
-            // Step 1: snapshot BEFORE any paint, so the source read sees
-            // the bitmap's prior state. CGImage retains its pixel data via
-            // copy-on-write against the bitmap storage; subsequent writes
-            // to ctx don't affect the snapshot.
-            let snapshot: CGImage? = ctx.makeImage()
-
-            // Step 2: paint fallback bg rects. Same code shape as
-            // paintWindowRects (clip-respecting), keyed off the widget's
-            // bg+border colors the session computed via paintRectsForWindow.
-            self.withClip(ctx, nil) {
-                for r in fallbackBgRects {
-                    applyFill(ctx, r.color)
-                    ctx.fill(CGRect(x: CGFloat(r.x), y: CGFloat(r.y),
-                                    width: CGFloat(r.width), height: CGFloat(r.height)))
-                }
-            }
-
-            // Step 3: blit from snapshot. Source rect in DEVICE pixels (the
-            // snapshot is the raw device-pixel buffer; the ctx CTM doesn't
-            // affect it). Dest is in X-logical coords; the ctx CTM handles
-            // logical → device on the draw call.
-            if let snapshot = snapshot {
-                let scale = view.scaleFactor
-                let bw = view.backingWidth
-                let bh = view.backingHeight
-                let srcDevX = Int((Double(fromX) * scale).rounded())
-                let srcDevY_top = Int((Double(fromY) * scale).rounded())
-                let srcDevW = Int((Double(width) * scale).rounded())
-                let srcDevH = Int((Double(height) * scale).rounded())
-                // CGImage uses y-up coords (origin bottom-left). The bitmap
-                // stores row-0 at the BOTTOM in raw memory, but the X
-                // server's CTM y-flips so logical-y=0 means visual-top
-                // (high device-y). Convert: source's visual-top row at
-                // device-y = bh - srcDevY_top - srcDevH (i.e. the CGImage
-                // row range that holds the widget content).
-                let srcCGY = bh - srcDevY_top - srcDevH
-                // Intersect with image bounds. cropping(to:) requires its
-                // rect to be inside [0,bw]×[0,bh]; out-of-bounds returns
-                // nil, no draw, fallback bg-paint stands. Partially in-
-                // bounds clips to the visible portion.
-                let clampedX = max(0, srcDevX)
-                let clampedY = max(0, srcCGY)
-                let clampedW = min(srcDevW, bw - clampedX)
-                let clampedH = min(srcDevH, bh - clampedY)
-                if clampedW > 0, clampedH > 0,
-                   let sub = snapshot.cropping(to: CGRect(
-                       x: clampedX, y: clampedY,
-                       width: clampedW, height: clampedH)) {
-                    // Compute the dest rect aligned with the clipped source.
-                    // If we had to clamp the source on the left/top, the
-                    // dest shifts by the same logical amount so the
-                    // visible portion lands at the right place. The visual
-                    // top-edge of the source maps to the visual top-edge
-                    // of the dest at toY; if we clamped top by `clampDy`
-                    // device pixels (clampedY > srcCGY), then we lost
-                    // `clampDy / scale` logical pixels from the top of
-                    // the source, and the dest top shifts down by the
-                    // same amount.
-                    let lostTopDev = clampedY - srcCGY  // device pixels lost off the top
-                    let lostLeftDev = clampedX - srcDevX
-                    let dstX = CGFloat(toX) + CGFloat(lostLeftDev) / CGFloat(scale)
-                    // For top clamping: top device rows lost means dest's
-                    // visual top shifts down (in logical coords).
-                    // But also: if the original srcCGY was negative (source
-                    // visual top below the bitmap), we've already lost
-                    // those rows; the bottom of the visible portion lands
-                    // at toY + height, which is unaffected. Hmm — need to
-                    // think about top vs bottom clamping.
-                    //
-                    // Simplification: when both source and dest are
-                    // entirely within bitmap bounds (the common case),
-                    // lostTopDev = lostLeftDev = 0 and dstX/dstY are just
-                    // (toX, toY). For partial clamping the math gets
-                    // fiddlier; do the simple case first and accept that
-                    // partial clamping might mis-align by a few pixels.
-                    // The dominant cases (dtpad full in-bounds, quickplot
-                    // full out-of-bounds) both land cleanly.
-                    let dstY = CGFloat(toY) + CGFloat(lostTopDev) / CGFloat(scale)
-                    let dstW = CGFloat(clampedW) / CGFloat(scale)
-                    let dstH = CGFloat(clampedH) / CGFloat(scale)
-                    ctx.saveGState()
-                    ctx.draw(sub, in: CGRect(x: dstX, y: dstY, width: dstW, height: dstH))
-                    ctx.restoreGState()
-                }
-            }
-
-            view.setNeedsDisplay(view.bounds)
-        }
     }
 
     /// Cache of CTFont instances keyed by (macFontName, pointSize). Avoids

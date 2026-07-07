@@ -13,14 +13,12 @@ public enum LauncherTokenizer {
     public static func tokenize(_ text: String) -> [LauncherTokenSpan] {
         var spans: [LauncherTokenSpan] = []
         let ns = text as NSString
-        var pos = 0
         text.enumerateSubstrings(in: text.startIndex..., options: [.byLines, .substringNotRequired]) { _, lineRange, _, _ in
             let utf16 = NSRange(lineRange, in: text)
             let line = ns.substring(with: utf16)
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
             if trimmed.isEmpty {
-                pos = utf16.location + utf16.length
                 return
             }
             if trimmed.hasPrefix("#") || trimmed.hasPrefix("!") {
@@ -39,7 +37,6 @@ public enum LauncherTokenizer {
             } else {
                 spans.append(LauncherTokenSpan(kind: .unknown, range: utf16))
             }
-            pos = utf16.location + utf16.length
         }
         return spans
     }
