@@ -1314,6 +1314,9 @@ func formatServerMessage(_ msg: ServerMessage, byteOrder: ByteOrder, ctx: inout 
     }
 }
 
+/// The single home for Request → major opcode in this module — used by
+/// ChronoDumper, Dumper, and CaptureDiff. Don't re-add a local copy (Dumper
+/// had a verbatim one, deleted 2026-07-06).
 func opcodeOf(_ req: Request) -> UInt8 {
     switch req {
     case .createWindow:              return CreateWindow.opcode
