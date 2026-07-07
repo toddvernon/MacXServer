@@ -47,7 +47,6 @@ final class MachineFileTests: XCTestCase {
         """)
         let m = file.machines[0]
         XCTAssertEqual(m.transport, .helios)
-        XCTAssertEqual(m.memoryMB, 128)
         XCTAssertEqual(m.networkMode, .slirp)
         XCTAssertTrue(m.launchers.isEmpty)
         XCTAssertNil(m.image)
@@ -94,21 +93,59 @@ final class MachineFileTests: XCTestCase {
         XCTAssertEqual(e.port, 22)   // ssh default for the overridden transport
     }
 
-    func testFileBrowserLauncherNeedsNoCommand() throws {
-        let m = Machine(name: "m", kind: .externalHost, host: "h", user: "u", transport: .helios,
-                        launchers: [MachineLauncher(name: "Files", fileBrowser: true)])
-        let e = m.resolvedEntries().entries[0]
+    /// Legacy file-browser launchers (pre-2026-07-07) are dropped at decode:
+    /// Admin Agents > File Transfer replaced them, appearing automatically
+    /// whenever the box has helios. Real launchers in the same list survive.
+    func testLegacyFileBrowserLaunchersDropOnDecode() throws {
+        let file = try MachinesFile.decode("""
+        { "machines": [ { "name": "box", "kind": "externalHost",
+                          "host": "10.0.0.5", "user": "a", "launchers": [
+            { "name": "Files", "fileBrowser": true },
+            { "name": "xterm", "command": "xterm -fg cyan" } ] } ] }
+        """)
+        let m = file.machines[0]
+        XCTAssertEqual(m.launchers.count, 1)
+        XCTAssertEqual(m.launchers[0].name, "xterm")
+    }
+
+    /// The Admin Agents File Transfer entry: the machine's connection facts
+    /// with the helios transport and no command.
+    func testFileTransferEntryUsesMachineFacts() throws {
+        let m = Machine(name: "ss5", kind: .externalHost, os: .sunos414,
+                        host: "ipc.example.com", user: "tvernon", transport: .telnet)
+        var warnings: [String] = []
+        let e = try XCTUnwrap(m.fileTransferEntry(warnings: &warnings))
         XCTAssertTrue(e.fileBrowser)
+        XCTAssertEqual(e.transport, .helios)
+        XCTAssertEqual(e.host, "ipc.example.com")
+        XCTAssertEqual(e.port, 2125)   // external helios default
         XCTAssertEqual(e.command, "")
+    }
+
+    /// The machine-level shell-prompt needle reaches the runtime entry (the
+    /// per-launcher key died with the old launchers file; this is its
+    /// machine-level replacement, 2026-07-07).
+    func testMachineShellPromptReachesLauncherEntry() throws {
+        var m = Machine(name: "ipc", kind: .externalHost, host: "ipc.example.com",
+                        user: "tvernon", transport: .telnet,
+                        launchers: [MachineLauncher(name: "xterm", command: "xterm")])
+        m.shellPrompt = "tvernon]"
+        let e = m.resolvedEntries().entries[0]
+        XCTAssertEqual(e.shellPrompt, "tvernon]")
+        // And it round-trips through the JSON.
+        let file = MachinesFile(machines: [m])
+        let round = try MachinesFile.decode(file.encoded())
+        XCTAssertEqual(round.machines[0].shellPrompt, "tvernon]")
     }
 
     // MARK: - makeEngineConfig
 
     func testEngineConfigForEmulatedVM() {
         let m = Machine(name: "s", kind: .emulatedVM, os: .solaris26,
-                        host: "127.0.0.1", user: "t", imagePath: "/tmp/disk.qcow2", memoryMB: 256)
+                        host: "127.0.0.1", user: "t", imagePath: "/tmp/disk.qcow2")
         let cfg = m.makeEngineConfig(tftpDirectory: "/tmp/tftp")
         XCTAssertEqual(cfg?.diskImage.path, "/tmp/disk.qcow2")
+        // Memory is not per-machine: every VM gets the SS-5 max.
         XCTAssertEqual(cfg?.memoryMB, 256)
         XCTAssertEqual(cfg?.ports, .solaris26)
         XCTAssertEqual(cfg?.tftpDirectory, "/tmp/tftp")

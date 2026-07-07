@@ -75,6 +75,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// reads, so window and menu never disagree.
     private var machinesWindow: MachinesWindowController?
     private var machinesModel: MachinesModel?
+
+    // MARK: Helios prober state (see "Helios prober" section)
+
+    /// What the last probe learned about a machine's agent. `up` requires a
+    /// completed hello; `unauthorized` means the agent ANSWERED but refused the
+    /// secret (alive, misconfigured); `down` is connect-failed/timed-out.
+    enum HeliosReachability { case unknown, up, unauthorized, down }
+    struct HeliosProbeResult {
+        var reach: HeliosReachability
+        var hello: HelloResult?
+        var sysinfo: SysInfoResult?
+        /// When the probe completed (drives the clock-drift math: the guest's
+        /// `sysinfo.time` is compared against the Mac clock AT PROBE TIME).
+        var at: Date
+    }
+    /// Latest probe result per machine id. Main-thread only.
+    private var probeResults: [UUID: HeliosProbeResult] = [:]
+    /// Serial queue for the blocking socket work (HeliosClient is sync).
+    private let probeQueue = DispatchQueue(label: "macxserver.helios.prober", qos: .utility)
+    private var probeTimer: Timer?
+    /// Coalesces probeAllSoon() bursts (mutations arrive in flurries).
+    private var probePassScheduled = false
     /// Set when an orphan's Helios shutdown call fails fast (connection refused,
     /// timed out, or auth rejected), so the poll loop can flip the panel to its
     /// failure state without waiting out the full countdown. Reset at the start
@@ -159,6 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         loadMachineRegistry()
         setupMachinesWindow()
         checkForReconnectableOrphansOnLaunch()
+        startHeliosProber()
     }
 
     /// Load the machine registry, migrating the legacy launchers file on first
@@ -222,6 +245,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.onLaunch    = { [weak self] id, name in self?.launchFromMachine(id, launcherName: name) }
         model.onSetHeliosSecret = { [weak self] id in self?.promptHeliosSecret(for: id) }
         model.onDnsAdmin  = { [weak self] id in self?.openDnsAdmin(machineID: id) }
+        model.onFileTransfer = { [weak self] id in self?.openMachineFileTransfer(id) }
+        // What a blank DISPLAY actually resolves to at launch time (this X
+        // server's own address) -- the Settings field shows it as the
+        // placeholder so "blank" reads as a value, not a mystery.
+        model.defaultDisplay = { [weak self] in
+            guard let self else { return ":0" }
+            return "\(self.advertisedHost):\(self.displayNumber)"
+        }
 
         // Edit (master toolbar + Settings tab).
         model.onAddNew = { [weak self] in
@@ -257,7 +288,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             registry.remove(id)
             // Drop the machine's per-machine windows with it -- a console or
             // DNS panel for a machine that no longer exists is a dangling
-            // control surface.
+            // control surface. Its probe state goes too.
+            self.probeResults.removeValue(forKey: id)
             self.consoles.removeValue(forKey: id)?.close()
             self.dnsAdminControllers.removeValue(forKey: id)?.close()
             // File-browser windows are keyed "<machine-id>/<launcher>" (one per
@@ -335,7 +367,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let statusText: String
         var progress: Double? = nil
         if !isEmulated {
-            dot = .external; statusText = "External"
+            // The helios prober refines an external box's dot; unknown =
+            // never probed or not set up for helios.
+            switch probeResults[m.id]?.reach ?? .unknown {
+            case .unknown:      dot = .external;             statusText = "External"
+            case .up:           dot = .externalUp;           statusText = "External \u{00b7} agent responding"
+            case .unauthorized: dot = .externalUnauthorized; statusText = "External \u{00b7} agent refused the secret"
+            case .down:         dot = .externalDown;         statusText = "External \u{00b7} not responding"
+            }
         } else if !m.isInstalledEmulatedVM {
             dot = .notInstalled; statusText = "Not installed"
         } else if state == .running && ready {
@@ -361,22 +400,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // much as helios -- a launch against a stopped VM only fails
             // slowly). External hosts stay enabled; we don't own their state.
             let enabled = !isEmulated || ready
-            return MachineLauncherChip(id: l.name, name: l.name,
-                                       isFileBrowser: l.fileBrowser, enabled: enabled)
+            return MachineLauncherChip(id: l.name, name: l.name, enabled: enabled)
         }
 
         return MachineRow(
             id: m.id, name: m.name, isEmulated: isEmulated,
             subtitle: subtitle, statusText: statusText, dot: dot, progress: progress,
+            systemLine: systemLine(for: m, ready: ready),
             showsLifecycle: isEmulated,
             canStart: (state == .stopped || state == .notInstalled),
             canShutDown: (state == .running && ready),
             canForceQuit: (state == .running || state == .shuttingDown),
             canBackup: (state == .stopped),
             canConsole: (consoles[m.id] != nil),
-            canDnsAdmin: (isEmulated && state == .running && ready),
+            // OS-sensitive admin verbs (the rule, Todd 2026-07-07): the box
+            // must be answering over Helios AND we must know what OS it runs.
+            // Emulated: ready covers reachability and boot implies a known
+            // image OS. External: the prober's last hello + the user-set OS.
+            canDnsAdmin: isEmulated
+                ? (state == .running && ready)
+                : (probeResults[m.id]?.reach == .up && m.os != nil),
+            // Admin verbs gate on the box ANSWERING over Helios (the rule,
+            // Todd 2026-07-07): emulated = ready (readiness IS the helios
+            // liveness signal); external = the prober's last hello succeeded
+            // (which, against the fail-closed agent, also proves the saved
+            // secret is right). File Transfer is OS-agnostic so it doesn't
+            // need the machine's OS, unlike canDnsAdmin.
+            canFileTransfer: isEmulated
+                ? (state == .running && ready)
+                : probeResults[m.id]?.reach == .up,
+            osIsDetected: !isEmulated && probeResults[m.id]?.sysinfo?.uname != nil,
             canSetHeliosSecret: !isEmulated,
             launchers: chips)
+    }
+
+    /// Open the machine's Admin Agents file browser (Overview → Admin Agents →
+    /// File Transfer): a synthetic filebrowser launcher resolved against the
+    /// machine, so host / helios port / user / secret all ride the exact same
+    /// plumbing a `fileBrowser = true` launcher chip uses. Keyed per machine so
+    /// repeated clicks focus the existing window.
+    private func openMachineFileTransfer(_ machineID: UUID) {
+        guard let machine = registry?.machine(machineID) else { return }
+        var warnings: [String] = []
+        guard let entry = machine.fileTransferEntry(warnings: &warnings) else { return }
+        openFileBrowser(entry: entry, key: "\(machine.id.uuidString)/admin.file-transfer")
     }
 
     /// Launch (or open the file browser for) one of a machine's launchers, reusing
@@ -386,11 +453,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
               let ml = machine.launchers.first(where: { $0.name == launcherName }) else { return }
         var warnings: [String] = []
         guard let entry = machine.resolved(ml, warnings: &warnings) else { return }
-        if entry.fileBrowser {
-            openFileBrowser(entry: entry, key: "\(machine.id.uuidString)/\(ml.name)")
-        } else {
-            launch(entry, os: machine.os)
-        }
+        // Launchers are always commands now: legacy file-browser launchers are
+        // dropped at decode (Admin Agents > File Transfer replaced them).
+        launch(entry, os: machine.os)
     }
 
     /// Enter / update / clear the Helios daemon secret for an external machine,
@@ -418,7 +483,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         } else {
             try? KeychainHelper.store(account: account, password: value)
         }
+        // A changed secret changes reachability (unauthorized <-> up): a
+        // stale dot here would look like the save didn't take.
+        probeResults.removeValue(forKey: machineID)
         refreshMachines()
+        probeAllSoon()
     }
 
     /// Refresh every machine surface after an add/edit/remove/clone: the window
@@ -434,6 +503,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         refreshMachines()
         if let m = machinesMenu { rebuildMachinesMenu(m) }
         updateStatusMenu()
+        // Host/transport edits change what the prober should be watching.
+        probeAllSoon()
     }
 
     // MARK: - Machines menu
@@ -525,8 +596,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if !m.launchers.isEmpty {
             sub.addItem(.separator())
             for l in m.launchers {
-                let title = l.fileBrowser ? "\(l.name)\u{2026}" : l.name
-                let item = NSMenuItem(title: title,
+                let item = NSMenuItem(title: l.name,
                                       action: #selector(launchMachineLauncher(_:)), keyEquivalent: "")
                 item.target = self
                 item.representedObject = "\(m.id.uuidString)/\(l.name)" as NSString
@@ -660,6 +730,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // and Admin now (not at process launch).
             self?.registry?.controller(id)?.isReady = true
             self?.refreshSparcMenu()
+            // Fetch the fresh guest's sysinfo now instead of waiting out the
+            // prober's next 3-minute tick.
+            self?.probeAllSoon()
         }
         engine.onBootStalled { [weak self] reason in
             // Wedged guest -- make sure the user sees it and can Force Quit.
@@ -995,11 +1068,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func openDnsAdmin(machineID id: UUID) {
         guard let m = registry?.machine(id) else { return }
         if dnsAdminControllers[id] == nil {
-            let port = m.resolvedPorts.helios
+            // All three providers re-read the registry live, so the window
+            // keeps working across a guest stop/start (per-boot secret) and
+            // across host/user edits on an external machine. `heliosSecret`
+            // resolves both kinds: loopback -> the owning engine's per-boot
+            // secret (by port), external -> the Keychain secret.
+            let hostFor: () -> String = { [weak self] in
+                guard let m = self?.registry?.machine(id) else { return "127.0.0.1" }
+                return m.kind == .emulatedVM ? "127.0.0.1" : m.host
+            }
             dnsAdminControllers[id] = DnsAdminWindowController(
                 machineName: m.name,
-                secretProvider: { [weak self] in self?.registry?.controller(id)?.engine.currentSecret },
-                portProvider: { port })
+                secretProvider: { [weak self] in
+                    guard let self, let m = self.registry?.machine(id) else { return nil }
+                    return self.heliosSecret(host: hostFor(), user: m.user,
+                                             port: m.resolvedPorts.helios)
+                },
+                hostProvider: hostFor,
+                portProvider: { [weak self] in
+                    self?.registry?.machine(id)?.resolvedPorts.helios ?? 2125
+                })
         }
         dnsAdminControllers[id]?.showWindow()
     }
@@ -1131,6 +1219,163 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return KeychainHelper.retrieve(account: heliosSecretAccount(host: host, user: user))
     }
 
+    // MARK: - Helios prober (external reachability + guest sysinfo)
+    //
+    // "Has helios" gating is configuration; the prober is DISPLAY. Every ~3
+    // minutes (plus immediately at launch, after any machine mutation, after a
+    // secret change, and when a guest comes ready) it hellos each candidate
+    // box off the main thread and refines the external dot (up / unauthorized
+    // / down) plus the Overview's sysinfo line. Verbs never gate on probe
+    // results -- a probe is at worst minutes stale, and failing at use with a
+    // clear error beats a mysteriously dimmed button.
+
+    /// One probe job, snapshotted on the main thread so the worker never
+    /// touches the registry or the Keychain.
+    private struct HeliosProbeJob {
+        let id: UUID
+        let host: String
+        let port: UInt16
+        let secret: String?
+        let isEmulated: Bool
+    }
+
+    /// Start the recurring prober: an immediate pass, then every 3 minutes.
+    /// Cheap when nothing qualifies -- no sockets are opened for machines that
+    /// aren't helios-configured externals or ready emulated guests.
+    private func startHeliosProber() {
+        probeTimer = Timer.scheduledTimer(withTimeInterval: 180, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async { self?.probeAllSoon() }
+        }
+        probeTimer?.tolerance = 15
+        probeAllSoon()
+    }
+
+    /// Schedule one coalesced probe pass on the next runloop turn (mutations
+    /// arrive in flurries; one pass covers them all).
+    private func probeAllSoon() {
+        guard !probePassScheduled else { return }
+        probePassScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.probePassScheduled = false
+            self.runProbePass()
+        }
+    }
+
+    private func probeJobs() -> [HeliosProbeJob] {
+        guard let registry else { return [] }
+        var jobs: [HeliosProbeJob] = []
+        for m in registry.machines {
+            if m.kind == .externalHost {
+                guard !m.host.isEmpty else { continue }
+                // Only boxes set up for helios. A transport-helios box with no
+                // saved secret still gets probed: the fail-closed agent's
+                // "unauthorized" answer is exactly the actionable signal.
+                let secret = KeychainHelper.retrieve(
+                    account: heliosSecretAccount(host: m.host, user: m.user))
+                guard m.transport == .helios || secret != nil else { continue }
+                jobs.append(HeliosProbeJob(id: m.id, host: m.host,
+                                           port: m.resolvedPorts.helios,
+                                           secret: secret, isEmulated: false))
+            } else if registry.controller(m.id)?.isReady == true {
+                // Ready emulated guest: refresh its sysinfo. Readiness already
+                // proves liveness; the reach result never drives its dot.
+                jobs.append(HeliosProbeJob(id: m.id, host: "127.0.0.1",
+                                           port: m.resolvedPorts.helios,
+                                           secret: registry.controller(m.id)?.engine.currentSecret,
+                                           isEmulated: true))
+            }
+        }
+        return jobs
+    }
+
+    private func runProbePass() {
+        let jobs = probeJobs()
+        guard !jobs.isEmpty else { return }
+        probeQueue.async { [weak self] in
+            var results: [(UUID, HeliosProbeResult)] = []
+            for job in jobs {
+                results.append((job.id, Self.probe(job)))
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                for (id, result) in results { self.probeResults[id] = result }
+                self.adoptDetectedOSes(results)
+                self.refreshMachines()
+            }
+        }
+    }
+
+    /// Blocking single-machine probe (runs on probeQueue): hello for
+    /// liveness, then sysinfo best-effort. A protocolError on hello means the
+    /// agent ANSWERED (it's alive) -- "unauthorized" is the config signal. An
+    /// old agent's "unknown verb" on sysinfo just means no stats (pre-0.2.0).
+    nonisolated private static func probe(_ job: HeliosProbeJob) -> HeliosProbeResult {
+        let client = HeliosClient(host: job.host, port: job.port,
+                                  timeout: 3, secret: job.secret)
+        defer { client.close() }
+        do {
+            try client.connect()
+            let hello = try client.hello()
+            let sys = try? client.sysinfo()
+            return HeliosProbeResult(reach: .up, hello: hello, sysinfo: sys, at: Date())
+        } catch HeliosClient.HeliosError.protocolError(let message) {
+            let reach: HeliosReachability =
+                message.contains("unauthorized") ? .unauthorized : .up
+            return HeliosProbeResult(reach: reach, hello: nil, sysinfo: nil, at: Date())
+        } catch {
+            return HeliosProbeResult(reach: .down, hello: nil, sysinfo: nil, at: Date())
+        }
+    }
+
+    /// An external box that reports its own uname over sysinfo IS the source
+    /// of truth for its OS (same doctrine as image detection on emulated
+    /// VMs): adopt it into the registry, which auto-populates -- and, via
+    /// `osIsDetected`, dims -- the Settings OS picker. A machine whose agent
+    /// predates sysinfo keeps its manually-set OS untouched.
+    private func adoptDetectedOSes(_ results: [(UUID, HeliosProbeResult)]) {
+        guard let registry else { return }
+        for (id, result) in results {
+            guard let uname = result.sysinfo?.uname,
+                  let detected = MachineOS.detect(unameSysname: uname.sysname,
+                                                  release: uname.release),
+                  var m = registry.machine(id),
+                  m.kind == .externalHost, m.os != detected else { continue }
+            m.os = detected
+            registry.update(m)
+            afterMachineMutation()
+        }
+    }
+
+    /// The Overview's one-line guest summary from the machine's last sysinfo.
+    /// Renders only what the agent reported (the fields-optional contract);
+    /// suppressed entirely once the box stops answering -- stale facts read
+    /// as current ones.
+    private func systemLine(for m: Machine, ready: Bool) -> String? {
+        guard let probe = probeResults[m.id], let sys = probe.sysinfo else { return nil }
+        if m.kind == .emulatedVM && !ready { return nil }
+        if m.kind == .externalHost && probe.reach != .up { return nil }
+        var parts: [String] = []
+        if let u = sys.uname { parts.append("\(u.sysname) \(u.release) \(u.machine)") }
+        if let mem = sys.memMB { parts.append("\(Int(mem.rounded()))MB") }
+        if let load = sys.load, !load.isEmpty { parts.append(String(format: "load %.2f", load[0])) }
+        if let swap = sys.swap, swap.totalKB > 0 {
+            parts.append("swap \(Int((swap.usedKB / swap.totalKB * 100).rounded()))%")
+        }
+        if let disks = sys.disks, let fullest = disks.max(by: { $0.usedPct < $1.usedPct }) {
+            parts.append("\(fullest.mount) \(Int(fullest.usedPct))% full")
+        }
+        // mk48t08 clocks drift, and a qemu guest boots on whatever the RTC
+        // hands it. Compare the guest clock against the Mac clock AT PROBE
+        // TIME; two minutes of slack ignores probe latency and rounding.
+        let drift = sys.time - probe.at.timeIntervalSince1970
+        if abs(drift) > 120 {
+            let minutes = Int((abs(drift) / 60).rounded())
+            parts.append("clock \(drift > 0 ? "+" : "\u{2212}")\(minutes)m")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " \u{00b7} ")
+    }
+
     /// Open (or focus) a Helios file browser for a resolved filebrowser entry,
     /// keyed so the window is reused. Shared by the Launchers menu and machine rows.
     @MainActor
@@ -1233,17 +1478,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         activeLauncher = launcher
 
+        // The session transcript is ALWAYS captured (bounded), verbose or
+        // not: a failed launch without it is undiagnosable ("timed out
+        // waiting for shell prompt" -- waiting for WHAT, against WHAT
+        // output?). Verbose additionally streams it to a progress window.
+        let transcript = LaunchTranscript()
+        var ctrl: LaunchProgressWindowController? = nil
         if entry.verbose {
-            let ctrl = LaunchProgressWindowController(title: entry.name)
+            ctrl = LaunchProgressWindowController(title: entry.name)
             progressController = ctrl
-            ctrl.showWindow()
-            launcher.onStatus { [weak ctrl] message in
-                ctrl?.appendStatusLine(message)
-            }
-            launcher.onText { [weak ctrl] text, bold in
-                if bold { ctrl?.appendBoldText(text) }
-                else { ctrl?.appendText(text) }
-            }
+            ctrl?.showWindow()
+        }
+        launcher.onStatus { [weak ctrl] message in
+            transcript.append("\u{2022} \(message)\n")
+            ctrl?.appendStatusLine(message)
+        }
+        launcher.onText { [weak ctrl] text, bold in
+            transcript.append(text)
+            if bold { ctrl?.appendBoldText(text) }
+            else { ctrl?.appendText(text) }
         }
 
         launcher.launch { [weak self] result in
@@ -1256,19 +1509,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     self?.progressController?.appendStatusLine("FAILED: \(error.localizedDescription)")
                     self?.progressController?.markDone(failed: true)
                 } else {
-                    self?.showLaunchError("Launch failed for \(entry.name): \(error.localizedDescription)")
+                    self?.showLaunchError("Launch failed for \(entry.name): \(error.localizedDescription)",
+                                          transcript: transcript.tail())
                 }
             }
         }
     }
 
-    private func showLaunchError(_ message: String) {
+    private func showLaunchError(_ message: String, transcript: String = "") {
         let alert = NSAlert()
         alert.messageText = "Launcher Error"
-        alert.informativeText = message
+        alert.informativeText = transcript.isEmpty
+            ? message
+            : message + "\n\nSession transcript (what the machine sent):\n\(transcript)"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    /// Bounded rolling capture of one launch session, so a failure dialog can
+    /// show what the machine actually sent. Callbacks arrive on the main
+    /// queue (the launchers dispatch there), so no locking.
+    private final class LaunchTranscript {
+        private var text = ""
+        func append(_ s: String) {
+            text += s
+            if text.count > 4000 { text = String(text.suffix(4000)) }
+        }
+        /// The last few lines, tidied for an alert.
+        func tail(maxLines: Int = 14) -> String {
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+            return lines.suffix(maxLines).joined(separator: "\n")
+        }
     }
 
     // MARK: - Machine lifecycle (per machine id)

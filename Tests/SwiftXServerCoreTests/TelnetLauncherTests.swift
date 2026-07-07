@@ -28,6 +28,29 @@ final class TelnetLauncherTests: XCTestCase {
         XCTAssertEqual(TelnetLauncher.stripANSI(input), "done")
     }
 
+    // Generic shell-prompt detection: the fallback when the configured needle
+    // (the "$ " default -- sh/ksh-only) doesn't match. Genesis: the real
+    // SS5's csh prompt "ipc% " timed out the launcher (2026-07-07); machine
+    // launchers have no prompt keys, so the default must cover real shells.
+    func testGenericShellPromptDetection() {
+        // The four classic sigils, with and without trailing space.
+        XCTAssertTrue(TelnetLauncher.looksLikeShellPrompt("Last login: Tue Jul  7\nipc% "))
+        XCTAssertTrue(TelnetLauncher.looksLikeShellPrompt("motd line\n$ "))
+        XCTAssertTrue(TelnetLauncher.looksLikeShellPrompt("banner\nipc# "))
+        XCTAssertTrue(TelnetLauncher.looksLikeShellPrompt("banner\nhost>"))
+        // The fleet's canonical csh prompt: bracket-wrapped, ends "] " -- the
+        // shape that beat the sigil-only check on the real SS5 (2026-07-07).
+        XCTAssertTrue(TelnetLauncher.looksLikeShellPrompt(
+            "SunOS Release 4.1.4 (GENERIC) #2\n[ipc:[tvernon]:/home2/tvernon] "))
+        XCTAssertTrue(TelnetLauncher.looksLikeShellPrompt(
+            "SunOS Release 4.1.4\n[ss2.example.com:[bob]:/home/bob] %"))
+        // Non-prompts: login/password prompts, empty, banner-only output.
+        XCTAssertFalse(TelnetLauncher.looksLikeShellPrompt("login: "))
+        XCTAssertFalse(TelnetLauncher.looksLikeShellPrompt("Password:"))
+        XCTAssertFalse(TelnetLauncher.looksLikeShellPrompt(""))
+        XCTAssertFalse(TelnetLauncher.looksLikeShellPrompt("Last login: Tue Jul  7 14:02:11"))
+    }
+
     // The full prompt .cshrc emits once TERM=xterm: two OSC title pushes, a CR,
     // then the visible "[host:[user]:/cwd] ". The shell_prompt needle "bob]"
     // (matching "[bob]") must survive stripping.

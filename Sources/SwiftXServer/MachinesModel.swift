@@ -7,14 +7,20 @@ enum MachineStatusDot: Equatable {
     case booting        // qemu up, still coming to ready
     case stopped        // installed, not running
     case notInstalled   // emulated VM with no image
-    case external       // a real host (no lifecycle we own)
+    // External hosts: no lifecycle we own, but the helios prober (~3 min
+    // hello) refines the dot. `.external` = never probed / not configured
+    // for helios; the others reflect the last probe. An agent that ANSWERS
+    // "unauthorized" is alive -- that's a config problem, not a dead box.
+    case external               // unknown (unprobed / no helios config)
+    case externalUp             // agent answered hello
+    case externalUnauthorized   // agent alive but refused the secret
+    case externalDown           // connect failed / timed out
 }
 
 /// One clickable launcher under a machine (Overview page runs it on click).
 struct MachineLauncherChip: Identifiable, Equatable {
     let id: String          // the launcher name (unique within a machine)
     let name: String
-    let isFileBrowser: Bool
     let enabled: Bool
 }
 
@@ -30,6 +36,13 @@ struct MachineRow: Identifiable, Equatable {
     let dot: MachineStatusDot
     let progress: Double?       // boot progress 0...1 when booting
 
+    /// One quiet line of guest facts from the agent's `sysinfo` (uname, load,
+    /// swap, disk fullness, clock drift), composed by AppDelegate from the
+    /// latest probe. nil = no data yet (machine down, agent pre-0.2.0, or
+    /// never probed). Display-only; fields the agent omitted just don't
+    /// appear in the line.
+    let systemLine: String?
+
     // Lifecycle capabilities. In P1 only the wired bundled emulated VM shows
     // lifecycle controls; external hosts have none (no start/stop we own).
     let showsLifecycle: Bool
@@ -38,9 +51,25 @@ struct MachineRow: Identifiable, Equatable {
     let canForceQuit: Bool
     let canBackup: Bool
     let canConsole: Bool
-    /// DNS admin talks to the guest's Helios daemon, so it needs the machine
-    /// running and ready. Emulated VMs only.
+    // The Admin Agents rule (Todd, 2026-07-07): an admin verb is available
+    // when the box is ANSWERING over Helios -- emulated = running and ready
+    // (readiness IS the helios liveness signal), external = the prober's
+    // last hello succeeded (which, against the fail-closed agent, also
+    // proves the saved secret) -- plus, for OS-sensitive verbs, when we know
+    // what OS the machine runs (external boxes declare it in Settings;
+    // emulated machines get it from image detection).
+
+    /// DNS admin (edit /etc/resolv.conf over the agent). OS-sensitive:
+    /// an external host also needs its OS set.
     let canDnsAdmin: Bool
+
+    /// Helios file browser. OS-agnostic, so reachability alone gates it.
+    let canFileTransfer: Bool
+
+    /// True when the machine's OS came from the box itself (an external
+    /// host's sysinfo uname). The Settings OS picker dims: the box outranks
+    /// a manual pick, same as image detection does on emulated VMs.
+    let osIsDetected: Bool
 
     /// External hosts carry a Helios daemon secret the user enters (bundled VMs
     /// get theirs per-boot automatically). True → show the "Helios Secret" control.
@@ -84,6 +113,8 @@ final class MachinesModel: ObservableObject {
     var onSetHeliosSecret: ((UUID) -> Void)?
     /// Open the machine's DNS (/etc/resolv.conf) admin window.
     var onDnsAdmin: ((UUID) -> Void)?
+    /// Open the machine's Helios file browser (Overview → Admin Agents).
+    var onFileTransfer: ((UUID) -> Void)?
 
     // Edit actions (master toolbar + Settings page).
     /// Add a fresh default machine, persist it, and return its id to select.
@@ -100,6 +131,10 @@ final class MachinesModel: ObservableObject {
     /// The name of the *other* emulated VM already claiming `imagePath` (excluding
     /// the machine being edited), or nil if the image is free. Drives a warning.
     var imageClaimant: ((_ imagePath: String, _ excluding: UUID) -> String?)?
+    /// The DISPLAY a launched client gets when the machine leaves it blank:
+    /// this X server's own address ("<Mac LAN IP>:<display>"). Shown as the
+    /// field's placeholder so blank reads as what it actually does.
+    var defaultDisplay: (() -> String)?
 
     var selectedMachine: Machine? { machines.first { $0.id == selection } }
     func row(_ id: UUID) -> MachineRow? { rows[id] }

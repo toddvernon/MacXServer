@@ -19,14 +19,15 @@ struct DnsAdminPanelView: View {
 
     init(machineName: String,
          secretProvider: @escaping () -> String?,
+         hostProvider: @escaping () -> String,
          portProvider: @escaping () -> UInt16,
          onApplied: (() -> Void)? = nil,
          onDismiss: (() -> Void)? = nil) {
         self.machineName = machineName
         self.onDismiss = onDismiss
         _model = StateObject(wrappedValue: DnsAdminPanelModel(
-            secretProvider: secretProvider, portProvider: portProvider,
-            onApplied: onApplied))
+            secretProvider: secretProvider, hostProvider: hostProvider,
+            portProvider: portProvider, onApplied: onApplied))
     }
 
     var body: some View {
@@ -121,6 +122,10 @@ final class DnsAdminPanelModel: ObservableObject {
     // permission bits rather than guessing.
     private var loadedMode: Int?
     private let secretProvider: () -> String?
+    /// The machine's Helios host: loopback for an emulated guest (its qemu
+    /// hostfwds live there), the real address for an external box. Read live
+    /// so a host edit is picked up on the next call.
+    private let hostProvider: () -> String
     /// The machine's Helios host port (per-machine: 2125 Solaris, 2135 SunOS
     /// 4.1.4, ...). Without this the admin call would dial the wrong guest.
     private let portProvider: () -> UInt16
@@ -129,9 +134,11 @@ final class DnsAdminPanelModel: ObservableObject {
     private let onApplied: (() -> Void)?
 
     init(secretProvider: @escaping () -> String?,
+         hostProvider: @escaping () -> String,
          portProvider: @escaping () -> UInt16,
          onApplied: (() -> Void)? = nil) {
         self.secretProvider = secretProvider
+        self.hostProvider = hostProvider
         self.portProvider = portProvider
         self.onApplied = onApplied
     }
@@ -148,10 +155,11 @@ final class DnsAdminPanelModel: ObservableObject {
         busy = true
         setBanner("Reading \(Self.remotePath) from the SPARCstation\u{2026}", error: false)
         let secret = secretProvider()
+        let host = hostProvider()
         let port = portProvider()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let outcome: Result<(String, Int), Error>
-            let client = HeliosClient(port: port, secret: secret)
+            let client = HeliosClient(host: host, port: port, secret: secret)
             defer { client.close() }
             do {
                 try client.connect()
@@ -183,12 +191,13 @@ final class DnsAdminPanelModel: ObservableObject {
         busy = true
         setBanner("Writing \(Self.remotePath) to the SPARCstation\u{2026}", error: false)
         let secret = secretProvider()
+        let host = hostProvider()
         let port = portProvider()
         let payload = Data(text.utf8)
         let mode = loadedMode
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let outcome: Result<Void, Error>
-            let client = HeliosClient(port: port, secret: secret)
+            let client = HeliosClient(host: host, port: port, secret: secret)
             defer { client.close() }
             do {
                 try client.connect()

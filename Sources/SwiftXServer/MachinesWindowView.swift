@@ -26,7 +26,7 @@ struct MachinesWindowView: View {
             if model.machines.isEmpty {
                 emptyState
             } else {
-                List(selection: $model.selection) {
+                List(selection: deferredSelection) {
                     machineSection("Bundled Machines", model.bundledMachines)
                     machineSection("Virtual Machines", model.virtualMachines)
                     machineSection("External Machines", model.externalMachines)
@@ -36,6 +36,18 @@ struct MachinesWindowView: View {
             Divider()
             toolbar
         }
+    }
+
+    /// The AppKit-backed List writes its selection binding from inside the
+    /// view-update pass on row clicks (worse NSPanel-hosted), which trips
+    /// "Publishing changes from within view updates is not allowed". Deferring
+    /// the @Published write one runloop turn moves the publish outside the
+    /// update transaction; the get side stays live.
+    private var deferredSelection: Binding<UUID?> {
+        Binding(get: { model.selection },
+                set: { newValue in
+                    DispatchQueue.main.async { model.selection = newValue }
+                })
     }
 
     /// One titled section of the master list, or nothing when it's empty (so a
@@ -203,6 +215,7 @@ private struct MachineOverviewPage: View {
                     bootBar(row)
                     lifecycle(row)
                     launchers(row)
+                    adminAgents(row)
                 }
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -215,11 +228,22 @@ private struct MachineOverviewPage: View {
     /// No dot here (the master list carries it); the thermometer below is the
     /// Overview's state color.
     private func statusLine(_ row: MachineRow) -> some View {
-        HStack(spacing: 10) {
-            Text(row.statusText).font(.system(size: 15, weight: .medium))
-            Spacer()
-            Text(row.subtitle).font(.caption).foregroundStyle(.secondary)
-                .lineLimit(1).truncationMode(.middle)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                Text(row.statusText).font(.system(size: 15, weight: .medium))
+                Spacer()
+                Text(row.subtitle).font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            // Guest facts from the agent's sysinfo (present once the box has
+            // answered a probe): uname, load, swap, disk fullness, clock drift.
+            if let line = row.systemLine {
+                Text(line)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -230,12 +254,23 @@ private struct MachineOverviewPage: View {
     /// own).
     @ViewBuilder private func bootBar(_ row: MachineRow) -> some View {
         if row.isEmulated {
-            let accent: Color = (row.dot == .running) ? .green : .yellow
+            let ready = (row.dot == .running)
+            let accent: Color = ready ? .green : .yellow
+            let fraction = row.progress ?? 0
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(accent.opacity(0.15))
-                    Capsule().fill(accent)
-                        .frame(width: max(0, geo.size.width * (row.progress ?? 0)))
+                    Group {
+                        if ready || fraction <= 0 {
+                            Capsule().fill(accent)
+                        } else {
+                            // In motion (booting or shutting down): animated
+                            // barber pole instead of flat yellow.
+                            BarberPoleFill(accent: accent)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    .frame(width: max(0, geo.size.width * fraction))
                 }
             }
             .frame(height: 6)
@@ -286,13 +321,57 @@ private struct MachineOverviewPage: View {
                             Button {
                                 model.onLaunch?(row.id, chip.id)
                             } label: {
-                                Label(chip.name, systemImage: chip.isFileBrowser ? "folder" : "terminal")
+                                Label(chip.name, systemImage: "terminal")
                                     .labelStyle(.titleAndIcon)
                             }
                             .buttonStyle(.bordered)
                             .disabled(!chip.enabled)
                         }
                     }
+                }
+            }
+            .padding(.leading, 16)
+        }
+    }
+
+    /// Verbs that ride the box's Helios agent (File Transfer, DNS; more to
+    /// come). File Transfer gates on `canFileTransfer` ("has helios" per the
+    /// MachineRow doc: emulated = up and ready, external = a saved secret);
+    /// DNS gates on `canDnsAdmin` (emulated, running and ready).
+    private func adminAgents(_ row: MachineRow) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            MachineSectionHeader("Admin Agents")
+            VStack(alignment: .leading, spacing: 8) {
+                FlowLayout(spacing: 6) {
+                    Button {
+                        model.onFileTransfer?(row.id)
+                    } label: {
+                        Label("File Transfer", systemImage: "folder")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!row.canFileTransfer)
+                    .help(row.canFileTransfer
+                          ? "Browse and move files over the Helios agent"
+                          : (row.isEmulated
+                             ? "Available once the machine is running and ready"
+                             : "Available once the machine answers a Helios check "
+                             + "(save its secret in the Overview if you haven't)"))
+
+                    Button {
+                        model.onDnsAdmin?(row.id)
+                    } label: {
+                        Label("DNS", systemImage: "network")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!row.canDnsAdmin)
+                    .help(row.canDnsAdmin
+                          ? "Edit the machine's DNS configuration (/etc/resolv.conf)"
+                          : (row.isEmulated
+                             ? "Available once the machine is running and ready"
+                             : "Needs the machine answering over Helios and its OS "
+                             + "set in Settings"))
                 }
             }
             .padding(.leading, 16)
@@ -351,6 +430,12 @@ struct StatusDotView: View {
                 Circle().strokeBorder(.tertiary, lineWidth: 1.5).frame(width: 10, height: 10)
             case .external:
                 Circle().fill(.secondary).frame(width: 10, height: 10)
+            case .externalUp:
+                Circle().fill(.green).frame(width: 10, height: 10)
+            case .externalUnauthorized:
+                Circle().fill(.orange).frame(width: 10, height: 10)
+            case .externalDown:
+                Circle().strokeBorder(.red, lineWidth: 1.5).frame(width: 10, height: 10)
             }
         }
         .frame(width: 12, height: 12)
@@ -364,6 +449,9 @@ struct StatusDotView: View {
         case .stopped: return "Stopped"
         case .notInstalled: return "Not installed"
         case .external: return "External host"
+        case .externalUp: return "External host, agent responding"
+        case .externalUnauthorized: return "External host, agent refused the saved secret"
+        case .externalDown: return "External host, not responding"
         }
     }
 }

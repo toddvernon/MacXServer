@@ -293,10 +293,9 @@ final class MachineRegistryTests: XCTestCase {
     }
 
     func testEngineConfigCarriesMachineMacAndPorts() throws {
-        var m = Machine(name: "vm", kind: .emulatedVM, os: .netbsd,
+        let m = Machine(name: "vm", kind: .emulatedVM, os: .netbsd,
                         host: "127.0.0.1", user: "t",
                         ports: ImagePorts.block(7), imagePath: "/tmp/x.qcow2")
-        m.memoryMB = 256
         let config = try XCTUnwrap(m.makeEngineConfig())
         XCTAssertEqual(config.macAddress, m.resolvedMacAddress)
         XCTAssertEqual(config.ports, ImagePorts.block(7))

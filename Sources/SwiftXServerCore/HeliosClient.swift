@@ -100,6 +100,14 @@ public final class HeliosClient {
         try call("hello", as: HelloResult.self)
     }
 
+    /// Best-effort guest system stats (agent 0.2.0+). Older agents answer
+    /// "unknown verb", surfaced as `.protocolError` -- treat that as "agent
+    /// predates sysinfo", not a failure. See `SysInfoResult` for the
+    /// fields-optional contract.
+    public func sysinfo() throws -> SysInfoResult {
+        try call("sysinfo", as: SysInfoResult.self)
+    }
+
     /// Graceful guest shutdown (the daemon runs `init 5`). The daemon ACKs
     /// `{status:"shutting down"}` first, then runs the command, so this returns
     /// before the guest actually goes down; the connection drops afterward.
@@ -459,6 +467,41 @@ public struct HelloResult: Decodable, Equatable, Sendable {
 
 public struct ShutdownResult: Decodable, Equatable, Sendable {
     public let status: String
+}
+
+/// A decoded `sysinfo` response (agent 0.2.0+). EVERY field except
+/// `time`/`agentUptime` is optional by protocol contract: a collector that
+/// fails on the guest simply omits its field, and an older agent has no
+/// sysinfo at all (`unknown verb`). Numbers decode as Double because the
+/// agent's JSON emitter formats them freely. Consumers must render what's
+/// present and never infer "agent down" from missing fields -- hello is the
+/// liveness signal.
+public struct SysInfoResult: Decodable, Equatable, Sendable {
+    public struct Uname: Decodable, Equatable, Sendable {
+        public let sysname: String
+        public let release: String
+        public let machine: String
+        public let nodename: String
+    }
+    public struct Swap: Decodable, Equatable, Sendable {
+        public let totalKB: Double
+        public let usedKB: Double
+    }
+    public struct Disk: Decodable, Equatable, Sendable {
+        public let mount: String
+        public let sizeKB: Double
+        public let usedPct: Double
+    }
+    public let uname: Uname?
+    public let hostid: String?
+    public let memMB: Double?
+    public let swap: Swap?
+    /// 1 / 5 / 15 minute load averages.
+    public let load: [Double]?
+    public let disks: [Disk]?
+    /// Guest epoch seconds (drives the clock-drift display).
+    public let time: Double
+    public let agentUptime: Double
 }
 
 public struct RunResult: Decodable, Equatable, Sendable {

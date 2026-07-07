@@ -116,6 +116,24 @@ public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
         }
     }
 
+    /// Map a guest's own `uname` report (the sysinfo verb's `uname` field) to
+    /// a MachineOS. The box itself is the source of truth for what it runs --
+    /// same doctrine as image detection on emulated VMs -- so the prober uses
+    /// this to auto-populate an external machine's OS. nil = something we
+    /// don't profile (don't clobber a manual setting with a wrong guess).
+    public static func detect(unameSysname sysname: String, release: String) -> MachineOS? {
+        switch sysname {
+        case "SunOS":
+            if release.hasPrefix("4.") { return .sunos414 }
+            if release.hasPrefix("5.") { return .solaris26 }
+            return nil
+        case "NetBSD":
+            return .netbsd
+        default:
+            return nil
+        }
+    }
+
     /// PATH prefix so a bare `xterm` / `dtterm` resolves under the daemon's
     /// minimal env. Solaris ships OpenWindows + CDE; SunOS 4.1.4 has OpenWindows +
     /// MIT X but no CDE (`/usr/dt`); NetBSD ships X under `/usr/X11R7`.
@@ -146,31 +164,30 @@ public enum MachineNetworkMode: String, Equatable, Sendable, Codable {
 public struct MachineLauncher: Equatable, Sendable, Codable {
     /// Menu-item label.
     public var name: String
-    /// The X client command line. Optional: a filebrowser item opens the Helios
-    /// browser rather than running anything, so it needs no command.
+    /// The X client command line.
     public var command: String?
     /// Override the machine's transport for just this command. nil = inherit.
     public var transport: LauncherTransport?
     /// Show the per-launch progress window with the session transcript.
     public var verbose: Bool
-    /// Add a Helios file-browser item instead of a launch. Only meaningful on a
-    /// helios-transport machine.
-    public var fileBrowser: Bool
-    /// Override the DISPLAY handed to this command. nil = inherit the machine's.
-    public var display: String?
+    /// LEGACY (2026-07-07): file-browser launchers were replaced by the
+    /// Overview's automatic Admin Agents > File Transfer. Decoded so old
+    /// machines.json entries can be recognized and DROPPED on load (see
+    /// Machine.init(from:)); never encoded, never editable. There is no
+    /// per-launcher DISPLAY anymore either -- the machine's DISPLAY covers
+    /// every launcher; a legacy `display` key is simply ignored on decode.
+    public internal(set) var fileBrowser: Bool = false
     /// Optional cleartext password (telnet dev convenience; ignored for ssh).
     public var password: String?
 
     public init(name: String, command: String? = nil, transport: LauncherTransport? = nil,
-                verbose: Bool = false, fileBrowser: Bool = false,
-                display: String? = nil, password: String? = nil) {
+                verbose: Bool = false, password: String? = nil) {
         self.name = name; self.command = command; self.transport = transport
-        self.verbose = verbose; self.fileBrowser = fileBrowser
-        self.display = display; self.password = password
+        self.verbose = verbose; self.password = password
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, command, transport, verbose, fileBrowser, display, password
+        case name, command, transport, verbose, fileBrowser, password
     }
 
     public init(from decoder: Decoder) throws {
@@ -180,7 +197,6 @@ public struct MachineLauncher: Equatable, Sendable, Codable {
         transport = try c.decodeIfPresent(LauncherTransport.self, forKey: .transport)
         verbose = try c.decodeIfPresent(Bool.self, forKey: .verbose) ?? false
         fileBrowser = try c.decodeIfPresent(Bool.self, forKey: .fileBrowser) ?? false
-        display = try c.decodeIfPresent(String.self, forKey: .display)
         password = try c.decodeIfPresent(String.self, forKey: .password)
     }
 
@@ -191,8 +207,6 @@ public struct MachineLauncher: Equatable, Sendable, Codable {
         try c.encodeIfPresent(command, forKey: .command)
         try c.encodeIfPresent(transport, forKey: .transport)
         if verbose { try c.encode(true, forKey: .verbose) }
-        if fileBrowser { try c.encode(true, forKey: .fileBrowser) }
-        try c.encodeIfPresent(display, forKey: .display)
         try c.encodeIfPresent(password, forKey: .password)
     }
 }
@@ -229,14 +243,23 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
     /// Mac's LAN IP + display number. The canonical override is a slirp guest's
     /// `10.0.2.2:0`.
     public var display: String?
+    /// Shell-prompt needle for the telnet launcher: the substring that marks
+    /// "logged in, shell ready" for THIS machine+account (e.g. "tvernon]" for
+    /// the fleet's csh prompt). nil = built-in detection (classic $ % # >
+    /// sigils and the bracket-wrapped fleet prompt). A property of the
+    /// machine, not of each launcher -- reintroduced 2026-07-07 after the
+    /// per-launcher `shell_prompt` key died with the old launchers file.
+    public var shellPrompt: String?
     /// Explicit port triple. nil = derive from `os` (emulated) or 23/22/2125
     /// (external). Set only when a machine needs non-standard ports.
     public var ports: ImagePorts?
 
     // emulatedVM-only (nil / defaulted for external hosts).
     /// qcow2 path (raw string; `~` expanded by `image`). The lifecycle identity.
+    /// (No memory setting: every VM gets the SS-5's full 256MB -- see
+    /// QemuEngineConfig.memoryMB. The old per-machine knob was removed
+    /// 2026-07-07; a legacy `memoryMB` key in machines.json is ignored.)
     public var imagePath: String?
-    public var memoryMB: Int
     /// Unique per machine (a duplicate MAC collides the moment two VMs share a
     /// segment). nil = derive from `id` (see `resolvedMacAddress`).
     public var macAddress: String?
@@ -252,15 +275,16 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
     public init(id: UUID = UUID(), name: String, kind: MachineKind, os: MachineOS? = nil,
                 bundled: Bool = false,
                 host: String, user: String, transport: LauncherTransport = .helios,
-                display: String? = nil, ports: ImagePorts? = nil,
-                imagePath: String? = nil, memoryMB: Int = 128, macAddress: String? = nil,
+                display: String? = nil, shellPrompt: String? = nil,
+                ports: ImagePorts? = nil,
+                imagePath: String? = nil, macAddress: String? = nil,
                 networkMode: MachineNetworkMode = .slirp, autoBackup: Bool = true,
                 launchers: [MachineLauncher] = []) {
         self.id = id; self.name = name; self.kind = kind; self.os = os
         self.bundled = bundled
         self.host = host; self.user = user; self.transport = transport
-        self.display = display; self.ports = ports
-        self.imagePath = imagePath; self.memoryMB = memoryMB
+        self.display = display; self.shellPrompt = shellPrompt; self.ports = ports
+        self.imagePath = imagePath
         self.macAddress = macAddress; self.networkMode = networkMode
         self.autoBackup = autoBackup
         self.launchers = launchers
@@ -275,7 +299,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
     /// assigns the clone its own block on add), so a cloned emulated VM comes up
     /// "not installed" until you point it at its own image; a cloned external
     /// host is fully usable as soon as you set its host. Everything else -- kind,
-    /// os, user, transport, display, memory, network mode, and every launcher
+    /// os, user, transport, display, network mode, and every launcher
     /// command -- carries over. `name` defaults to "<name> copy".
     public func cloned(named newName: String? = nil) -> Machine {
         var copy = self
@@ -322,13 +346,14 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
 
     /// Reconstruct the `QemuEngineConfig` for an emulated VM. Helper + firmware
     /// come from the app bundle (via `defaultConfig`); this machine overrides the
-    /// disk image, memory, ports, and (when on) the TFTP shared folder. Returns
-    /// nil for an external host or an image-less emulated VM. Mirrors the old
-    /// AppDelegate.makeSparcConfig, now driven by the machine instead of globals.
+    /// disk image, ports, and (when on) the TFTP shared folder. Memory is not
+    /// per-machine: every VM gets the SS-5 maximum (defaultConfig's 256MB).
+    /// Returns nil for an external host or an image-less emulated VM. Mirrors the
+    /// old AppDelegate.makeSparcConfig, now driven by the machine instead of globals.
     public func makeEngineConfig(bundle: Bundle = .main,
                                  tftpDirectory: String? = nil) -> QemuEngineConfig? {
         guard kind == .emulatedVM, let image = image else { return nil }
-        var config = QemuEngine.defaultConfig(bundle: bundle, memoryMB: memoryMB)
+        var config = QemuEngine.defaultConfig(bundle: bundle)
         // Dev escape hatches win over the machine's values: defaultConfig has
         // already applied SPARCPLUG_DISK_IMAGE / SPARCPLUG_TFTP_DIR from the
         // env, so only overwrite when the env DIDN'T set them. Before this the
@@ -354,9 +379,9 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
             "host": host, "user": user, "transport": transport.rawValue,
             "port": String(resolvedPorts.port(for: transport)),
         ]
-        if let d = launcher.display ?? display { merged["display"] = d }
+        if let d = display { merged["display"] = d }
+        if let sp = shellPrompt, !sp.isEmpty { merged["shell_prompt"] = sp }
         if let c = launcher.command { merged["command"] = c }
-        if launcher.fileBrowser { merged["filebrowser"] = "true" }
         if launcher.verbose { merged["verbose"] = "true" }
         if let pw = launcher.password { merged["password"] = pw }
         return LauncherEntry.build(merged: merged, name: launcher.name,
@@ -373,11 +398,26 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         return (entries, warnings)
     }
 
+    /// The Admin Agents File Transfer entry: this machine's connection facts
+    /// with the helios transport and the file-browser flag, no launcher
+    /// involved (file access stopped being launcher config on 2026-07-07 --
+    /// it appears automatically whenever the box has helios).
+    public func fileTransferEntry(warnings: inout [String]) -> LauncherEntry? {
+        let merged: [String: String] = [
+            "host": host, "user": user,
+            "transport": LauncherTransport.helios.rawValue,
+            "port": String(resolvedPorts.helios),
+            "filebrowser": "true",
+        ]
+        return LauncherEntry.build(merged: merged, name: "File Transfer",
+                                   group: name, warnings: &warnings)
+    }
+
     // MARK: Codable (forgiving decode + terse encode)
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, os, bundled, host, user, transport, display, ports
-        case imagePath = "image", memoryMB, macAddress = "mac", networkMode
+        case id, name, kind, os, bundled, host, user, transport, display, shellPrompt, ports
+        case imagePath = "image", macAddress = "mac", networkMode
         case autoBackup, launchers
     }
 
@@ -393,13 +433,18 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         user = try c.decodeIfPresent(String.self, forKey: .user) ?? ""
         transport = try c.decodeIfPresent(LauncherTransport.self, forKey: .transport) ?? .helios
         display = try c.decodeIfPresent(String.self, forKey: .display)
+        shellPrompt = try c.decodeIfPresent(String.self, forKey: .shellPrompt)
         ports = try c.decodeIfPresent(ImagePorts.self, forKey: .ports)
         imagePath = try c.decodeIfPresent(String.self, forKey: .imagePath)
-        memoryMB = try c.decodeIfPresent(Int.self, forKey: .memoryMB) ?? 128
         macAddress = try c.decodeIfPresent(String.self, forKey: .macAddress)
         networkMode = try c.decodeIfPresent(MachineNetworkMode.self, forKey: .networkMode) ?? .slirp
         autoBackup = try c.decodeIfPresent(Bool.self, forKey: .autoBackup) ?? true
         launchers = try c.decodeIfPresent([MachineLauncher].self, forKey: .launchers) ?? []
+        // One-shot migration (2026-07-07): legacy file-browser launchers are
+        // superseded by Admin Agents > File Transfer, which appears
+        // automatically whenever the box has helios. Drop them on load; the
+        // next save writes the file without them.
+        launchers.removeAll { $0.fileBrowser }
     }
 
     /// Emit a clean, flat object: always id/name/kind/host/user; the emulated-only
@@ -415,10 +460,10 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         try c.encode(user, forKey: .user)
         if transport != .helios { try c.encode(transport, forKey: .transport) }
         try c.encodeIfPresent(display, forKey: .display)
+        try c.encodeIfPresent(shellPrompt, forKey: .shellPrompt)
         try c.encodeIfPresent(ports, forKey: .ports)
         if kind == .emulatedVM {
             try c.encodeIfPresent(imagePath, forKey: .imagePath)
-            try c.encode(memoryMB, forKey: .memoryMB)
             try c.encodeIfPresent(macAddress, forKey: .macAddress)
             if networkMode != .slirp { try c.encode(networkMode, forKey: .networkMode) }
             if !autoBackup { try c.encode(false, forKey: .autoBackup) }

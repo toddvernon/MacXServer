@@ -276,7 +276,9 @@ Machine
 
   // emulatedVM only:
   image         path to the qcow2 (the lifecycle identity)
-  memoryMB, macAddress (unique per machine), portAllocation
+  macAddress (unique per machine), portAllocation
+                (no memoryMB since 2026-07-07: every VM gets the SS-5's
+                256MB max; a legacy memoryMB key is ignored on decode)
   networkMode   .slirp (default) | .slirpLanExposed | .socketFabric
                 — see "Networking" below. Changes MAC handling, whether
                 host-port-forwards apply, and how Helios/console reach the box.

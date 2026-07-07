@@ -1237,6 +1237,58 @@ nobody should be running 8+ concurrent sun4m guests on one Mac anyway.
 
 ---
 
+## 2026-07-07: VM memory is not a setting — every guest gets the SS-5's 256MB
+
+The Settings tab briefly (2026-07-06 → 07-07) exposed a per-machine "Memory"
+field feeding qemu's `-m`. Removed outright, Todd's call: "pointless to
+change it." qemu's SS-5 machine caps at 256MB (`max_mem` in sun4m.c — also
+the real hardware's maximum), exceeding it is an instant `exit(1)` that
+presents as a mystery launch failure, and there is no scenario where starving
+a vintage guest below the max helps anything on a modern host. So: no knob,
+no validation problem. `Machine.memoryMB` is gone from the model and the
+JSON (a legacy `memoryMB` key in machines.json decodes to nothing);
+`QemuEngineConfig.memoryMB` survives as an engine-level parameter (tests pin
+the argv) defaulting to 256.
+
+**Considered + rejected**: validating/clamping the field (1–256) — fixing a
+knob nobody should turn is polish on the wrong thing; removing it removes
+the failure mode. Guests observed happy at 256 already (NetBSD ran with
+`RAM=256` in the boot scripts since the beginning; Solaris/SunOS ran 128 by
+script default, and 256 is within what the real SS-5 and both OSes support).
+
+---
+
+## 2026-07-07: Admin Agents availability rule — answering over Helios, plus a known OS for OS-sensitive verbs
+
+The Overview's Admin Agents verbs (File Transfer, DNS, and whatever joins
+them) gate on the machine actually ANSWERING over Helios: an emulated guest
+that's running and ready (readiness is already a helios hello), or an
+external host whose last prober hello succeeded (which, against the
+fail-closed agent, also proves the saved secret is right). On top of that,
+verbs that do OS-specific things (DNS today; most future admin verbs, per
+Todd) also require knowing the machine's OS — external boxes declare it via
+a new OS picker in Settings → Identity; emulated machines get it from image
+detection. Genesis: the real SS5's DNS chip sat dimmed because the old gate
+was `isEmulated && ready`, unreachable for external hardware by definition.
+
+**Supersedes** the one-day-old "gating is configuration, fail at use"
+posture for external verbs (2026-07-07 morning, File Transfer's original
+gate): with the prober live, reachability data is at worst minutes stale and
+a dimmed-with-tooltip button beats a working-looking button that always
+errors. Launch X11 clients (launcher chips) keep their existing gating —
+they're not admin verbs.
+
+**Companion slimming (same day):** the launcher definition lost two fields.
+`fileBrowser` launchers are superseded outright by the automatic File
+Transfer verb (legacy entries are dropped on load; the old launcher-file
+migration skips them). Per-launcher `display` is gone too — the machine's
+DISPLAY is the only level, shown in Settings with the real computed default
+("what blank means") as its placeholder. And the box's own uname (sysinfo)
+auto-populates + locks an external machine's OS, same source-of-truth
+doctrine as image detection on emulated VMs.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

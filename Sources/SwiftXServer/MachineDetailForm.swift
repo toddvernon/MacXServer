@@ -20,6 +20,8 @@ struct MachineDetailForm: View {
     @State private var draft: Machine
     /// Launcher being added/edited in the sheet, if any.
     @State private var launcherEdit: LauncherEditTarget?
+    /// Launcher pending delete confirmation (the minus button asks first).
+    @State private var launcherDelete: LauncherEditTarget?
     /// The guest-OS detection for the current image, run off-main at pick time (and
     /// on appear) for an image-backed emulated VM. nil until it has run.
     @State private var osDetection: GuestOSDetection?
@@ -51,7 +53,6 @@ struct MachineDetailForm: View {
                 if draft.kind == .emulatedVM {
                     imageSection
                     runtimeSection
-                    dnsSection
                 }
                 launchersSection
             }
@@ -65,6 +66,22 @@ struct MachineDetailForm: View {
             ) { edited in
                 apply(edited, to: target)
             }
+        }
+        .alert("Remove \u{201c}\(launcherDelete?.launcher.name ?? "")\u{201d}?",
+               isPresented: Binding(get: { launcherDelete != nil },
+                                    set: { if !$0 { launcherDelete = nil } })) {
+            Button("Remove", role: .destructive) {
+                if let target = launcherDelete, let i = target.index,
+                   i < draft.launchers.count {
+                    draft.launchers.remove(at: i)
+                    commit()
+                }
+                launcherDelete = nil
+            }
+            Button("Cancel", role: .cancel) { launcherDelete = nil }
+        } message: {
+            Text("Removes the launcher from this machine. Nothing on the machine "
+               + "itself is affected.")
         }
         // Re-detect whenever the image (or kind) changes -- i.e. at pick time.
         .task(id: "\(draft.kind.rawValue):\(draft.imagePath ?? "")") { await runOSDetection() }
@@ -183,13 +200,35 @@ struct MachineDetailForm: View {
                 .disabled(bundled)
             }
             osField
+            // The telnet launcher needs to recognize "logged in, shell
+            // ready". Built-in detection covers the classic sigils and the
+            // fleet's bracket prompt; this override is for anything else.
+            // Only shown when telnet is actually in play for this machine.
+            if draft.transport == .telnet
+                || draft.launchers.contains(where: { $0.transport == .telnet }) {
+                LabeledField("Prompt") {
+                    TextField("auto-detect ($ % # > or [\u{2026}])", text: Binding(
+                        get: { draft.shellPrompt ?? "" },
+                        set: { draft.shellPrompt = $0.isEmpty ? nil : $0 }))
+                        .textFieldStyle(.roundedBorder)
+                        .help("Substring that marks this account's shell prompt for "
+                            + "telnet launches (e.g. \u{201c}tvernon]\u{201d}). Blank = "
+                            + "automatic detection.")
+                }
+            }
             LabeledField("DISPLAY") {
-                TextField("auto (leave blank)", text: Binding(
+                // Placeholder = what blank actually resolves to at launch time
+                // (this X server's own address), so the default is visible and
+                // still editable. A slirp guest usually wants 10.0.2.2:0.
+                TextField(model.defaultDisplay.map { "\($0()) (this server)" }
+                              ?? "auto (leave blank)",
+                          text: Binding(
                     get: { draft.display ?? "" },
                     set: { draft.display = $0.isEmpty ? nil : $0 }))
                     .textFieldStyle(.roundedBorder)
-                    .help("Override the DISPLAY handed to launched clients. A slirp "
-                        + "guest usually wants 10.0.2.2:0.")
+                    .help("The DISPLAY handed to launched clients. Blank = this X "
+                        + "server's own address (shown). A slirp guest usually "
+                        + "wants 10.0.2.2:0.")
             }
         }
     }
@@ -223,15 +262,6 @@ struct MachineDetailForm: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
-            }
-            LabeledField("Memory") {
-                HStack(spacing: 6) {
-                    TextField("128", value: $draft.memoryMB, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 70)
-                        .disabled(running)
-                    Text("MB").foregroundStyle(.secondary)
-                }
             }
             Toggle("Back up the disk image after each clean shutdown",
                    isOn: $draft.autoBackup)
@@ -268,21 +298,8 @@ struct MachineDetailForm: View {
     /// Guest-OS administration over the Helios daemon. Editing needs the guest
     /// up and its daemon answering, so the button rides the same readiness gate
     /// as the Machines menu's Admin submenu.
-    private var dnsSection: some View {
-        let canEdit = model.row(draft.id)?.canDnsAdmin ?? false
-        return section("Machine DNS") {
-            HStack(spacing: 10) {
-                Button("Edit\u{2026}") { model.onDnsAdmin?(draft.id) }
-                    .disabled(!canEdit)
-                Text("/etc/resolv.conf")
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-            helpNote("Edits the guest's DNS configuration over the Helios daemon. "
-                   + "Only available while the machine is running and ready "
-                   + "(the daemon has answered).")
-        }
-    }
+    // (Machine DNS moved to the Overview's Admin Agents section 2026-07-07:
+    // it's an operate verb on a live guest, not machine configuration.)
 
     private func revealImageInFinder() {
         guard let path = draft.imagePath, !path.isEmpty else { return }
@@ -301,7 +318,12 @@ struct MachineDetailForm: View {
                 if osLocked {
                     HStack(spacing: 6) {
                         Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary)
-                        Text(draft.os?.rawValue ?? "unspecified")
+                        // Helios-detected: read the LIVE registry value, not the
+                        // draft -- the prober may have adopted the OS while this
+                        // pane sat open on a stale value-copy.
+                        Text((osDetectedOverHelios
+                              ? model.machines.first(where: { $0.id == draft.id })?.os
+                              : draft.os)?.rawValue ?? "unspecified")
                     }
                 } else {
                     Picker("", selection: $draft.os) {
@@ -321,20 +343,34 @@ struct MachineDetailForm: View {
         }
     }
 
+    /// True when an external machine's OS was learned from the box itself
+    /// (the agent's sysinfo uname, via the prober). The box outranks a
+    /// manual pick, same doctrine as image detection.
+    private var osDetectedOverHelios: Bool {
+        draft.kind == .externalHost && (model.row(draft.id)?.osIsDetected ?? false)
+    }
+
     /// Lock the OS to the detected value only when we're confident (an image-backed
-    /// emulated VM whose image identified a known OS).
+    /// emulated VM whose image identified a known OS, or an external host whose
+    /// agent reported its uname over Helios).
     private var osLocked: Bool {
         // A bundled fixture's OS is its fixed identity; a RUNNING machine's OS
         // is what it booted with (it drives the port block, boot unit, and
         // halt command -- changing it mid-run would desync every port lookup);
-        // otherwise it's locked once it's been derived from an attached image.
+        // otherwise it's locked once it's been derived from an attached image
+        // or reported by the box's own agent.
         bundled || running
             || (draft.kind == .emulatedVM && draft.imagePath?.isEmpty == false && osDetection?.os != nil)
+            || osDetectedOverHelios
     }
 
-    /// Caption under the OS row, only for an image-backed emulated VM (the derived
-    /// case): the detection explanation, or a "detecting…" placeholder while it runs.
+    /// Caption under the OS row: the image-detection explanation for an
+    /// image-backed emulated VM, or the Helios provenance for an external
+    /// host that reported its own uname.
     private var osCaption: String? {
+        if osDetectedOverHelios {
+            return "Detected from the machine over Helios."
+        }
         guard draft.kind == .emulatedVM, draft.imagePath?.isEmpty == false else { return nil }
         return osDetection?.explanation ?? "Detecting the OS from the image\u{2026}"
     }
@@ -353,7 +389,7 @@ struct MachineDetailForm: View {
             // Same content inset as the other sections (see `section`).
             VStack(alignment: .leading, spacing: 10) {
                 if draft.launchers.isEmpty {
-                    helpNote("No launchers. Add an X-client command or a Helios file browser.")
+                    helpNote("No launchers. Add an X-client command.")
                 } else {
                     ForEach(Array(draft.launchers.enumerated()), id: \.offset) { idx, l in
                         launcherRow(idx: idx, launcher: l)
@@ -367,11 +403,11 @@ struct MachineDetailForm: View {
 
     private func launcherRow(idx: Int, launcher l: MachineLauncher) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: l.fileBrowser ? "folder" : "terminal")
+            Image(systemName: "terminal")
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {
                 Text(l.name.isEmpty ? "(unnamed)" : l.name)
-                Text(l.fileBrowser ? "Helios file browser" : (l.command ?? ""))
+                Text(l.command ?? "")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
@@ -380,8 +416,9 @@ struct MachineDetailForm: View {
             } label: { Image(systemName: "pencil") }
                 .buttonStyle(.borderless)
             Button {
-                draft.launchers.remove(at: idx)
-                commit()
+                // Confirm first -- a stray click on the minus used to delete
+                // instantly with no undo.
+                launcherDelete = LauncherEditTarget(index: idx, launcher: l)
             } label: { Image(systemName: "minus.circle") }
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
@@ -398,18 +435,30 @@ struct MachineDetailForm: View {
         // draft opened BEFORE the start can still carry edits to them (the
         // machine was started from the menu while this pane sat open). Drop
         // those back to the committed values so a Return can't swap the
-        // image / memory / OS / kind out from under a running qemu -- the
+        // image / OS / kind out from under a running qemu -- the
         // termination auto-backup reads the CURRENT image path, so a mid-run
         // image swap would back up a file that never ran.
         if running {
             draft.kind = committed.kind
             draft.os = committed.os
             draft.imagePath = committed.imagePath
-            draft.memoryMB = committed.memoryMB
+        }
+        // Same stale-draft protection for a Helios-detected OS: the prober may
+        // have adopted the box's real OS into the registry while this pane sat
+        // open on an older copy -- a Return must not write the stale os back.
+        if draft.kind == .externalHost, model.row(draft.id)?.osIsDetected == true,
+           let live = model.machines.first(where: { $0.id == draft.id }) {
+            draft.os = live.os
         }
         guard canCommit else { return }
-        model.onCommit?(draft)
         committed = draft
+        // A selection change tears this form down via .id(), so commit() runs
+        // from onDisappear INSIDE the view-update transaction; onCommit refreshes
+        // the model's @Published machines/rows, which would trip "Publishing
+        // changes from within view updates". Defer the publish one runloop turn.
+        let machine = draft
+        let model = self.model
+        DispatchQueue.main.async { model.onCommit?(machine) }
     }
 
     private var canCommit: Bool {
@@ -473,7 +522,7 @@ private struct LabeledField<Content: View>: View {
 }
 
 /// A modal sheet editing one launcher command. Returns the edited launcher via
-/// `onSave`. A file-browser launcher needs no command; a regular one does.
+/// `onSave`.
 struct LauncherEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: MachineLauncher
@@ -499,12 +548,10 @@ struct LauncherEditorView: View {
                 }
                 GridRow {
                     Text("Command").gridColumnAlignment(.trailing).foregroundStyle(.secondary)
-                    TextField(draft.fileBrowser ? "(not needed for a file browser)"
-                                                : "xterm -fg cyan -bg black",
+                    TextField("xterm -fg cyan -bg black",
                               text: Binding(get: { draft.command ?? "" },
                                             set: { draft.command = $0.isEmpty ? nil : $0 }))
                         .textFieldStyle(.roundedBorder)
-                        .disabled(draft.fileBrowser)
                 }
                 GridRow {
                     Text("Transport").gridColumnAlignment(.trailing).foregroundStyle(.secondary)
@@ -518,16 +565,11 @@ struct LauncherEditorView: View {
                     .fixedSize()
                     .frame(width: 200, alignment: .leading)
                 }
-                GridRow {
-                    Text("DISPLAY").gridColumnAlignment(.trailing).foregroundStyle(.secondary)
-                    TextField("inherit (leave blank)",
-                              text: Binding(get: { draft.display ?? "" },
-                                            set: { draft.display = $0.isEmpty ? nil : $0 }))
-                        .textFieldStyle(.roundedBorder)
-                }
             }
 
-            Toggle("Helios file browser (no command)", isOn: $draft.fileBrowser)
+            // (No per-launcher DISPLAY or file-browser flag anymore, 2026-07-07:
+            // the machine's DISPLAY covers every launcher, and File Transfer is
+            // automatic under Admin Agents whenever the box has helios.)
             Toggle("Show progress window (verbose)", isOn: $draft.verbose)
 
             HStack {
@@ -544,10 +586,6 @@ struct LauncherEditorView: View {
 
     private var canSave: Bool {
         guard !draft.name.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
-        // A regular launcher needs a command; a file browser doesn't.
-        if !draft.fileBrowser, (draft.command ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
-            return false
-        }
-        return true
+        return !(draft.command ?? "").trimmingCharacters(in: .whitespaces).isEmpty
     }
 }

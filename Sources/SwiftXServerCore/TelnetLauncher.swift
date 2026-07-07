@@ -169,7 +169,14 @@ public final class TelnetLauncher: @unchecked Sendable {
                 finish(.failure(TelnetLaunchError.authenticationFailed))
                 return
             }
-            if text.contains(shellPromptNeedle) {
+            // The configured needle first; else generic prompt detection. The
+            // "$ " default is sh/ksh-only -- csh says "hostname% ", root says
+            // "# " -- and machine launchers have no per-launcher prompt keys
+            // (those died with the old launchers file; the defaults in
+            // LauncherEntry.build are the only prompt config left). So
+            // "telnet works by hand, launcher times out waiting for shell
+            // prompt" was the symptom against the real SS5 (2026-07-07).
+            if text.contains(shellPromptNeedle) || Self.looksLikeShellPrompt(text) {
                 cancelTimeout()
                 state = .sendingCommand
                 let cmd = "/bin/sh -c 'DISPLAY=\(displayString); export DISPLAY; " +
@@ -191,6 +198,24 @@ public final class TelnetLauncher: @unchecked Sendable {
         default:
             break
         }
+    }
+
+    /// Generic shell-prompt detection: the last non-blank line ends with one
+    /// of the classic prompt sigils ($ sh/ksh, % csh, # root, > some rc
+    /// shells), optionally followed by a space. Only consulted AFTER the
+    /// password went in (waitingForShell), so banner text can't trip it
+    /// mid-login; the state timeout stays as the backstop. Internal for
+    /// unit testing.
+    static func looksLikeShellPrompt(_ text: String) -> Bool {
+        guard let lastLine = text.split(separator: "\n", omittingEmptySubsequences: true)
+                .last.map({ $0.trimmingCharacters(in: .whitespaces) }),
+              !lastLine.isEmpty,
+              let sigil = lastLine.last else { return false }
+        if sigil == "$" || sigil == "%" || sigil == "#" || sigil == ">" { return true }
+        // The fleet's canonical csh prompt is "[host:[user]:/cwd] " -- a
+        // bracket-wrapped last line (the shape that beat the sigil check on
+        // the real SS5, 2026-07-07).
+        return lastLine.hasPrefix("[") && sigil == "]"
     }
 
     static func stripANSI(_ text: String) -> String {

@@ -62,15 +62,17 @@ public enum MachineMigrator {
             let kind: MachineKind = loopback ? .emulatedVM : .externalHost
             let os: MachineOS? = loopback ? .solaris26 : nil
             let machineTransport = first.transport
-            let launchers = group.entries.map { entry -> MachineLauncher in
+            // File-browser entries don't migrate: Admin Agents > File
+            // Transfer covers them automatically now. Per-launcher DISPLAY
+            // overrides don't either -- the machine's DISPLAY is the only
+            // level since 2026-07-07 (the group default already lands there).
+            let launchers = group.entries.filter { !$0.fileBrowser }.map { entry -> MachineLauncher in
                 MachineLauncher(
                     name: entry.name,
                     command: entry.command.isEmpty ? nil : entry.command,
                     // Only pin a transport when it differs from the machine's.
                     transport: entry.transport == machineTransport ? nil : entry.transport,
                     verbose: entry.verbose,
-                    fileBrowser: entry.fileBrowser,
-                    display: entry.display == first.display ? nil : entry.display,
                     password: entry.password)
             }
             machines.append(Machine(

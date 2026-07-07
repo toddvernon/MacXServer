@@ -64,6 +64,7 @@
 		2F9E9AD50AB9540D6BC98615 /* ChangeProperty.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C76D9CB0E09373F6808C9E /* ChangeProperty.swift */; };
 		2FF1A89AE14D6B11CDAD37BF /* RenderReplies.swift in Sources */ = {isa = PBXBuildFile; fileRef = 881FD1878A77E69244329EA9 /* RenderReplies.swift */; };
 		30616E370BE99AD95B92D0EA /* ByteOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26A6DB349FED3AF919909A38 /* ByteOrder.swift */; };
+		30AA32F8EEAACFBF94D2D8FF /* BarberPoleFill.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E8C9C0E5E981D043EBC161 /* BarberPoleFill.swift */; };
 		346691769036DFCCD9902F31 /* ByteWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16BDB4C385FE106FE817696E /* ByteWriter.swift */; };
 		347672E795A3A6F434CFC288 /* ShmEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 502251A243774C11396C7EAE /* ShmEvents.swift */; };
 		34B046119200D2455D2DF59C /* CocoaWindowBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDD91EC43E7E4357E4A85980 /* CocoaWindowBridge.swift */; };
@@ -192,7 +193,6 @@
 		93D6735693E7FFACF0BE8E74 /* PointerOpcodes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 978B041BB3BD0D2AF7AD31F3 /* PointerOpcodes.swift */; };
 		94179B158905B30F50AAB39D /* RegionExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AE6028AE3AA6CFC0BAD8C2E /* RegionExtras.swift */; };
 		94CD3F14B1FF3422A2F6480F /* MachinesFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75345EE5C3904FDD4EB06056 /* MachinesFile.swift */; };
-		952169E1A79ED92A2765265F /* CDEResourceManagerFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159D2737C894FEBCB8374D9F /* CDEResourceManagerFixture.swift */; };
 		96593D7B5E4AD9F26D92D28E /* SerialConsoleClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4BB3191FFA5FAB15F816631 /* SerialConsoleClient.swift */; };
 		96E287CFE88A07A994EE63F8 /* FileBrowserWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78BF0DBF7C4EC068F491C51C /* FileBrowserWindowController.swift */; };
 		972F3EE258AC442075DFB6FE /* XkbMapPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 280F23AE470D6D904408207B /* XkbMapPayload.swift */; };
@@ -505,7 +505,6 @@
 		140669078B4415BC3F9231E7 /* FileLogSink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileLogSink.swift; sourceTree = "<group>"; };
 		149BF1A018D63F3CDF368D84 /* TelnetLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelnetLauncher.swift; sourceTree = "<group>"; };
 		14F46AC1EF70369D1062B2C6 /* XColorDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XColorDatabase.swift; sourceTree = "<group>"; };
-		159D2737C894FEBCB8374D9F /* CDEResourceManagerFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDEResourceManagerFixture.swift; sourceTree = "<group>"; };
 		16BDB4C385FE106FE817696E /* ByteWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteWriter.swift; sourceTree = "<group>"; };
 		178C50C27D7E570AB3CE628C /* SetInputFocus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetInputFocus.swift; sourceTree = "<group>"; };
 		180424ADD377404D1B8A272E /* QueryColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryColors.swift; sourceTree = "<group>"; };
@@ -716,6 +715,7 @@
 		C454C4D8B6F5C18502884BF2 /* XInputEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XInputEvents.swift; sourceTree = "<group>"; };
 		C46AAD7BCDE790C11DD4C3A9 /* CaptureAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = CaptureAssets.xcassets; sourceTree = "<group>"; };
 		C4A99D791F23241E9A33233F /* CreateGC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGC.swift; sourceTree = "<group>"; };
+		C5E8C9C0E5E981D043EBC161 /* BarberPoleFill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarberPoleFill.swift; sourceTree = "<group>"; };
 		C614300F6CCE005F1E1A8679 /* DnsAdminWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DnsAdminWindowController.swift; sourceTree = "<group>"; };
 		C62F63EBF845EE60FC8C7221 /* RemoteLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLauncher.swift; sourceTree = "<group>"; };
 		C692A58FDDA47F11AD813822 /* ServerMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerMain.swift; sourceTree = "<group>"; };
@@ -865,7 +865,6 @@
 				D0B077D22943344CF0A6D22B /* Region */,
 				ED9981372DE4075EA32CA4AB /* AtomTable.swift */,
 				5829D0EF8D0186F481CB475F /* BootProgressReference.swift */,
-				159D2737C894FEBCB8374D9F /* CDEResourceManagerFixture.swift */,
 				5B5CB9142796ADF99BBAA0C3 /* ClipboardPreferences.swift */,
 				DDD91EC43E7E4357E4A85980 /* CocoaWindowBridge.swift */,
 				4F832BF595210624737A573D /* ColorTable.swift */,
@@ -989,6 +988,7 @@
 				3DC8E9A54EA9EFFCD82D4663 /* AcknowledgementsView.swift */,
 				5949B465CC3BB8FD9461BACE /* AcknowledgementsWindowController.swift */,
 				EA59B9723B98DBA33C9A52E9 /* AppDelegate.swift */,
+				C5E8C9C0E5E981D043EBC161 /* BarberPoleFill.swift */,
 				CB63974F52A5D72CE6236173 /* DnsAdminPanelView.swift */,
 				C614300F6CCE005F1E1A8679 /* DnsAdminWindowController.swift */,
 				E1B24EA7F92416621AE189BE /* FileBrowserPanelModel.swift */,
@@ -1596,7 +1596,6 @@
 			files = (
 				C6D787D84C8D48BEEE52D59D /* AtomTable.swift in Sources */,
 				805ABFFAF7B1A8D415BEEAFE /* BootProgressReference.swift in Sources */,
-				952169E1A79ED92A2765265F /* CDEResourceManagerFixture.swift in Sources */,
 				5DFB3901BFF84E0EC0F79375 /* ClipList.swift in Sources */,
 				DA8B8A39A3346E2DDBC566BA /* ClipboardPreferences.swift in Sources */,
 				34B046119200D2455D2DF59C /* CocoaWindowBridge.swift in Sources */,
@@ -1885,6 +1884,7 @@
 				E1571640C350B28E52A81393 /* AcknowledgementsView.swift in Sources */,
 				08FC4D70AF6406AB4EA3631F /* AcknowledgementsWindowController.swift in Sources */,
 				855D5C96B247907D25F2E066 /* AppDelegate.swift in Sources */,
+				30AA32F8EEAACFBF94D2D8FF /* BarberPoleFill.swift in Sources */,
 				B8EF374160A61C646F65B55B /* DnsAdminPanelView.swift in Sources */,
 				807EFD492D36DAC9C0A16E66 /* DnsAdminWindowController.swift in Sources */,
 				CD6207CD20C7BB5E07192385 /* FileBrowserPanelModel.swift in Sources */,

@@ -32,6 +32,94 @@ final class HeliosClientTests: XCTestCase {
                                           protocol: 1, host: "sparcplug", uptime: 42))
     }
 
+    // MARK: sysinfo
+
+    /// Full response, mirroring the real NetBSD 9.2 capture from the 0.2.0
+    /// agent validation (2026-07-07).
+    func testSysInfoParsesFullResponse() throws {
+        let server = try MockHeliosServer { req, id in
+            XCTAssertEqual(req["verb"] as? String, "sysinfo")
+            return ["id": id, "ok": true, "result": [
+                "uname": ["sysname": "NetBSD", "release": "9.2",
+                          "machine": "sparc", "nodename": "netbsd.localdomain"],
+                "hostid": "80eff4e5",
+                "memMB": 239.875,
+                "swap": ["totalKB": 1049600, "usedKB": 0],
+                "load": [0.48, 0.35, 0.15],
+                "disks": [["mount": "/", "sizeKB": 40253548, "usedPct": 2]],
+                "time": 1783453848,
+                "agentUptime": 15,
+            ]]
+        }
+        defer { server.stop() }
+        server.start()
+
+        let client = HeliosClient(host: "127.0.0.1", port: server.port, timeout: 5)
+        try client.connect()
+        defer { client.close() }
+
+        let sys = try client.sysinfo()
+        XCTAssertEqual(sys.uname?.sysname, "NetBSD")
+        XCTAssertEqual(sys.uname?.machine, "sparc")
+        XCTAssertEqual(sys.hostid, "80eff4e5")
+        XCTAssertEqual(sys.memMB ?? 0, 239.875, accuracy: 0.001)
+        XCTAssertEqual(sys.swap?.totalKB ?? 0, 1_049_600, accuracy: 0.5)
+        XCTAssertEqual(sys.load?.count, 3)
+        XCTAssertEqual(sys.disks?.first?.mount, "/")
+        XCTAssertEqual(sys.disks?.first?.usedPct ?? 0, 2, accuracy: 0.001)
+        XCTAssertGreaterThan(sys.time, 0)
+    }
+
+    /// The fields-optional contract: the SunOS fault-drill shape (kmem
+    /// unavailable -> memMB/load/swap absent) must decode, not throw. Callers
+    /// never infer "agent down" from missing fields.
+    func testSysInfoToleratesAbsentFields() throws {
+        let server = try MockHeliosServer { _, id in
+            ["id": id, "ok": true, "result": [
+                "uname": ["sysname": "SunOS", "release": "4.1.4",
+                          "machine": "sun4m", "nodename": "sunos"],
+                "hostid": "80eff3e5",
+                "disks": [["mount": "/", "sizeKB": 986095, "usedPct": 5]],
+                "time": 1783454875,
+                "agentUptime": 9,
+            ]]
+        }
+        defer { server.stop() }
+        server.start()
+
+        let client = HeliosClient(host: "127.0.0.1", port: server.port, timeout: 5)
+        try client.connect()
+        defer { client.close() }
+
+        let sys = try client.sysinfo()
+        XCTAssertEqual(sys.uname?.release, "4.1.4")
+        XCTAssertNil(sys.memMB)
+        XCTAssertNil(sys.load)
+        XCTAssertNil(sys.swap)
+        XCTAssertEqual(sys.disks?.count, 1)
+    }
+
+    /// A pre-0.2.0 agent answers "unknown verb": surfaced as .protocolError,
+    /// which callers treat as "no sysinfo", never as unreachable.
+    func testSysInfoUnknownVerbSurfacesAsProtocolError() throws {
+        let server = try MockHeliosServer { _, id in
+            ["id": id, "ok": false, "error": "unknown verb: sysinfo"]
+        }
+        defer { server.stop() }
+        server.start()
+
+        let client = HeliosClient(host: "127.0.0.1", port: server.port, timeout: 5)
+        try client.connect()
+        defer { client.close() }
+
+        XCTAssertThrowsError(try client.sysinfo()) { error in
+            guard case HeliosClient.HeliosError.protocolError(let m) = error else {
+                return XCTFail("expected protocolError, got \(error)")
+            }
+            XCTAssertTrue(m.contains("unknown verb"))
+        }
+    }
+
     func testIdIncrementsAndIsSentOnTheWire() throws {
         let server = try MockHeliosServer { _, id in
             ["id": id, "ok": true, "result": ["status": "shutting down"]]

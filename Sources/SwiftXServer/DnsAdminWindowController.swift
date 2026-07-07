@@ -12,6 +12,7 @@ final class DnsAdminWindowController: NSWindowController {
 
     init(machineName: String,
          secretProvider: @escaping () -> String?,
+         hostProvider: @escaping () -> String,
          portProvider: @escaping () -> UInt16) {
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
@@ -24,7 +25,8 @@ final class DnsAdminWindowController: NSWindowController {
         // Dismiss button (Esc) closes without applying.
         let hostingView = NSHostingView(rootView: DnsAdminPanelView(
             machineName: machineName,
-            secretProvider: secretProvider, portProvider: portProvider,
+            secretProvider: secretProvider, hostProvider: hostProvider,
+            portProvider: portProvider,
             onApplied: { [weak panel] in panel?.close() },
             onDismiss: { [weak panel] in panel?.close() }))
 
