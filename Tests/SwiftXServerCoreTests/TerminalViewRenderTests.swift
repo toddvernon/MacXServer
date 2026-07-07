@@ -48,12 +48,17 @@ final class TerminalViewRenderTests: XCTestCase {
     /// True if any sampled pixel in the cell box is meaningfully non-black.
     @MainActor
     private func cellHasInk(_ rep: NSBitmapImageRep, row: Int, col: Int, view: TerminalView) -> Bool {
-        // Mirror the view's integer cell metrics by dividing its bounds by the
-        // grid dimensions (the view sized itself to cols*cellW x rows*cellH).
-        let cw = view.bounds.width / 80
-        let ch = view.bounds.height / 24
-        let x0 = Int(CGFloat(col) * cw)
-        let y0 = Int(CGFloat(row) * ch)
+        // Ask the view for the exact cell box (it offsets the grid by its
+        // gridInset breathing margin), then convert points -> bitmap pixels:
+        // on a Retina machine the cached rep is 2x, and sampling in point
+        // coordinates would land in the margin.
+        let box = view.cellRect(row: row, col: col)
+        let sx = CGFloat(rep.pixelsWide) / view.bounds.width
+        let sy = CGFloat(rep.pixelsHigh) / view.bounds.height
+        let cw = box.width * sx
+        let ch = box.height * sy
+        let x0 = Int(box.minX * sx)
+        let y0 = Int(box.minY * sy)
         for dy in stride(from: 2, to: Int(ch) - 2, by: 2) {
             for dx in stride(from: 1, to: Int(cw) - 1, by: 2) {
                 guard let c = rep.colorAt(x: x0 + dx, y: y0 + dy) else { continue }

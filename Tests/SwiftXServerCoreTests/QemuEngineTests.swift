@@ -499,25 +499,93 @@ final class QemuEngineTests: XCTestCase {
 
     /// Boot progress is cosmetic and tops out below 1.0 -- the authoritative
     /// 1.0 comes from the first `hello`, not a console string. The old
-    /// `console login:` -> 1.0 proxy is gone.
+    /// `console login:` -> 1.0 proxy is gone. Milestones are per-OS now, so
+    /// every guest's table must satisfy the same contract.
     func testBootProgressTopsOutBelowReady() {
-        // Milestones are derived from the real boot transcript (ProgressReference),
-        // so assert behavior against that table rather than brittle constants.
-        let marks = ProgressReference.boot
-        let first = marks.first!
-        let last = marks.last!
+        for os in MachineOS.allCases {
+            // Milestones derive from the real boot transcript (ProgressReference),
+            // so assert behavior against that table rather than brittle constants.
+            let marks = ProgressReference.boot(for: os)
+            let first = marks.first!
+            let last = marks.last!
 
-        XCTAssertEqual(QemuEngine.bootProgress(in: ""), 0.0)
-        // A recognized early landmark gives its (small, positive) fraction.
-        XCTAssertEqual(QemuEngine.bootProgress(in: first.0), first.1, accuracy: 0.0001)
-        XCTAssertGreaterThan(first.1, 0.0)
-        // The highest landmark present wins (monotonic via max): an early plus a
-        // late line resolves to the late line's fraction.
-        XCTAssertEqual(QemuEngine.bootProgress(in: first.0 + "\n" + last.0),
-                       last.1, accuracy: 0.0001)
-        XCTAssertGreaterThan(last.1, first.1)
-        // Even the last console landmark stays below 1.0 -- `hello` owns ready.
-        XCTAssertLessThan(last.1, 1.0)
+            XCTAssertEqual(QemuEngine.bootProgress(in: "", milestones: marks), 0.0)
+            // A recognized early landmark gives its (small, positive) fraction.
+            XCTAssertEqual(QemuEngine.bootProgress(in: first.0, milestones: marks),
+                           first.1, accuracy: 0.0001)
+            XCTAssertGreaterThan(first.1, 0.0, "\(os)")
+            // The highest landmark present wins (monotonic via max): an early plus
+            // a late line resolves to the late line's fraction.
+            XCTAssertEqual(QemuEngine.bootProgress(in: first.0 + "\n" + last.0, milestones: marks),
+                           last.1, accuracy: 0.0001)
+            XCTAssertGreaterThan(last.1, first.1, "\(os)")
+            // Even the last console landmark stays below 1.0 -- `hello` owns ready.
+            XCTAssertLessThan(last.1, 1.0, "\(os)")
+        }
+    }
+
+    /// The per-OS tables actually recognize their own guest's late-boot lines
+    /// (same Solaris-default-on-all-guests class as the fsck/shutdown bugs:
+    /// with only the Solaris table, a NetBSD or SunOS boot moved the bar for
+    /// the shared OpenBIOS prelude, then parked it for the whole kernel +
+    /// userland bring-up).
+    func testBootProgressMilestonesArePerOS() {
+        // Real console lines from the 2026-07-07 captures, one deep-boot line
+        // per guest. NetBSD's carries the live kernel timestamp + a hostname to
+        // prove marker matching ignores both.
+        let sunosLine  = "starting network daemons: inetd printer."
+        let netbsdLine = "Starting heliosagent."
+        let netbsdKernelLine = "[   4.0975230] root file system type: ffs"
+
+        let sunos  = ProgressReference.boot(for: .sunos414)
+        let netbsd = ProgressReference.boot(for: .netbsd)
+        let solaris = ProgressReference.boot(for: .solaris26)
+
+        // Each OS's own table drives well past the OpenBIOS prelude (~0.2).
+        XCTAssertGreaterThan(QemuEngine.bootProgress(in: sunosLine, milestones: sunos), 0.5)
+        XCTAssertGreaterThan(QemuEngine.bootProgress(in: netbsdLine, milestones: netbsd), 0.5)
+        XCTAssertGreaterThan(QemuEngine.bootProgress(in: netbsdKernelLine, milestones: netbsd), 0.2)
+
+        // The Solaris table must NOT recognize the BSD lines -- that silence is
+        // the parked-bar bug this change fixes.
+        XCTAssertEqual(QemuEngine.bootProgress(in: sunosLine, milestones: solaris), 0.0)
+        XCTAssertEqual(QemuEngine.bootProgress(in: netbsdLine, milestones: solaris), 0.0)
+    }
+
+    /// NetBSD kernel timestamps ("[   1.0000060] ") vary run to run, so the
+    /// landmark parser strips them; non-timestamp brackets pass through.
+    func testKernelTimestampStripping() {
+        XCTAssertEqual(ProgressReference.stripKernelTimestamp(
+            "[   1.0000060] tcx0: SUNW,tcx, 1024 x 768"), "tcx0: SUNW,tcx, 1024 x 768")
+        XCTAssertEqual(ProgressReference.stripKernelTimestamp(
+            "[ 176.4179230] unmounting done"), "unmounting done")
+        XCTAssertEqual(ProgressReference.stripKernelTimestamp(
+            "[qemu] some diagnostic"), "[qemu] some diagnostic")
+        XCTAssertEqual(ProgressReference.stripKernelTimestamp(
+            "plain line"), "plain line")
+    }
+
+    /// Shutdown landmark hygiene: no marker in an OS's shutdown table may be a
+    /// substring of that OS's FIRST shutdown line, or pickLowest would snap the
+    /// receding bar to the bottom the moment shutdown starts (the bare
+    /// "halted" trap -- "halt: halted by <user>" contains it).
+    func testShutdownMilestonesDontBottomOutOnFirstLine() {
+        let firstLine: [MachineOS: String] = [
+            .solaris26: "INIT: New run level: 5",
+            .sunos414:  "Jul  7 10:58:41 sunos halt: halted by root",
+            .netbsd:    "Jul  7 16:56:20 netbsd halt: halted by tvernon",
+        ]
+        for os in MachineOS.allCases {
+            let marks = ProgressReference.shutdown(for: os)
+            let matched = marks.filter { firstLine[os]!.contains($0.0) }
+            // The first line may match its OWN landmark (the top of the recede),
+            // but never a deeper one.
+            let deepest = marks.map(\.1).min()!
+            for (marker, value) in matched {
+                XCTAssertGreaterThan(value, deepest,
+                    "\(os): first shutdown line matches deep marker '\(marker)'")
+            }
+        }
     }
 
     /// The slirp packet-send line is recognized; real qemu errors are not (they

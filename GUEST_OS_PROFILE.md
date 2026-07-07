@@ -39,7 +39,9 @@ derives everything from it (`config.profile`), so the engine has one per-OS inpu
 | `ports` (telnet/ssh/helios) | 2123/2222/2125         | 2133/2232/2135         | 2143/2242/2145         |
 | `shutdownCommand`           | `/usr/sbin/init 5`     | `/usr/etc/halt`        | `/sbin/halt`           |
 | `cleanHaltMarkers`          | "syncing file systems" | +"halted" *(guess)*    | "syncing disks"… *(guess)* |
+| `fsckStallMarkers`          | "RUN fsck MANUALLY"    | "RUN fsck MANUALLY"    | +"RUN fsck_ffs MANUALLY" |
 | `xBinDirs` (X PATH)         | openwin:dt:X11         | openwin:X11 (no CDE)   | /usr/X11R7/bin         |
+| progress transcripts        | 2026-06-23 capture     | 2026-07-07 capture     | 2026-07-07 capture     |
 
 Notes:
 - `shutdownCommand` is consumed **guest-side** by the daemon via `HELIOS_SHUTDOWN_CMD`
@@ -48,9 +50,17 @@ Notes:
 - `cleanHaltMarkers` only *labels* a stop clean-vs-crash; qemu exiting is the
   authoritative stop signal. The BSD phrases are best-effort — verify against real
   console output and tighten. A miss mislabels; it never hangs.
-- MAC address is still a single hardcode (`DE:AD:BE:EF:F3:E5`), NOT yet per-machine
-  — the gold NetBSD script uses `…F4:E5`. Tracked as the P2 unique-MAC gap
-  (SHORTCUTS), harmless under slirp.
+- The boot/shutdown progress-bar transcripts live in `ProgressReference`
+  (`BootProgressReference.swift`), not on `MachineOS` — they're multi-line
+  pastes, not one-liners — but they switch exhaustively on `MachineOS`, so the
+  forcing function is the same: a 4th OS won't compile until it brings its own
+  capture. Retuning a bar is pasting a fresh capture (trim variable lines:
+  dates, MACs, memory sizes, pids; NetBSD `[ n.nnn]` kernel timestamps are
+  stripped by the parser). Before 2026-07-07 only the Solaris transcript
+  existed, so a BSD boot moved the bar through the shared OpenBIOS prelude and
+  then parked it for the whole kernel + userland bring-up.
+- Guest MAC derives from the machine id as of P2 (2026-07-06) — per-machine,
+  no longer the shared `DE:AD:BE:EF:F3:E5` hardcode.
 
 ## The audit (run it when adding an OS, or periodically)
 

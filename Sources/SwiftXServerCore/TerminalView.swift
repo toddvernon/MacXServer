@@ -33,6 +33,12 @@ public final class TerminalView: NSView {
     private let cellH: CGFloat
     private let ascent: CGFloat
 
+    /// Breathing room between the view edges and the cell grid, so glyphs
+    /// don't kiss the window chrome. The backing layer paints it the terminal
+    /// background color, so it reads as part of the screen, not a frame.
+    /// Internal (not private) so the render tests can mirror the geometry.
+    let gridInset: CGFloat = 8
+
     public init(emulator: TerminalEmulator, pointSize: CGFloat = 13) {
         self.term = emulator
         self.grid = emulator.grid()
@@ -51,8 +57,8 @@ public final class TerminalView: NSView {
         self.ascent = ceil(f.ascender)
         self.cellH = ceil(f.ascender - f.descender + f.leading)
 
-        let size = NSSize(width: cellW * CGFloat(emulator.cols),
-                          height: cellH * CGFloat(emulator.rows))
+        let size = NSSize(width: cellW * CGFloat(emulator.cols) + gridInset * 2,
+                          height: cellH * CGFloat(emulator.rows) + gridInset * 2)
         super.init(frame: NSRect(origin: .zero, size: size))
 
         // Layer-backed with a black background so any margin beyond the integer
@@ -109,8 +115,8 @@ public final class TerminalView: NSView {
     /// Recompute the grid from the current bounds + integer cell metrics and
     /// reflow the emulator. Display-only; does not touch the guest.
     private func reflowToFit() {
-        let cols = max(1, Int(bounds.width / cellW))
-        let rows = max(1, Int(bounds.height / cellH))
+        let cols = max(1, Int((bounds.width - gridInset * 2) / cellW))
+        let rows = max(1, Int((bounds.height - gridInset * 2) / cellH))
         guard rows != term.rows || cols != term.cols else { return }
         term.resize(rows: rows, cols: cols)
         grid = term.grid()
@@ -171,8 +177,10 @@ public final class TerminalView: NSView {
 
     // MARK: - Drawing
 
-    private func cellRect(row: Int, col: Int) -> NSRect {
-        NSRect(x: CGFloat(col) * cellW, y: CGFloat(row) * cellH,
+    /// Internal (not private) so the render tests can sample exact cell boxes.
+    func cellRect(row: Int, col: Int) -> NSRect {
+        NSRect(x: gridInset + CGFloat(col) * cellW,
+               y: gridInset + CGFloat(row) * cellH,
                width: cellW, height: cellH)
     }
 
@@ -183,7 +191,8 @@ public final class TerminalView: NSView {
         // scattered dirty cells, and filling it would erase the live cells
         // between them (e.g. text under a cursor that jumped across a line).
         // needsToDraw honors AppKit's real (possibly disjoint) dirty region.
-        // Cells tile the view exactly (integer metrics), so there are no gaps.
+        // Cells tile the inset grid exactly (integer metrics); the margin and
+        // any leftover beyond the grid are the layer's background color.
         for row in 0..<grid.count {
             for col in 0..<grid[row].count {
                 guard needsToDraw(cellRect(row: row, col: col)) else { continue }

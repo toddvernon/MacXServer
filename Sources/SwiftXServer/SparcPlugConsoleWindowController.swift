@@ -210,16 +210,24 @@ struct SparcPlugConsoleView: View {
     }
 
     /// Full-width thermometer: grows as the guest boots, recedes as it shuts
-    /// down. Driven by QemuEngine progress milestones. Blue while in motion
-    /// (booting or unbooting); flips to green once the box is up and serving
+    /// down. Driven by QemuEngine progress milestones. Yellow barber pole while
+    /// in motion (booting or unbooting), matching the Machines-window Overview
+    /// bar; flips to solid green once the box is up and serving
     /// (state == .running and `ready`, i.e. Helios answered).
     private var bootBar: some View {
-        let accent: Color = (model.state == .running && model.ready) ? .green : .blue
+        let ready = (model.state == .running && model.ready)
+        let accent: Color = ready ? .green : .yellow
         return GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Rectangle().fill(accent.opacity(0.15))
-                Rectangle().fill(accent)
-                    .frame(width: geo.size.width * model.progress)
+                Group {
+                    if ready || model.progress <= 0 {
+                        Rectangle().fill(accent)
+                    } else {
+                        BarberPoleFill(accent: accent)
+                    }
+                }
+                .frame(width: geo.size.width * model.progress)
             }
         }
         .frame(height: 5)
@@ -227,13 +235,15 @@ struct SparcPlugConsoleView: View {
         .animation(.easeInOut(duration: 0.3), value: model.ready)
     }
 
-    /// "SPARCstation 5 — <OS> — 115200 baud", dropping the OS segment when the
-    /// running machine's OS is unknown (rather than hardcoding one).
+    /// "SPARCstation 5 — <OS>", dropping the OS segment when the running
+    /// machine's OS is unknown (rather than hardcoding one). No baud claim:
+    /// the emulated ESCC doesn't pace by baud (see the ttya-mode note in
+    /// QemuEngine.buildArguments), so quoting a rate was decoration.
     private var headerTitle: String {
         if let os = model.osName, !os.isEmpty {
-            return "SPARCstation 5 — \(os) — 115200 baud"
+            return "SPARCstation 5 — \(os)"
         }
-        return "SPARCstation 5 — 115200 baud"
+        return "SPARCstation 5"
     }
 
     private var content: some View {
@@ -325,7 +335,9 @@ struct SparcPlugConsoleView: View {
     private var statusColor: Color {
         if model.bootStalledReason != nil { return .orange }
         switch model.state {
-        case .running: return model.ready ? .green : .blue
+        // Booting is yellow app-wide (master-list dot, thermometer); the old
+        // blue predated the barber-pole/yellow scheme.
+        case .running: return model.ready ? .green : .yellow
         case .shuttingDown: return .orange
         case .stopped: return .secondary
         case .notInstalled: return .orange

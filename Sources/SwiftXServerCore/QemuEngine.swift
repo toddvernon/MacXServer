@@ -82,6 +82,10 @@ public struct QemuEngineConfig: Sendable, Equatable {
     /// The writable Solaris qcow2. Lives in Application Support in the shipped
     /// product (Track C installs it there); overridable for dev.
     public var diskImage: URL
+    /// Guest RAM in MB. Not user-configurable: every VM gets 256, the SS-5's
+    /// hardware maximum and qemu's sun4m `max_mem` ceiling (asking for more is
+    /// an instant qemu exit). The per-machine knob was removed 2026-07-07 --
+    /// there was never a reason to starve a vintage guest.
     public var memoryMB: Int
     /// Host ports forwarded into this image's guest (telnet / ssh / helios).
     /// Defaults to the Solaris 2.6 block; other OSes pass their own block so
@@ -102,7 +106,7 @@ public struct QemuEngineConfig: Sendable, Equatable {
     /// behavior (the historical default). See MachineOS + GUEST_OS_PROFILE.md.
     public var os: MachineOS?
 
-    public init(helper: URL, firmwareDir: URL, diskImage: URL, memoryMB: Int = 128,
+    public init(helper: URL, firmwareDir: URL, diskImage: URL, memoryMB: Int = 256,
                 ports: ImagePorts = .solaris26, macAddress: String = "DE:AD:BE:EF:F3:E5",
                 tftpDirectory: String? = nil, os: MachineOS? = nil) {
         self.helper = helper
@@ -227,8 +231,10 @@ public final class QemuEngine: @unchecked Sendable {
     // takes the highest match (monotonic max), shutdown the lowest (monotonic
     // recede via min). Both are cosmetic and stop short of the ends -- boot's
     // 1.0 comes from the first `hello` (C3), shutdown's 0 from pid-death.
-    private static let bootMilestones: [(String, Double)] = ProgressReference.boot
-    private static let shutdownMilestones: [(String, Double)] = ProgressReference.shutdown
+    // Per-OS (guest-profile rule): the three guests share only the OpenBIOS
+    // prelude, so a common table would park the bar early in the boot.
+    private lazy var bootMilestones: [(String, Double)] = ProgressReference.boot(for: config.profile)
+    private lazy var shutdownMilestones: [(String, Double)] = ProgressReference.shutdown(for: config.profile)
 
     public init(config: QemuEngineConfig) {
         self.config = config
@@ -484,6 +490,12 @@ public final class QemuEngine: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self = self, self.isRunning, !self.shuttingDown else { return }
             self.shuttingDown = true
+            // Fresh tail for the recede: the buffer holds the last 8KB of
+            // whatever the console showed (an editor screen is arbitrary
+            // text), and the tail stops accumulating at steady state anyway
+            // (see ingest). Shutdown markers should only ever match shutdown
+            // output.
+            self.consoleTail = ""
             self.emitState()
             self.requestShutdownViaDaemon()
         }
@@ -879,10 +891,12 @@ public final class QemuEngine: @unchecked Sendable {
         markers.contains { text.contains($0) }
     }
 
-    /// Cosmetic boot progress (0...~0.9) from console milestones. Internal for
-    /// unit testing. Tops out below 1.0 -- `hello` owns the final step.
-    static func bootProgress(in text: String) -> Double {
-        matchedProgress(bootMilestones, in: text, default: 0.0, pickLowest: false)
+    /// Cosmetic boot progress (0...~0.9) from console milestones. Milestones
+    /// are per-OS (the instance passes its own table); parameterized like
+    /// `indicatesFsckStall` so unit tests can drive any OS's table. Tops out
+    /// below 1.0 -- `hello` owns the final step.
+    static func bootProgress(in text: String, milestones: [(String, Double)]) -> Double {
+        matchedProgress(milestones, in: text, default: 0.0, pickLowest: false)
     }
 
     // MARK: - Argument construction
@@ -1027,7 +1041,7 @@ public final class QemuEngine: @unchecked Sendable {
     ///   helper   = .../Contents/Helpers/qemu-system-sparc
     ///   firmware = .../Contents/Resources/qemu-firmware
     ///   image    = Application Support/macXserver/<diskImageFilename>
-    public static func defaultConfig(bundle: Bundle = .main, memoryMB: Int = 128) -> QemuEngineConfig {
+    public static func defaultConfig(bundle: Bundle = .main) -> QemuEngineConfig {
         let env = ProcessInfo.processInfo.environment
 
         let helper: URL
@@ -1055,7 +1069,7 @@ public final class QemuEngine: @unchecked Sendable {
         let tftpDir = env["SPARCPLUG_TFTP_DIR"].flatMap { $0.isEmpty ? nil : $0 }
 
         return QemuEngineConfig(helper: helper, firmwareDir: firmwareDir,
-                                diskImage: diskImage, memoryMB: memoryMB,
+                                diskImage: diskImage,
                                 tftpDirectory: tftpDir)
     }
 
@@ -1069,35 +1083,53 @@ public final class QemuEngine: @unchecked Sendable {
         guard let s = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .ascii) else { return }
 
-        // Keep a bounded tail so markers split across chunks still match.
-        consoleTail += s
-        if consoleTail.count > 8192 {
-            consoleTail = String(consoleTail.suffix(8192))
-        }
+        // Marker work only matters while the machine is IN MOTION (booting or
+        // shutting down); once `hello` pegs progress at 1.0 nothing below can
+        // change until a shutdown begins. And this is the console hot path:
+        // qemu's ESCC delivers byte-sized chunks, so at steady state a
+        // full-screen guest app (a cm/vi repaint) was paying an 8KB tail
+        // re-copy plus ~55 substring scans over that tail PER BYTE -- the
+        // "integrated console is slow" bug. (The UART was never the problem:
+        // iTerm2 renders the same UART's bytes instantly; only we were doing
+        // per-byte marker scans on top.)
+        if !ready || shuttingDown {
+            consoleTail += s
+            // Trim lazily: re-materializing an 8KB string every byte-chunk is
+            // the same quadratic trap as the scans. Markers just get a
+            // slightly larger window between trims, which is harmless.
+            if consoleTail.count > 12288 {
+                consoleTail = String(consoleTail.suffix(8192))
+            }
 
-        if shuttingDown, !sawCleanHalt,
-           config.profile.cleanHaltMarkers.contains(where: { consoleTail.contains($0) }) {
-            sawCleanHalt = true
-            let cb = cleanHaltCallback
-            DispatchQueue.main.async { cb?() }
-        }
+            // Every marker is line-oriented, so a marker can only complete
+            // when its line does: scan on newline arrival, not every chunk.
+            if s.contains("\n") {
+                if shuttingDown, !sawCleanHalt,
+                   config.profile.cleanHaltMarkers.contains(where: { consoleTail.contains($0) }) {
+                    sawCleanHalt = true
+                    let cb = cleanHaltCallback
+                    DispatchQueue.main.async { cb?() }
+                }
 
-        // fsck couldn't preen a dirty filesystem and dropped to maintenance:
-        // the boot is wedged and the daemon will never come up. Declare it
-        // stalled now rather than waiting out the readiness budget.
-        if !ready, !bootStalled,
-           Self.indicatesFsckStall(consoleTail, markers: config.profile.fsckStallMarkers) {
-            markBootStalled("filesystem check failed (RUN fsck MANUALLY)")
-        }
+                // fsck couldn't preen a dirty filesystem and dropped to
+                // maintenance: the boot is wedged and the daemon will never
+                // come up. Declare it stalled now rather than waiting out the
+                // full readiness budget.
+                if !ready, !bootStalled,
+                   Self.indicatesFsckStall(consoleTail, markers: config.profile.fsckStallMarkers) {
+                    markBootStalled("filesystem check failed (RUN fsck MANUALLY)")
+                }
 
-        // Progress: grow on boot milestones, recede on shutdown milestones.
-        let updated = shuttingDown
-            ? min(progress, Self.matchedProgress(Self.shutdownMilestones, in: consoleTail, default: 1.0, pickLowest: true))
-            : max(progress, Self.bootProgress(in: consoleTail))
-        if updated != progress {
-            progress = updated
-            let pc = progressCallback
-            DispatchQueue.main.async { pc?(updated) }
+                // Progress: grow on boot milestones, recede on shutdown ones.
+                let updated = shuttingDown
+                    ? min(progress, Self.matchedProgress(shutdownMilestones, in: consoleTail, default: 1.0, pickLowest: true))
+                    : max(progress, Self.bootProgress(in: consoleTail, milestones: bootMilestones))
+                if updated != progress {
+                    progress = updated
+                    let pc = progressCallback
+                    DispatchQueue.main.async { pc?(updated) }
+                }
+            }
         }
 
         let cb = consoleCallback
