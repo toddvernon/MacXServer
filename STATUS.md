@@ -109,7 +109,9 @@
 - SPARCplug: no changes.
 
 ## Switching Macs
-- git pull both repos on the other Mac; rebuild macXserver in Xcode there.
+- Laptop is synced as of the evening 2026-07-07 session: pulled to ec06df2,
+  reran xcodegen (no pbxproj drift), ready to build in Xcode. The desktop was
+  already pushed.
 - Let Dropbox finish syncing memory + the cx tree (memory got: sysinfo verb,
   launcher-format update).
 - All guest VMs are powered off, no image locks. The real SS5 (ss1) runs
