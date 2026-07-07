@@ -329,10 +329,16 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
                                  tftpDirectory: String? = nil) -> QemuEngineConfig? {
         guard kind == .emulatedVM, let image = image else { return nil }
         var config = QemuEngine.defaultConfig(bundle: bundle, memoryMB: memoryMB)
-        config.diskImage = image
+        // Dev escape hatches win over the machine's values: defaultConfig has
+        // already applied SPARCPLUG_DISK_IMAGE / SPARCPLUG_TFTP_DIR from the
+        // env, so only overwrite when the env DIDN'T set them. Before this the
+        // per-machine values always clobbered the env vars, making them dead on
+        // the app path (they only worked in tests). See CODE_AUDIT §2a.
+        let env = ProcessInfo.processInfo.environment
+        if (env["SPARCPLUG_DISK_IMAGE"]?.isEmpty ?? true) { config.diskImage = image }
+        if (env["SPARCPLUG_TFTP_DIR"]?.isEmpty ?? true) { config.tftpDirectory = tftpDirectory }
         config.ports = resolvedPorts
         config.macAddress = resolvedMacAddress
-        config.tftpDirectory = tftpDirectory
         config.os = os
         return config
     }

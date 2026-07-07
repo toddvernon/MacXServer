@@ -165,7 +165,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// machine with no launcher group to copy from (rare -- the seeded launchers
     /// file normally supplies a loopback group), so we derive it best-effort.
     private func loadMachineRegistry() {
-        let launchers = LauncherFileLoader.loadOrSeed(seed: DefaultLaunchers.seedContent)
+        // The legacy launchers dotfile is only needed for the one-time
+        // migration into machines.json. Seed it (write if absent) only on that
+        // first run; once machines.json exists just read the dotfile if it
+        // happens to be present, so a user who deletes it doesn't get it
+        // silently recreated every launch (it's dead post-migration anyway).
+        let machinesExist = FileManager.default.fileExists(atPath: MachinesFileLoader.defaultPath)
+        let launchers: LauncherFile = machinesExist
+            ? ((try? String(contentsOfFile: LauncherFileLoader.defaultPath, encoding: .utf8))
+                .map { LauncherFile.parse($0) } ?? LauncherFile.parse(""))
+            : LauncherFileLoader.loadOrSeed(seed: DefaultLaunchers.seedContent)
         let bundledUser = launchers.entries.first(where: { Self.isLoopbackHost($0.host) })?.user
             ?? launchers.entries.first?.user ?? ""
         self.registry = MachineRegistry.load(bundledImagePath: preferences.sparcDiskImagePath,
