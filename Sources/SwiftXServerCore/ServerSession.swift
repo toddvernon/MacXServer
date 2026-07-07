@@ -3938,6 +3938,25 @@ public final class ServerSession: @unchecked Sendable {
         // Render via the existing depth-1 PutImage path: 1 bits → fg,
         // 0 bits → bg, exactly what CopyPlane is supposed to do.
         let state = gcState(r.gc, byteOrder: byteOrder)
+
+        // Honor the GC pixmap clip-mask exactly as CopyArea does (was ignored
+        // before — a masked CopyPlane drew unmasked). Origin is dst-local; add
+        // the dst window offset so it lands in the same coord space as
+        // dstX/dstY. A missing/non-depth-1 mask degrades to unmasked (logged in
+        // the bridge) rather than a spurious BadMatch. (CODE_AUDIT §1)
+        var clipMaskPixmap: UInt32 = 0
+        var clipMaskOriginX: Int16 = 0
+        var clipMaskOriginY: Int16 = 0
+        if state.clipMaskPixmap != 0 {
+            if let maskPix = pixmaps.get(state.clipMaskPixmap), maskPix.depth == 1 {
+                clipMaskPixmap = state.clipMaskPixmap
+                clipMaskOriginX = state.clipXOrigin &+ dstDX
+                clipMaskOriginY = state.clipYOrigin &+ dstDY
+            } else {
+                log?.log("  CopyPlane: clip-mask 0x\(String(state.clipMaskPixmap, radix: 16)) missing or not depth-1 — drawing unmasked")
+            }
+        }
+
         bridge.drawPutImage(
             target: dstTarget,
             sourceData: bitmap,
@@ -3946,7 +3965,10 @@ public final class ServerSession: @unchecked Sendable {
             leftPad: 0,
             foreground: resolveColor(state.foreground, target: dstTarget),
             background: resolveColor(state.background, target: dstTarget),
-            clipRectangles: state.clipRectangles
+            clipRectangles: state.clipRectangles,
+            clipMaskPixmap: clipMaskPixmap,
+            clipMaskOriginX: clipMaskOriginX,
+            clipMaskOriginY: clipMaskOriginY
         )
 
         // CopyPlane has the same graphics-exposures contract as CopyArea —
@@ -6416,7 +6438,10 @@ public final class ServerSession: @unchecked Sendable {
                     dstX: r.dstX &+ dx, dstY: r.dstY &+ dy,
                     leftPad: r.leftPad,
                     foreground: fg, background: bg,
-                    clipRectangles: state.clipRectangles
+                    clipRectangles: state.clipRectangles,
+                    // PutImage clip-mask is unchanged (never honored here); the
+                    // mask path is CopyPlane-only for now.
+                    clipMaskPixmap: 0, clipMaskOriginX: 0, clipMaskOriginY: 0
                 )
 
             case (.bitmap, _):
@@ -7282,7 +7307,7 @@ public final class ServerSession: @unchecked Sendable {
             if let w = windows.get(r.drawable) {
                 let reply = GetGeometryReply(
                     sequenceNumber: sequenceNumber,
-                    depth: w.depth == 0 ? 8 : w.depth,
+                    depth: w.depth == 0 ? config.rootDepth : w.depth,
                     root: config.rootWindowId,
                     x: w.x, y: w.y,
                     width: w.width, height: w.height,
@@ -7299,10 +7324,10 @@ public final class ServerSession: @unchecked Sendable {
                 outbound.append(reply.encode(byteOrder: byteOrder))
             } else if r.drawable == config.rootWindowId {
                 // Root isn't in the windows table; synthesize from screen
-                // config. Root depth is 8 per SetupAccepted.
+                // config. Root depth matches SetupAccepted (24, TrueColor).
                 let reply = GetGeometryReply(
                     sequenceNumber: sequenceNumber,
-                    depth: 8,
+                    depth: config.rootDepth,
                     root: config.rootWindowId,
                     x: 0, y: 0,
                     width: config.widthInPixels,

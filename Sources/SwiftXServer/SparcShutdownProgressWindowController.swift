@@ -139,7 +139,10 @@ struct SparcShutdownProgressView: View {
     private var substatus: String {
         switch model.phase {
         case .working:
-            return "Sent the shutdown command (init 5). Waiting for it to power "
+            // Don't name the command — the daemon runs the guest's per-OS halt
+            // (init 5 on Solaris, halt on the BSDs), so "init 5" was wrong on
+            // BSD guests (CODE_AUDIT §1).
+            return "Sent the shutdown command. Waiting for it to power "
                 + "off — \(model.remaining)s left."
         case .succeeded:
             return "Starting your SPARCstation…"

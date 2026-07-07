@@ -477,13 +477,24 @@ final class QemuEngineTests: XCTestCase {
     /// routine clean-boot preen ("fsck" alone) does NOT trip it -- otherwise the
     /// stall warning would fire on every healthy boot.
     func testFsckStallDetection() {
+        let solaris = MachineOS.solaris26.fsckStallMarkers
         XCTAssertTrue(QemuEngine.indicatesFsckStall(
-            "/dev/rdsk/c0t0d0s0: UNEXPECTED INCONSISTENCY; RUN fsck MANUALLY."))
+            "/dev/rdsk/c0t0d0s0: UNEXPECTED INCONSISTENCY; RUN fsck MANUALLY.", markers: solaris))
         XCTAssertTrue(QemuEngine.indicatesFsckStall(
-            "lots of boot text\nRUN fsck MANUALLY\nEnter maintenance mode"))
+            "lots of boot text\nRUN fsck MANUALLY\nEnter maintenance mode", markers: solaris))
         XCTAssertFalse(QemuEngine.indicatesFsckStall(
-            "/dev/rdsk/c0t0d0s0: is clean\nThe / file system (/dev/...) was checked with fsck"))
-        XCTAssertFalse(QemuEngine.indicatesFsckStall("Booting...\nThe system is ready"))
+            "/dev/rdsk/c0t0d0s0: is clean\nThe / file system (/dev/...) was checked with fsck", markers: solaris))
+        XCTAssertFalse(QemuEngine.indicatesFsckStall("Booting...\nThe system is ready", markers: solaris))
+
+        // Regression (CODE_AUDIT §1): NetBSD's fsck_ffs wording. The Solaris
+        // marker set never matched it, so stall detection silently no-op'd on
+        // NetBSD and boot waited out the full readiness budget.
+        let netbsd = MachineOS.netbsd.fsckStallMarkers
+        XCTAssertTrue(QemuEngine.indicatesFsckStall(
+            "/dev/sd0a: UNEXPECTED INCONSISTENCY; RUN fsck_ffs MANUALLY.", markers: netbsd))
+        XCTAssertFalse(QemuEngine.indicatesFsckStall(
+            "/dev/sd0a: UNEXPECTED INCONSISTENCY; RUN fsck_ffs MANUALLY.", markers: solaris),
+            "the Solaris marker set must NOT match NetBSD's phrase — that was the bug")
     }
 
     /// Boot progress is cosmetic and tops out below 1.0 -- the authoritative

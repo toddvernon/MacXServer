@@ -1847,20 +1847,9 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         // GRAPHICS_Y_FLIP.md the y-flip gotcha only bites image-source draws,
         // so clipping to rects avoids a second orientation hazard for the
         // mask while the icon still draws through the one safe helper.
-        let maskRects: [CGRect]? = { () -> [CGRect]? in
-            guard clipMaskPixmap != 0 else { return nil }
-            guard let maskBuf = lookupPixmapBuffer(clipMaskPixmap),
-                  let grid = StippleBitGrid(buffer: maskBuf) else {
-                log?.log("  CopyArea: clip-mask 0x\(String(clipMaskPixmap, radix: 16)) unreadable — drawing unmasked")
-                return nil
-            }
-            return clipMaskOpaqueRects(
-                grid: grid,
-                originX: CGFloat(clipMaskOriginX),
-                originY: CGFloat(clipMaskOriginY),
-                clampTo: dstRect
-            )
-        }()
+        let maskRects = clipMaskRects(clipMaskPixmap,
+                                      originX: clipMaskOriginX, originY: clipMaskOriginY,
+                                      clampTo: dstRect, op: "CopyArea")
         withDrawContext(dst, clipRectangles: clipRectangles) { ctx in
             if let mr = maskRects {
                 // Empty → every pixel of the copy is masked out; draw nothing.
@@ -2378,7 +2367,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         dstX: Int16, dstY: Int16,
         leftPad: UInt8,
         foreground: RGB16, background: RGB16,
-        clipRectangles: [Framer.Rectangle]?
+        clipRectangles: [Framer.Rectangle]?,
+        clipMaskPixmap: UInt32 = 0,
+        clipMaskOriginX: Int16 = 0,
+        clipMaskOriginY: Int16 = 0
     ) {
         log?.log("  drawPutImage target=\(target) src=\(sourceWidth)x\(sourceHeight) dst=(\(dstX),\(dstY)) leftPad=\(leftPad) data=\(sourceData.count)b fg=(\(foreground.red >> 8),\(foreground.green >> 8),\(foreground.blue >> 8)) bg=(\(background.red >> 8),\(background.green >> 8),\(background.blue >> 8))")
 
@@ -2435,7 +2427,10 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
 
         blitARGB(argb, width: w, height: h,
                  dstX: dstX, dstY: dstY,
-                 target: target, clipRectangles: clipRectangles)
+                 target: target, clipRectangles: clipRectangles,
+                 clipMaskPixmap: clipMaskPixmap,
+                 clipMaskOriginX: clipMaskOriginX,
+                 clipMaskOriginY: clipMaskOriginY)
     }
 
     /// ZPixmap PutImage. Session pre-resolves the packed-pixel source
@@ -2469,10 +2464,30 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
     /// destination through `withDrawContext`, which handles clipping + the
     /// y-flip dance documented in GRAPHICS_Y_FLIP.md. Nearest-neighbor
     /// interpolation keeps small icons crisp through device-scale upscaling.
+    /// Resolve a GC clip-mask pixmap into destination-space opaque rects, or
+    /// nil when there's no mask / it's unreadable (→ draw unmasked). Shared by
+    /// copyArea and blitARGB so image-source draws honor the mask identically.
+    private func clipMaskRects(_ clipMaskPixmap: UInt32,
+                               originX: Int16, originY: Int16,
+                               clampTo dstRect: CGRect, op: String) -> [CGRect]? {
+        guard clipMaskPixmap != 0 else { return nil }
+        guard let maskBuf = lookupPixmapBuffer(clipMaskPixmap),
+              let grid = StippleBitGrid(buffer: maskBuf) else {
+            log?.log("  \(op): clip-mask 0x\(String(clipMaskPixmap, radix: 16)) unreadable — drawing unmasked")
+            return nil
+        }
+        return clipMaskOpaqueRects(grid: grid,
+                                   originX: CGFloat(originX), originY: CGFloat(originY),
+                                   clampTo: dstRect)
+    }
+
     private func blitARGB(_ argb: [UInt8], width w: Int, height h: Int,
                            dstX: Int16, dstY: Int16,
                            target: DrawTarget,
-                           clipRectangles: [Framer.Rectangle]?) {
+                           clipRectangles: [Framer.Rectangle]?,
+                           clipMaskPixmap: UInt32 = 0,
+                           clipMaskOriginX: Int16 = 0,
+                           clipMaskOriginY: Int16 = 0) {
         let data = Data(argb)
         guard let provider = CGDataProvider(data: data as CFData) else { return }
         let info: UInt32 = CGImageAlphaInfo.premultipliedFirst.rawValue
@@ -2493,7 +2508,17 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
             x: CGFloat(dstX), y: CGFloat(dstY),
             width: CGFloat(w), height: CGFloat(h)
         )
+        // GC pixmap clip-mask (same as copyArea): only mask bits = 1 draw.
+        // Used by CopyPlane through drawPutImage. Rect-clipping, not an image
+        // mask, per the GRAPHICS_Y_FLIP note in copyArea.
+        let maskRects = clipMaskRects(clipMaskPixmap,
+                                      originX: clipMaskOriginX, originY: clipMaskOriginY,
+                                      clampTo: dstRect, op: "drawPutImage")
         withDrawContext(target, clipRectangles: clipRectangles) { ctx in
+            if let mr = maskRects {
+                guard !mr.isEmpty else { return }   // fully masked out → draw nothing
+                ctx.clip(to: mr)
+            }
             ctx.interpolationQuality = .none
             ctx.drawImageRespectingYFlip(cgImage, in: dstRect)
         }
@@ -3312,12 +3337,17 @@ public final class CocoaWindowBridge: WindowBridge, @unchecked Sendable {
         let newLogicalH = Int((bounds.height * backingScale / CGFloat(scaleFactor)).rounded())
         log?.log("  windowDidEndLiveResize id=0x\(String(id, radix: 16)) final bounds=\(bounds.width)x\(bounds.height)pt → logical \(newLogicalW)x\(newLogicalH)")
         guard newLogicalW > 0, newLogicalH > 0 else { return }
-        if newLogicalW != view.logicalWidth || newLogicalH != view.logicalHeight {
-            view.resizeBacking(logicalWidth: newLogicalW,
-                               logicalHeight: newLogicalH,
-                               scale: scaleFactor)
-            view.setNeedsDisplay(view.bounds)
-        }
+        // Only catch up (bitmap + ConfigureNotify) if the final size actually
+        // differs from what the session last knew. The bitmap resize was
+        // deferred through the whole drag, so view.logicalWidth/Height still
+        // holds the pre-drag size — a drag out-and-back to the same size must
+        // NOT fire a zero-delta ConfigureNotify (xterm reacts badly to it),
+        // matching handleNSWindowResize's guard. (CODE_AUDIT §1)
+        guard newLogicalW != view.logicalWidth || newLogicalH != view.logicalHeight else { return }
+        view.resizeBacking(logicalWidth: newLogicalW,
+                           logicalHeight: newLogicalH,
+                           scale: scaleFactor)
+        view.setNeedsDisplay(view.bounds)
         fireResize(id: id, w: UInt16(min(newLogicalW, 65535)), h: UInt16(min(newLogicalH, 65535)))
     }
 }

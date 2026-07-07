@@ -18,7 +18,8 @@ final class SSHLauncherTests: XCTestCase {
             port: 22,
             transport: .ssh
         )
-        let args = SSHLauncher.buildArguments(entry: entry, displayString: "mac.local:0")
+        let args = SSHLauncher.buildArguments(entry: entry, displayString: "mac.local:0",
+                                              xBinDirs: "/usr/openwin/bin")
         XCTAssertEqual(args, [
             "-T",
             "-o", "BatchMode=yes",
@@ -26,9 +27,22 @@ final class SSHLauncherTests: XCTestCase {
             "-o", "ConnectTimeout=15",
             "-p", "22",
             "todd@linuxbox.local",
-            "/bin/sh -c 'DISPLAY=mac.local:0; export DISPLAY; " +
+            "/bin/sh -c 'PATH=/usr/openwin/bin:$PATH; export PATH; " +
+                "DISPLAY=mac.local:0; export DISPLAY; " +
                 "nohup firefox </dev/null >/dev/null 2>&1 &'"
         ])
+    }
+
+    /// The per-OS X bin dirs are prepended to PATH (CODE_AUDIT §1): sshd's
+    /// minimal non-login PATH otherwise can't find a bare `xterm` that the
+    /// telnet/helios transports resolve via their own prepend.
+    func testBuildArgumentsPrependsXBinDirs() {
+        let entry = LauncherEntry(
+            name: "xterm", group: "netbsd",
+            host: "h", command: "xterm", user: "u", port: 22, transport: .ssh)
+        let args = SSHLauncher.buildArguments(entry: entry, displayString: "d:0",
+                                              xBinDirs: "/usr/X11R7/bin")
+        XCTAssertTrue(args.last!.contains("PATH=/usr/X11R7/bin:$PATH; export PATH;"))
     }
 
     /// Non-default port is honored.

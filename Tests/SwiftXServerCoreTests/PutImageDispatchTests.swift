@@ -13,7 +13,11 @@ private final class RecPutImageBridge: WindowBridge, @unchecked Sendable {
         var foreground: RGB16
         var background: RGB16
         var data: [UInt8]
+        var clipMaskPixmap: UInt32 = 0
     }
+    /// CopyPlane reads the source through this before packing the plane; return
+    /// a non-empty buffer so the dispatch reaches drawPutImage.
+    var readPixelsResult: [UInt32] = []
     struct ARGBCall: Equatable {
         var width: UInt16
         var height: UInt16
@@ -38,14 +42,23 @@ private final class RecPutImageBridge: WindowBridge, @unchecked Sendable {
         dstX: Int16, dstY: Int16,
         leftPad: UInt8,
         foreground: RGB16, background: RGB16,
-        clipRectangles: [Framer.Rectangle]?
+        clipRectangles: [Framer.Rectangle]?,
+        clipMaskPixmap: UInt32,
+        clipMaskOriginX: Int16,
+        clipMaskOriginY: Int16
     ) {
         calls.append(Call(
             width: sourceWidth, height: sourceHeight,
             dstX: dstX, dstY: dstY, leftPad: leftPad,
             foreground: foreground, background: background,
-            data: sourceData
+            data: sourceData,
+            clipMaskPixmap: clipMaskPixmap
         ))
+    }
+
+    func readDrawablePixels(from src: DrawTarget, srcX: Int16, srcY: Int16,
+                            width: Int, height: Int) -> [UInt32] {
+        readPixelsResult
     }
 
     func drawPutImageARGB(
@@ -121,6 +134,41 @@ final class PutImageDispatchTests: XCTestCase {
         // per ColorTable initialisation.
         XCTAssertEqual(call.foreground, RGB16(red: 0, green: 0, blue: 0))
         XCTAssertEqual(call.background, RGB16(red: 65535, green: 65535, blue: 65535))
+    }
+
+    /// CopyPlane must honor the GC's pixmap clip-mask, exactly as CopyArea
+    /// does. It ignored `clipMaskPixmap` before (a masked CopyPlane drew
+    /// unmasked). This drives a CopyPlane whose GC has a depth-1 clip-mask set
+    /// and asserts the mask id reaches the bridge's drawPutImage. (CODE_AUDIT §1)
+    func testCopyPlaneHonorsGCClipMask() throws {
+        let bridge = RecPutImageBridge()
+        bridge.readPixelsResult = [UInt32](repeating: 0, count: 16 * 16)  // non-empty src
+        let session = ServerSession(bridge: bridge)
+        _ = session.feed(SetupRequest(byteOrder: .lsbFirst).encode())
+
+        let srcId: UInt32  = 0x4400020
+        let dstId: UInt32  = 0x4400021
+        let maskId: UInt32 = 0x4400022
+        let gcId: UInt32   = 0x4400023
+        for (pid, depth) in [(srcId, UInt8(24)), (dstId, 24), (maskId, 1)] {
+            _ = session.feed(CreatePixmap(depth: depth, pid: pid, drawable: 0x28,
+                                          width: 16, height: 16).encode(byteOrder: .lsbFirst))
+        }
+        _ = session.feed(CreateGC(cid: gcId, drawable: dstId,
+                                  valueMask: 0, valueList: []).encode(byteOrder: .lsbFirst))
+        // XSetClipMask(gc, maskPixmap): ChangeGC, clipMask bit, value = maskId.
+        _ = session.feed(ChangeGC(gc: gcId, valueMask: GCBits.clipMask,
+                                  valueList: [UInt8(maskId & 0xFF), UInt8((maskId >> 8) & 0xFF),
+                                              UInt8((maskId >> 16) & 0xFF), UInt8((maskId >> 24) & 0xFF)])
+                            .encode(byteOrder: .lsbFirst))
+
+        _ = session.feed(CopyPlane(srcDrawable: srcId, dstDrawable: dstId, gc: gcId,
+                                   srcX: 0, srcY: 0, dstX: 0, dstY: 0,
+                                   width: 16, height: 16, bitPlane: 1).encode(byteOrder: .lsbFirst))
+
+        XCTAssertEqual(bridge.calls.count, 1, "CopyPlane must reach bridge.drawPutImage")
+        XCTAssertEqual(bridge.calls[0].clipMaskPixmap, maskId,
+                       "CopyPlane must thread the GC clip-mask pixmap to the bridge")
     }
 
     /// ZPixmap depth=8 was the vintage PseudoColor motifbur menu-icon path.

@@ -40,6 +40,14 @@ public struct ServerConfig: Sendable {
     /// `Region.scaledToDevice(by:)` use this. Always ≥ 1.
     public var deviceScale: Int32 { max(1, Int32(scaleFactor.rounded())) }
 
+    /// Depth of the root window / default visual, as advertised in
+    /// SetupAccepted (`Screen.rootDepth`). 24 since the 2026-06-13 TrueColor
+    /// switch. GetGeometry answers this for the root and for CopyFromParent
+    /// (depth-0) windows so it can't disagree with GetImage/PutImage/CopyPlane,
+    /// which all assume 24 — the pre-fix `8` here caused BadMatch when a client
+    /// sized an XImage from GetGeometry. See CODE_AUDIT_2026-07 §1.
+    public var rootDepth: UInt8 { 24 }
+
     /// Default used by `ServerSession()` when no config is passed —
     /// scale=1 so test code that asserts directly on region values
     /// doesn't have to multiply through. The real (Cocoa-driven)

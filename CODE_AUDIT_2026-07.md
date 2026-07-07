@@ -56,7 +56,19 @@ crash vector, so not a blocker. Left as-is.
 
 ---
 
-## 1. Latent bugs the audit surfaced (verified, small, high-value)
+## 1. Latent bugs the audit surfaced — ✅ ALL FIXED 2026-07-06
+
+All seven latent bugs plus the two "fix now" behavior items (CopyPlane clip-mask,
+ssh PATH) and the shutdown-text cosmetics are fixed. Notable mechanics:
+`ServerConfig.rootDepth` gives GetGeometry one home for the advertised 24;
+`MachineOS.fsckStallMarkers` puts the per-OS fsck phrases in the exhaustive-switch
+profile (with a NetBSD regression test); FontMappings revert now routes through
+the shared backup-first `ResourceFileLoader.reseed`; the CopyPlane clip-mask
+reuses a new shared `clipMaskRects` bridge helper (dedups CopyArea's inline copy)
+and threads through `drawPutImage`, covered by a new CopyPlane-honors-clip-mask
+test. Full suite 1492 green.
+
+### Original findings (for reference)
 
 These are DEDUP findings where the copies already **diverged** — i.e. real bugs,
 not style. Each is a small, targeted fix.

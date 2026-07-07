@@ -464,6 +464,9 @@ public protocol WindowBridge: AnyObject, Sendable {
     /// Scanlines are 32-bit-aligned and MSB-first per our setup-reply
     /// advertisement (ServerConfig: bitmapFormatBitOrder=mostSignificant,
     /// bitmapFormatScanlinePad=32).
+    /// `clipMaskPixmap` (0 = none) is a depth-1 GC clip-mask: only mask bits =
+    /// 1 are drawn, positioned at the clip origin in the dst coord space. Used
+    /// by CopyPlane, which honors the GC clip-mask exactly as CopyArea does.
     func drawPutImage(
         target: DrawTarget,
         sourceData: [UInt8],
@@ -471,7 +474,10 @@ public protocol WindowBridge: AnyObject, Sendable {
         dstX: Int16, dstY: Int16,
         leftPad: UInt8,
         foreground: RGB16, background: RGB16,
-        clipRectangles: [Rectangle]?
+        clipRectangles: [Rectangle]?,
+        clipMaskPixmap: UInt32,
+        clipMaskOriginX: Int16,
+        clipMaskOriginY: Int16
     )
 
     /// Blit pre-resolved ARGB pixels into the drawable. Used by the ZPixmap
@@ -802,7 +808,10 @@ public extension WindowBridge {
         dstX: Int16, dstY: Int16,
         leftPad: UInt8,
         foreground: RGB16, background: RGB16,
-        clipRectangles: [Rectangle]?
+        clipRectangles: [Rectangle]?,
+        clipMaskPixmap: UInt32,
+        clipMaskOriginX: Int16,
+        clipMaskOriginY: Int16
     ) {}
     func drawPutImageARGB(
         target: DrawTarget,

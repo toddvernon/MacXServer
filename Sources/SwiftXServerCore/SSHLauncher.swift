@@ -27,6 +27,11 @@ public enum SSHLaunchError: Error, LocalizedError, Sendable {
 public final class SSHLauncher: @unchecked Sendable {
     private let entry: LauncherEntry
     private let displayString: String
+    /// Guest X bin dirs, prepended to PATH so a bare `xterm`/`dtterm` resolves
+    /// under sshd's minimal non-login PATH. Per-OS (from `MachineOS.xBinDirs`);
+    /// defaults to the Solaris set to match HeliosLauncher. Without this a
+    /// command that worked over telnet/helios could fail over ssh only.
+    private let xBinDirs: String
     private var process: Process?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
@@ -36,9 +41,11 @@ public final class SSHLauncher: @unchecked Sendable {
     private var textCallback: ((String, Bool) -> Void)?
     private var stderrBuffer = ""
 
-    public init(entry: LauncherEntry, displayString: String) {
+    public init(entry: LauncherEntry, displayString: String,
+                xBinDirs: String = "/usr/openwin/bin:/usr/dt/bin:/usr/bin/X11") {
         self.entry = entry
         self.displayString = displayString
+        self.xBinDirs = xBinDirs
     }
 
     public func onStatus(_ callback: @escaping (String) -> Void) {
@@ -51,7 +58,7 @@ public final class SSHLauncher: @unchecked Sendable {
 
     public func launch(completion: @escaping (Result<Void, Error>) -> Void) {
         self.completion = completion
-        let args = Self.buildArguments(entry: entry, displayString: displayString)
+        let args = Self.buildArguments(entry: entry, displayString: displayString, xBinDirs: xBinDirs)
         reportStatus("Spawning: ssh \(args.joined(separator: " "))")
         reportText("ssh " + args.joined(separator: " ") + "\n", bold: true)
 
@@ -129,7 +136,8 @@ public final class SSHLauncher: @unchecked Sendable {
     /// Build the ssh argv. Public so the unit test can pin the exact form;
     /// keeping it static and pure makes the construction trivially testable
     /// without driving an actual ssh process.
-    public static func buildArguments(entry: LauncherEntry, displayString: String) -> [String] {
+    public static func buildArguments(entry: LauncherEntry, displayString: String,
+                                      xBinDirs: String = "/usr/openwin/bin:/usr/dt/bin:/usr/bin/X11") -> [String] {
         // Wrap in /bin/sh -c '...' so the syntax is Bourne regardless of
         // the remote user's login shell. Without this, accounts whose
         // login shell is csh/tcsh (a common Unix-old-school setup) reject
@@ -137,7 +145,11 @@ public final class SSHLauncher: @unchecked Sendable {
         // Same wrap as the telnet path; same single-quote gotcha applies
         // (a literal single quote inside `command` breaks the wrap; the
         // seed comment in DefaultLaunchers documents the workaround).
-        let inner = "DISPLAY=\(displayString); export DISPLAY; " +
+        // Prepend the guest's X bin dirs: sshd runs a non-login shell with a
+        // minimal PATH, so a bare `xterm` that resolves over telnet/helios
+        // (which prepend it) would otherwise not be found over ssh.
+        let inner = "PATH=\(xBinDirs):$PATH; export PATH; " +
+                    "DISPLAY=\(displayString); export DISPLAY; " +
                     "nohup \(entry.command) </dev/null >/dev/null 2>&1 &"
         let remote = "/bin/sh -c '\(inner)'"
         return [

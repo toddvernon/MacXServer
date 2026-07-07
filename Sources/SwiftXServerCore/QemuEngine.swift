@@ -145,13 +145,8 @@ public final class QemuEngine: @unchecked Sendable {
     // systems", the BSD guests differ. The authoritative "it stopped" signal is
     // qemu exiting; the markers only refine the clean/unclean label.
 
-    /// Console phrase Solaris prints when boot-time fsck can't preen a dirty
-    /// filesystem and drops to the maintenance shell for a human. The guest
-    /// never reaches multiuser, so the daemon never starts and `hello` never
-    /// answers -- detecting this lets us declare the boot stalled immediately
-    /// instead of waiting out the readiness budget. It's the *failure* phrase,
-    /// not bare "fsck": a clean boot runs a routine preen check too.
-    static let fsckStallMarker = "RUN fsck MANUALLY"
+    // The fsck-stall failure phrases moved to `MachineOS.fsckStallMarkers`
+    // (per-OS: the SVR4 and NetBSD wordings differ). See indicatesFsckStall.
 
     /// How long to wait for the guest to answer `hello` before declaring the
     /// boot stalled. ~4 min covers a slow emulated-SPARC 2.6 boot (close enough
@@ -273,11 +268,15 @@ public final class QemuEngine: @unchecked Sendable {
         DispatchQueue.global(qos: .userInitiated).async {
             let client = HeliosClient(port: port, timeout: 10, secret: secret)
             defer { client.close() }
-            // Same shape as HeliosLauncher: prepend the guest's X bin dirs (per-OS,
-            // from the profile), set DISPLAY, background detached so run_command
-            // returns at once.
+            // Console-convenience xterm to root at the qemu-gateway DISPLAY
+            // (deliberately not machine-configurable — this is the debug path).
+            // Prepend the guest's per-OS X bin dirs, set DISPLAY, chdir into
+            // HOME (run_command leaves cwd at the daemon's `/`, so without this
+            // xterm opens in / and its prompt looks like a bare root shell —
+            // same fix as HeliosLauncher.remoteCommand), background detached.
             let cmd = "PATH=\(xBinDirs):$PATH; export PATH; " +
                       "DISPLAY=10.0.2.2:0; export DISPLAY; " +
+                      "cd \"$HOME\" 2>/dev/null; " +
                       "nohup xterm </dev/null >/dev/null 2>&1 &"
             do {
                 try client.connect()
@@ -873,10 +872,11 @@ public final class QemuEngine: @unchecked Sendable {
     }
 
     /// True when the console shows the boot-time fsck maintenance drop. Keyed on
-    /// the failure phrase, not bare "fsck" (a clean boot preens routinely).
-    /// Internal for unit testing.
-    static func indicatesFsckStall(_ text: String) -> Bool {
-        text.contains(fsckStallMarker)
+    /// the OS's failure phrase(s), not bare "fsck" (a clean boot preens
+    /// routinely). Markers are per-OS (`MachineOS.fsckStallMarkers`) — the SVR4
+    /// and NetBSD wordings differ. Internal for unit testing.
+    static func indicatesFsckStall(_ text: String, markers: [String]) -> Bool {
+        markers.contains { text.contains($0) }
     }
 
     /// Cosmetic boot progress (0...~0.9) from console milestones. Internal for
@@ -1085,7 +1085,8 @@ public final class QemuEngine: @unchecked Sendable {
         // fsck couldn't preen a dirty filesystem and dropped to maintenance:
         // the boot is wedged and the daemon will never come up. Declare it
         // stalled now rather than waiting out the readiness budget.
-        if !ready, !bootStalled, Self.indicatesFsckStall(consoleTail) {
+        if !ready, !bootStalled,
+           Self.indicatesFsckStall(consoleTail, markers: config.profile.fsckStallMarkers) {
             markBootStalled("filesystem check failed (RUN fsck MANUALLY)")
         }
 

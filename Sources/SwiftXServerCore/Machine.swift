@@ -99,6 +99,23 @@ public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
         }
     }
 
+    /// Console phrases that positively signal a boot has WEDGED at an
+    /// interactive fsck prompt (multiuser never reached → the daemon never
+    /// starts → `hello` never answers), so the host can declare the boot
+    /// stalled immediately instead of waiting out the full readiness budget.
+    /// Matched as substrings (any one). It's the *failure* phrase, not bare
+    /// "fsck" — a clean boot runs a routine preen check too. Per-OS because the
+    /// wording differs: SVR4 says "RUN fsck MANUALLY", NetBSD's fsck_ffs says
+    /// "RUN fsck_ffs MANUALLY" (the Solaris literal silently never matched on
+    /// NetBSD — same Solaris-default-on-all-guests class as the shutdown bug).
+    public var fsckStallMarkers: [String] {
+        switch self {
+        case .solaris26: return ["RUN fsck MANUALLY"]
+        case .sunos414:  return ["RUN fsck MANUALLY"]
+        case .netbsd:    return ["RUN fsck_ffs MANUALLY", "RUN fsck MANUALLY"]
+        }
+    }
+
     /// PATH prefix so a bare `xterm` / `dtterm` resolves under the daemon's
     /// minimal env. Solaris ships OpenWindows + CDE; SunOS 4.1.4 has OpenWindows +
     /// MIT X but no CDE (`/usr/dt`); NetBSD ships X under `/usr/X11R7`.

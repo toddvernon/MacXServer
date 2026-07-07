@@ -250,6 +250,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // control surface.
             self.consoles.removeValue(forKey: id)?.close()
             self.dnsAdminControllers.removeValue(forKey: id)?.close()
+            // File-browser windows are keyed "<machine-id>/<launcher>" (one per
+            // browsable launcher), so evict every key for this machine or its
+            // windows linger holding the dead machine's host/port/user.
+            let prefix = "\(id.uuidString)/"
+            for key in self.fileBrowserControllers.keys where key.hasPrefix(prefix) {
+                self.fileBrowserControllers.removeValue(forKey: key)?.close()
+            }
             if self.machinesModel?.selection == id { self.machinesModel?.selection = nil }
             self.afterMachineMutation()
         }
@@ -1104,7 +1111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// against both.
     private func heliosSecret(host: String, user: String, port: UInt16) -> String? {
         let h = host.lowercased()
-        if h == "127.0.0.1" || h == "localhost" || h == "::1" {
+        if Self.isLoopbackHost(h) {
             guard let registry else { return nil }
             let owner = registry.machines.first {
                 $0.kind == .emulatedVM && $0.resolvedPorts.helios == port
@@ -1203,7 +1210,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case .telnet:
             launcher = TelnetLauncher(entry: entry, password: password, displayString: display)
         case .ssh:
-            launcher = SSHLauncher(entry: entry, displayString: display)
+            launcher = SSHLauncher(entry: entry, displayString: display,
+                                   xBinDirs: (os ?? .solaris26).xBinDirs)
         case .helios:
             // Same loopback-only rule as the file browser: an emulated guest's
             // per-launch secret goes only to its loopback hostfwd, not a real
@@ -1595,7 +1603,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         switch alert.runModal() {
         case .alertFirstButtonReturn:  attemptHeliosShutdown(machine: machine, lock: lock, image: image)
         case .alertSecondButtonReturn: forceQuitOrphan(machine: machine, lock: lock, image: image)
-        case .alertThirdButtonReturn:  showManualShutdownInstructions(telnetPort: machine.resolvedPorts.telnet)
+        case .alertThirdButtonReturn:  showManualShutdownInstructions(telnetPort: machine.resolvedPorts.telnet, os: machine.os)
         default: break
         }
     }
@@ -1656,7 +1664,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let progress = SparcShutdownProgressWindowController(
             totalSeconds: total,
             onForceQuit: { [weak self] in self?.forceQuitFromProgress(machine: machine, lock: lock, image: image) },
-            onShowManual: { [weak self] in self?.showManualFromProgress(telnetPort: machine.resolvedPorts.telnet) },
+            onShowManual: { [weak self] in self?.showManualFromProgress(telnetPort: machine.resolvedPorts.telnet, os: machine.os) },
             onCancel: { [weak self] in self?.cancelShutdownWait() })
         sparcShutdownProgress = progress
         progress.showWindow()
@@ -1702,9 +1710,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// Show Me How chosen from the progress panel: tear down and show the
     /// manual telnet steps.
-    private func showManualFromProgress(telnetPort: UInt16) {
+    private func showManualFromProgress(telnetPort: UInt16, os: MachineOS? = nil) {
         sparcShutdownProgress?.close(); sparcShutdownProgress = nil
-        showManualShutdownInstructions(telnetPort: telnetPort)
+        showManualShutdownInstructions(telnetPort: telnetPort, os: os)
     }
 
     /// Cancel chosen from the progress panel: stop waiting and leave the orphan
@@ -1713,17 +1721,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sparcShutdownProgress?.close(); sparcShutdownProgress = nil
     }
 
-    private func showManualShutdownInstructions(telnetPort: UInt16) {
+    private func showManualShutdownInstructions(telnetPort: UInt16, os: MachineOS? = nil) {
         let alert = NSAlert()
         alert.messageText = "Shut down the running guest by hand"
+        // The exact halt command is per-OS (init 5 on Solaris, halt on the
+        // BSDs); show the guest's own when we know it (CODE_AUDIT §1).
+        let haltCmd = os?.shutdownCommand ?? "init 5"
         var text = "In Terminal, connect to the running guest and halt it. Solaris 2.6 "
         text += "refuses a direct root telnet login, so log in as a normal user and "
         text += "then su to root:\n\n"
         text += "    telnet 127.0.0.1 \(telnetPort)\n"
         text += "    (log in as a user, then:)\n"
         text += "    su -\n"
-        text += "    init 5\n\n"
-        text += "(On a BSD guest, use halt instead of init 5.) Once it powers off, start the "
+        text += "    \(haltCmd)\n\n"
+        if os == nil {
+            text += "(On a BSD guest, use halt instead of init 5.) "
+        }
+        text += "Once it powers off, start the "
         text += "machine again. If telnet won\u{2019}t connect, use Force Quit instead (it risks "
         text += "a disk check on the next boot)."
         alert.informativeText = text

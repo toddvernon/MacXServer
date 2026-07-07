@@ -143,10 +143,20 @@ final class FontMappingsPanelModel: ObservableObject {
 
     func revert() {
         do {
-            try DefaultFontMappings.seedContent.write(toFile: path, atomically: true, encoding: .utf8)
+            // Back the current file up to <path>.bak before overwriting, same as
+            // the Resources/Preferences editors — a direct write here used to
+            // destroy the user's edits with no recovery (CODE_AUDIT §1).
+            let backupPath = try ResourceFileLoader.reseed(
+                path: path,
+                seed: DefaultFontMappings.seedContent
+            )
             loadFromDisk()
             FontResolver.installMappings()
-            setBanner("Reverted to bundled defaults.", error: false)
+            if let backupPath {
+                setBanner("Reverted to bundled defaults. Previous file backed up to \(backupPath).", error: false)
+            } else {
+                setBanner("Reverted to bundled defaults.", error: false)
+            }
         } catch {
             setBanner("Revert failed: \(error.localizedDescription)", error: true)
         }
