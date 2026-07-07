@@ -121,7 +121,17 @@ pre-release); ssh launcher gets no per-OS PATH prepend that telnet/helios get
 
 ---
 
-## 2. DELETE — dead code (Periphery scan pending; these are the semantic finds)
+## 2. DELETE — dead code — ✅ DONE 2026-07-06
+
+Deleted `_unused_blitWindowRegion`, `CDEResourceManagerFixture` + test; moved
+`gatekeeper-probe.sh` → archive/ and `x11perf-survey.sh` → scripts/; fixed the
+trivial write-only `pos` and the `backPixel` var→let. SelectionMediator stub path
+kept (defensive + tested) but its doc-block de-trapped — see §5 commit. Periphery
+also flagged 140 "unused" (mostly Framer's deliberately-symmetric encode/decode —
+false positives, left alone) and 240 "redundant public" (the §4 access-tightening
+pass, deferred post-release).
+
+### Original finds (reference)
 
 - **`_unused_blitWindowRegion`** — `CocoaWindowBridge.swift:3085`, ~110 lines.
   Superseded by `blitWindowRegion` (shipped default-ON 2026-06-04), which
@@ -147,7 +157,14 @@ pre-release); ssh launcher gets no per-OS PATH prepend that telnet/helios get
 - Trivial: `LauncherTokenizer.swift:16` `var pos` written never read;
   `ServerSession.swift:4370` `var backPixel` should be `let`.
 
-## 2a. Migration leftovers — needs-Todd (deliberate legacy vs zombie)
+## 2a. Migration leftovers — ✅ DONE 2026-07-06 (Todd: do all)
+
+Launchers dotfile no longer reseeded every launch (seed only when machines.json
+is absent); SPARCPLUG_DISK_IMAGE / SPARCPLUG_TFTP_DIR now win over the machine's
+values again on the app path; sparcplug.diskImagePath given a removal horizon in
+SHORTCUTS.
+
+### Original finds (reference)
 
 - **`~/.macxserver-launchers` reseeded on every launch.** `loadOrSeed`
   (`LauncherFile.swift:240`) rewrites the legacy dotfile whenever absent, every
@@ -165,7 +182,26 @@ pre-release); ssh launcher gets no per-OS PATH prepend that telnet/helios get
 
 ---
 
-## 3. DEDUP — repeated code worth one home (no divergence found yet)
+## 3. DEDUP — repeated code worth one home
+
+**Status 2026-07-06:** the divergence-bug dedups (they were latent bugs) all
+landed in §1 — CopyPlane clip-mask via a shared `clipMaskRects` helper,
+FontMappings revert via the shared `ResourceFileLoader.reseed`, GetGeometry via
+`ServerConfig.rootDepth`, fsck marker via `MachineOS.fsckStallMarkers`. Plus the
+`opcodeOf` dedup (~125 lines) is done.
+
+**Remaining is pure cleanliness, NOT bugs — deliberately NOT done this pass.**
+The LOW-risk ones (text-pipeline core, window-cache `showOrCreate`, `MachineGates`,
+`HandlerList`) are safe mechanical extractions worth doing when there's appetite.
+The MEDIUM-risk ones (paint-region-bg + emit-Expose cascade ×4, X-root↔NSScreen
+placement + pointer-coordinate scale unification, Dumper stream-walk rewrite,
+y-flip backing-context factory) all change working rendering/geometry code and
+the audit flagged each as needing live verification (dtpad/quickplot resize
+eyeball, Studio-Display-vs-laptop mixed-DPI). Doing those blind right before
+release is the wrong trade. Recommend: pick these up post-release, or pair each
+with a live-fixture run. The list below is the original inventory.
+
+### Inventory (reference)
 
 Ordered by drift-cost. All LOW risk unless noted.
 
@@ -251,7 +287,15 @@ SwiftXCaptureUI declares Package deps it never imports (one-line manifest fix).
 
 ---
 
-## 5. LEDGER — doc/comment drift (cheap, do in the cleanup batches)
+## 5. LEDGER — doc/comment drift — ✅ swift-x DONE 2026-07-06 (SPARCplug pending)
+
+All swift-x items done (blitWindowRegion comments, SHORTCUTS ColorTable/impersonation,
+AppDelegate deleted-UI comments, ServerSession line-number citation, GPL_SOURCE
+pointer). The SPARCplug-repo items below (helios/README stale port block,
+gold.sha256, expand runbooks at root) are NOT yet done — separate repo, low
+priority, no code risk.
+
+### Items (reference)
 
 - SHORTCUTS.md:211 says the ColorTable CDE palette is "still in code but
   dormant" — deleted 2026-06-13 (TrueColor rewrite); same entry says the
