@@ -319,13 +319,22 @@ private struct MachineOverviewPage: View {
                     FlowLayout(spacing: 6) {
                         ForEach(row.launchers) { chip in
                             Button {
-                                model.onLaunch?(row.id, chip.id)
+                                model.onLaunch?(row.id, chip.id, false)
                             } label: {
                                 Label(chip.name, systemImage: "terminal")
                                     .labelStyle(.titleAndIcon)
                             }
                             .buttonStyle(.bordered)
                             .disabled(!chip.enabled)
+                            // Verbose is a launch gesture, not launcher config:
+                            // right-click streams this one launch's transcript
+                            // to a live progress window.
+                            .contextMenu {
+                                Button("Run with Progress Window") {
+                                    model.onLaunch?(row.id, chip.id, true)
+                                }
+                                .disabled(!chip.enabled)
+                            }
                         }
                     }
                 }

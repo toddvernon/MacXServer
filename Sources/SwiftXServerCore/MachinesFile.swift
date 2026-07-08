@@ -71,14 +71,18 @@ public enum MachineMigrator {
                     name: entry.name,
                     command: entry.command.isEmpty ? nil : entry.command,
                     // Only pin a transport when it differs from the machine's.
-                    transport: entry.transport == machineTransport ? nil : entry.transport,
-                    verbose: entry.verbose,
-                    password: entry.password)
+                    // (Legacy verbose doesn't migrate: the progress window is a
+                    // launch-time gesture now, not launcher config.)
+                    transport: entry.transport == machineTransport ? nil : entry.transport)
             }
             machines.append(Machine(
                 name: group.label, kind: kind, os: os,
                 host: first.host, user: first.user, transport: machineTransport,
                 display: first.display,
+                // The password is machine-level now (one credential per
+                // user@host); the old file carried it per-entry, so take the
+                // first one set.
+                password: group.entries.compactMap(\.password).first { !$0.isEmpty },
                 ports: portsFor(kind: kind, os: os, transport: machineTransport, port: first.port),
                 imagePath: (loopback && !bundledImagePath.isEmpty) ? bundledImagePath : nil,
                 launchers: launchers))

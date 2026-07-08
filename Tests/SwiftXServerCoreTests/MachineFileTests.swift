@@ -138,6 +138,73 @@ final class MachineFileTests: XCTestCase {
         XCTAssertEqual(round.machines[0].shellPrompt, "tvernon]")
     }
 
+    /// A legacy per-launcher `verbose` key (config until 2026-07-08; the
+    /// progress window is a launch gesture now) is ignored on decode and
+    /// never re-encoded.
+    func testLegacyVerboseKeyIgnoredAndDropped() throws {
+        let file = try MachinesFile.decode("""
+        { "machines": [ { "name": "box", "kind": "externalHost",
+                          "host": "10.0.0.5", "user": "a", "launchers": [
+            { "name": "xterm", "command": "xterm", "verbose": true } ] } ] }
+        """)
+        XCTAssertEqual(file.machines[0].launchers.count, 1)
+        XCTAssertFalse(MachinesFile(machines: file.machines).encoded().contains("verbose"))
+    }
+
+    /// The machine-level password reaches telnet entries and round-trips
+    /// through the JSON (moved up from the launchers 2026-07-08; one
+    /// credential per user@host).
+    func testMachinePasswordReachesTelnetEntryAndRoundTrips() throws {
+        var m = Machine(name: "ipc", kind: .externalHost, host: "ipc.example.com",
+                        user: "tvernon", transport: .telnet,
+                        launchers: [MachineLauncher(name: "xterm", command: "xterm")])
+        m.password = "hunter2"
+        let (entries, warnings) = m.resolvedEntries()
+        XCTAssertEqual(entries[0].password, "hunter2")
+        XCTAssertTrue(warnings.isEmpty)
+        let round = try MachinesFile.decode(MachinesFile(machines: [m]).encoded())
+        XCTAssertEqual(round.machines[0].password, "hunter2")
+    }
+
+    /// Only the telnet flow injects the password: an ssh launcher on a telnet
+    /// machine gets none (and so no ssh-with-password warning).
+    func testMachinePasswordNotInjectedForSsh() {
+        var m = Machine(name: "ipc", kind: .externalHost, host: "ipc.example.com",
+                        user: "tvernon", transport: .telnet,
+                        launchers: [MachineLauncher(name: "remote", command: "xterm",
+                                                    transport: .ssh)])
+        m.password = "hunter2"
+        let (entries, warnings) = m.resolvedEntries()
+        XCTAssertNil(entries[0].password)
+        XCTAssertTrue(warnings.isEmpty)
+    }
+
+    /// Legacy per-launcher passwords (the 2026-07-07 migration seeded one on
+    /// every launcher) lift to the machine on decode and never re-encode.
+    func testLegacyLauncherPasswordsLiftToMachineAndDrop() throws {
+        let file = try MachinesFile.decode("""
+        { "machines": [ { "name": "ipc", "kind": "externalHost",
+                          "host": "ipc.example.com", "user": "tvernon",
+                          "transport": "telnet", "launchers": [
+            { "name": "xterm cyan", "command": "xterm", "password": "hunter2" },
+            { "name": "xterm blue", "command": "xterm", "password": "hunter2" } ] } ] }
+        """)
+        let m = file.machines[0]
+        XCTAssertEqual(m.password, "hunter2")
+        XCTAssertTrue(m.launchers.allSatisfy { $0.password == nil })
+        // An explicit machine-level password wins over stale launcher copies.
+        let explicit = try MachinesFile.decode("""
+        { "machines": [ { "name": "ipc", "kind": "externalHost",
+                          "host": "ipc.example.com", "user": "tvernon",
+                          "password": "correct", "launchers": [
+            { "name": "xterm", "command": "xterm", "password": "stale" } ] } ] }
+        """)
+        XCTAssertEqual(explicit.machines[0].password, "correct")
+        // The re-encoded file carries the password once, at machine level.
+        let encoded = MachinesFile(machines: [m]).encoded()
+        XCTAssertEqual(encoded.components(separatedBy: "\"password\"").count - 1, 1)
+    }
+
     // MARK: - makeEngineConfig
 
     func testEngineConfigForEmulatedVM() {
@@ -211,6 +278,7 @@ final class MachineFileTests: XCTestCase {
         host      = u5.example.com
         user      = alice
         transport = telnet
+        password  = swordfish
 
         [u5/xterm]
         command = xterm
@@ -228,6 +296,9 @@ final class MachineFileTests: XCTestCase {
         XCTAssertNil(u5?.image)
         XCTAssertEqual(u5?.transport, .telnet)
         XCTAssertEqual(u5?.launchers.count, 1)
+        // The old per-entry password lands on the machine, not the launcher.
+        XCTAssertEqual(u5?.password, "swordfish")
+        XCTAssertNil(u5?.launchers.first?.password)
     }
 
     func testMigrationClassifiesWithoutSeedingBundled() {

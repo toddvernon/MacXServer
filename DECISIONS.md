@@ -1289,6 +1289,47 @@ doctrine as image detection on emulated VMs.
 
 ---
 
+## 2026-07-08: Telnet password is a machine-level field, edited in Settings → Connection
+
+The 2026-07-07 launcher slimming dropped the password from the launcher
+editor but left the per-launcher `password` key in the model, so the
+passwords the migration had seeded (one copy on EVERY launcher of a box —
+Todd's live file had 92) kept working with no way to edit them. The password
+is a credential for the machine's user@host, and launchers can't override
+either, so per-launcher copies were pure duplication — same reasoning that
+moved `display`, `fileBrowser`, and `shellPrompt` up. Now: `Machine.password`
+(optional, cleartext in machines.json, same trust level the old launchers
+file had), edited via a Password secure-field with a Show checkbox in
+Settings → Connection, shown when telnet is in play, right next to Prompt.
+Legacy per-launcher keys are lifted on load (first non-empty wins, an
+explicit machine key wins over stale launcher copies) and never re-encoded,
+mirroring the `fileBrowser` drop. Resolution injects the password only into
+telnet entries — ssh stays keys-only (no spurious ssh-with-password
+warnings), helios has its own secret. Blank keeps the old contract: prompt
+on first launch, store in the Keychain (Debug builds: the 0600 dev-secrets
+file, since ad-hoc signing churn makes the real Keychain unusable in
+development).
+
+---
+
+## 2026-07-08: Verbose is a launch gesture, not launcher config
+
+The per-launcher `verbose` flag (persisted in machines.json, edited via a
+toggle in the launcher sheet) is gone. You want the live progress window
+when you're debugging a launcher, not as a standing property of it — the
+old flow meant open editor, toggle on, launch, open editor, toggle off.
+Now: right-click a launcher (the Overview chips, and the X11 Launchers rows
+on the Settings page) → "Run with Progress Window" streams that one
+launch's transcript live; a plain click runs silently. Todd's call. The
+verbose bit rides the launch path as a parameter (`onLaunch(id, name,
+verbose)`), nothing is persisted, and a legacy `verbose` key in
+machines.json is ignored on decode and dropped on the next save (same
+treatment as `memoryMB` / per-launcher `display`). The failure-path
+transcript is unaffected: every launch still captures a bounded transcript
+and a failing silent launch still shows its tail in the error dialog.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

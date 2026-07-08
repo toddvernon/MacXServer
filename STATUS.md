@@ -1,119 +1,101 @@
-# Status 2026-07-07
+# Status 2026-07-08
 
-## Headline: heliosAgent 0.2.0 (sysinfo verb) shipped + validated on all three guests. macXserver grew the whole admin plane: Admin Agents on the Overview (File Transfer + DNS), a 3-minute helios prober driving external dots + a live System line, OS auto-detect from the box's own uname, and the admin-verb availability rule. Plus a big console/UX day: per-OS boot-progress transcripts, the console-slowness mystery SOLVED (it was never the UART), barber-pole thermometers, launcher-def slimming. ONE PINNED REGRESSION: telnet launchers (see below).
+## Headline: helios agent 0.2.0 is live on the ENTIRE real Sun fleet (11
+machines) and the telnet-launcher regression is closed. The machine editor got
+its password field back (machine-level now, with a one-shot lift from the old
+per-launcher keys), verbose became a right-click launch gesture instead of
+persisted config, and the launcher progress window states its wire facts. The
+ss5 no-xterm mystery unwound into two separate bugs (stale 0.1.0 agent + a
+colon-less DISPLAY), both fixed.
 
-## What's working / done this session
+## Fleet / hardware
 
-### heliosAgent 0.2.0 (cx repo, commit 12741e7)
-- New `sysinfo` verb: uname, hostid, memMB, swap, load, disk fullness, guest
-  clock, agent uptime. Fork-free by design (syscalls/libc; nlist + /dev/kmem
-  on SunOS 4, the ps/pstat technique). Every field independently optional --
-  a failed collector omits its field, verb always ok:true, hello untouched as
-  the liveness signal. The agent gates everything, so stats can never make it
-  worse; the SunOS bogus-kernel fault drill proves it (fields absent, agent
-  fine).
-- Built + unit-tested on macOS (155/0), NetBSD (155/0), Solaris 2.6 (151/0),
-  SunOS 4.1.4 (151/0); deployed to all three guest images; every number
-  cross-checked against native tools. SunOS C++ gotcha recorded: K&R headers
-  declare struct statfs/nlist but not the functions -- extern "C" prototypes
-  required.
-- Todd installed 0.2.0 on the real SS5 (ss1.vernon.com). Secret file is in
-  /etc/helios/helios.json; the agent reads it ONCE at startup, so it needs a
-  restart after the file lands (/etc/init.d/heliosAgent restart) -- was
-  pending at session end, orange dot until then.
+- heliosAgent deployed on all 11 real machines: ipc, ipx, ipx2, lx, ss1, ss2,
+  ss10, ss20, ss5, u1, u5. Fleet complete.
+- u5 revived: new NVRAM battery + idprom reprogram. Open puzzle: the previous
+  battery was only ~3 months old and the machine ran continuously (battery is
+  only drawn while powered OFF), so suspect a leakage path in the battery
+  hack -- classic culprit is the dead internal cell in the M48T59 not being
+  isolated, draining the new coin cell in parallel. If this battery dies fast
+  too, that's the confirmation.
+- ss5 had been quietly running agent 0.1.0 (a redeploy never actually landed /
+  restarted the daemon -- uptime proved it was the same 2-day-old process).
+  0.2.0 now deployed: OS auto-detects (sunos414), DNS admin lights up.
+- Vintage lesson re-learned: SunOS 4.x DES crypt only reads the FIRST 8 chars
+  of a password. A "wrong" test password that differs after char 8 logs in
+  fine. Make test passwords wrong early in the string.
 
-### macXserver admin plane (swift-x)
-- **Admin Agents section** on the Overview: File Transfer (the helios file
-  browser, no launcher config needed anymore) and DNS (moved here from
-  Settings). Availability rule (DECISIONS 2026-07-07): admin verbs need the
-  box ANSWERING over helios (emulated = ready; external = last probe's hello
-  succeeded, which under fail-closed auth also proves the secret), plus a
-  known OS for OS-sensitive verbs (DNS).
-- **Helios prober**: every 3 min (plus at launch, after mutations, secret
-  changes, guest-ready) hellos every candidate box off-main. External dots:
-  green = agent answering, orange = agent alive but REFUSED THE SECRET (very
-  actionable), hollow red = not responding, gray = never probed. sysinfo
-  feeds a monospace System line on the Overview (uname, MB, load, swap %,
-  fullest disk, clock drift vs the Mac).
-- **OS auto-detect**: an external box's sysinfo uname maps to MachineOS and
-  auto-populates + locks the Settings OS picker ("Detected from the machine
-  over Helios"); manual picker remains for pre-0.2.0 agents. Stale-draft
-  protection so an open form can't clobber it.
-- **DNS window works on external hosts now** (was hardcoded loopback +
-  emulated-engine secret; host/secret/port providers all read live).
-- DISPLAY field placeholder shows what blank actually resolves to (this
-  server's address), still editable.
+## What changed in swift-x this session
 
-### Launcher definition slimmed + editor safety
-- Per-launcher `display` and `fileBrowser` are GONE (machine DISPLAY is the
-  only level; File Transfer is automatic). Legacy keys ignored/dropped on
-  load; old launcher-file migration skips filebrowser entries. Editor is
-  name/command/transport/verbose/password.
-- machine-level `shellPrompt` field reintroduced (Settings > Connection >
-  Prompt, shown when telnet is in play): the per-launcher shell_prompt key
-  died with the old launchers file and the hardcoded "$ " default is sh-only.
-  Telnet launcher also auto-detects classic sigils ($ % # >) AND the fleet's
-  bracket csh prompt "[host:[user]:/cwd] ".
-- Launcher delete now confirms (the minus used to delete instantly).
-- Every launch captures a bounded transcript; a failing launch WITHOUT the
-  verbose window shows the last ~14 lines in the error dialog.
+### Telnet password is machine-level (DECISIONS 2026-07-08)
+- `Machine.password` (cleartext in machines.json, same trust level as the old
+  launchers file). Edited in Settings > Connection, next to Prompt, shown when
+  telnet is in play: secure field + "Show" checkbox.
+- One-shot lift on load: legacy per-launcher password keys (the migration had
+  seeded the same password onto EVERY launcher -- my live file had 92 copies)
+  move to the machine, never re-encode. Old launcher-file migration lifts too.
+- Injection is telnet-only at resolve time: ssh stays keys-only (no spurious
+  warnings), helios has its own secret. Blank = prompt on first launch ->
+  Keychain (Debug builds: the 0600 dev-secrets file).
+- The field commits AS YOU TYPE (like the autoBackup toggle). The first cut
+  waited for Return/pane-exit and I proved the hole immediately: typed a wrong
+  password, launched from the menu, old password silently used. The other text
+  fields still commit on Return/exit only -- fine for visible text, watch it.
 
-### Console + boot UX (morning half)
-- **Console slowness SOLVED**: never the UART. QemuEngine.ingest was doing an
-  8KB tail re-copy + ~55 substring scans PER BYTE (qemu's ESCC delivers
-  byte-sized chunks), forever, even after ready. Now: marker work only while
-  booting/shutting down, scans only on newline chunks, lazy tail trim,
-  shutdown clears the tail. cm/vi in the console is now iTerm2-class.
-- **Per-OS boot/shutdown progress transcripts** (was Solaris-only, so BSD
-  boots parked the bar after OpenBIOS): ProgressReference switches
-  exhaustively on MachineOS; NetBSD kernel timestamps stripped by the parser;
-  pid/hostname traps documented in the tables.
-- Barber-pole thermometer (yellow/dark diagonal stripes, clock-locked shimmer)
-  in the Overview AND console windows while booting/shutting down; console
-  "Booting" dot yellow (was blue); "115200 baud" removed from console titles
-  (the ESCC doesn't pace); terminal grid got an 8pt black margin; file
-  browser is a normal window (was a hide-on-deactivate panel -- couldn't drag
-  from Finder).
-- Machines-window "Publishing changes from within view updates" fixed
-  (deferred List selection binding + deferred commit publish).
-- **Memory setting removed entirely**: every VM gets the SS-5's 256MB max
-  (qemu sun4m ceiling; DECISIONS 2026-07-07). Legacy memoryMB key ignored.
-- Xcode gotcha fixed + noted: deleting a source file needs `xcodegen` in the
-  same change (pbxproj is generated + tracked).
+### Verbose is a launch gesture, not launcher config (DECISIONS 2026-07-08)
+- `MachineLauncher.verbose` is gone (editor toggle too). Legacy key ignored on
+  decode, dropped on next save, same treatment as memoryMB.
+- Right-click a launcher -> "Run with Progress Window": Overview chips AND the
+  Settings-page X11 Launchers rows (rows also got plain "Run"). Plain click
+  runs silent. The bit rides onLaunch(id, name, verbose) -> executeLaunch.
+- Progress window header now states the wire facts in monospace:
+  "telnet . tvernon@ipc.vernon.com:23 . DISPLAY 192.168.7.5:0" -- transport,
+  account, port, and the DISPLAY actually handed to the client.
+
+### DISPLAY typo fix-up at the edit boundary
+- "desktop.vernon.com" without :0 is never valid X and fails brutally
+  silently (client dies at connect under nohup >/dev/null AFTER the launch
+  reports success -- exactly what ate ss5's xterms). The Settings DISPLAY
+  field now appends :0 on field exit when the display number is missing, so
+  the stored config matches what the field shows. Deliberately NOT a silent
+  resolve-time fixup (Todd's call; memory has the principle).
+
+## What's working / verified
+
+- Full suite green (swift test), including new coverage: password round-trip +
+  lift + telnet-only injection + machine-key-wins, legacy verbose drop.
+- Telnet launchers against the real fleet work end to end (the 2026-07-07
+  pinned regression is CLOSED -- machine shellPrompt + password did it).
+- ss5: OS detected, DNS admin enabled, xterms launch (after the DISPLAY fix).
+- File Transfer, DNS, System line all live across the fleet.
 
 ## What's broken / open
 
-- **PINNED REGRESSION -- telnet launchers vs the real SS5.** Login + password
-  go through (Keychain), but the dialog transcript shows NO prompt bytes
-  arriving after the SunOS banner within the 15s window, so "timed out
-  waiting for shell prompt" even after the bracket-prompt detection landed.
-  Needs a live byte-level look at what follows the banner (telnetd
-  negotiation? buffered echo? build staleness?). The transcript-in-dialog
-  feature is the tool for the job. Todd: "sort out later."
-- SS5 agent restart pending (see above) -- orange dot until done.
-- swift test 1500 pass, swift build clean. REBUILD IN XCODE (many UI + model
-  changes).
+- SwiftUI/SourceKit shows stale phantom errors on Machine.password in the
+  editor until Xcode reindexes -- the compiler is fine, ignore the squiggles.
+- One manual step on the OTHER data front: nothing. machines.json migrated
+  itself (passwords lifted, verbose keys drop on next save).
+- u5 battery watch (see Fleet above).
+- Console windows are still hide-on-deactivate utility panels -- convert if it
+  annoys.
 
 ## What's next
-- The pinned telnet regression (first, it blocks SS5 launchers).
-- SS5: restart agent, watch dot go green + OS auto-populate + System line.
+
 - MCP bridge (still the standing next lead).
 - Image download implementation per IMAGE_DOWNLOAD_PLAN.md.
-- Console windows are still hide-on-deactivate utility panels (same class as
-  the file-browser fix) -- convert if it annoys.
+- nuc machine has no OS set (external, non-Sun) -- harmless, DNS stays dimmed
+  there by design.
 
 ## Committed this session
-- swift-x: see git log 2026-07-07 (console/boot UX commit + admin plane
-  commit on top of daab448).
-- cx heliosAgent: 12741e7 (sysinfo 0.2.0) + SYSINFO_PLAN.md.
-- SPARCplug: no changes.
+
+- swift-x: this session's commit on top of fce765c (password field + verbose
+  gesture + progress-window detail + DISPLAY fix-up + DECISIONS + tests).
+- SPARCplug, cx repos: no changes.
 
 ## Switching Macs
-- Laptop is synced as of the evening 2026-07-07 session: pulled to ec06df2,
-  reran xcodegen (no pbxproj drift), ready to build in Xcode. The desktop was
-  already pushed.
-- Let Dropbox finish syncing memory + the cx tree (memory got: sysinfo verb,
-  launcher-format update).
-- All guest VMs are powered off, no image locks. The real SS5 (ss1) runs
-  agent 0.2.0 with /etc/helios/helios.json secret "test" -- restart its agent
-  if not already done.
+
+- REBUILD IN XCODE (model + UI changes; also clears the SourceKit phantoms).
+- Let Dropbox finish syncing memory (fleet-deployment note, u5 battery
+  puzzle, normalize-at-edit-boundary principle) before opening the laptop.
+- No VMs running, no image locks. The fleet is all real hardware now and
+  stays up on its own.

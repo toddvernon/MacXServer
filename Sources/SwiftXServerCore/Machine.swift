@@ -168,8 +168,9 @@ public struct MachineLauncher: Equatable, Sendable, Codable {
     public var command: String?
     /// Override the machine's transport for just this command. nil = inherit.
     public var transport: LauncherTransport?
-    /// Show the per-launch progress window with the session transcript.
-    public var verbose: Bool
+    // (No `verbose` anymore, 2026-07-08: showing the progress window is a
+    // launch-time gesture -- right-click > Run with Progress Window -- not
+    // launcher config. A legacy `verbose` key is simply ignored on decode.)
     /// LEGACY (2026-07-07): file-browser launchers were replaced by the
     /// Overview's automatic Admin Agents > File Transfer. Decoded so old
     /// machines.json entries can be recognized and DROPPED on load (see
@@ -177,17 +178,22 @@ public struct MachineLauncher: Equatable, Sendable, Codable {
     /// per-launcher DISPLAY anymore either -- the machine's DISPLAY covers
     /// every launcher; a legacy `display` key is simply ignored on decode.
     public internal(set) var fileBrowser: Bool = false
-    /// Optional cleartext password (telnet dev convenience; ignored for ssh).
-    public var password: String?
+    /// LEGACY (2026-07-08): the password moved to the machine (it's a
+    /// credential for the machine's user@host, and launchers can't override
+    /// either, so per-launcher copies were pure duplication -- the migrated
+    /// file had the same password on every launcher of a box). Decoded so old
+    /// machines.json entries can be lifted onto `Machine.password` (see
+    /// Machine.init(from:)); never encoded, never editable.
+    public internal(set) var password: String?
 
     public init(name: String, command: String? = nil, transport: LauncherTransport? = nil,
-                verbose: Bool = false, password: String? = nil) {
+                password: String? = nil) {
         self.name = name; self.command = command; self.transport = transport
-        self.verbose = verbose; self.password = password
+        self.password = password
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, command, transport, verbose, fileBrowser, password
+        case name, command, transport, fileBrowser, password
     }
 
     public init(from decoder: Decoder) throws {
@@ -195,7 +201,6 @@ public struct MachineLauncher: Equatable, Sendable, Codable {
         name = try c.decode(String.self, forKey: .name)
         command = try c.decodeIfPresent(String.self, forKey: .command)
         transport = try c.decodeIfPresent(LauncherTransport.self, forKey: .transport)
-        verbose = try c.decodeIfPresent(Bool.self, forKey: .verbose) ?? false
         fileBrowser = try c.decodeIfPresent(Bool.self, forKey: .fileBrowser) ?? false
         password = try c.decodeIfPresent(String.self, forKey: .password)
     }
@@ -206,8 +211,7 @@ public struct MachineLauncher: Equatable, Sendable, Codable {
         try c.encode(name, forKey: .name)
         try c.encodeIfPresent(command, forKey: .command)
         try c.encodeIfPresent(transport, forKey: .transport)
-        if verbose { try c.encode(true, forKey: .verbose) }
-        try c.encodeIfPresent(password, forKey: .password)
+        // password is legacy: lifted to the machine on decode, never re-emitted.
     }
 }
 
@@ -250,6 +254,13 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
     /// machine, not of each launcher -- reintroduced 2026-07-07 after the
     /// per-launcher `shell_prompt` key died with the old launchers file.
     public var shellPrompt: String?
+    /// Login password for telnet launches, cleartext in machines.json (a dev
+    /// convenience -- the file is the user's own config, same trust level the
+    /// old launchers file had). nil = ask on first launch and store in the
+    /// macOS Keychain (the Debug dev-file fallback included; see
+    /// KeychainHelper). A machine credential (user@host), not per-launcher --
+    /// moved up 2026-07-08, same slimming as display/fileBrowser/shellPrompt.
+    public var password: String?
     /// Explicit port triple. nil = derive from `os` (emulated) or 23/22/2125
     /// (external). Set only when a machine needs non-standard ports.
     public var ports: ImagePorts?
@@ -276,6 +287,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
                 bundled: Bool = false,
                 host: String, user: String, transport: LauncherTransport = .helios,
                 display: String? = nil, shellPrompt: String? = nil,
+                password: String? = nil,
                 ports: ImagePorts? = nil,
                 imagePath: String? = nil, macAddress: String? = nil,
                 networkMode: MachineNetworkMode = .slirp, autoBackup: Bool = true,
@@ -283,7 +295,8 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         self.id = id; self.name = name; self.kind = kind; self.os = os
         self.bundled = bundled
         self.host = host; self.user = user; self.transport = transport
-        self.display = display; self.shellPrompt = shellPrompt; self.ports = ports
+        self.display = display; self.shellPrompt = shellPrompt
+        self.password = password; self.ports = ports
         self.imagePath = imagePath
         self.macAddress = macAddress; self.networkMode = networkMode
         self.autoBackup = autoBackup
@@ -299,8 +312,8 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
     /// assigns the clone its own block on add), so a cloned emulated VM comes up
     /// "not installed" until you point it at its own image; a cloned external
     /// host is fully usable as soon as you set its host. Everything else -- kind,
-    /// os, user, transport, display, network mode, and every launcher
-    /// command -- carries over. `name` defaults to "<name> copy".
+    /// os, user, transport, display, password, network mode, and every
+    /// launcher command -- carries over. `name` defaults to "<name> copy".
     public func cloned(named newName: String? = nil) -> Machine {
         var copy = self
         copy.id = UUID()
@@ -382,8 +395,12 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         if let d = display { merged["display"] = d }
         if let sp = shellPrompt, !sp.isEmpty { merged["shell_prompt"] = sp }
         if let c = launcher.command { merged["command"] = c }
-        if launcher.verbose { merged["verbose"] = "true" }
-        if let pw = launcher.password { merged["password"] = pw }
+        // The password is a machine credential; only the telnet flow injects
+        // it (ssh is keys-only, helios has its own secret), so a telnet
+        // machine's ssh launchers don't trip the ssh-with-password warning.
+        if transport == .telnet, let pw = password, !pw.isEmpty {
+            merged["password"] = pw
+        }
         return LauncherEntry.build(merged: merged, name: launcher.name,
                                    group: name, warnings: &warnings)
     }
@@ -416,7 +433,8 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
     // MARK: Codable (forgiving decode + terse encode)
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, os, bundled, host, user, transport, display, shellPrompt, ports
+        case id, name, kind, os, bundled, host, user, transport, display, shellPrompt
+        case password, ports
         case imagePath = "image", macAddress = "mac", networkMode
         case autoBackup, launchers
     }
@@ -434,6 +452,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         transport = try c.decodeIfPresent(LauncherTransport.self, forKey: .transport) ?? .helios
         display = try c.decodeIfPresent(String.self, forKey: .display)
         shellPrompt = try c.decodeIfPresent(String.self, forKey: .shellPrompt)
+        password = try c.decodeIfPresent(String.self, forKey: .password)
         ports = try c.decodeIfPresent(ImagePorts.self, forKey: .ports)
         imagePath = try c.decodeIfPresent(String.self, forKey: .imagePath)
         macAddress = try c.decodeIfPresent(String.self, forKey: .macAddress)
@@ -445,6 +464,15 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         // automatically whenever the box has helios. Drop them on load; the
         // next save writes the file without them.
         launchers.removeAll { $0.fileBrowser }
+        // One-shot migration (2026-07-08): the password moved up to the
+        // machine (one credential per user@host, not a copy on every
+        // launcher). Lift the first non-empty legacy per-launcher password if
+        // the machine has none, then drop them all; the next save writes the
+        // file in the new shape.
+        if password == nil {
+            password = launchers.compactMap(\.password).first { !$0.isEmpty }
+        }
+        for i in launchers.indices { launchers[i].password = nil }
     }
 
     /// Emit a clean, flat object: always id/name/kind/host/user; the emulated-only
@@ -461,6 +489,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         if transport != .helios { try c.encode(transport, forKey: .transport) }
         try c.encodeIfPresent(display, forKey: .display)
         try c.encodeIfPresent(shellPrompt, forKey: .shellPrompt)
+        try c.encodeIfPresent(password, forKey: .password)
         try c.encodeIfPresent(ports, forKey: .ports)
         if kind == .emulatedVM {
             try c.encodeIfPresent(imagePath, forKey: .imagePath)

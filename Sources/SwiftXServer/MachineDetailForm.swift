@@ -29,6 +29,8 @@ struct MachineDetailForm: View {
     /// fixture's fixed OS (fool-proofing: you can't attach the NetBSD image to
     /// the Solaris machine). Cleared on the next pick.
     @State private var imageMismatchNote: String?
+    /// "Show what I'm typing" for the telnet password field.
+    @State private var revealPassword = false
 
     init(machine: Machine, model: MachinesModel) {
         self.model = model
@@ -215,6 +217,7 @@ struct MachineDetailForm: View {
                             + "telnet launches (e.g. \u{201c}tvernon]\u{201d}). Blank = "
                             + "automatic detection.")
                 }
+                passwordField
             }
             LabeledField("DISPLAY") {
                 // Placeholder = what blank actually resolves to at launch time
@@ -230,6 +233,39 @@ struct MachineDetailForm: View {
                         + "server's own address (shown). A slirp guest usually "
                         + "wants 10.0.2.2:0.")
             }
+        }
+    }
+
+    /// The telnet login password (its own property: keeps connectionSection
+    /// type-checkable). Same field swap as SecretEntryField, in SwiftUI: dots
+    /// by default, plain when "Show" is on, one shared binding.
+    private var passwordBinding: Binding<String> {
+        Binding(get: { draft.password ?? "" },
+                set: { draft.password = $0.isEmpty ? nil : $0 })
+    }
+
+    private var passwordField: some View {
+        LabeledField("Password") {
+            HStack(spacing: 8) {
+                if revealPassword {
+                    TextField("ask on first launch (Keychain)", text: passwordBinding)
+                        .textFieldStyle(.roundedBorder)
+                } else {
+                    SecureField("ask on first launch (Keychain)", text: passwordBinding)
+                        .textFieldStyle(.roundedBorder)
+                }
+                Toggle("Show", isOn: $revealPassword)
+                    .toggleStyle(.checkbox)
+            }
+            .help("Login password for telnet launches on this machine, "
+                + "stored in machines.json. Blank = ask on first launch "
+                + "and remember in the macOS Keychain.")
+            // Commit as-you-type (like the autoBackup toggle): a launch
+            // from the Machines menu never blurs this field or tears the
+            // form down, so waiting for Return/onDisappear meant the
+            // registry could hold a different password than the dots
+            // showed. No cross-field validation on it, so eager is safe.
+            .onChange(of: draft.password) { commit() }
         }
     }
 
@@ -424,6 +460,16 @@ struct MachineDetailForm: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
+        // Rows here are for editing; running lives on the Overview. The
+        // exception is the debugging gesture: right-click > Run with Progress
+        // Window streams this one launch's transcript live (verbose stopped
+        // being persisted launcher config 2026-07-08). Runs the committed
+        // launcher from the registry, so an uncommitted rename runs the old name.
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Run") { model.onLaunch?(draft.id, l.name, false) }
+            Button("Run with Progress Window") { model.onLaunch?(draft.id, l.name, true) }
+        }
     }
 
     // MARK: Commit + validation
@@ -449,6 +495,16 @@ struct MachineDetailForm: View {
         if draft.kind == .externalHost, model.row(draft.id)?.osIsDetected == true,
            let live = model.machines.first(where: { $0.id == draft.id }) {
             draft.os = live.os
+        }
+        // Fix up a colon-less DISPLAY override at the edit boundary (Todd,
+        // 2026-07-08): "desktop.vernon.com" without a display number is never
+        // valid X, and the failure is brutally silent -- the client dies at
+        // connect under nohup >/dev/null after the launch already reported
+        // success. Appending :0 here (not at resolve time) keeps the stored
+        // config identical to what the field shows.
+        if let d = draft.display?.trimmingCharacters(in: .whitespaces) {
+            if d.isEmpty { draft.display = nil }
+            else if !d.contains(":") { draft.display = "\(d):0" }
         }
         guard canCommit else { return }
         committed = draft
@@ -569,9 +625,9 @@ struct LauncherEditorView: View {
 
             // (No per-launcher DISPLAY or file-browser flag anymore, 2026-07-07:
             // the machine's DISPLAY covers every launcher, and File Transfer is
-            // automatic under Admin Agents whenever the box has helios.)
-            Toggle("Show progress window (verbose)", isOn: $draft.verbose)
-
+            // automatic under Admin Agents whenever the box has helios. No
+            // verbose toggle either, 2026-07-08: the progress window is a
+            // launch gesture -- right-click > Run with Progress Window.)
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)

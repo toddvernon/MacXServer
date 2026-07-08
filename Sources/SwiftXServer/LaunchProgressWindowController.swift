@@ -5,8 +5,12 @@ final class LaunchProgressWindowController: NSWindowController {
 
     private let model = LaunchProgressModel()
 
-    init(title: String) {
-        let hostingView = NSHostingView(rootView: LaunchProgressView(model: model))
+    /// `detail` names the session on the wire -- transport + user@host:port
+    /// (e.g. "telnet \u{2022} tvernon@ipc.vernon.com:23") -- so the window says
+    /// HOW it's connecting, not just what it's launching.
+    init(title: String, detail: String) {
+        let hostingView = NSHostingView(rootView: LaunchProgressView(model: model,
+                                                                     detail: detail))
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 640),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .utilityWindow],
@@ -86,6 +90,8 @@ final class LaunchProgressModel: ObservableObject {
 
 struct LaunchProgressView: View {
     @ObservedObject var model: LaunchProgressModel
+    /// The session on the wire: transport + user@host:port.
+    let detail: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -96,9 +102,12 @@ struct LaunchProgressView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Launcher Progress")
                         .font(.title2)
-                    Text("Telnet session log. Turn off verbose in the launcher config once it works.")
-                        .font(.caption)
+                    Text(detail)
+                        .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
+                    Text("Live session log for this launch. Use a plain click once it works.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                 }
                 Spacer()
             }

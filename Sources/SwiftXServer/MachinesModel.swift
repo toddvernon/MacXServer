@@ -108,8 +108,10 @@ final class MachinesModel: ObservableObject {
     var onForceQuit: ((UUID) -> Void)?
     var onBackup: ((UUID) -> Void)?
     var onConsole: ((UUID) -> Void)?
-    /// (machineID, launcherName)
-    var onLaunch: ((UUID, String) -> Void)?
+    /// (machineID, launcherName, verbose). verbose = stream this one launch's
+    /// transcript to a live progress window (right-click > Run with Progress
+    /// Window); it's a launch gesture, not launcher config.
+    var onLaunch: ((UUID, String, Bool) -> Void)?
     var onSetHeliosSecret: ((UUID) -> Void)?
     /// Open the machine's DNS (/etc/resolv.conf) admin window.
     var onDnsAdmin: ((UUID) -> Void)?

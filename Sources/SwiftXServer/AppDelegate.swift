@@ -242,7 +242,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.onForceQuit = { [weak self] id in self?.confirmForceQuit(id) }
         model.onBackup    = { [weak self] id in self?.backUpDiskImage(id) }
         model.onConsole   = { [weak self] id in self?.showConsoleWindow(id) }
-        model.onLaunch    = { [weak self] id, name in self?.launchFromMachine(id, launcherName: name) }
+        model.onLaunch    = { [weak self] id, name, verbose in
+            self?.launchFromMachine(id, launcherName: name, verbose: verbose) }
         model.onSetHeliosSecret = { [weak self] id in self?.promptHeliosSecret(for: id) }
         model.onDnsAdmin  = { [weak self] id in self?.openDnsAdmin(machineID: id) }
         model.onFileTransfer = { [weak self] id in self?.openMachineFileTransfer(id) }
@@ -448,14 +449,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// Launch (or open the file browser for) one of a machine's launchers, reusing
     /// the same paths the Launchers menu uses.
-    private func launchFromMachine(_ machineID: UUID, launcherName: String) {
+    private func launchFromMachine(_ machineID: UUID, launcherName: String,
+                                   verbose: Bool = false) {
         guard let machine = registry?.machine(machineID),
               let ml = machine.launchers.first(where: { $0.name == launcherName }) else { return }
         var warnings: [String] = []
         guard let entry = machine.resolved(ml, warnings: &warnings) else { return }
         // Launchers are always commands now: legacy file-browser launchers are
         // dropped at decode (Admin Agents > File Transfer replaced them).
-        launch(entry, os: machine.os)
+        launch(entry, os: machine.os, verbose: verbose)
     }
 
     /// Enter / update / clear the Helios daemon secret for an external machine,
@@ -1415,33 +1417,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// Launch one resolved entry (from a machine row / the Machines menu). Picks
-    /// the auth path by transport: ssh/helios need none; telnet uses the launcher
+    /// the auth path by transport: ssh/helios need none; telnet uses the machine's
     /// password, else the Keychain (prompting on first use). `os` is the owning
     /// machine's guest OS (drives the helios launcher's X bin dirs).
     @MainActor
-    private func launch(_ entry: LauncherEntry, os: MachineOS?) {
+    private func launch(_ entry: LauncherEntry, os: MachineOS?, verbose: Bool = false) {
         // ssh (keys-only) and helios (daemon, no auth) need no password: skip
         // the prompt and Keychain entirely. Any password field is ignored.
         if entry.transport == .ssh || entry.transport == .helios {
-            executeLaunch(entry: entry, os: os, password: "")
+            executeLaunch(entry: entry, os: os, password: "", verbose: verbose)
             return
         }
-        // Telnet path: explicit password in the launcher file wins (dev
-        // convenience — skips the prompt every launch). Otherwise fall back
-        // to the Keychain, prompting and storing on first use.
+        // Telnet path: the machine's password wins (dev convenience — skips
+        // the prompt every launch). Otherwise fall back to the Keychain,
+        // prompting and storing on first use.
         if let pw = entry.password, !pw.isEmpty {
-            executeLaunch(entry: entry, os: os, password: pw)
+            executeLaunch(entry: entry, os: os, password: pw, verbose: verbose)
             return
         }
         let account = "\(entry.user)@\(entry.host)"
         if let password = KeychainHelper.retrieve(account: account) {
-            executeLaunch(entry: entry, os: os, password: password)
+            executeLaunch(entry: entry, os: os, password: password, verbose: verbose)
         } else {
-            promptForPassword(entry: entry, os: os, account: account)
+            promptForPassword(entry: entry, os: os, account: account, verbose: verbose)
         }
     }
 
-    private func promptForPassword(entry: LauncherEntry, os: MachineOS?, account: String) {
+    private func promptForPassword(entry: LauncherEntry, os: MachineOS?, account: String,
+                                   verbose: Bool) {
         let alert = NSAlert()
         alert.messageText = "Password for \(account)"
         alert.informativeText = "Enter the login password for \(entry.user) on \(entry.host).\nIt will be stored in the macOS Keychain."
@@ -1455,10 +1458,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let password = field.stringValue
         guard !password.isEmpty else { return }
         try? KeychainHelper.store(account: account, password: password)
-        executeLaunch(entry: entry, os: os, password: password)
+        executeLaunch(entry: entry, os: os, password: password, verbose: verbose)
     }
 
-    private func executeLaunch(entry: LauncherEntry, os: MachineOS?, password: String) {
+    private func executeLaunch(entry: LauncherEntry, os: MachineOS?, password: String,
+                               verbose: Bool) {
         let display = entry.display ?? "\(advertisedHost):\(displayNumber)"
         let launcher: RemoteLauncher
         switch entry.transport {
@@ -1481,11 +1485,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // The session transcript is ALWAYS captured (bounded), verbose or
         // not: a failed launch without it is undiagnosable ("timed out
         // waiting for shell prompt" -- waiting for WHAT, against WHAT
-        // output?). Verbose additionally streams it to a progress window.
+        // output?). Verbose (a launch-time gesture: right-click > Run with
+        // Progress Window) additionally streams it to a progress window.
         let transcript = LaunchTranscript()
         var ctrl: LaunchProgressWindowController? = nil
-        if entry.verbose {
-            ctrl = LaunchProgressWindowController(title: entry.name)
+        if verbose {
+            let detail = "\(entry.transport.rawValue) \u{2022} "
+                + "\(entry.user)@\(entry.host):\(entry.port) \u{2022} DISPLAY \(display)"
+            ctrl = LaunchProgressWindowController(title: entry.name, detail: detail)
             progressController = ctrl
             ctrl?.showWindow()
         }
