@@ -133,6 +133,10 @@ final class MachinesModel: ObservableObject {
     /// The name of the *other* emulated VM already claiming `imagePath` (excluding
     /// the machine being edited), or nil if the image is free. Drives a warning.
     var imageClaimant: ((_ imagePath: String, _ excluding: UUID) -> String?)?
+    /// The name of the *other* emulated VM whose port block overlaps `ports`
+    /// (excluding the machine being edited), or nil if the block is free.
+    /// Drives the Settings ports editor's collision warning.
+    var portsClaimant: ((_ ports: ImagePorts, _ excluding: UUID) -> String?)?
     /// The DISPLAY a launched client gets when the machine leaves it blank:
     /// this X server's own address ("<Mac LAN IP>:<display>"). Shown as the
     /// field's placeholder so blank reads as what it actually does.

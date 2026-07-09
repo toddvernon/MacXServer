@@ -261,6 +261,31 @@ final class MachineFileTests: XCTestCase {
         XCTAssertFalse(round.machines[0].autoBackup)
     }
 
+    /// The Settings ports editor (audit F1) persists an explicit override as a
+    /// full triple; blank-out clears it and the terse encode drops the key.
+    func testPortsOverrideRoundTripsOnlyWhenSet() throws {
+        let decoded = try MachinesFile.decode("""
+        { "machines": [ { "name": "vm", "kind": "emulatedVM",
+                          "host": "127.0.0.1", "user": "t" } ] }
+        """)
+        // No override -> no key emitted, ports derive.
+        XCTAssertNil(decoded.machines[0].ports)
+        XCTAssertFalse(MachinesFile(machines: decoded.machines).encoded()
+            .contains("\"ports\""))
+        // An explicit override round-trips intact...
+        var pinned = decoded.machines[0]
+        pinned.ports = ImagePorts(telnet: 2153, ssh: 2252, helios: 2155)
+        let round = try MachinesFile.decode(MachinesFile(machines: [pinned]).encoded())
+        XCTAssertEqual(round.machines[0].ports,
+                       ImagePorts(telnet: 2153, ssh: 2252, helios: 2155))
+        XCTAssertEqual(round.machines[0].resolvedPorts.ssh, 2252)
+        // ...and clearing it back to nil drops the key again.
+        var cleared = round.machines[0]
+        cleared.ports = nil
+        XCTAssertFalse(MachinesFile(machines: [cleared]).encoded()
+            .contains("\"ports\""))
+    }
+
     // MARK: - Migration
 
     func testMigrationClassifiesLoopbackAndExternal() {

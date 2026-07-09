@@ -324,6 +324,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.imageClaimant = { [weak self] path, excluding in
             self?.registry?.imageClaimant(imagePath: path, excluding: excluding)?.name
         }
+        model.portsClaimant = { [weak self] ports, excluding in
+            self?.registry?.portBlockClaimant(ports: ports, excluding: excluding)?.name
+        }
     }
 
     /// Reopen (or focus) the Machines window -- from the status item / Machines menu.

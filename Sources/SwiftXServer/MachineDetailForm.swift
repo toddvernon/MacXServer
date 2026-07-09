@@ -31,6 +31,13 @@ struct MachineDetailForm: View {
     @State private var imageMismatchNote: String?
     /// "Show what I'm typing" for the telnet password field.
     @State private var revealPassword = false
+    /// The ports editor's field text (telnet / ssh / helios). Kept as strings
+    /// (not bindings into `draft.ports`) so a half-typed number doesn't have to
+    /// be a valid port: blank = derive, and the triple only lands on the draft
+    /// once every non-blank field parses (see `syncPortsDraft`).
+    @State private var portTelnetText: String
+    @State private var portSSHText: String
+    @State private var portHeliosText: String
 
     init(machine: Machine, model: MachinesModel) {
         self.model = model
@@ -40,6 +47,11 @@ struct MachineDetailForm: View {
         if m.bundled { m.transport = .helios }
         _committed = State(initialValue: machine)
         _draft = State(initialValue: m)
+        // Seed the ports editor from the explicit override only -- derived
+        // ports show as placeholders, so blank keeps meaning "the usual".
+        _portTelnetText = State(initialValue: machine.ports.map { String($0.telnet) } ?? "")
+        _portSSHText = State(initialValue: machine.ports.map { String($0.ssh) } ?? "")
+        _portHeliosText = State(initialValue: machine.ports.map { String($0.helios) } ?? "")
     }
 
     /// A shipped bundled fixture: its kind/host/OS are load-bearing identity, so
@@ -182,6 +194,7 @@ struct MachineDetailForm: View {
                draft.host.trimmingCharacters(in: .whitespaces).isEmpty {
                 helpNote("A host is required before an external machine is saved.")
             }
+            portsField
             LabeledField("User") {
                 TextField("login user", text: $draft.user)
                     .textFieldStyle(.roundedBorder)
@@ -266,6 +279,113 @@ struct MachineDetailForm: View {
             // registry could hold a different password than the dots
             // showed. No cross-field validation on it, so eager is safe.
             .onChange(of: draft.password) { commit() }
+        }
+    }
+
+    // MARK: Ports editor (audit F1, 2026-07-09)
+
+    /// What blank port fields resolve to: the machine's derived block (per-OS
+    /// for emulated VMs, 23/22/2125 for externals). Computed off a ports-less
+    /// copy so an explicit override never feeds back into its own placeholders.
+    private var derivedPorts: ImagePorts {
+        var m = draft
+        m.ports = nil
+        return m.resolvedPorts
+    }
+
+    /// True when some non-blank port field isn't a number in 1...65535.
+    /// (Blank is always fine -- it means "derive".)
+    private var portsTextInvalid: Bool {
+        [portTelnetText, portSSHText, portHeliosText].contains { text in
+            let t = text.trimmingCharacters(in: .whitespaces)
+            return !t.isEmpty && (UInt16(t) == nil || UInt16(t) == 0)
+        }
+    }
+
+    /// The override the current field text describes: nil when all three are
+    /// blank (back to derived), otherwise a full triple with blank fields
+    /// filled from the derived block. Meaningless while `portsTextInvalid`.
+    private var portsFromText: ImagePorts? {
+        let d = derivedPorts
+        let t = portTelnetText.trimmingCharacters(in: .whitespaces)
+        let s = portSSHText.trimmingCharacters(in: .whitespaces)
+        let h = portHeliosText.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty && s.isEmpty && h.isEmpty { return nil }
+        return ImagePorts(telnet: t.isEmpty ? d.telnet : UInt16(t) ?? d.telnet,
+                          ssh: s.isEmpty ? d.ssh : UInt16(s) ?? d.ssh,
+                          helios: h.isEmpty ? d.helios : UInt16(h) ?? d.helios)
+    }
+
+    /// Land the field text on the draft. A half-typed / invalid number leaves
+    /// `draft.ports` alone (and `canCommit` blocks on it), so garbage never
+    /// persists; blank-out clears the override back to derived.
+    private func syncPortsDraft() {
+        guard !portsTextInvalid else { return }
+        draft.ports = portsFromText
+    }
+
+    /// The other emulated VM whose port block collides with this draft's, if
+    /// any (blocks commit, same pattern as `imageClaimantName`). Emulated VMs
+    /// only: they all share loopback; externals are dialed at their own host.
+    private var portsClaimantName: String? {
+        guard draft.kind == .emulatedVM else { return nil }
+        return model.portsClaimant?(draft.resolvedPorts, draft.id)
+    }
+
+    private var portsField: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            LabeledField("Ports") {
+                HStack(spacing: 10) {
+                    portBox("telnet", $portTelnetText, placeholder: derivedPorts.telnet)
+                    portBox("ssh", $portSSHText, placeholder: derivedPorts.ssh)
+                    portBox("helios", $portHeliosText, placeholder: derivedPorts.helios)
+                }
+                // A live qemu's hostfwds are baked into its argv, same freeze
+                // rule as the disk image.
+                .disabled(running)
+            }
+            .onChange(of: portTelnetText) { syncPortsDraft() }
+            .onChange(of: portSSHText) { syncPortsDraft() }
+            .onChange(of: portHeliosText) { syncPortsDraft() }
+            Group {
+                if running {
+                    helpNote("Stop the VM to change its ports.")
+                } else if draft.kind == .emulatedVM {
+                    helpNote("How this Mac reaches the guest. Assigned when the machine "
+                           + "was created; override only to resolve a conflict.")
+                } else {
+                    helpNote("How this Mac reaches the machine's telnet, SSH, and Helios "
+                           + "agent. Leave blank for the usual ports.")
+                }
+            }
+            .padding(.leading, 96)   // align under the fields (label 84 + spacing 12)
+            if portsTextInvalid {
+                Label("Ports must be numbers between 1 and 65535.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(.leading, 96)
+            }
+            if let other = portsClaimantName {
+                Label("These ports collide with \u{201c}\(other)\u{201d} \u{2014} every "
+                    + "machine needs its own.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(.leading, 96)
+            }
+        }
+    }
+
+    private func portBox(_ label: String, _ text: Binding<String>,
+                         placeholder: UInt16) -> some View {
+        HStack(spacing: 4) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            TextField(String(placeholder), text: text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+                .multilineTextAlignment(.trailing)
+                .frame(width: 64)
         }
     }
 
@@ -488,6 +608,9 @@ struct MachineDetailForm: View {
             draft.kind = committed.kind
             draft.os = committed.os
             draft.imagePath = committed.imagePath
+            // Ports too: the live qemu's hostfwds were built from the
+            // committed block, so a mid-run edit would desync every dial.
+            draft.ports = committed.ports
         }
         // Same stale-draft protection for a Helios-detected OS: the prober may
         // have adopted the box's real OS into the registry while this pane sat
@@ -523,6 +646,7 @@ struct MachineDetailForm: View {
         if draft.kind == .externalHost,
            draft.host.trimmingCharacters(in: .whitespaces).isEmpty { return false }
         if imageClaimantName != nil { return false }
+        if portsTextInvalid || portsClaimantName != nil { return false }
         return true
     }
 

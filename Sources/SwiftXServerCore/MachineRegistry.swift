@@ -142,6 +142,20 @@ public final class MachineRegistry {
         return ImagePorts.block(index)
     }
 
+    /// The other emulated VM (if any) whose resolved port block overlaps
+    /// `ports`, ignoring `excluding` (the machine being edited). The Settings
+    /// ports editor runs this at commit so a collision is flagged in the form
+    /// instead of surfacing later as the launch-time `portConflict` refusal.
+    /// Only emulated VMs are checked: they all share loopback, while external
+    /// hosts are dialed at their own host's real ports, so two externals both
+    /// on 23/22/2125 is the norm, not a clash.
+    public func portBlockClaimant(ports: ImagePorts, excluding: UUID?) -> Machine? {
+        machines.first { m in
+            m.kind == .emulatedVM && m.id != excluding
+                && m.resolvedPorts.overlaps(ports)
+        }
+    }
+
     /// The RUNNING machine (if any) whose ports collide with `machine`'s.
     /// Belt-and-suspenders start guard: sticky assignment means this can't
     /// happen unless someone hand-edited machines.json into a conflict, but a

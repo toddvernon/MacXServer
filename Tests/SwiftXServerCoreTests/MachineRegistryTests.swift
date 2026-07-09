@@ -147,6 +147,32 @@ final class MachineRegistryTests: XCTestCase {
         XCTAssertNil(registry.imageClaimant(imagePath: "~/img/other.qcow2", excluding: nil))
     }
 
+    /// The Settings ports editor's commit-time collision check (audit F1):
+    /// another emulated VM holding an overlapping block is named, editing your
+    /// own block is not a collision, and externals never participate (they're
+    /// dialed at their own host's real ports).
+    func testPortBlockClaimantDetectsOverlapAndIgnoresSelfAndExternals() {
+        let sol = Machine(name: "solaris", kind: .emulatedVM, os: .solaris26,
+                          host: "127.0.0.1", user: "t")
+        let ext = Machine(name: "ss5", kind: .externalHost, host: "h", user: "t",
+                          ports: ImagePorts(telnet: 23, ssh: 22, helios: 9125))
+        let registry = MachineRegistry(machines: [sol, ext], path: tempPath("portclaim"))
+
+        // Overlapping any port of solaris's derived block names it.
+        XCTAssertEqual(registry.portBlockClaimant(
+            ports: ImagePorts(telnet: 2123, ssh: 9922, helios: 9925),
+            excluding: nil)?.name, "solaris")
+        // Excluding the owner itself reports no collision (editing your own).
+        XCTAssertNil(registry.portBlockClaimant(ports: sol.resolvedPorts,
+                                                excluding: sol.id))
+        // A free block is free; the external's ports are never claimed.
+        XCTAssertNil(registry.portBlockClaimant(ports: ImagePorts.block(9),
+                                                excluding: nil))
+        XCTAssertNil(registry.portBlockClaimant(
+            ports: ImagePorts(telnet: 23, ssh: 22, helios: 9125),
+            excluding: nil))
+    }
+
     func testClonedCopiesConfigButNotImageOrIdentity() {
         let sol = Machine(name: "solaris", kind: .emulatedVM, os: .solaris26,
                           host: "127.0.0.1", user: "t",
