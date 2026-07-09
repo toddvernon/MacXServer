@@ -1330,6 +1330,32 @@ and a failing silent launch still shows its tail in the error dialog.
 
 ---
 
+## 2026-07-09: Guest hostfwds bind loopback only; the networkMode knob is deleted
+
+Two halves of the same audit finding (MACHINE_SETTINGS_AUDIT.md F2). The
+qemu nic string used empty-hostaddr hostfwds (`hostfwd=tcp::2123-:23`),
+which libslirp binds to ALL interfaces — so every guest's telnet/ssh/helios
+forward was reachable from the whole LAN, while the `networkMode` doc
+claimed loopback-only. And `networkMode` itself was dead config: decoded,
+encoded, defaulted, read by nothing (`makeEngineConfig` never passed it).
+
+The fix is to make the doc's claim true and delete the lie: hostfwds now
+bind `127.0.0.1` explicitly, and `MachineNetworkMode` + `Machine.networkMode`
+are gone. A legacy `networkMode` key in machines.json is ignored on decode
+(Codable drops unknown keys) and vanishes on the next save.
+
+This changes wire behavior: guests stop being LAN-reachable. That's the
+intent — the app on this Mac is the only thing that dials guest ports, and
+an unauthenticated vintage telnetd listening on the LAN is a real (if
+small) security surface. Guest-to-guest still works through the host:
+slirp delivers a guest's connection to `10.0.2.2:PORT` onto the host's
+loopback, where the other guest's hostfwd lives. If LAN-exposed guests or
+a true shared inter-VM segment (qemu socket networking / vmnet) ever become
+real needs, they get designed fresh with UI and a DECISIONS entry — not a
+dormant enum waiting to be wired. Todd's call, 2026-07-09.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

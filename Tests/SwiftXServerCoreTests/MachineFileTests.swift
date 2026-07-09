@@ -47,7 +47,6 @@ final class MachineFileTests: XCTestCase {
         """)
         let m = file.machines[0]
         XCTAssertEqual(m.transport, .helios)
-        XCTAssertEqual(m.networkMode, .slirp)
         XCTAssertTrue(m.launchers.isEmpty)
         XCTAssertNil(m.image)
         // an id is generated when omitted

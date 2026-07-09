@@ -303,6 +303,6 @@ final class MachineRegistryTests: XCTestCase {
         let args = QemuEngine.buildArguments(config: config)
         let nic = try XCTUnwrap(args.first { $0.hasPrefix("user,model=lance") })
         XCTAssertTrue(nic.contains("mac=\(m.resolvedMacAddress)"))
-        XCTAssertTrue(nic.contains("hostfwd=tcp::\(ImagePorts.block(7).helios)-:2125"))
+        XCTAssertTrue(nic.contains("hostfwd=tcp:127.0.0.1:\(ImagePorts.block(7).helios)-:2125"))
     }
 }

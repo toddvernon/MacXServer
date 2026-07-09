@@ -146,14 +146,12 @@ public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
     }
 }
 
-/// How an emulated VM is put on the network. slirp is the zero-config default
-/// (free outbound NAT, localhost hostfwds). See "Networking" in the refactor
-/// doc. Only `.slirp` behavior is wired today; the other two are P2.
-public enum MachineNetworkMode: String, Equatable, Sendable, Codable {
-    case slirp             // user-mode, hostfwds bound to localhost (default)
-    case slirpLanExposed   // slirp, a forward bound 0.0.0.0 for LAN reach
-    case socketFabric      // slirp on le0 + a socket fabric on a second NIC
-}
+// (No network-mode knob: every emulated VM is slirp user-mode NAT with its
+// hostfwds bound to 127.0.0.1 -- the app on this Mac is the only thing that
+// dials guest ports. The dead `networkMode` enum was deleted 2026-07-09; a
+// legacy key in machines.json is ignored on decode. If LAN-exposed guests or
+// a shared inter-VM segment ever become real needs, they get designed fresh
+// with UI, not a dormant enum. See DECISIONS.md 2026-07-09.)
 
 /// One launcher command belonging to a machine: a named X-client command that
 /// runs *on that machine*. It carries only what's specific to the command;
@@ -274,7 +272,6 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
     /// Unique per machine (a duplicate MAC collides the moment two VMs share a
     /// segment). nil = derive from `id` (see `resolvedMacAddress`).
     public var macAddress: String?
-    public var networkMode: MachineNetworkMode
     /// Keep a dated "last known good" copy of the disk image after each clean
     /// shutdown (the old global `sparcplug.autoBackupOnShutdown`, per-machine
     /// now that several images can run). Emulated VMs only.
@@ -290,7 +287,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
                 password: String? = nil,
                 ports: ImagePorts? = nil,
                 imagePath: String? = nil, macAddress: String? = nil,
-                networkMode: MachineNetworkMode = .slirp, autoBackup: Bool = true,
+                autoBackup: Bool = true,
                 launchers: [MachineLauncher] = []) {
         self.id = id; self.name = name; self.kind = kind; self.os = os
         self.bundled = bundled
@@ -298,7 +295,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         self.display = display; self.shellPrompt = shellPrompt
         self.password = password; self.ports = ports
         self.imagePath = imagePath
-        self.macAddress = macAddress; self.networkMode = networkMode
+        self.macAddress = macAddress
         self.autoBackup = autoBackup
         self.launchers = launchers
     }
@@ -312,8 +309,8 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
     /// assigns the clone its own block on add), so a cloned emulated VM comes up
     /// "not installed" until you point it at its own image; a cloned external
     /// host is fully usable as soon as you set its host. Everything else -- kind,
-    /// os, user, transport, display, password, network mode, and every
-    /// launcher command -- carries over. `name` defaults to "<name> copy".
+    /// os, user, transport, display, password, and every launcher command --
+    /// carries over. `name` defaults to "<name> copy".
     public func cloned(named newName: String? = nil) -> Machine {
         var copy = self
         copy.id = UUID()
@@ -435,7 +432,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
     enum CodingKeys: String, CodingKey {
         case id, name, kind, os, bundled, host, user, transport, display, shellPrompt
         case password, ports
-        case imagePath = "image", macAddress = "mac", networkMode
+        case imagePath = "image", macAddress = "mac"
         case autoBackup, launchers
     }
 
@@ -456,7 +453,6 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         ports = try c.decodeIfPresent(ImagePorts.self, forKey: .ports)
         imagePath = try c.decodeIfPresent(String.self, forKey: .imagePath)
         macAddress = try c.decodeIfPresent(String.self, forKey: .macAddress)
-        networkMode = try c.decodeIfPresent(MachineNetworkMode.self, forKey: .networkMode) ?? .slirp
         autoBackup = try c.decodeIfPresent(Bool.self, forKey: .autoBackup) ?? true
         launchers = try c.decodeIfPresent([MachineLauncher].self, forKey: .launchers) ?? []
         // One-shot migration (2026-07-07): legacy file-browser launchers are
@@ -494,7 +490,6 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         if kind == .emulatedVM {
             try c.encodeIfPresent(imagePath, forKey: .imagePath)
             try c.encodeIfPresent(macAddress, forKey: .macAddress)
-            if networkMode != .slirp { try c.encode(networkMode, forKey: .networkMode) }
             if !autoBackup { try c.encode(false, forKey: .autoBackup) }
         }
         if !launchers.isEmpty { try c.encode(launchers, forKey: .launchers) }

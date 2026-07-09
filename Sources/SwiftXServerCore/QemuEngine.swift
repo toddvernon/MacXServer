@@ -917,12 +917,16 @@ public final class QemuEngine: @unchecked Sendable {
         // and the Mac reaches the Helios daemon directly (no ssh tunnel). The
         // block comes from `config.ports` (Solaris 2.6 = 2123/2222/2125 by
         // default; other OSes pass their own block so several images can run at
-        // once). Per-machine MAC (stable across reboots, unique per machine so
-        // concurrent guests never collide). When a shared folder is configured,
-        // append slirp's built-in TFTP server pointed at it; the guest pulls
-        // files with `tftp 10.0.2.2`.
+        // once). Hostfwds bind 127.0.0.1 explicitly: this app is the only thing
+        // that dials guest ports, and an empty hostaddr would bind ALL
+        // interfaces, exposing guest telnet to the LAN (fixed 2026-07-09, see
+        // DECISIONS.md). Guest-to-guest via 10.0.2.2:PORT still works -- slirp
+        // delivers those to the host's loopback. Per-machine MAC (stable across
+        // reboots, unique per machine so concurrent guests never collide). When
+        // a shared folder is configured, append slirp's built-in TFTP server
+        // pointed at it; the guest pulls files with `tftp 10.0.2.2`.
         let p = config.ports
-        var nic = "user,model=lance,mac=\(config.macAddress),hostfwd=tcp::\(p.telnet)-:23,hostfwd=tcp::\(p.ssh)-:22,hostfwd=tcp::\(p.helios)-:2125"
+        var nic = "user,model=lance,mac=\(config.macAddress),hostfwd=tcp:127.0.0.1:\(p.telnet)-:23,hostfwd=tcp:127.0.0.1:\(p.ssh)-:22,hostfwd=tcp:127.0.0.1:\(p.helios)-:2125"
         if let tftp = config.tftpDirectory, !tftp.isEmpty {
             nic += ",tftp=\(tftp)"
         }

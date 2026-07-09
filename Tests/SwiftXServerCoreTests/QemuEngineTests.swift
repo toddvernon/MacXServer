@@ -28,7 +28,7 @@ final class QemuEngineTests: XCTestCase {
             "-prom-env", "input-device=ttya",
             "-prom-env", "output-device=ttya",
             "-prom-env", "ttya-mode=115200,8,n,1,-",
-            "-nic", "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::2123-:23,hostfwd=tcp::2222-:22,hostfwd=tcp::2125-:2125",
+            "-nic", "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp:127.0.0.1:2123-:23,hostfwd=tcp:127.0.0.1:2222-:22,hostfwd=tcp:127.0.0.1:2125-:2125",
             "-drive", "file=/Users/x/Library/Application Support/macXserver/solaris-2.6.qcow2,bus=0,unit=0,media=disk",
         ])
     }
@@ -42,7 +42,7 @@ final class QemuEngineTests: XCTestCase {
         let nic = QemuEngine.buildArguments(config: c)[
             QemuEngine.buildArguments(config: c).firstIndex(of: "-nic")! + 1]
         XCTAssertEqual(nic,
-            "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::2133-:23,hostfwd=tcp::2232-:22,hostfwd=tcp::2135-:2125")
+            "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp:127.0.0.1:2133-:23,hostfwd=tcp:127.0.0.1:2232-:22,hostfwd=tcp:127.0.0.1:2135-:2125")
         // The three OS blocks must not overlap, or concurrent images collide.
         let all = [ImagePorts.solaris26, .sunos414, .netbsd]
             .flatMap { [$0.telnet, $0.ssh, $0.helios] }
@@ -57,7 +57,7 @@ final class QemuEngineTests: XCTestCase {
         let args = QemuEngine.buildArguments(config: c)
         let nic = args[args.firstIndex(of: "-nic")! + 1]
         XCTAssertEqual(nic,
-            "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp::2123-:23,hostfwd=tcp::2222-:22,hostfwd=tcp::2125-:2125,tftp=/Users/x/macXserverTFTP")
+            "user,model=lance,mac=DE:AD:BE:EF:F3:E5,hostfwd=tcp:127.0.0.1:2123-:23,hostfwd=tcp:127.0.0.1:2222-:22,hostfwd=tcp:127.0.0.1:2125-:2125,tftp=/Users/x/macXserverTFTP")
     }
 
     /// The QMP control socket (VM_CONTROL.md Stage 1) is added only when a path
