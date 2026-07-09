@@ -448,7 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             launchers: chips)
     }
 
-    /// Open the machine's Admin Agents file browser (Overview → Admin Agents →
+    /// Open the machine's file browser (Overview → Helios Admin Agents →
     /// File Transfer): a synthetic filebrowser launcher resolved against the
     /// machine, so host / helios port / user / secret all ride the exact same
     /// plumbing a `fileBrowser = true` launcher chip uses. Keyed per machine so
@@ -577,7 +577,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             sub.addItem(item)
         }
 
-        // Admin verbs mirror the Overview's Admin Agents section exactly
+        // Admin verbs mirror the Overview's Helios Admin Agents section exactly
         // (audit F5, 2026-07-09: the menu and window used to disagree -- a
         // menu-first user couldn't find File Transfer at all). Gates match
         // machineRow: emulated = running and ready; external = the prober's

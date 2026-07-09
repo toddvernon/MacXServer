@@ -370,7 +370,7 @@ private struct MachineOverviewPage: View {
     /// DNS gates on `canDnsAdmin` (emulated, running and ready).
     private func adminAgents(_ row: MachineRow) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            MachineSectionHeader("Admin Agents")
+            MachineSectionHeader("Helios Admin Agents")
             VStack(alignment: .leading, spacing: 8) {
                 FlowLayout(spacing: 6) {
                     Button {
