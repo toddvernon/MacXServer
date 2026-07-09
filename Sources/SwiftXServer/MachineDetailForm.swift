@@ -573,19 +573,22 @@ struct MachineDetailForm: View {
                 // is launch resolution, so it's launcher config, not
                 // connection config.
                 LabeledField("Show windows on") {
-                    // Placeholder = what blank actually resolves to at launch
-                    // time (this X server's own address), so the default is
-                    // visible and still editable.
-                    TextField(model.defaultDisplay.map { "\($0()) (this server)" }
-                                  ?? "auto (leave blank)",
+                    // The gray text is the EFFECTIVE default, not a suggestion:
+                    // what blank actually resolves to at launch time (this
+                    // Mac's own address). Same convention as Xcode's inherited
+                    // build settings / Network's DHCP-filled fields; the
+                    // caption below says so explicitly (Todd, 2026-07-09).
+                    TextField(model.defaultDisplay.map { "\($0()) (this Mac)" }
+                                  ?? "this Mac",
                               text: Binding(
                         get: { draft.display ?? "" },
                         set: { draft.display = $0.isEmpty ? nil : $0 }))
                         .textFieldStyle(.roundedBorder)
                 }
-                fieldCaption("Where launched apps put their windows. Blank means this "
-                           + "X server (shown grayed). From inside an emulated VM this "
-                           + "Mac is 10.0.2.2, so those machines use 10.0.2.2:0.")
+                fieldCaption("Where launched apps put their windows. Leave it blank "
+                           + "for this Mac: the gray text shows what blank does, not "
+                           + "a suggestion. From inside an emulated VM this Mac is "
+                           + "10.0.2.2, so those machines use 10.0.2.2:0.")
                 if draft.launchers.isEmpty {
                     helpNote("No launchers. Add an X-client command.")
                 } else {
@@ -809,7 +812,7 @@ struct LauncherEditorView: View {
                     // the one place you'd trip over it: the same command can
                     // behave differently per connection.
                     Text("Runs on the machine with its display already pointed at "
-                       + "this server. Anything that opens an X window works. Over "
+                       + "this Mac. Anything that opens an X window works. Over "
                        + "Telnet the command sees the login shell's own PATH; over "
                        + "SSH or the Helios agent the app adds the system's X "
                        + "program folders itself.")
