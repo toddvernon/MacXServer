@@ -62,13 +62,13 @@ struct MachineDetailForm: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                identitySection
+                machineSection
                 connectionSection
+                loginSection
+                launchersSection
                 if draft.kind == .emulatedVM {
                     imageSection
-                    runtimeSection
                 }
-                launchersSection
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -151,8 +151,13 @@ struct MachineDetailForm: View {
         }
     }
 
-    private var identitySection: some View {
-        section("Identity") {
+    /// What this machine IS: name, kind, OS. (Was "Identity"; renamed in the
+    /// 2026-07-09 settings reorg -- see MACHINE_SETTINGS_AUDIT.md section 2.
+    /// OS moved in from Connection: it's machine identity, driving boot
+    /// config, halt command, port block, and X paths, nothing about
+    /// connecting.)
+    private var machineSection: some View {
+        section("Machine") {
             LabeledField("Name") {
                 TextField("Machine name", text: $draft.name)
                     .textFieldStyle(.roundedBorder)
@@ -172,13 +177,19 @@ struct MachineDetailForm: View {
                 .labelsHidden()
                 .disabled(bundled || running)
             }
+            fieldCaption("An emulated VM runs right here on your Mac. An external host "
+                       + "is a real machine on your network that this app connects to.")
             if bundled {
                 helpNote("This is a bundled machine that ships with the app. Its kind, "
                        + "host, and OS are fixed; attach a disk image here to run it.")
             }
+            osField
         }
     }
 
+    /// How the app REACHES the box: host, transport, ports, and (external
+    /// only) the Helios secret -- a wrong secret is a connection failure, so
+    /// it lives next to Host and Connect with.
     private var connectionSection: some View {
         section("Connection") {
             LabeledField("Host") {
@@ -190,23 +201,22 @@ struct MachineDetailForm: View {
                     .textFieldStyle(.roundedBorder)
                     .disabled(draft.kind == .emulatedVM)
             }
+            if draft.kind == .emulatedVM {
+                fieldCaption("Emulated VMs are always reached through this Mac, so "
+                           + "there's nothing to set.")
+            }
             if draft.kind == .externalHost,
                draft.host.trimmingCharacters(in: .whitespaces).isEmpty {
                 helpNote("A host is required before an external machine is saved.")
             }
-            portsField
-            LabeledField("User") {
-                TextField("login user", text: $draft.user)
-                    .textFieldStyle(.roundedBorder)
-            }
-            LabeledField("Transport") {
+            LabeledField("Connect with") {
                 // A bundled machine's management plane is Helios by design (its
                 // per-boot secret + hostfwd are wired for it), so the picker is
                 // locked there. Explicit .leading: a bare frame(width:) centers
                 // the narrow picker, drifting it right of the text fields above.
                 Picker("", selection: $draft.transport) {
                     ForEach(LauncherTransport.allCases, id: \.self) { t in
-                        Text(t.rawValue).tag(t)
+                        Text(t.displayName).tag(t)
                     }
                 }
                 .labelsHidden()
@@ -214,37 +224,57 @@ struct MachineDetailForm: View {
                 .frame(width: 140, alignment: .leading)
                 .disabled(bundled)
             }
-            osField
+            fieldCaption("How the app logs in to run things. Telnet and SSH sign in "
+                       + "like you would at a terminal; the Helios agent is our own "
+                       + "helper, the smoothest option once it's installed on the "
+                       + "machine.")
+            portsField
+            if draft.kind == .externalHost {
+                heliosSecretField
+            }
+        }
+    }
+
+    /// The Helios secret entry point (moved from the Overview 2026-07-09: a
+    /// credential is a setting, and the Overview slot it sat in belongs to
+    /// lifecycle buttons). The value lives in the Keychain, not the draft, so
+    /// this is a button that opens the existing dialog, not a field.
+    private var heliosSecretField: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            LabeledField("Helios Secret") {
+                Button("Set\u{2026}") { model.onSetHeliosSecret?(draft.id) }
+            }
+            fieldCaption("The password this machine's Helios agent expects. Kept in "
+                       + "your macOS Keychain.")
+        }
+    }
+
+    /// The ACCOUNT on the machine: user, and the telnet login mechanics
+    /// (password + shell prompt) inside the section that owns them.
+    private var loginSection: some View {
+        section("Login") {
+            LabeledField("User") {
+                TextField("login user", text: $draft.user)
+                    .textFieldStyle(.roundedBorder)
+            }
+            fieldCaption("The account on that machine. Apps you launch log in and "
+                       + "run as this user.")
             // The telnet launcher needs to recognize "logged in, shell
             // ready". Built-in detection covers the classic sigils and the
             // fleet's bracket prompt; this override is for anything else.
             // Only shown when telnet is actually in play for this machine.
             if draft.transport == .telnet
                 || draft.launchers.contains(where: { $0.transport == .telnet }) {
-                LabeledField("Prompt") {
+                passwordField
+                LabeledField("Shell prompt") {
                     TextField("auto-detect ($ % # > or [\u{2026}])", text: Binding(
                         get: { draft.shellPrompt ?? "" },
                         set: { draft.shellPrompt = $0.isEmpty ? nil : $0 }))
                         .textFieldStyle(.roundedBorder)
-                        .help("Substring that marks this account's shell prompt for "
-                            + "telnet launches (e.g. \u{201c}tvernon]\u{201d}). Blank = "
-                            + "automatic detection.")
                 }
-                passwordField
-            }
-            LabeledField("DISPLAY") {
-                // Placeholder = what blank actually resolves to at launch time
-                // (this X server's own address), so the default is visible and
-                // still editable. A slirp guest usually wants 10.0.2.2:0.
-                TextField(model.defaultDisplay.map { "\($0()) (this server)" }
-                              ?? "auto (leave blank)",
-                          text: Binding(
-                    get: { draft.display ?? "" },
-                    set: { draft.display = $0.isEmpty ? nil : $0 }))
-                    .textFieldStyle(.roundedBorder)
-                    .help("The DISPLAY handed to launched clients. Blank = this X "
-                        + "server's own address (shown). A slirp guest usually "
-                        + "wants 10.0.2.2:0.")
+                fieldCaption("How we recognize that a telnet login finished: text "
+                           + "your shell prompt ends with. Leave blank and the app "
+                           + "figures out the usual prompts itself.")
             }
         }
     }
@@ -258,27 +288,29 @@ struct MachineDetailForm: View {
     }
 
     private var passwordField: some View {
-        LabeledField("Password") {
-            HStack(spacing: 8) {
-                if revealPassword {
-                    TextField("ask on first launch (Keychain)", text: passwordBinding)
-                        .textFieldStyle(.roundedBorder)
-                } else {
-                    SecureField("ask on first launch (Keychain)", text: passwordBinding)
-                        .textFieldStyle(.roundedBorder)
+        VStack(alignment: .leading, spacing: 2) {
+            LabeledField("Password") {
+                HStack(spacing: 8) {
+                    if revealPassword {
+                        TextField("ask on first launch (Keychain)", text: passwordBinding)
+                            .textFieldStyle(.roundedBorder)
+                    } else {
+                        SecureField("ask on first launch (Keychain)", text: passwordBinding)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    Toggle("Show", isOn: $revealPassword)
+                        .toggleStyle(.checkbox)
                 }
-                Toggle("Show", isOn: $revealPassword)
-                    .toggleStyle(.checkbox)
+                // Commit as-you-type (like the autoBackup toggle): a launch
+                // from the Machines menu never blurs this field or tears the
+                // form down, so waiting for Return/onDisappear meant the
+                // registry could hold a different password than the dots
+                // showed. No cross-field validation on it, so eager is safe.
+                .onChange(of: draft.password) { commit() }
             }
-            .help("Login password for telnet launches on this machine, "
-                + "stored in machines.json. Blank = ask on first launch "
-                + "and remember in the macOS Keychain.")
-            // Commit as-you-type (like the autoBackup toggle): a launch
-            // from the Machines menu never blurs this field or tears the
-            // form down, so waiting for Return/onDisappear meant the
-            // registry could hold a different password than the dots
-            // showed. No cross-field validation on it, so eager is safe.
-            .onChange(of: draft.password) { commit() }
+            fieldCaption("Password for telnet logins. Leave it blank to be asked once "
+                       + "and have it kept in the macOS Keychain; type it here only if "
+                       + "you're fine with it sitting in machines.json as plain text.")
         }
     }
 
@@ -428,28 +460,10 @@ struct MachineDetailForm: View {
         }
     }
 
-    /// The machine's assigned runtime identity: the Mac-side host ports the
-    /// tooling dials (sticky -- assigned once by the registry, never move for
-    /// the life of the machine) and the guest MAC (derived from the machine's
-    /// id; stable across boots, unique per machine). Read-only by design.
-    private var runtimeSection: some View {
-        let p = draft.resolvedPorts
-        return section("Runtime") {
-            LabeledField("Ports") {
-                Text("telnet \(String(p.telnet)) \u{00B7} ssh \(String(p.ssh)) \u{00B7} helios \(String(p.helios))")
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-            }
-            LabeledField("MAC") {
-                Text(draft.resolvedMacAddress)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-            }
-            helpNote("Assigned to this machine when it was created and never change, "
-                   + "so scripts and tooling can rely on them. Ports are this Mac's "
-                   + "forwards into the guest (telnet/ssh/helios).")
-        }
-    }
+    // (The read-only Runtime section retired 2026-07-09: ports gained a real
+    // editor above, and the ports + MAC facts moved to the Overview as a
+    // quiet monospaced line under the system line -- Settings now holds only
+    // things with an edit affordance.)
 
     /// Guest-OS administration over the Helios daemon. Editing needs the guest
     /// up and its daemon answering, so the button rides the same readiness gate
@@ -479,13 +493,13 @@ struct MachineDetailForm: View {
                         // pane sat open on a stale value-copy.
                         Text((osDetectedOverHelios
                               ? model.machines.first(where: { $0.id == draft.id })?.os
-                              : draft.os)?.rawValue ?? "unspecified")
+                              : draft.os)?.displayName ?? "unspecified")
                     }
                 } else {
                     Picker("", selection: $draft.os) {
                         Text("auto / unspecified").tag(MachineOS?.none)
                         ForEach(MachineOS.allCases, id: \.self) { os in
-                            Text(os.rawValue).tag(MachineOS?.some(os))
+                            Text(os.displayName).tag(MachineOS?.some(os))
                         }
                     }
                     .labelsHidden()
@@ -521,14 +535,19 @@ struct MachineDetailForm: View {
     }
 
     /// Caption under the OS row: the image-detection explanation for an
-    /// image-backed emulated VM, or the Helios provenance for an external
-    /// host that reported its own uname.
+    /// image-backed emulated VM, the Helios provenance for an external host
+    /// that reported its own uname, or (free-picker state) what the field is
+    /// even for.
     private var osCaption: String? {
         if osDetectedOverHelios {
             return "Detected from the machine over Helios."
         }
-        guard draft.kind == .emulatedVM, draft.imagePath?.isEmpty == false else { return nil }
-        return osDetection?.explanation ?? "Detecting the OS from the image\u{2026}"
+        if draft.kind == .emulatedVM, draft.imagePath?.isEmpty == false {
+            return osDetection?.explanation ?? "Detecting the OS from the image\u{2026}"
+        }
+        if osLocked { return nil }
+        return "What the machine runs. Set it if we couldn't detect it. It tells the "
+             + "app where that system keeps its X programs and how to talk to it."
     }
 
     private var launchersSection: some View {
@@ -544,6 +563,23 @@ struct MachineDetailForm: View {
             }
             // Same content inset as the other sections (see `section`).
             VStack(alignment: .leading, spacing: 10) {
+                // DISPLAY renamed + moved here 2026-07-09: its only consumer
+                // is launch resolution, so it's launcher config, not
+                // connection config.
+                LabeledField("Show windows on") {
+                    // Placeholder = what blank actually resolves to at launch
+                    // time (this X server's own address), so the default is
+                    // visible and still editable.
+                    TextField(model.defaultDisplay.map { "\($0()) (this server)" }
+                                  ?? "auto (leave blank)",
+                              text: Binding(
+                        get: { draft.display ?? "" },
+                        set: { draft.display = $0.isEmpty ? nil : $0 }))
+                        .textFieldStyle(.roundedBorder)
+                }
+                fieldCaption("Where launched apps put their windows. Blank means this "
+                           + "X server (shown grayed). From inside an emulated VM this "
+                           + "Mac is 10.0.2.2, so those machines use 10.0.2.2:0.")
                 if draft.launchers.isEmpty {
                     helpNote("No launchers. Add an X-client command.")
                 } else {
@@ -551,6 +587,8 @@ struct MachineDetailForm: View {
                         launcherRow(idx: idx, launcher: l)
                         if idx < draft.launchers.count - 1 { Divider() }
                     }
+                    helpNote("Right-click a launcher to watch the login play out in a "
+                           + "progress window, handy when a launch hangs.")
                 }
             }
             .padding(.leading, 16)
@@ -673,6 +711,26 @@ struct MachineDetailForm: View {
         Text(text).font(.caption).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
+
+    /// A helpNote indented to sit under its field's control (label 84 +
+    /// spacing 12), the always-visible caption style from the 2026-07-09
+    /// settings pass -- promoted from hover-only .help tooltips, which were
+    /// invisible until you knew to hover.
+    private func fieldCaption(_ text: String) -> some View {
+        helpNote(text).padding(.leading, 96)
+    }
+}
+
+/// Plain-English transport names for the UI (the raw enum values are
+/// protocol vocabulary; user-facing labels avoid it).
+extension LauncherTransport {
+    var displayName: String {
+        switch self {
+        case .telnet: return "Telnet"
+        case .ssh:    return "SSH"
+        case .helios: return "Helios agent"
+        }
+    }
 }
 
 /// Identifies which launcher the sheet is editing: an existing index, or nil for
@@ -734,11 +792,24 @@ struct LauncherEditorView: View {
                         .textFieldStyle(.roundedBorder)
                 }
                 GridRow {
-                    Text("Transport").gridColumnAlignment(.trailing).foregroundStyle(.secondary)
+                    Text("")
+                    // The second sentence is the F10 asymmetry, documented at
+                    // the one place you'd trip over it: the same command can
+                    // behave differently per connection.
+                    Text("Runs on the machine with its display already pointed at "
+                       + "this server. Anything that opens an X window works. Over "
+                       + "Telnet the command sees the login shell's own PATH; over "
+                       + "SSH or the Helios agent the app adds the system's X "
+                       + "program folders itself.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                GridRow {
+                    Text("Connect with").gridColumnAlignment(.trailing).foregroundStyle(.secondary)
                     Picker("", selection: $draft.transport) {
-                        Text("inherit (\(machineTransport.rawValue))").tag(LauncherTransport?.none)
+                        Text("inherit (\(machineTransport.displayName))").tag(LauncherTransport?.none)
                         ForEach(LauncherTransport.allCases, id: \.self) { t in
-                            Text(t.rawValue).tag(LauncherTransport?.some(t))
+                            Text(t.displayName).tag(LauncherTransport?.some(t))
                         }
                     }
                     .labelsHidden()

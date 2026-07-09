@@ -472,9 +472,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let account = heliosSecretAccount(host: m.host, user: m.user)
         let alert = NSAlert()
         alert.messageText = "Helios secret for \(m.user)@\(m.host)"
-        alert.informativeText = "Enter the Helios daemon secret for this machine. "
-            + "Leave blank to clear it. Stored in your macOS Keychain, sent as the "
-            + "daemon's auth on every Helios call to this host."
+        alert.informativeText = "The password this machine's Helios agent expects. "
+            + "The app sends it whenever it talks to the agent: file transfer, DNS, "
+            + "status. Leave blank to clear it. Kept in your macOS Keychain."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         let field = SecretEntryField()

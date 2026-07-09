@@ -244,6 +244,31 @@ private struct MachineOverviewPage: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            factsLine(row)
+        }
+    }
+
+    /// The assigned ports (+ MAC for emulated VMs) as a quiet reference line.
+    /// Moved here from the Settings tab's read-only Runtime section
+    /// (2026-07-09): they pair with the live system line above, and Settings
+    /// now holds only things with an edit affordance (the ports editor).
+    @ViewBuilder private func factsLine(_ row: MachineRow) -> some View {
+        if let m = model.machines.first(where: { $0.id == row.id }) {
+            let p = m.resolvedPorts
+            let ports = "telnet \(String(p.telnet)) \u{00B7} ssh \(String(p.ssh)) "
+                      + "\u{00B7} helios \(String(p.helios))"
+            Text(row.isEmulated ? "\(ports) \u{00B7} MAC \(m.resolvedMacAddress)" : ports)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .textSelection(.enabled)
+                .help(row.isEmulated
+                      ? "Assigned to this machine when it was created and never change, "
+                      + "so scripts and tooling can rely on them. Ports are this Mac's "
+                      + "forwards into the guest; MAC is the guest's network address. "
+                      + "Override the ports in Settings if two machines collide."
+                      : "The ports this Mac uses to reach the machine's telnet, SSH, "
+                      + "and Helios agent. Change them in Settings if the machine "
+                      + "listens somewhere unusual.")
         }
     }
 
@@ -296,15 +321,11 @@ private struct MachineOverviewPage: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
-        } else if row.canSetHeliosSecret {
-            Button {
-                model.onSetHeliosSecret?(row.id)
-            } label: {
-                Label("Helios Secret\u{2026}", systemImage: "key.fill")
-            }
-            .buttonStyle(.bordered)
-            .help("Enter the Helios daemon secret for this host")
         }
+        // (No else: an external host has no lifecycle we own, so its row shows
+        // nothing -- which is truthful. The Helios Secret entry point moved to
+        // Settings -> Connection 2026-07-09: a credential is a setting, and it
+        // was only ever here because the lifecycle slot happened to be empty.)
     }
 
     @ViewBuilder private func launchers(_ row: MachineRow) -> some View {
