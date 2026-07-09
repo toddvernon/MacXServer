@@ -1437,6 +1437,16 @@ could only yield "unauthorized" -- a confusing dot for what's really
 neutral gray "not watched" dot, and both the status text and the Helios
 section say how to turn monitoring on.
 
+**Launchers are their own tab** (added later the same evening): the
+detail pane is Overview / Settings / Launchers now. Machine config is
+write-once; launchers are a working list you keep tweaking -- different
+edit cadences get different tabs (the Xcode target-editor precedent).
+The launcher-scoped defaults ("Show windows on", "Connect with") moved
+into the tab with the list, so Settings is purely machine facts. The
+Launchers form commits ONLY the fields it owns onto the live machine
+(and the Settings form adopts the live launcher-scoped values at commit),
+so the two tabs' drafts can't clobber each other.
+
 **The helios secret is keyed by host alone** (`helios:<host>`,
 lowercased). It's a per-box fact -- one daemon, one secret, whatever
 login telnet/ssh/run-as uses -- so editing User must not detach it

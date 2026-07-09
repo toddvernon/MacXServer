@@ -148,13 +148,16 @@ private struct MasterRow: View {
     }
 }
 
-/// The detail pane: a segmented Overview/Settings switcher over the two pages.
+/// The detail pane: a segmented Overview/Settings/Launchers switcher over the
+/// three pages (Launchers split out 2026-07-09: operate / configure / commands
+/// have different edit cadences, so they get different tabs -- same reasoning
+/// as Xcode's target-editor tabs).
 private struct MachineDetailContainer: View {
     let machine: Machine
     @ObservedObject var model: MachinesModel
     @State private var tab: DetailTab = .overview
 
-    enum DetailTab: Hashable { case overview, settings }
+    enum DetailTab: Hashable { case overview, settings, launchers }
 
     /// A VM with no disk image can't run, so its Overview is a dead end — open
     /// straight to Settings where the image gets set.
@@ -173,6 +176,7 @@ private struct MachineDetailContainer: View {
                 Picker("", selection: $tab) {
                     Text("Overview").tag(DetailTab.overview)
                     Text("Settings").tag(DetailTab.settings)
+                    Text("Launchers").tag(DetailTab.launchers)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -184,9 +188,11 @@ private struct MachineDetailContainer: View {
             switch tab {
             case .overview:
                 MachineOverviewPage(row: model.row(machine.id), model: model,
-                                    onEditLaunchers: { tab = .settings })
+                                    onEditLaunchers: { tab = .launchers })
             case .settings:
                 MachineDetailForm(machine: machine, model: model)
+            case .launchers:
+                MachineLaunchersForm(machine: machine, model: model)
             }
         }
         // Pick the starting tab per machine. Driven from the body (not @State init)
@@ -334,9 +340,9 @@ private struct MachineOverviewPage: View {
             // Content inset under the header, matching the Settings tab.
             VStack(alignment: .leading, spacing: 8) {
                 if row.launchers.isEmpty {
-                    editInSettingsLine(prefix: "No launchers.")
+                    editInLaunchersLine(prefix: "No launchers.")
                 } else {
-                    editInSettingsLine(prefix: "Click to run.")
+                    editInLaunchersLine(prefix: "Click to run.")
                     FlowLayout(spacing: 6) {
                         ForEach(row.launchers) { chip in
                             Button {
@@ -408,15 +414,15 @@ private struct MachineOverviewPage: View {
         }
     }
 
-    /// "<prefix> Edit in Settings." with Edit as a blue link that hops the
-    /// pane to the Settings tab.
-    private func editInSettingsLine(prefix: String) -> some View {
+    /// "<prefix> Edit in Launchers." with Edit as a blue link that hops the
+    /// pane to the Launchers tab.
+    private func editInLaunchersLine(prefix: String) -> some View {
         HStack(spacing: 4) {
             Text(prefix)
             Button("Edit") { onEditLaunchers() }
                 .buttonStyle(.plain)
                 .foregroundStyle(.blue)
-            Text("in Settings.")
+            Text("in Launchers.")
         }
         .font(.caption)
         .foregroundStyle(.secondary)

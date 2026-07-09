@@ -18,10 +18,6 @@ struct MachineDetailForm: View {
     /// changed (and so a re-commit after Return doesn't re-fire needlessly).
     @State private var committed: Machine
     @State private var draft: Machine
-    /// Launcher being added/edited in the sheet, if any.
-    @State private var launcherEdit: LauncherEditTarget?
-    /// Launcher pending delete confirmation (the minus button asks first).
-    @State private var launcherDelete: LauncherEditTarget?
     /// The guest-OS detection for the current image, run off-main at pick time (and
     /// on appear) for an image-backed emulated VM. nil until it has run.
     @State private var osDetection: GuestOSDetection?
@@ -55,7 +51,8 @@ struct MachineDetailForm: View {
     }
 
     /// A shipped bundled fixture: its kind/host/OS are load-bearing identity, so
-    /// they're locked; you can still attach an image and edit launchers.
+    /// they're locked; you can still attach an image here (launchers have
+    /// their own tab).
     private var bundled: Bool { draft.bundled }
     private var running: Bool { model.isRunning(draft.id) }
 
@@ -66,7 +63,6 @@ struct MachineDetailForm: View {
                 connectionSection
                 heliosSection
                 telnetSSHSection
-                launchersSection
                 if draft.kind == .emulatedVM {
                     imageSection
                 }
@@ -79,36 +75,6 @@ struct MachineDetailForm: View {
         .onChange(of: portTelnetText) { syncPortsDraft() }
         .onChange(of: portSSHText) { syncPortsDraft() }
         .onChange(of: portHeliosText) { syncPortsDraft() }
-        .sheet(item: $launcherEdit) { target in
-            LauncherEditorView(
-                initial: target.launcher,
-                machineTransport: draft.transport,
-                // Sibling names, minus the launcher being edited: chips,
-                // menu items, and launchFromMachine all key by name, so a
-                // duplicate would shadow its twin on every run surface.
-                takenNames: draft.launchers.enumerated()
-                    .filter { $0.offset != target.index }
-                    .map(\.element.name)
-            ) { edited in
-                apply(edited, to: target)
-            }
-        }
-        .alert("Remove \u{201c}\(launcherDelete?.launcher.name ?? "")\u{201d}?",
-               isPresented: Binding(get: { launcherDelete != nil },
-                                    set: { if !$0 { launcherDelete = nil } })) {
-            Button("Remove", role: .destructive) {
-                if let target = launcherDelete, let i = target.index,
-                   i < draft.launchers.count {
-                    draft.launchers.remove(at: i)
-                    commit()
-                }
-                launcherDelete = nil
-            }
-            Button("Cancel", role: .cancel) { launcherDelete = nil }
-        } message: {
-            Text("Removes the launcher from this machine. Nothing on the machine "
-               + "itself is affected.")
-        }
         // Re-detect whenever the image (or kind) changes -- i.e. at pick time.
         .task(id: "\(draft.kind.rawValue):\(draft.imagePath ?? "")") { await runOSDetection() }
         // Auto-commit: Return in any field, and on leaving the pane (switch
@@ -601,111 +567,8 @@ struct MachineDetailForm: View {
              + "app where that system keeps its X programs and how to talk to it."
     }
 
-    private var launchersSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                sectionHeader("X11 Launchers")
-                Spacer()
-                Button {
-                    launcherEdit = LauncherEditTarget(index: nil,
-                                                      launcher: MachineLauncher(name: ""))
-                } label: { Label("Add Command", systemImage: "plus") }
-                    .controlSize(.small)
-            }
-            // Same content inset as the other sections (see `section`).
-            VStack(alignment: .leading, spacing: 10) {
-                // DISPLAY renamed + moved here 2026-07-09: its only consumer
-                // is launch resolution, so it's launcher config, not
-                // connection config.
-                LabeledField("Show windows on") {
-                    // The gray text is the EFFECTIVE default, not a suggestion:
-                    // what blank actually resolves to at launch time (this
-                    // Mac's own address). Same convention as Xcode's inherited
-                    // build settings / Network's DHCP-filled fields; the
-                    // caption below says so explicitly (Todd, 2026-07-09).
-                    TextField(model.defaultDisplay.map { "\($0()) (this Mac)" }
-                                  ?? "this Mac",
-                              text: Binding(
-                        get: { draft.display ?? "" },
-                        set: { draft.display = $0.isEmpty ? nil : $0 }))
-                        .textFieldStyle(.roundedBorder)
-                }
-                fieldCaption("Where launched apps put their windows. Leave it blank "
-                           + "for this Mac: the gray text shows what blank does, not "
-                           + "a suggestion. From inside an emulated VM this Mac is "
-                           + "10.0.2.2, so those machines use 10.0.2.2:0.")
-                LabeledField("Connect with") {
-                    // Moved here from Connection (2026-07-09, Todd): this is
-                    // the default way LAUNCHER COMMANDS log in, nothing more --
-                    // monitoring rides the Helios section's secret now. A
-                    // bundled machine's launchers run over Helios by design
-                    // (its per-boot secret + hostfwd are wired for it), so the
-                    // picker is locked there. Explicit .leading: a bare
-                    // frame(width:) centers the narrow picker.
-                    Picker("", selection: $draft.transport) {
-                        ForEach(LauncherTransport.allCases, id: \.self) { t in
-                            Text(t.displayName).tag(t)
-                        }
-                    }
-                    .labelsHidden()
-                    .fixedSize()
-                    .frame(width: 140, alignment: .leading)
-                    .disabled(bundled)
-                }
-                fieldCaption("How these commands sign in to run. Telnet and SSH log "
-                           + "in like you would at a terminal; the Helios agent is "
-                           + "our own helper, the smoothest option once it's "
-                           + "installed on the machine. Each launcher can override "
-                           + "this.")
-                if draft.launchers.isEmpty {
-                    helpNote("No launchers. Add an X-client command.")
-                } else {
-                    ForEach(Array(draft.launchers.enumerated()), id: \.offset) { idx, l in
-                        launcherRow(idx: idx, launcher: l)
-                        if idx < draft.launchers.count - 1 { Divider() }
-                    }
-                    helpNote("Right-click a launcher to watch the login play out in a "
-                           + "progress window, handy when a launch hangs.")
-                }
-            }
-            .padding(.leading, 16)
-        }
-    }
-
-    private func launcherRow(idx: Int, launcher l: MachineLauncher) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "terminal")
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(l.name.isEmpty ? "(unnamed)" : l.name)
-                Text(l.command ?? "")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer()
-            Button {
-                launcherEdit = LauncherEditTarget(index: idx, launcher: l)
-            } label: { Image(systemName: "pencil") }
-                .buttonStyle(.borderless)
-            Button {
-                // Confirm first -- a stray click on the minus used to delete
-                // instantly with no undo.
-                launcherDelete = LauncherEditTarget(index: idx, launcher: l)
-            } label: { Image(systemName: "minus.circle") }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 2)
-        // Rows here are for editing; running lives on the Overview. The
-        // exception is the debugging gesture: right-click > Run with Progress
-        // Window streams this one launch's transcript live (verbose stopped
-        // being persisted launcher config 2026-07-08). Runs the committed
-        // launcher from the registry, so an uncommitted rename runs the old name.
-        .contentShape(Rectangle())
-        .contextMenu {
-            Button("Run") { model.onLaunch?(draft.id, l.name, false) }
-            Button("Run with Progress Window") { model.onLaunch?(draft.id, l.name, true) }
-        }
-    }
+    // (The X11 Launchers section left for its own tab 2026-07-09 --
+    // MachineLaunchersForm below. Settings is pure machine facts now.)
 
     // MARK: Commit + validation
 
@@ -734,15 +597,14 @@ struct MachineDetailForm: View {
            let live = model.machines.first(where: { $0.id == draft.id }) {
             draft.os = live.os
         }
-        // Fix up a colon-less DISPLAY override at the edit boundary (Todd,
-        // 2026-07-08): "desktop.vernon.com" without a display number is never
-        // valid X, and the failure is brutally silent -- the client dies at
-        // connect under nohup >/dev/null after the launch already reported
-        // success. Appending :0 here (not at resolve time) keeps the stored
-        // config identical to what the field shows.
-        if let d = draft.display?.trimmingCharacters(in: .whitespaces) {
-            if d.isEmpty { draft.display = nil }
-            else if !d.contains(":") { draft.display = "\(d):0" }
+        // Launcher-scoped fields (display / transport / launchers) are edited
+        // on the Launchers tab now; adopt the live values so a Settings draft
+        // that sat open can't write stale copies back over a Launchers-tab
+        // commit.
+        if let live = model.machines.first(where: { $0.id == draft.id }) {
+            draft.display = live.display
+            if !bundled { draft.transport = live.transport }
+            draft.launchers = live.launchers
         }
         guard canCommit else { return }
         committed = draft
@@ -771,30 +633,16 @@ struct MachineDetailForm: View {
         return model.imageClaimant?(path, draft.id)
     }
 
-    private func apply(_ edited: MachineLauncher, to target: LauncherEditTarget) {
-        if let i = target.index, i < draft.launchers.count {
-            draft.launchers[i] = edited
-        } else {
-            draft.launchers.append(edited)
-        }
-        commit()   // a launcher edit is a deliberate action; persist it now
-    }
-
     private func sectionHeader(_ text: String) -> some View {
         MachineSectionHeader(text)
     }
 
     private func helpNote(_ text: String) -> some View {
-        Text(text).font(.caption).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+        formHelpNote(text)
     }
 
-    /// A helpNote indented to sit under its field's control (label 84 +
-    /// spacing 12), the always-visible caption style from the 2026-07-09
-    /// settings pass -- promoted from hover-only .help tooltips, which were
-    /// invisible until you knew to hover.
     private func fieldCaption(_ text: String) -> some View {
-        helpNote(text).padding(.leading, 96)
+        formFieldCaption(text)
     }
 }
 
@@ -806,6 +654,227 @@ extension LauncherTransport {
         case .telnet: return "Telnet"
         case .ssh:    return "SSH"
         case .helios: return "Helios agent"
+        }
+    }
+}
+
+/// Caption helpers shared by the Settings and Launchers forms.
+private func formHelpNote(_ text: String) -> some View {
+    Text(text).font(.caption).foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+}
+
+/// A helpNote indented to sit under its field's control (label 84 + spacing
+/// 12), the always-visible caption style from the 2026-07-09 settings pass --
+/// promoted from hover-only .help tooltips, which were invisible until you
+/// knew to hover.
+private func formFieldCaption(_ text: String) -> some View {
+    formHelpNote(text).padding(.leading, 96)
+}
+
+/// The Launchers tab: the machine's X-client commands plus the two
+/// launcher-scoped defaults (where windows go, how commands sign in). Its own
+/// tab since 2026-07-09 (Todd's call): machine config is write-once, launchers
+/// are a working list you keep tweaking -- different cadence, different tab.
+/// Same draft/auto-commit machinery as the Settings form, but commit copies
+/// ONLY the fields this tab owns onto the live machine, so a draft that sat
+/// open through a prober OS adoption or an image change can never write stale
+/// machine facts back.
+struct MachineLaunchersForm: View {
+    @ObservedObject var model: MachinesModel
+    @State private var committed: Machine
+    @State private var draft: Machine
+    /// Launcher being added/edited in the sheet, if any.
+    @State private var launcherEdit: LauncherEditTarget?
+    /// Launcher pending delete confirmation (the minus button asks first).
+    @State private var launcherDelete: LauncherEditTarget?
+
+    init(machine: Machine, model: MachinesModel) {
+        self.model = model
+        // Same bundled-transport snap as the Settings form: a bundled machine
+        // is managed over Helios, full stop.
+        var m = machine
+        if m.bundled { m.transport = .helios }
+        _committed = State(initialValue: machine)
+        _draft = State(initialValue: m)
+    }
+
+    private var bundled: Bool { draft.bundled }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    MachineSectionHeader("X11 Launchers")
+                    Spacer()
+                    Button {
+                        launcherEdit = LauncherEditTarget(index: nil,
+                                                          launcher: MachineLauncher(name: ""))
+                    } label: { Label("Add Command", systemImage: "plus") }
+                        .controlSize(.small)
+                }
+                // Same content inset as the Settings sections.
+                VStack(alignment: .leading, spacing: 10) {
+                    LabeledField("Show windows on") {
+                        // The gray text is the EFFECTIVE default, not a
+                        // suggestion: what blank actually resolves to at
+                        // launch time (this Mac's own address). The caption
+                        // says so explicitly (Todd, 2026-07-09).
+                        TextField(model.defaultDisplay.map { "\($0()) (this Mac)" }
+                                      ?? "this Mac",
+                                  text: Binding(
+                            get: { draft.display ?? "" },
+                            set: { draft.display = $0.isEmpty ? nil : $0 }))
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    formFieldCaption("Where launched apps put their windows. Leave it "
+                                   + "blank for this Mac: the gray text shows what "
+                                   + "blank does, not a suggestion. From inside an "
+                                   + "emulated VM this Mac is 10.0.2.2, so those "
+                                   + "machines use 10.0.2.2:0.")
+                    LabeledField("Connect with") {
+                        // The default way THESE COMMANDS log in, nothing more
+                        // (monitoring rides the Helios section's secret). A
+                        // bundled machine's launchers run over Helios by
+                        // design, so the picker is locked there.
+                        Picker("", selection: $draft.transport) {
+                            ForEach(LauncherTransport.allCases, id: \.self) { t in
+                                Text(t.displayName).tag(t)
+                            }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                        .frame(width: 140, alignment: .leading)
+                        .disabled(bundled)
+                    }
+                    formFieldCaption("How these commands sign in to run. Telnet and "
+                                   + "SSH log in like you would at a terminal; the "
+                                   + "Helios agent is our own helper, the smoothest "
+                                   + "option once it's installed on the machine. "
+                                   + "Each launcher can override this.")
+                    if draft.launchers.isEmpty {
+                        formHelpNote("No launchers. Add an X-client command.")
+                    } else {
+                        ForEach(Array(draft.launchers.enumerated()), id: \.offset) { idx, l in
+                            launcherRow(idx: idx, launcher: l)
+                            if idx < draft.launchers.count - 1 { Divider() }
+                        }
+                        formHelpNote("Right-click a launcher to watch the login play "
+                                   + "out in a progress window, handy when a launch "
+                                   + "hangs.")
+                    }
+                }
+                .padding(.leading, 16)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .sheet(item: $launcherEdit) { target in
+            LauncherEditorView(
+                initial: target.launcher,
+                machineTransport: draft.transport,
+                // Sibling names, minus the launcher being edited: chips,
+                // menu items, and launchFromMachine all key by name, so a
+                // duplicate would shadow its twin on every run surface.
+                takenNames: draft.launchers.enumerated()
+                    .filter { $0.offset != target.index }
+                    .map(\.element.name)
+            ) { edited in
+                apply(edited, to: target)
+            }
+        }
+        .alert("Remove \u{201c}\(launcherDelete?.launcher.name ?? "")\u{201d}?",
+               isPresented: Binding(get: { launcherDelete != nil },
+                                    set: { if !$0 { launcherDelete = nil } })) {
+            Button("Remove", role: .destructive) {
+                if let target = launcherDelete, let i = target.index,
+                   i < draft.launchers.count {
+                    draft.launchers.remove(at: i)
+                    commit()
+                }
+                launcherDelete = nil
+            }
+            Button("Cancel", role: .cancel) { launcherDelete = nil }
+        } message: {
+            Text("Removes the launcher from this machine. Nothing on the machine "
+               + "itself is affected.")
+        }
+        // Auto-commit at the same edit boundaries as the Settings form.
+        .onSubmit { commit() }
+        .onDisappear { commit() }
+    }
+
+    private func launcherRow(idx: Int, launcher l: MachineLauncher) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "terminal")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(l.name.isEmpty ? "(unnamed)" : l.name)
+                Text(l.command ?? "")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Button {
+                launcherEdit = LauncherEditTarget(index: idx, launcher: l)
+            } label: { Image(systemName: "pencil") }
+                .buttonStyle(.borderless)
+            Button {
+                // Confirm first -- a stray click on the minus used to delete
+                // instantly with no undo.
+                launcherDelete = LauncherEditTarget(index: idx, launcher: l)
+            } label: { Image(systemName: "minus.circle") }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+        // Rows here are for editing; running lives on the Overview. The
+        // exception is the debugging gesture: right-click > Run with Progress
+        // Window streams this one launch's transcript live. Runs the committed
+        // launcher from the registry, so an uncommitted rename runs the old name.
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Run") { model.onLaunch?(draft.id, l.name, false) }
+            Button("Run with Progress Window") { model.onLaunch?(draft.id, l.name, true) }
+        }
+    }
+
+    private func apply(_ edited: MachineLauncher, to target: LauncherEditTarget) {
+        if let i = target.index, i < draft.launchers.count {
+            draft.launchers[i] = edited
+        } else {
+            draft.launchers.append(edited)
+        }
+        commit()   // a launcher edit is a deliberate action; persist it now
+    }
+
+    /// Persist the launcher-scoped fields if they changed. Unlike the Settings
+    /// form (which owns the whole machine), this copies display / transport /
+    /// launchers onto the LIVE machine at publish time -- the rest of this
+    /// draft may be stale and must never win.
+    private func commit() {
+        // Fix up a colon-less DISPLAY override at the edit boundary (Todd,
+        // 2026-07-08): "desktop.vernon.com" without a display number is never
+        // valid X, and the failure is brutally silent. Appending :0 here (not
+        // at resolve time) keeps the stored config identical to the field.
+        if let d = draft.display?.trimmingCharacters(in: .whitespaces) {
+            if d.isEmpty { draft.display = nil }
+            else if !d.contains(":") { draft.display = "\(d):0" }
+        }
+        guard draft != committed else { return }
+        committed = draft
+        let model = self.model
+        let id = draft.id
+        let display = draft.display
+        let transport = draft.transport
+        let launchers = draft.launchers
+        // Deferred one runloop turn for the same publishing-during-view-update
+        // reason as the Settings form.
+        DispatchQueue.main.async {
+            guard var live = model.machines.first(where: { $0.id == id }) else { return }
+            live.display = display
+            live.transport = transport
+            live.launchers = launchers
+            model.onCommit?(live)
         }
     }
 }

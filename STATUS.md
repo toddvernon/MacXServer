@@ -18,8 +18,10 @@ the CLIPBOARD/editres gaps).
   fail-closed-auth note).
 - Settings sections are planes now: Machine / Connection (host, user) /
   Helios (port, secret, live status line) / Telnet-SSH (ports, password,
-  shell prompt, always visible) / X11 Launchers ("Show windows on",
-  "Connect with", list) / Disk Image.
+  shell prompt, always visible) / Disk Image. Launchers became their own
+  TAB (Overview / Settings / Launchers) holding "Show windows on",
+  "Connect with", and the list; per-tab drafts commit only the fields
+  they own, so the tabs can't clobber each other.
 - "Connect with" = how launcher commands sign in, nothing more. Prober
   candidacy is secret-saved-only; secretless external = gray "not watched
   (no Helios secret)" instead of a bogus "refused" orange.
