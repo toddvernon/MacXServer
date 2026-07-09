@@ -76,7 +76,13 @@ struct MachineDetailForm: View {
         .sheet(item: $launcherEdit) { target in
             LauncherEditorView(
                 initial: target.launcher,
-                machineTransport: draft.transport
+                machineTransport: draft.transport,
+                // Sibling names, minus the launcher being edited: chips,
+                // menu items, and launchFromMachine all key by name, so a
+                // duplicate would shadow its twin on every run surface.
+                takenNames: draft.launchers.enumerated()
+                    .filter { $0.offset != target.index }
+                    .map(\.element.name)
             ) { edited in
                 apply(edited, to: target)
             }
@@ -766,12 +772,18 @@ struct LauncherEditorView: View {
     @State private var draft: MachineLauncher
     /// The owning machine's transport, shown as the "inherit" default label.
     private let machineTransport: LauncherTransport
+    /// The machine's OTHER launcher names. Every run surface (chips, menus,
+    /// launchFromMachine) keys launchers by name, so a duplicate name makes
+    /// its twin unreachable -- Done blocks on it (audit F9, 2026-07-09).
+    private let takenNames: [String]
     private let onSave: (MachineLauncher) -> Void
 
     init(initial: MachineLauncher, machineTransport: LauncherTransport,
+         takenNames: [String] = [],
          onSave: @escaping (MachineLauncher) -> Void) {
         _draft = State(initialValue: initial)
         self.machineTransport = machineTransport
+        self.takenNames = takenNames
         self.onSave = onSave
     }
 
@@ -823,6 +835,12 @@ struct LauncherEditorView: View {
             // automatic under Admin Agents whenever the box has helios. No
             // verbose toggle either, 2026-07-08: the progress window is a
             // launch gesture -- right-click > Run with Progress Window.)
+            if nameTaken {
+                Text("This machine already has a launcher named "
+                   + "\u{201c}\(draft.name)\u{201d}. Give this one its own name.")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -835,8 +853,13 @@ struct LauncherEditorView: View {
         .frame(width: 460)
     }
 
+    /// Exact-match against siblings (names are the launcher key everywhere,
+    /// so the comparison matches the lookups: case-sensitive, as-typed).
+    private var nameTaken: Bool { takenNames.contains(draft.name) }
+
     private var canSave: Bool {
         guard !draft.name.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        guard !nameTaken else { return false }
         return !(draft.command ?? "").trimmingCharacters(in: .whitespaces).isEmpty
     }
 }

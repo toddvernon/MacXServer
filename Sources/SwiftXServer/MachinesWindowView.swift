@@ -386,7 +386,7 @@ private struct MachineOverviewPage: View {
                           : (row.isEmulated
                              ? "Available once the machine is running and ready"
                              : "Available once the machine answers a Helios check "
-                             + "(save its secret in the Overview if you haven't)"))
+                             + "(set its Helios Secret in Settings if you haven't)"))
 
                     Button {
                         model.onDnsAdmin?(row.id)
@@ -400,8 +400,8 @@ private struct MachineOverviewPage: View {
                           ? "Edit the machine's DNS configuration (/etc/resolv.conf)"
                           : (row.isEmulated
                              ? "Available once the machine is running and ready"
-                             : "Needs the machine answering over Helios and its OS "
-                             + "set in Settings"))
+                             : "Available once the machine answers a Helios check "
+                             + "(set its Helios Secret in Settings if you haven't)"))
                 }
             }
             .padding(.leading, 16)

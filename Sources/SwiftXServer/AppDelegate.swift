@@ -417,13 +417,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             canForceQuit: (state == .running || state == .shuttingDown),
             canBackup: (state == .stopped),
             canConsole: (consoles[m.id] != nil),
-            // OS-sensitive admin verbs (the rule, Todd 2026-07-07): the box
-            // must be answering over Helios AND we must know what OS it runs.
-            // Emulated: ready covers reachability and boot implies a known
-            // image OS. External: the prober's last hello + the user-set OS.
+            // DNS gates on the box answering over Helios, same as File
+            // Transfer. (The os != nil condition dropped 2026-07-09, audit
+            // F4: the DNS panel writes a constant /etc/resolv.conf and never
+            // consults the OS. The 2026-07-07 "OS-sensitive verbs" doctrine
+            // still holds for verbs that ARE OS-sensitive; this one isn't.)
             canDnsAdmin: isEmulated
                 ? (state == .running && ready)
-                : (probeResults[m.id]?.reach == .up && m.os != nil),
+                : probeResults[m.id]?.reach == .up,
             // Admin verbs gate on the box ANSWERING over Helios (the rule,
             // Todd 2026-07-07): emulated = ready (readiness IS the helios
             // liveness signal); external = the prober's last hello succeeded
@@ -567,6 +568,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             sub.addItem(item)
         }
 
+        // Admin verbs mirror the Overview's Admin Agents section exactly
+        // (audit F5, 2026-07-09: the menu and window used to disagree -- a
+        // menu-first user couldn't find File Transfer at all). Gates match
+        // machineRow: emulated = running and ready; external = the prober's
+        // last hello succeeded. DNS is not OS-gated (audit F4).
+        let canAdmin = isEmulated ? ready : (probeResults[m.id]?.reach == .up)
+
+        func addAdminSubmenu() {
+            let adminItem = NSMenuItem(title: "Admin", action: nil, keyEquivalent: "")
+            adminItem.isEnabled = canAdmin
+            let adminMenu = NSMenu(title: "Admin")
+            adminMenu.autoenablesItems = false
+            let transfer = NSMenuItem(title: "File Transfer\u{2026}",
+                                      action: #selector(fileTransferMenu(_:)), keyEquivalent: "")
+            transfer.target = self
+            transfer.isEnabled = canAdmin
+            transfer.representedObject = idString
+            adminMenu.addItem(transfer)
+            let dns = NSMenuItem(title: "DNS (/etc/resolv.conf)\u{2026}",
+                                 action: #selector(openDnsAdmin(_:)), keyEquivalent: "")
+            dns.target = self
+            dns.isEnabled = canAdmin
+            dns.representedObject = idString
+            adminMenu.addItem(dns)
+            adminItem.submenu = adminMenu
+            sub.addItem(adminItem)
+        }
+
         if isEmulated {
             // Same gating as the old SPARCstation submenu, per machine. Start
             // covers the not-installed case (it opens the install flow); Shut
@@ -580,22 +609,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             sub.addItem(.separator())
             add("Show Console", #selector(showConsoleMenu(_:)), enabled: consoles[m.id] != nil)
             add("Back Up Disk Image\u{2026}", #selector(backUpDiskImageMenu(_:)), enabled: state == .stopped)
-
-            // Admin (DNS) talks to the machine's daemon, so gate it on readiness.
-            let adminItem = NSMenuItem(title: "Admin", action: nil, keyEquivalent: "")
-            adminItem.isEnabled = ready
-            let adminMenu = NSMenu(title: "Admin")
-            adminMenu.autoenablesItems = false
-            let dns = NSMenuItem(title: "DNS (/etc/resolv.conf)\u{2026}",
-                                 action: #selector(openDnsAdmin(_:)), keyEquivalent: "")
-            dns.target = self
-            dns.isEnabled = ready
-            dns.representedObject = idString
-            adminMenu.addItem(dns)
-            adminItem.submenu = adminMenu
-            sub.addItem(adminItem)
+            addAdminSubmenu()
         } else {
-            add("Helios Secret\u{2026}", #selector(setHeliosSecretMenu(_:)), enabled: true)
+            // (No Helios Secret item anymore: the entry point moved to
+            // Settings -> Connection 2026-07-09, and the menu mirrors the
+            // Overview's operate verbs, not Settings.)
+            addAdminSubmenu()
         }
 
         if !m.launchers.isEmpty {
@@ -651,11 +670,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @MainActor
-    @objc private func setHeliosSecretMenu(_ sender: NSMenuItem) {
-        guard let idStr = sender.representedObject as? String,
-              let id = UUID(uuidString: idStr) else { return }
-        promptHeliosSecret(for: id)
+    @objc private func fileTransferMenu(_ sender: NSMenuItem) {
+        if let id = machineID(from: sender) { openMachineFileTransfer(id) }
     }
+    // (setHeliosSecretMenu retired 2026-07-09: the menu item moved out with
+    // the Overview button; the entry point is Settings -> Connection, wired
+    // through model.onSetHeliosSecret.)
 
 
     /// Resolve one machine's engine config: helper + firmware from the app
@@ -1438,9 +1458,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             executeLaunch(entry: entry, os: os, password: pw, verbose: verbose)
             return
         }
-        let account = "\(entry.user)@\(entry.host)"
+        // Keyed by user@host:port (2026-07-09, audit F6): every emulated VM is
+        // host 127.0.0.1, so the old user@host key made all loopback VMs with
+        // the same user share ONE stored password -- first-launch prompt for
+        // VM A silently became VM B's password. The telnet port is
+        // per-machine, so it disambiguates.
+        let account = "\(entry.user)@\(entry.host):\(entry.port)"
         if let password = KeychainHelper.retrieve(account: account) {
             executeLaunch(entry: entry, os: os, password: password, verbose: verbose)
+        } else if let legacy = KeychainHelper.retrieve(account: "\(entry.user)@\(entry.host)") {
+            // One-shot migration from the old key: copy it forward under the
+            // new key and use it. The old entry is left alone -- lookalike
+            // user@host items may belong to other apps, not ours to delete.
+            try? KeychainHelper.store(account: account, password: legacy)
+            executeLaunch(entry: entry, os: os, password: legacy, verbose: verbose)
         } else {
             promptForPassword(entry: entry, os: os, account: account, verbose: verbose)
         }
@@ -1449,7 +1480,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func promptForPassword(entry: LauncherEntry, os: MachineOS?, account: String,
                                    verbose: Bool) {
         let alert = NSAlert()
-        alert.messageText = "Password for \(account)"
+        // The Keychain account string carries a port suffix now; the title
+        // stays human ("user on host"), not the storage key.
+        alert.messageText = "Password for \(entry.user) on \(entry.host)"
         alert.informativeText = "Enter the login password for \(entry.user) on \(entry.host).\nIt will be stored in the macOS Keychain."
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
