@@ -1403,6 +1403,49 @@ belong to some other app, so it isn't ours to delete. (The helios secret
 account `helios:user@host` is unaffected: it's external-only, where
 hosts are genuinely distinct.)
 
+(Superseded same-day for the HELIOS account -- see the evening entry
+below: the helios secret is keyed by host alone now, because it's a
+per-box fact. The telnet password stays user@host:port -- a login
+password genuinely is per-user.)
+
+---
+
+## 2026-07-09 (evening): Settings group by plane; transport is launcher config; helios secret keyed by host
+
+Todd's manual pass on the morning reorg surfaced a real tension: the
+Connection section mixed two unrelated planes, and "Connect with" was
+doing two jobs -- the default transport for launcher commands AND the
+prober's opt-in (transport == helios meant "watch this box"). Unwound as
+three linked decisions:
+
+**Sections are planes now.** Machine (name/kind/OS), Connection (host +
+user: the genuinely shared facts), **Helios** (agent port, secret,
+live status line), **Telnet / SSH** (their ports, password, shell
+prompt -- always visible; fields materializing when a picker two
+sections away said telnet was the old muddle), X11 Launchers ("Show
+windows on", "Connect with", the list), Disk Image. The three-field
+Ports row dissolved into the plane sections; the collision check still
+spans the triple and warns under both rows.
+
+**Transport is launcher config.** "Connect with" lives in X11 Launchers
+and means one thing: how launcher commands sign in (per-launcher
+override unchanged, bundled still locked to Helios agent). Prober
+candidacy no longer reads it: an external box is watched iff a Helios
+secret is saved. Probing a secretless box against fail-closed agents
+could only yield "unauthorized" -- a confusing dot for what's really
+"you haven't set the secret" (the 2026-07-09 ipc incident). No secret =
+neutral gray "not watched" dot, and both the status text and the Helios
+section say how to turn monitoring on.
+
+**The helios secret is keyed by host alone** (`helios:<host>`,
+lowercased). It's a per-box fact -- one daemon, one secret, whatever
+login telnet/ssh/run-as uses -- so editing User must not detach it
+(under `helios:user@host` it did, which is what made ipc read "refused
+the secret" for an app-side key miss). Legacy user@host entries migrate
+forward on first read, old entry left alone. "Unauthorized" can now only
+mean the SAVED secret was refused, and the UI says "refused the saved
+secret" plus a re-enter hint in the Helios section's status line.
+
 ---
 
 ## Decisions still to make

@@ -1,10 +1,33 @@
 # Status 2026-07-09
 
-## Headline: settings cleanup day executed. All four phases of
-SETTINGS_CLEANUP_PLAN.md shipped in four commits; 9 of the 10 audit
-findings closed (F3 deferred to SHORTCUTS by design). VM land is buttoned
-up pending Todd's manual pass; next session opens on X11 work (MCP bridge
-lead, or the CLIPBOARD/editres gaps).
+## Headline: settings cleanup day executed, then revised live. All four
+phases of SETTINGS_CLEANUP_PLAN.md shipped (9 of 10 audit findings
+closed, F3 deferred to SHORTCUTS by design), and Todd's manual pass drove
+an evening round: sections regrouped by PLANE (Helios and Telnet/SSH each
+own a section, transport demoted to launcher config), helios secret keyed
+by host, prober candidacy = secret-saved. See the three 2026-07-09
+DECISIONS entries. Next session opens on X11 work (MCP bridge lead, or
+the CLIPBOARD/editres gaps).
+
+## Evening revision (Todd's manual pass, after the morning phases)
+
+- Fleet dots mystery solved: every fleet agent was fine (all accept
+  secret "test"; verified by direct hello) -- the per-Mac Debug secret
+  store ~/.macxserver-dev-secrets.json just lacked 8 of 11 entries on the
+  desktop. Backfilled; memory updated (switching-Macs checklist + the
+  fail-closed-auth note).
+- Settings sections are planes now: Machine / Connection (host, user) /
+  Helios (port, secret, live status line) / Telnet-SSH (ports, password,
+  shell prompt, always visible) / X11 Launchers ("Show windows on",
+  "Connect with", list) / Disk Image.
+- "Connect with" = how launcher commands sign in, nothing more. Prober
+  candidacy is secret-saved-only; secretless external = gray "not watched
+  (no Helios secret)" instead of a bogus "refused" orange.
+- Helios secret keyed helios:<host> (was user@host; editing User detached
+  the secret -- the ipc confusion). Legacy entries migrate on read.
+- Wording: "this Mac" never "this server"; effective-default gray
+  placeholders say so in the caption; Overview section renamed "Helios
+  Admin Agents".
 
 ## What happened this session
 

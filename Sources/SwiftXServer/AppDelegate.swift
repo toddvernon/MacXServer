@@ -336,6 +336,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.portsClaimant = { [weak self] ports, excluding in
             self?.registry?.portBlockClaimant(ports: ports, excluding: excluding)?.name
         }
+        model.hasHeliosSecret = { [weak self] id in
+            guard let self, let m = self.registry?.machine(id) else { return false }
+            return self.savedHeliosSecret(host: m.host, user: m.user) != nil
+        }
     }
 
     /// Reopen (or focus) the Machines window -- from the status item / Machines menu.
@@ -380,12 +384,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let statusText: String
         var progress: Double? = nil
         if !isEmulated {
-            // The helios prober refines an external box's dot; unknown =
-            // never probed or not set up for helios.
+            // The helios prober refines an external box's dot. Since
+            // candidacy became secret-saved-only (2026-07-09), unknown splits
+            // two honest ways: no secret = deliberately not watched (say how
+            // to turn it on), secret-but-no-result-yet = first probe pending.
+            // And "refused" can only mean the SAVED secret was denied -- a
+            // key miss can't reach the wire anymore.
             switch probeResults[m.id]?.reach ?? .unknown {
-            case .unknown:      dot = .external;             statusText = "External"
+            case .unknown:
+                dot = .external
+                statusText = savedHeliosSecret(host: m.host, user: m.user) == nil
+                    ? "External \u{00b7} not watched (no Helios secret)"
+                    : "External \u{00b7} checking\u{2026}"
             case .up:           dot = .externalUp;           statusText = "External \u{00b7} agent responding"
-            case .unauthorized: dot = .externalUnauthorized; statusText = "External \u{00b7} agent refused the secret"
+            case .unauthorized: dot = .externalUnauthorized; statusText = "External \u{00b7} agent refused the saved secret"
             case .down:         dot = .externalDown;         statusText = "External \u{00b7} not responding"
             }
         } else if !m.isInstalledEmulatedVM {
@@ -479,16 +491,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @MainActor
     private func promptHeliosSecret(for machineID: UUID) {
         guard let m = registry?.machine(machineID) else { return }
-        let account = heliosSecretAccount(host: m.host, user: m.user)
+        let account = heliosSecretAccount(host: m.host)
         let alert = NSAlert()
-        alert.messageText = "Helios secret for \(m.user)@\(m.host)"
+        alert.messageText = "Helios secret for \(m.host)"
         alert.informativeText = "The password this machine's Helios agent expects. "
             + "The app sends it whenever it talks to the agent: file transfer, DNS, "
             + "status. Leave blank to clear it. Kept in your macOS Keychain."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         let field = SecretEntryField()
-        field.value = KeychainHelper.retrieve(account: account) ?? ""
+        // savedHeliosSecret (not a bare retrieve) so a legacy user@host-keyed
+        // entry prefills here and migrates forward.
+        field.value = savedHeliosSecret(host: m.host, user: m.user) ?? ""
         alert.accessoryView = field
         alert.window.initialFirstResponder = field.activeField
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -1226,11 +1240,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: - Launchers
 
-    /// Keychain account under which an external machine's Helios daemon secret is
-    /// stored. Keyed by user@host so it survives a machine rename / re-migration
-    /// and is shared by every launcher + file-browser call to that box.
-    private func heliosSecretAccount(host: String, user: String) -> String {
-        "helios:\(user)@\(host)"
+    /// Keychain account under which an external machine's Helios daemon secret
+    /// is stored. Keyed by HOST alone (2026-07-09): the agent's secret is a
+    /// per-box fact -- one daemon, one secret, whichever login telnet/ssh/
+    /// run-as uses -- so editing the User field must not detach it. (It did
+    /// when the key was user@host: the lookup came back empty, the prober
+    /// helloed with no auth, and the dot read "refused the secret" for what
+    /// was really an app-side key miss.)
+    private func heliosSecretAccount(host: String) -> String {
+        "helios:\(host.lowercased())"
+    }
+
+    /// Retrieve an external box's saved secret, migrating a legacy
+    /// user@host-keyed entry forward once: copy it under the host key and use
+    /// it; the old entry is left alone (same pattern as the telnet password
+    /// key migration).
+    private func savedHeliosSecret(host: String, user: String) -> String? {
+        let account = heliosSecretAccount(host: host)
+        if let s = KeychainHelper.retrieve(account: account) { return s }
+        if let legacy = KeychainHelper.retrieve(account: "helios:\(user)@\(host)") {
+            try? KeychainHelper.store(account: account, password: legacy)
+            return legacy
+        }
+        return nil
     }
 
     /// The Helios `auth` secret to present to a box's daemon. An emulated guest
@@ -1250,7 +1282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             return owner.flatMap { registry.controller($0.id)?.engine.currentSecret }
         }
-        return KeychainHelper.retrieve(account: heliosSecretAccount(host: host, user: user))
+        return savedHeliosSecret(host: host, user: user)
     }
 
     // MARK: - Helios prober (external reachability + guest sysinfo)
@@ -1302,12 +1334,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         for m in registry.machines {
             if m.kind == .externalHost {
                 guard !m.host.isEmpty else { continue }
-                // Only boxes set up for helios. A transport-helios box with no
-                // saved secret still gets probed: the fail-closed agent's
-                // "unauthorized" answer is exactly the actionable signal.
-                let secret = KeychainHelper.retrieve(
-                    account: heliosSecretAccount(host: m.host, user: m.user))
-                guard m.transport == .helios || secret != nil else { continue }
+                // Candidacy = a saved secret, nothing else (2026-07-09).
+                // Transport is launcher config now, not a monitoring opt-in,
+                // and probing a secretless box against fail-closed agents can
+                // only produce "unauthorized" -- a confusing dot for what's
+                // really "you haven't set the secret yet" (the ipc incident).
+                // No secret -> neutral gray "not watched" dot; the Helios
+                // section in Settings says how to turn monitoring on.
+                guard let secret = savedHeliosSecret(host: m.host, user: m.user) else { continue }
                 jobs.append(HeliosProbeJob(id: m.id, host: m.host,
                                            port: m.resolvedPorts.helios,
                                            secret: secret, isEmulated: false))

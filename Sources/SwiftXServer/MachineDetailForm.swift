@@ -64,7 +64,8 @@ struct MachineDetailForm: View {
             VStack(alignment: .leading, spacing: 16) {
                 machineSection
                 connectionSection
-                loginSection
+                heliosSection
+                telnetSSHSection
                 launchersSection
                 if draft.kind == .emulatedVM {
                     imageSection
@@ -73,6 +74,11 @@ struct MachineDetailForm: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // Land port-field edits on the draft as they're typed (the boxes live
+        // in two different sections now, so the sync rides the whole form).
+        .onChange(of: portTelnetText) { syncPortsDraft() }
+        .onChange(of: portSSHText) { syncPortsDraft() }
+        .onChange(of: portHeliosText) { syncPortsDraft() }
         .sheet(item: $launcherEdit) { target in
             LauncherEditorView(
                 initial: target.launcher,
@@ -193,9 +199,11 @@ struct MachineDetailForm: View {
         }
     }
 
-    /// How the app REACHES the box: host, transport, ports, and (external
-    /// only) the Helios secret -- a wrong secret is a connection failure, so
-    /// it lives next to Host and Connect with.
+    /// The facts every plane shares: where the box is, and which account the
+    /// app uses on it. (The 2026-07-09 evening regroup, Todd's call: Helios
+    /// and Telnet/SSH each got their own section below, and the launcher
+    /// transport moved down to X11 Launchers -- "Connection" kept only what's
+    /// genuinely common.)
     private var connectionSection: some View {
         section("Connection") {
             LabeledField("Host") {
@@ -215,73 +223,110 @@ struct MachineDetailForm: View {
                draft.host.trimmingCharacters(in: .whitespaces).isEmpty {
                 helpNote("A host is required before an external machine is saved.")
             }
-            LabeledField("Connect with") {
-                // A bundled machine's management plane is Helios by design (its
-                // per-boot secret + hostfwd are wired for it), so the picker is
-                // locked there. Explicit .leading: a bare frame(width:) centers
-                // the narrow picker, drifting it right of the text fields above.
-                Picker("", selection: $draft.transport) {
-                    ForEach(LauncherTransport.allCases, id: \.self) { t in
-                        Text(t.displayName).tag(t)
-                    }
-                }
-                .labelsHidden()
-                .fixedSize()
-                .frame(width: 140, alignment: .leading)
-                .disabled(bundled)
-            }
-            fieldCaption("How the app logs in to run things. Telnet and SSH sign in "
-                       + "like you would at a terminal; the Helios agent is our own "
-                       + "helper, the smoothest option once it's installed on the "
-                       + "machine.")
-            portsField
-            if draft.kind == .externalHost {
-                heliosSecretField
-            }
-        }
-    }
-
-    /// The Helios secret entry point (moved from the Overview 2026-07-09: a
-    /// credential is a setting, and the Overview slot it sat in belongs to
-    /// lifecycle buttons). The value lives in the Keychain, not the draft, so
-    /// this is a button that opens the existing dialog, not a field.
-    private var heliosSecretField: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            LabeledField("Helios Secret") {
-                Button("Set\u{2026}") { model.onSetHeliosSecret?(draft.id) }
-            }
-            fieldCaption("The password this machine's Helios agent expects. Kept in "
-                       + "your macOS Keychain.")
-        }
-    }
-
-    /// The ACCOUNT on the machine: user, and the telnet login mechanics
-    /// (password + shell prompt) inside the section that owns them.
-    private var loginSection: some View {
-        section("Login") {
             LabeledField("User") {
                 TextField("login user", text: $draft.user)
                     .textFieldStyle(.roundedBorder)
             }
-            fieldCaption("The account on that machine. Apps you launch log in and "
-                       + "run as this user.")
-            // The telnet launcher needs to recognize "logged in, shell
-            // ready". Built-in detection covers the classic sigils and the
-            // fleet's bracket prompt; this override is for anything else.
-            // Only shown when telnet is actually in play for this machine.
-            if draft.transport == .telnet
-                || draft.launchers.contains(where: { $0.transport == .telnet }) {
-                passwordField
-                LabeledField("Shell prompt") {
-                    TextField("auto-detect ($ % # > or [\u{2026}])", text: Binding(
-                        get: { draft.shellPrompt ?? "" },
-                        set: { draft.shellPrompt = $0.isEmpty ? nil : $0 }))
-                        .textFieldStyle(.roundedBorder)
-                }
-                fieldCaption("How we recognize that a telnet login finished: text "
-                           + "your shell prompt ends with. Leave blank and the app "
-                           + "figures out the usual prompts itself.")
+            fieldCaption("The account on that machine. Telnet and SSH sign in as "
+                       + "this user; the Helios agent runs commands as this user.")
+        }
+    }
+
+    /// The machine's management plane: our agent, its port, its secret, and
+    /// whether it's answering. Its own section (not a "connection" choice)
+    /// because Helios is what the status dot, File Transfer, and DNS ride
+    /// regardless of how launcher commands log in.
+    private var heliosSection: some View {
+        section("Helios") {
+            if draft.kind == .externalHost {
+                heliosStatusLine
             }
+            LabeledField("Port") {
+                portBox(nil, $portHeliosText, placeholder: derivedPorts.helios)
+                    .disabled(running)
+            }
+            portsRowCaption
+            if draft.kind == .externalHost {
+                LabeledField("Secret") {
+                    Button((model.hasHeliosSecret?(draft.id) ?? false)
+                           ? "Change\u{2026}" : "Set\u{2026}") {
+                        model.onSetHeliosSecret?(draft.id)
+                    }
+                }
+                fieldCaption("The password this machine's Helios agent expects. Kept "
+                           + "in your macOS Keychain. Setting it also turns on "
+                           + "monitoring: the app checks the agent every few minutes "
+                           + "and shows the result as the machine's status dot.")
+            } else {
+                fieldCaption("The agent inside the guest gets a fresh secret at "
+                           + "every boot, automatically. There's nothing to set.")
+            }
+            if heliosPortInvalid {
+                portsInvalidNote
+            }
+            portsCollisionNote
+        }
+    }
+
+    /// The live answer to "is Helios working on this box": derived from the
+    /// same probe result that drives the status dot, so Settings and the
+    /// master list can never disagree.
+    @ViewBuilder private var heliosStatusLine: some View {
+        let dot = model.row(draft.id)?.dot ?? .external
+        let hasSecret = model.hasHeliosSecret?(draft.id) ?? false
+        let text: String = {
+            switch dot {
+            case .externalUp:
+                return "The agent is answering."
+            case .externalUnauthorized:
+                return "The agent is answering but refused the saved secret. "
+                     + "Re-enter it below."
+            case .externalDown:
+                return "Not answering. Check that the agent is running and the "
+                     + "port below is right."
+            default:
+                return hasSecret
+                    ? "Checking\u{2026}"
+                    : "Not watched. Set the secret below to turn on monitoring."
+            }
+        }()
+        HStack(spacing: 6) {
+            StatusDotView(dot: dot, progress: nil)
+            Text(text).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.leading, 96)
+    }
+
+    /// The terminal login plane: how telnet/ssh launches sign in. Password and
+    /// prompt are telnet mechanics (SSH is keys-only) and are always visible
+    /// now -- the section boundary says what they belong to, where the old
+    /// form materialized them when a picker two sections away said telnet.
+    private var telnetSSHSection: some View {
+        section("Telnet / SSH") {
+            LabeledField("Ports") {
+                HStack(spacing: 10) {
+                    portBox("telnet", $portTelnetText, placeholder: derivedPorts.telnet)
+                    portBox("ssh", $portSSHText, placeholder: derivedPorts.ssh)
+                }
+                .disabled(running)
+            }
+            portsRowCaption
+            passwordField
+            LabeledField("Shell prompt") {
+                TextField("auto-detect ($ % # > or [\u{2026}])", text: Binding(
+                    get: { draft.shellPrompt ?? "" },
+                    set: { draft.shellPrompt = $0.isEmpty ? nil : $0 }))
+                    .textFieldStyle(.roundedBorder)
+            }
+            fieldCaption("How we recognize that a telnet login finished: text "
+                       + "your shell prompt ends with. Leave blank and the app "
+                       + "figures out the usual prompts itself. (SSH needs neither "
+                       + "of these: it signs in with your keys.)")
+            if telnetSSHPortsInvalid {
+                portsInvalidNote
+            }
+            portsCollisionNote
         }
     }
 
@@ -331,14 +376,21 @@ struct MachineDetailForm: View {
         return m.resolvedPorts
     }
 
-    /// True when some non-blank port field isn't a number in 1...65535.
+    /// True when this non-blank port text isn't a number in 1...65535.
     /// (Blank is always fine -- it means "derive".)
-    private var portsTextInvalid: Bool {
-        [portTelnetText, portSSHText, portHeliosText].contains { text in
-            let t = text.trimmingCharacters(in: .whitespaces)
-            return !t.isEmpty && (UInt16(t) == nil || UInt16(t) == 0)
-        }
+    private func portTextBad(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        return !t.isEmpty && (UInt16(t) == nil || UInt16(t) == 0)
     }
+
+    /// Per-section validity (the boxes live in two sections since the
+    /// 2026-07-09 plane regroup, and each shows its own note)...
+    private var heliosPortInvalid: Bool { portTextBad(portHeliosText) }
+    private var telnetSSHPortsInvalid: Bool {
+        portTextBad(portTelnetText) || portTextBad(portSSHText)
+    }
+    /// ...while commit blocks on any of them.
+    private var portsTextInvalid: Bool { heliosPortInvalid || telnetSSHPortsInvalid }
 
     /// The override the current field text describes: nil when all three are
     /// blank (back to derived), otherwise a full triple with blank fields
@@ -370,55 +422,48 @@ struct MachineDetailForm: View {
         return model.portsClaimant?(draft.resolvedPorts, draft.id)
     }
 
-    private var portsField: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            LabeledField("Ports") {
-                HStack(spacing: 10) {
-                    portBox("telnet", $portTelnetText, placeholder: derivedPorts.telnet)
-                    portBox("ssh", $portSSHText, placeholder: derivedPorts.ssh)
-                    portBox("helios", $portHeliosText, placeholder: derivedPorts.helios)
-                }
-                // A live qemu's hostfwds are baked into its argv, same freeze
-                // rule as the disk image.
-                .disabled(running)
-            }
-            .onChange(of: portTelnetText) { syncPortsDraft() }
-            .onChange(of: portSSHText) { syncPortsDraft() }
-            .onChange(of: portHeliosText) { syncPortsDraft() }
-            Group {
-                if running {
-                    helpNote("Stop the VM to change its ports.")
-                } else if draft.kind == .emulatedVM {
-                    helpNote("How this Mac reaches the guest. Assigned when the machine "
-                           + "was created; override only to resolve a conflict.")
-                } else {
-                    helpNote("How this Mac reaches the machine's telnet, SSH, and Helios "
-                           + "agent. Leave blank for the usual ports.")
-                }
-            }
-            .padding(.leading, 96)   // align under the fields (label 84 + spacing 12)
-            if portsTextInvalid {
-                Label("Ports must be numbers between 1 and 65535.",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .padding(.leading, 96)
-            }
-            if let other = portsClaimantName {
-                Label("These ports collide with \u{201c}\(other)\u{201d} \u{2014} every "
-                    + "machine needs its own.",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .padding(.leading, 96)
-            }
+    /// The shared caption under each ports row: what blank does, and (while
+    /// running) why the boxes are frozen -- a live qemu's hostfwds are baked
+    /// into its argv, same freeze rule as the disk image.
+    @ViewBuilder private var portsRowCaption: some View {
+        if running {
+            fieldCaption("Stop the VM to change its ports.")
+        } else if draft.kind == .emulatedVM {
+            fieldCaption("Assigned when the machine was created; the gray text is "
+                       + "what blank uses. Override only to resolve a conflict.")
+        } else {
+            fieldCaption("Leave blank for the usual port (shown gray).")
         }
     }
 
-    private func portBox(_ label: String, _ text: Binding<String>,
+    private var portsInvalidNote: some View {
+        Label("Ports must be numbers between 1 and 65535.",
+              systemImage: "exclamationmark.triangle.fill")
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .padding(.leading, 96)
+    }
+
+    /// The collision warning, shown under BOTH ports rows (the overlap check
+    /// spans the whole triple, and a warning only in the other section would
+    /// be invisible from the one being edited).
+    @ViewBuilder private var portsCollisionNote: some View {
+        if let other = portsClaimantName {
+            Label("These ports collide with \u{201c}\(other)\u{201d}. Every "
+                + "machine needs its own.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .padding(.leading, 96)
+        }
+    }
+
+    private func portBox(_ label: String?, _ text: Binding<String>,
                          placeholder: UInt16) -> some View {
         HStack(spacing: 4) {
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            if let label {
+                Text(label).font(.caption).foregroundStyle(.secondary)
+            }
             TextField(String(placeholder), text: text)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.body, design: .monospaced))
@@ -589,6 +634,29 @@ struct MachineDetailForm: View {
                            + "for this Mac: the gray text shows what blank does, not "
                            + "a suggestion. From inside an emulated VM this Mac is "
                            + "10.0.2.2, so those machines use 10.0.2.2:0.")
+                LabeledField("Connect with") {
+                    // Moved here from Connection (2026-07-09, Todd): this is
+                    // the default way LAUNCHER COMMANDS log in, nothing more --
+                    // monitoring rides the Helios section's secret now. A
+                    // bundled machine's launchers run over Helios by design
+                    // (its per-boot secret + hostfwd are wired for it), so the
+                    // picker is locked there. Explicit .leading: a bare
+                    // frame(width:) centers the narrow picker.
+                    Picker("", selection: $draft.transport) {
+                        ForEach(LauncherTransport.allCases, id: \.self) { t in
+                            Text(t.displayName).tag(t)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .frame(width: 140, alignment: .leading)
+                    .disabled(bundled)
+                }
+                fieldCaption("How these commands sign in to run. Telnet and SSH log "
+                           + "in like you would at a terminal; the Helios agent is "
+                           + "our own helper, the smoothest option once it's "
+                           + "installed on the machine. Each launcher can override "
+                           + "this.")
                 if draft.launchers.isEmpty {
                     helpNote("No launchers. Add an X-client command.")
                 } else {

@@ -137,6 +137,10 @@ final class MachinesModel: ObservableObject {
     /// (excluding the machine being edited), or nil if the block is free.
     /// Drives the Settings ports editor's collision warning.
     var portsClaimant: ((_ ports: ImagePorts, _ excluding: UUID) -> String?)?
+    /// Whether an external machine has a Helios secret saved (Keychain /
+    /// dev-secrets). Drives the Settings Helios section's status line -- the
+    /// value itself never reaches the form.
+    var hasHeliosSecret: ((_ id: UUID) -> Bool)?
     /// The DISPLAY a launched client gets when the machine leaves it blank:
     /// this X server's own address ("<Mac LAN IP>:<display>"). Shown as the
     /// field's placeholder so blank reads as what it actually does.
