@@ -20,10 +20,12 @@ public struct MachinesFile: Codable, Equatable, Sendable {
     public init(machines: [Machine]) { self.machines = machines }
 
     /// Hosts we treat as "the bundled emulator's loopback" rather than a real LAN
-    /// box. Drives migration's emulatedVM-vs-externalHost inference.
+    /// box. Drives migration's emulatedVM-vs-externalHost inference, and (public
+    /// since 2026-07-09) the app side's loopback checks -- one list, not two
+    /// drifting copies.
     static let loopbackHosts: Set<String> = ["127.0.0.1", "localhost", "0.0.0.0", "::1"]
 
-    static func isLoopback(_ host: String) -> Bool {
+    public static func isLoopback(_ host: String) -> Bool {
         loopbackHosts.contains(host.lowercased())
     }
 

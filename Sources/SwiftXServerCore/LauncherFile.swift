@@ -29,8 +29,10 @@ public struct LauncherEntry: Equatable, Sendable {
     public let user: String
     /// Remote port. Default 23 for telnet, 22 for ssh.
     public let port: UInt16
-    /// Show the per-launch progress window with the session transcript.
-    public let verbose: Bool
+    // (No `verbose` field, 2026-07-09: the progress window is a launch-time
+    // gesture -- right-click > Run with Progress Window -- carried as a
+    // parameter on the launch path, never launcher config. A legacy
+    // `verbose` key in the old launchers file is ignored at parse.)
     /// Add a "Files…" item next to this launcher that opens a Helios file
     /// browser scoped to `user`'s home directory. Only meaningful for
     /// `transport = helios` (the daemon is the file-transfer mechanism); the
@@ -80,7 +82,6 @@ public struct LauncherEntry: Equatable, Sendable {
             ?? .telnet
         let port = merged["port"].flatMap { UInt16($0) }
             ?? (transport == .ssh ? 22 : transport == .helios ? 2125 : 23)
-        let verbose = ["true", "yes", "1"].contains(merged["verbose"]?.lowercased() ?? "")
         if transport == .ssh, let pw = merged["password"], !pw.isEmpty {
             warnings.append("'\(group)/\(name)' has transport=ssh and a "
                 + "password set; ssh is keys-only here, password ignored")
@@ -90,10 +91,15 @@ public struct LauncherEntry: Equatable, Sendable {
                 + "transport=\(transport.rawValue); the file browser only works over "
                 + "transport=helios, so this key can't browse (wrong transport)")
         }
+        // login_prompt / password_prompt are legacy launchers-file keys: only
+        // the old dotfile can set them, and machine launchers (the live path)
+        // always get the "ogin:"/"assword:" defaults -- there is no machine-
+        // level knob yet (audit F3, ledgered in SHORTCUTS.md; the fix is the
+        // shellPrompt pattern repeated, waiting on a real host that needs it).
         return LauncherEntry(
             name: name, group: group,
             host: host, command: command, user: user,
-            port: port, verbose: verbose, fileBrowser: fileBrowser,
+            port: port, fileBrowser: fileBrowser,
             loginPrompt: merged["login_prompt"] ?? "ogin:",
             passwordPrompt: merged["password_prompt"] ?? "assword:",
             shellPrompt: merged["shell_prompt"] ?? "$ ",
@@ -104,7 +110,7 @@ public struct LauncherEntry: Equatable, Sendable {
 
     /// Build an entry. Prompts and port carry the documented defaults when omitted.
     public init(name: String, group: String, host: String, command: String, user: String,
-                port: UInt16 = 23, verbose: Bool = false, fileBrowser: Bool = false,
+                port: UInt16 = 23, fileBrowser: Bool = false,
                 loginPrompt: String = "ogin:",
                 passwordPrompt: String = "assword:",
                 shellPrompt: String = "$ ",
@@ -113,7 +119,7 @@ public struct LauncherEntry: Equatable, Sendable {
                 display: String? = nil) {
         self.name = name; self.group = group
         self.host = host; self.command = command
-        self.user = user; self.port = port; self.verbose = verbose
+        self.user = user; self.port = port
         self.fileBrowser = fileBrowser
         self.loginPrompt = loginPrompt; self.passwordPrompt = passwordPrompt
         self.shellPrompt = shellPrompt; self.password = password

@@ -104,9 +104,9 @@ final class LauncherFileTests: XCTestCase {
         XCTAssertEqual(file.entries[0].host, "u5.example.com")
         XCTAssertEqual(file.entries[0].user, "bob")
         XCTAssertEqual(file.entries[0].shellPrompt, "myhost]")
-        XCTAssertTrue(file.entries[0].verbose, "inherited verbose=true")
-        XCTAssertTrue(file.entries[1].verbose, "inherited verbose=true")
-        XCTAssertFalse(file.entries[2].verbose, "item override verbose=false")
+        // The `verbose` keys above are legacy config the parser now ignores
+        // (the progress window became a launch gesture 2026-07-08); entries
+        // still parse fine around them.
     }
 
     // `password` inherits from the host block (dev-convenience field set on

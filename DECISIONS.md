@@ -1356,6 +1356,55 @@ dormant enum waiting to be wired. Todd's call, 2026-07-09.
 
 ---
 
+## 2026-07-09: Machine settings speak plain English, grouped by what they answer
+
+The MACHINE_SETTINGS_AUDIT.md cleanup locked in a naming + grouping
+doctrine for the Settings tab. Sections answer questions: **Machine**
+(what is this? Name, Kind, OS), **Connection** (how does the app reach
+it? Host, Connect with, Ports, Helios Secret), **Login** (as whom? User,
+Password, Shell prompt), **X11 Launchers** (what runs, and where do
+windows go? Show windows on + the launcher list), **Disk Image**
+(emulated only). Conditional fields appear inside the section that owns
+them, so telnet's password materializing no longer mutates a different
+section of the form.
+
+Renames follow the existing no-jargon rule (user-facing labels avoid
+protocol vocabulary): Transport -> "Connect with" with options Telnet /
+SSH / Helios agent, DISPLAY -> "Show windows on", Prompt -> "Shell
+prompt", Identity -> "Machine", OS picker shows displayName not raw enum
+values. Every non-obvious field carries an always-visible caption
+(fieldCaption, the helpNote style indented under the control) instead of
+a hover-only tooltip -- if a setting needs explaining, the explanation is
+visible without knowing to hover.
+
+Two placement doctrines worth keeping: **Settings holds only things with
+an edit affordance** -- the read-only Runtime section dissolved to a
+monospaced ports+MAC facts line on the Overview, next to the live system
+line; and **credentials are settings, not operate verbs** -- the Helios
+Secret button left the Overview's lifecycle slot (it only sat there
+because an external's slot happened to be empty) for Settings ->
+Connection. The Machines menu mirrors the Overview's operate verbs, so
+the secret has no menu item anymore.
+
+---
+
+## 2026-07-09: Telnet Keychain slot is per-machine (user@host:port)
+
+The telnet password Keychain account was `user@host`, and every emulated
+VM is host 127.0.0.1 -- so all loopback VMs sharing a username shared
+ONE stored password (first-launch prompt for VM A silently became VM B's
+stored password; the mismatch surfaced as a bare "Authentication
+failed"). The account key is now `user@host:port`; the telnet port is
+per-machine (sticky block assignment), so it disambiguates without
+inventing a new identity scheme. Lookup falls back to the legacy
+`user@host` entry once and copies it forward under the new key; the old
+entry is deliberately left in place -- a lookalike `user@host` item may
+belong to some other app, so it isn't ours to delete. (The helios secret
+account `helios:user@host` is unaffected: it's external-only, where
+hosts are genuinely distinct.)
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

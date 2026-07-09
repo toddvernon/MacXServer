@@ -6,6 +6,10 @@ the code actually consumes. Two subagent passes (UI inventory + state/config
 cross-reference), top findings hand-verified against the working tree
 (main @ f577f81). Read-only audit; nothing was changed.
 
+**2026-07-09: the cleanup shipped** (SETTINGS_CLEANUP_PLAN.md, all four
+phases). Each finding below carries a Status line: 9 shipped, F3 deferred
+to SHORTCUTS.md.
+
 Files walked: MachineDetailForm.swift (MDF), MachinesWindowView.swift (MWV),
 MachinesModel.swift, AppDelegate.swift (AD), Machine.swift (M),
 MachinesFile.swift, MachineRegistry.swift, LauncherFile.swift (LF),
@@ -215,6 +219,8 @@ below.
 
 ### F1 · HIGH · Ports: consulted everywhere, editable nowhere, and a dialog lies about it  [VERIFIED]
 
+> **Status: SHIPPED 2026-07-09 — editable Ports row in Settings → Connection (both kinds), commit-time collision check (`portBlockClaimant`), fields frozen while running.**
+
 `Machine.ports` is a first-class persisted override consumed on every plane
 (launch dial, hostfwds, prober, DNS, file browser, manual-shutdown text).
 The only UI is the read-only Runtime row, rendered only for emulated VMs. An
@@ -226,6 +232,8 @@ port-conflict alert says "Give one of them its own ports in Settings"
 (AD:1625). Settings has no such control. The user is sent to a dead end.
 
 ### F2 · HIGH · `networkMode` is dead config, and the live behavior contradicts its doc  [VERIFIED]
+
+> **Status: SHIPPED 2026-07-09 — property deleted, hostfwds bind 127.0.0.1 explicitly. DECISIONS entry.**
 
 `Machine.networkMode` is decoded/encoded (M:459, 497) with documented
 semantics (`.slirp` = "hostfwds bound to localhost", `.slirpLanExposed`,
@@ -239,6 +247,8 @@ this is also a small security surface: guest telnet reachable from the LAN.
 
 ### F3 · MEDIUM · Telnet login/password prompt needles are hardcoded
 
+> **Status: DEFERRED — ledgered in SHORTCUTS.md (Telnet launch); fix is the shellPrompt pattern repeated, waiting on a live repro.**
+
 `LauncherEntry.build` defaults loginPrompt = "ogin:", passwordPrompt =
 "assword:" (LF:97-98) and `Machine.resolved` never overrides them, so for
 machine launchers the defaults are the only possibility. `shellPrompt` was
@@ -248,6 +258,8 @@ host with a "Username:" style banner times out with "Timed out waiting for
 login prompt" and there is no knob anywhere.
 
 ### F4 · MEDIUM · External DNS admin gates on OS, but DNS never uses the OS  [VERIFIED]
+
+> **Status: SHIPPED 2026-07-09 — OS condition dropped; gate is reach == .up, matching File Transfer.**
 
 `canDnsAdmin` (external) requires reach == .up AND os != nil (AD:421-423),
 and the dimmed-button help sends the user to Settings to set the OS. But
@@ -260,6 +272,8 @@ Decision needed: drop the OS condition, or keep the doctrine and note it.
 
 ### F5 · MEDIUM · Machines menu and Overview disagree on Admin verbs  [VERIFIED]
 
+> **Status: SHIPPED 2026-07-09 — both kinds get an Admin submenu (File Transfer + DNS) mirroring the Overview; external Helios Secret menu item retired with the Overview button.**
+
 The comments claim menu and window mirror each other (AD:72-76, 339-342).
 They do not: external machines get DNS + File Transfer on Overview but only
 "Helios Secret" in the menu (AD:594-596); emulated machines get both on
@@ -267,6 +281,8 @@ Overview but only DNS in the menu's Admin submenu (AD:582-593). A menu-first
 user cannot find File Transfer at all.
 
 ### F6 · MEDIUM-LOW · Telnet Keychain slot is shared by all loopback VMs with the same user  [VERIFIED]
+
+> **Status: SHIPPED 2026-07-09 — account is user@host:port with one-shot fallback migration from user@host. DECISIONS entry.**
 
 Telnet Keychain account = `user@host` (AD:1438). Every emulated VM is host
 127.0.0.1, so the Solaris and NetBSD fixtures both logging in as tvernon
@@ -278,12 +294,16 @@ account has the same shape but is external-only, so it is not affected.)
 
 ### F7 · LOW · `LauncherEntry.verbose` is parsed but read by nothing
 
+> **Status: SHIPPED 2026-07-09 — verbose field + parse removed; login_prompt/password_prompt doc block rewritten to say what they really are (legacy dotfile-only keys).**
+
 LF still parses `verbose` (LF:33, 83, 96) and its doc comment describes
 behavior that no longer exists (verbosity is exclusively the launch-gesture
 parameter now). The legacy `login_prompt`/`password_prompt` doc block is
 similarly misleading. Cleanup, not user-visible.
 
 ### F8 · LOW · `~/.macxserver-launchers` is still read on every startup
+
+> **Status: SHIPPED 2026-07-09 — dotfile read only when machines.json is absent (the one-shot migration); post-migration bundledUser falls back to NSUserName().**
 
 `loadMachineRegistry` parses the legacy dotfile each launch solely to derive
 `bundledUser` for fixture injection (AD:196-205), though the stated design
@@ -293,6 +313,8 @@ ghost input tomorrow.
 
 ### F9 · LOW · Duplicate launcher names are allowed but launchers are keyed by name
 
+> **Status: SHIPPED 2026-07-09 — editor sheet blocks Done on a sibling-name match with a note saying why.**
+
 Chip id, menu representedObject, and `launchFromMachine` all key by name
 (AD:398-404, 455, 604); the editor validates only non-empty. Two launchers
 named "xterm": the second is unreachable from every run surface, plus
@@ -300,6 +322,8 @@ duplicate-ID ForEach glitches. One-line fix: uniqueness in `canSave`, or a
 real id on MachineLauncher.
 
 ### F10 · LOW · OS-unset ssh/helios launches silently assume Solaris paths
+
+> **Status: CAPTION SHIPPED 2026-07-09 — the telnet-PATH asymmetry is documented in the launcher-command caption; the silent Solaris-path default itself stays as-is (per the cleanup plan, a caption at most).**
 
 `(os ?? .solaris26).xBinDirs` (AD:1473, 1481). External NetBSD box with OS
 unset: bare `xterm` gets Solaris paths prepended, fails over ssh/helios,

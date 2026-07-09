@@ -1,66 +1,91 @@
-# Status 2026-07-08 (evening)
+# Status 2026-07-09
 
-## Headline: audit day, no code touched. Two subagent audits of the machine
-settings UI and the state/config model landed in MACHINE_SETTINGS_AUDIT.md,
-and SETTINGS_CLEANUP_PLAN.md is the execution plan for tomorrow. One focused
-day closes out VM land, then we're back to X11 work.
+## Headline: settings cleanup day executed. All four phases of
+SETTINGS_CLEANUP_PLAN.md shipped in four commits; 9 of the 10 audit
+findings closed (F3 deferred to SHORTCUTS by design). VM land is buttoned
+up pending Todd's manual pass; next session opens on X11 work (MCP bridge
+lead, or the CLIPBOARD/editres gaps).
 
 ## What happened this session
 
-- Pulled the other Mac's f577f81 (machine-level telnet password + verbose
-  launch gesture) clean at session start.
-- Audited: settings-field organization, label discoverability, the Identity
-  section naming, and a full state x config-item cross-reference (does the
-  UI expose what the code reads, and vice versa). Top findings hand-verified
-  against the code, not just taken from the agents.
-- Wrote MACHINE_SETTINGS_AUDIT.md (inventory, proposed section reorg, drafted
-  captions/renames, 10 ranked findings) and SETTINGS_CLEANUP_PLAN.md (the
-  four-phase day plan).
+Todd confirmed the three morning decisions as recommended: delete
+networkMode + bind loopback, drop the DNS OS gate, ports/MAC facts to
+Overview. (Context that drove the first one: VM-to-VM networking someday
+is unaffected -- each guest is its own slirp NAT; guest A can reach guest
+B via 10.0.2.2:port even with loopback binding, and a real shared segment
+would be a new netdev + fresh design anyway.)
 
-## Headline findings (details + line cites in the audit doc)
-
-- F1 HIGH: Machine.ports is consumed everywhere, editable nowhere, and the
-  port-conflict dialog tells the user to fix it "in Settings" where no
-  control exists. Externals can't see their ports at all.
-- F2 HIGH: networkMode is dead persisted config, and the live qemu hostfwd
-  string binds all interfaces, so guest telnet/ssh/helios are LAN-reachable
-  while the .slirp doc claims loopback-only.
-- Also real: telnet Keychain slot shared by all loopback VMs with the same
-  user (F6), DNS admin gated on an OS it never uses (F4), menu vs Overview
-  disagree on Admin verbs (F5), launchers keyed by name with no uniqueness
-  check (F9), hardcoded "ogin:"/"assword:" needles (F3, deferred).
-- Reorg proposal: Identity -> Machine (Name/Kind/OS), Connection (Host/
-  "Connect with"/Ports/Helios Secret), new Login section (User/Password/
-  Shell prompt), DISPLAY renamed "Show windows on" and moved to Launchers,
-  Runtime section dissolves to an Overview facts row.
+- **Phase 1a (F2)**: `MachineNetworkMode` deleted (was decoded/encoded,
+  read by nothing); qemu hostfwds now `hostfwd=tcp:127.0.0.1:...` --
+  guests are no longer LAN-reachable. DECISIONS entry.
+- **Phase 1b (F1)**: editable Ports row (telnet/ssh/helios) in Settings ->
+  Connection for BOTH kinds; blank = derived, placeholders show the
+  derived block, all-blank clears the override. Commit-time collision
+  check via new `MachineRegistry.portBlockClaimant` (+ tests); fields
+  freeze while running. The port-conflict dialog's "fix it in Settings"
+  is finally true.
+- **Phase 2**: section reorg to Machine / Connection / Login / X11
+  Launchers / Disk Image. Renames: Transport -> "Connect with" (Telnet /
+  SSH / Helios agent), DISPLAY -> "Show windows on" (moved to Launchers),
+  Prompt -> "Shell prompt", Identity -> "Machine"; OS picker shows
+  displayName. Runtime section dissolved to an Overview monospaced
+  ports+MAC facts line. Helios Secret moved Overview -> Settings ->
+  Connection; dialog text rewritten. Hover tooltips promoted to visible
+  fieldCaption footnotes everywhere (incl. the F10 telnet-PATH asymmetry
+  in the launcher-command caption).
+- **Phase 3**: F5 menu parity (both kinds get Admin submenu = File
+  Transfer + DNS, gates mirror the Overview; external Helios Secret menu
+  item retired). F9 launcher-name uniqueness blocks Done in the editor
+  sheet. F6 telnet Keychain account = user@host:port with one-shot
+  fallback migration (old entry left alone). F4 DNS admin no longer
+  OS-gated.
+- **Phase 4**: F7 verbose field/parse removed from LauncherFile (doc block
+  fixed); F8 startup no longer reads ~/.macxserver-launchers when
+  machines.json exists (bundledUser falls back to NSUserName()); loopback
+  host list deduped (MachinesFile.isLoopback now public, AppDelegate
+  delegates). F3 ledgered in SHORTCUTS. DECISIONS entries x3 (loopback
+  bind, settings naming doctrine, keychain key). Audit doc annotated
+  per-finding shipped/deferred.
 
 ## What's working / what's broken
 
-- No code changed today; everything from yesterday's status still holds
-  (fleet complete, telnet regression closed, suite green as of f577f81).
-- The audit findings ARE the broken list now; they're ledgered in the audit
-  doc with severity ranks.
+- swift test green after every phase: 1506 tests, 0 failures (2 new port
+  tests added).
+- machines.json migration is automatic: legacy networkMode key ignored on
+  decode, old telnet Keychain entry copied forward on first use.
+- NOT yet done: the manual pass (Phase 4 tail) -- needs a human on the
+  GUI. Checklist: rebuild in Xcode (model + UI changed), one fixture VM
+  (boot, xterm launch, DNS, File Transfer, Back Up), one real host (ipc
+  or ss5: probe dot, DNS, File Transfer, telnet launch with progress
+  window), spot-check menu vs Overview verb parity, eyeball the new
+  Settings sections + captions.
 
-## What's next (tomorrow, in order)
+## Behavior changes to notice while testing
 
-1. Open SETTINGS_CLEANUP_PLAN.md and confirm the three decisions at the top
-   (delete networkMode + loopback binding, drop the DNS OS gate, ports/MAC
-   facts to Overview).
-2. Run the plan: Phase 1 (F2 + ports editor), Phase 2 (reorg + captions),
-   Phase 3 (small fixes), Phase 4 (cleanup + docs + manual pass).
-3. Then back to X11 land: MCP bridge is still the standing lead, image
-   download per IMAGE_DOWNLOAD_PLAN.md behind it.
+- Guest ports refuse connections from other LAN machines now (loopback
+  bind) -- expected, it's the F2 fix.
+- First telnet launch per VM may prompt once if the legacy shared
+  user@host Keychain entry doesn't match that VM (the per-machine key fix
+  working as intended).
+- External machines' menu: Helios Secret is gone; set it in Settings ->
+  Connection.
+
+## What's next
+
+1. Todd's manual pass per the checklist above; fix anything it surfaces.
+2. Back to X11 land: MCP bridge is the standing lead; image download per
+   IMAGE_DOWNLOAD_PLAN.md behind it; CLIPBOARD/editres gaps in the
+   feature matrix as the protocol-side alternative.
 
 ## Committed this session
 
-- swift-x: audit + plan docs on top of f577f81.
+- swift-x: 81719de (1a), 164066d (1b), 7aac433 (2), 6e80a27 (3), + the
+  Phase 4 commit on top.
 - SPARCplug, cx repos: no changes.
 
 ## Switching Macs
 
-- Docs-only session, so no rebuild strictly needed for this commit, but if
-  the laptop hasn't rebuilt since f577f81 (model + UI changes), rebuild in
-  Xcode before running the app.
+- Code + model changed: rebuild in Xcode on the other Mac before running
+  the app (MacXServer.xcodeproj, not swift build).
 - No VMs running, no image locks.
-- Let Dropbox finish syncing memory before opening the other Mac (no new
-  memories written today, so low stakes).
+- No new memories written yet this session.

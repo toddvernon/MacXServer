@@ -189,18 +189,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// machine with no launcher group to copy from (rare -- the seeded launchers
     /// file normally supplies a loopback group), so we derive it best-effort.
     private func loadMachineRegistry() {
-        // The legacy launchers dotfile is only needed for the one-time
-        // migration into machines.json. Seed it (write if absent) only on that
-        // first run; once machines.json exists just read the dotfile if it
-        // happens to be present, so a user who deletes it doesn't get it
-        // silently recreated every launch (it's dead post-migration anyway).
+        // The legacy launchers dotfile is one-shot migration input: it's read
+        // (seeding it first if absent) only when machines.json doesn't exist
+        // yet. Once machines.json exists the dotfile is dead config and is
+        // never opened again (audit F8, 2026-07-09 -- it used to be parsed on
+        // every startup just to derive bundledUser, so a stale file's first
+        // user could silently become the user on a newly injected fixture).
+        // Post-migration bundledUser falls back to the Mac's own login name;
+        // it only matters if a fixture ever has to be injected fresh, and
+        // both live machines.json files already carry their fixtures.
         let machinesExist = FileManager.default.fileExists(atPath: MachinesFileLoader.defaultPath)
-        let launchers: LauncherFile = machinesExist
-            ? ((try? String(contentsOfFile: LauncherFileLoader.defaultPath, encoding: .utf8))
-                .map { LauncherFile.parse($0) } ?? LauncherFile.parse(""))
-            : LauncherFileLoader.loadOrSeed(seed: DefaultLaunchers.seedContent)
-        let bundledUser = launchers.entries.first(where: { Self.isLoopbackHost($0.host) })?.user
-            ?? launchers.entries.first?.user ?? ""
+        let bundledUser: String
+        if machinesExist {
+            bundledUser = NSUserName()
+        } else {
+            let launchers = LauncherFileLoader.loadOrSeed(seed: DefaultLaunchers.seedContent)
+            bundledUser = launchers.entries.first(where: { Self.isLoopbackHost($0.host) })?.user
+                ?? launchers.entries.first?.user ?? NSUserName()
+        }
         self.registry = MachineRegistry.load(bundledImagePath: preferences.sparcDiskImagePath,
                                              bundledUser: bundledUser)
         // The launcher file is imported ONCE (MachinesFileLoader.loadOrMigrate, on
@@ -211,8 +217,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // MACHINE_MANAGER_REFACTOR.md / SHORTCUTS.md.
     }
 
+    /// One loopback list for the whole app: MachinesFile's (it drives
+    /// migration's emulated-vs-external inference; a second copy here had
+    /// already started to drift).
     private static func isLoopbackHost(_ host: String) -> Bool {
-        ["127.0.0.1", "localhost", "0.0.0.0", "::1"].contains(host.lowercased())
+        MachinesFile.isLoopback(host)
     }
 
     // MARK: - Machines list window
