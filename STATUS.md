@@ -117,11 +117,12 @@ yet.
 
 ## Committed / push state
 
-- X repo: 18 commits UNPUSHED on this Mac (11 from 07-09/07-10 morning +
-  release pipeline + image downloader + status/user docs + first-run docs +
-  UserAdmin core + Users panel + this first-run-flow commit). **Push before
-  switching machines.**
-- SPARCplug: 1 commit unpushed (0e7690c build-catalog.sh).
+- X repo: ALL PUSHED. Latest is d10077a (first-run flow). Today's arc:
+  release pipeline (bcc423b) + image downloader (70343d6) + status/user
+  docs (fc3ca77) + first-run docs (79f22dc) + UserAdmin core (5f160c8) +
+  Users panel (d1c6086) + first-run flow (d10077a), on top of the 11
+  07-09/07-10 morning commits. origin/main is current.
+- SPARCplug: PUSHED. Latest is 0e7690c (build-catalog.sh).
 - cx repos: no changes.
 
 ## Switching Macs
