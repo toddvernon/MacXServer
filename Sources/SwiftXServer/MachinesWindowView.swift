@@ -437,6 +437,21 @@ private struct MachineOverviewPage: View {
                              ? "Available once the machine is running and ready"
                              : "Available once the machine answers a Helios check "
                              + "(set its Helios Secret in Settings if you haven't)"))
+
+                    Button {
+                        model.onManageUsers?(row.id)
+                    } label: {
+                        Label("Users", systemImage: "person.2")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!row.canManageUsers)
+                    .help(row.canManageUsers
+                          ? "Add or remove login accounts on the machine"
+                          : (row.isEmulated
+                             ? "Available once the machine is running and ready"
+                             : "Available once the machine answers a Helios check "
+                             + "and its OS is known (set both in Settings)"))
                 }
             }
             .padding(.leading, 16)

@@ -87,6 +87,11 @@ struct MachineRow: Identifiable, Equatable {
     /// Helios file browser. OS-agnostic, so reachability alone gates it.
     let canFileTransfer: Bool
 
+    /// Users admin (add/delete accounts). OS-sensitive -- UserAdmin's per-OS
+    /// mechanics need the machine's OS -- so it gates on the box answering
+    /// over Helios AND a known OS, same rule File Transfer uses plus the OS.
+    let canManageUsers: Bool
+
     /// True when the machine's OS came from the box itself (an external
     /// host's sysinfo uname). The Settings OS picker dims: the box outranks
     /// a manual pick, same as image detection does on emulated VMs.
@@ -143,6 +148,8 @@ final class MachinesModel: ObservableObject {
     var onDnsAdmin: ((UUID) -> Void)?
     /// Open the machine's Helios file browser (Overview → Admin Agents).
     var onFileTransfer: ((UUID) -> Void)?
+    /// Open the machine's Users admin panel (Overview → Admin Agents).
+    var onManageUsers: ((UUID) -> Void)?
 
     // Edit actions (master toolbar + Settings page).
     /// Add a fresh default machine, persist it, and return its id to select.

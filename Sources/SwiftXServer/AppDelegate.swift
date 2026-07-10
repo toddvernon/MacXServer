@@ -57,6 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Per-machine DNS-admin windows, keyed by machine id (the panel talks to
     /// one machine's Helios daemon).
     private var dnsAdminControllers: [UUID: DnsAdminWindowController] = [:]
+    /// Per-machine Users-admin windows, keyed by machine id.
+    private var usersAdminControllers: [UUID: UsersWindowController] = [:]
     private var sparcWelcome: SparcStationWelcomeWindowController?
     /// The machine the welcome/install flow was opened for (Start pressed on an
     /// image-less VM); chooseImageThenStart attaches the picked image to it.
@@ -269,6 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.onSetHeliosSecret = { [weak self] id in self?.promptHeliosSecret(for: id) }
         model.onDnsAdmin  = { [weak self] id in self?.openDnsAdmin(machineID: id) }
         model.onFileTransfer = { [weak self] id in self?.openMachineFileTransfer(id) }
+        model.onManageUsers = { [weak self] id in self?.openUsersAdmin(machineID: id) }
         // What a blank DISPLAY actually resolves to at launch time (this X
         // server's own address) -- the Settings field shows it as the
         // placeholder so "blank" reads as a value, not a mystery.
@@ -315,6 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self.probeResults.removeValue(forKey: id)
             self.consoles.removeValue(forKey: id)?.close()
             self.dnsAdminControllers.removeValue(forKey: id)?.close()
+            self.usersAdminControllers.removeValue(forKey: id)?.close()
             // File-browser windows are keyed "<machine-id>/<launcher>" (one per
             // browsable launcher), so evict every key for this machine or its
             // windows linger holding the dead machine's host/port/user.
@@ -506,6 +510,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             canFileTransfer: isEmulated
                 ? (state == .running && ready)
                 : probeResults[m.id]?.reach == .up,
+            // Users is File Transfer's gate PLUS a known OS (UserAdmin's
+            // per-OS record mechanics need it). An external box gets its OS
+            // from sysinfo uname; an emulated VM from image detection.
+            canManageUsers: (m.os != nil) && (isEmulated
+                ? (state == .running && ready)
+                : probeResults[m.id]?.reach == .up),
             osIsDetected: !isEmulated && probeResults[m.id]?.sysinfo?.uname != nil,
             canSetHeliosSecret: !isEmulated,
             launchers: chips)
@@ -707,6 +717,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             dns.isEnabled = canAdmin
             dns.representedObject = idString
             adminMenu.addItem(dns)
+            // Users is OS-sensitive: needs the box answering AND its OS known.
+            let users = NSMenuItem(title: "Users\u{2026}",
+                                   action: #selector(openUsersAdmin(_:)), keyEquivalent: "")
+            users.target = self
+            users.isEnabled = canAdmin && (m.os != nil)
+            users.representedObject = idString
+            adminMenu.addItem(users)
             adminItem.submenu = adminMenu
             sub.addItem(adminItem)
         }
@@ -1186,6 +1203,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 })
         }
         dnsAdminControllers[id]?.showWindow()
+    }
+
+    @objc private func openUsersAdmin(_ sender: Any?) {
+        guard let id = machineID(from: sender) else { return }
+        openUsersAdmin(machineID: id)
+    }
+
+    /// Open (or focus) the Users admin panel for a machine. Same live-provider
+    /// shape as DNS admin, plus an OS provider (UserAdmin is per-OS) and the
+    /// "use for launchers" hook that adopts a freshly-added account as the
+    /// machine's login.
+    @MainActor
+    private func openUsersAdmin(machineID id: UUID) {
+        guard let m = registry?.machine(id) else { return }
+        if usersAdminControllers[id] == nil {
+            let hostFor: () -> String = { [weak self] in
+                guard let m = self?.registry?.machine(id) else { return "127.0.0.1" }
+                return m.kind == .emulatedVM ? "127.0.0.1" : m.host
+            }
+            usersAdminControllers[id] = UsersWindowController(
+                machineName: m.name,
+                osProvider: { [weak self] in self?.registry?.machine(id)?.os },
+                secretProvider: { [weak self] in
+                    guard let self, let m = self.registry?.machine(id) else { return nil }
+                    return self.heliosSecret(host: hostFor(), user: m.user,
+                                             port: m.resolvedPorts.helios)
+                },
+                hostProvider: hostFor,
+                portProvider: { [weak self] in
+                    self?.registry?.machine(id)?.resolvedPorts.helios ?? 2125
+                },
+                launcherUserProvider: { [weak self] in
+                    self?.registry?.machine(id)?.user ?? ""
+                },
+                onUseForLaunchers: { [weak self] user, password in
+                    self?.adoptMachineLogin(machineID: id, user: user, password: password)
+                })
+        }
+        usersAdminControllers[id]?.showWindow()
+    }
+
+    /// Adopt a just-created guest account as the machine's launcher login: set
+    /// `machine.user` and stash the password in the telnet Keychain slot (the
+    /// per-machine `user@host:telnetPort` key launchers read). Shared by the
+    /// Users panel's "use for launchers" checkbox and the first-run flow.
+    @MainActor
+    private func adoptMachineLogin(machineID id: UUID, user: String, password: String) {
+        guard let registry, var m = registry.machine(id) else { return }
+        m.user = user
+        registry.update(m)
+        let account = "\(user)@\(m.host):\(m.resolvedPorts.telnet)"
+        try? KeychainHelper.store(account: account, password: password)
+        afterMachineMutation()
     }
 
     @MainActor

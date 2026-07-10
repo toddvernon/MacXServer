@@ -69,28 +69,45 @@ yet.
   rebuild + a local catalog), plus yesterday's menu-bar work — the manual
   GUI checklist from the morning roll still stands.
 
-## What's next (agreed with Todd this afternoon)
+## User management + first run (this session, afternoon/evening)
 
-1. **Architect Helios-driven add-user / delete-user.** Needed for first
-   run: published images can't ship with Todd's account as the only
-   login. Agent-side verbs vs host-driven run_command orchestration, DES
-   hash host-side, per-OS realities (Solaris useradd+shadow, 4.1.4
-   hand-edited passwd, NetBSD useradd -p), home-dir skeleton, UI surface
-   (Users panel under Helios Admin Agents), and the first-ready prompt.
-   Design doc in flight.
-2. **First-launch experience** — the full stranger's journey from
-   macxserver.com download through Gatekeeper, first app open, image
-   download, first boot, user creation, first xterm. Discussion next.
-3. Data side of the catalog: E1 (baseline-configured masters with current
-   heliosAgent baked in) → build-catalog.sh → upload.
-4. Todd's manual GUI pass (menu bar + download flow), then v0.9.9 — which
-   also proves A5/A6 end-to-end.
+- **Designed + ratified.** HELIOS_USER_MANAGEMENT.md (host-driven over the
+  existing verbs) + FIRST_RUN_EXPERIENCE.md (Todd's in-window guided flow:
+  "just getting started" bubble, blue Download, "one more thing -- add a
+  user" popup on download completion, Enter boots + applies the login at
+  ready). DECISIONS 2026-07-10. One decision still open: root-password
+  policy for published masters.
+- **UserAdmin core BUILT** (commit 5f160c8). Per-OS record builders
+  (Solaris passwd+shadow, 4.1.4 hash-in-passwd, NetBSD master.passwd +
+  pwd_mkdb), crypt(3) DES hash host-side, commit-point ordering, rm-guard.
+  21 unit tests + a live add->run-as->delete cycle **passed on the running
+  NetBSD guest**.
+- **Users panel BUILT** (this commit). UsersPanelView + UsersWindowController
+  (modeled on DNS admin): account list, Add sheet, Delete confirm with
+  optional home removal. Overview "Users" chip (gated on answering + known
+  OS) + Machines-menu Admin item. "Use for launchers" adopts the account as
+  machine.user + telnet Keychain (adoptMachineLogin, shared with first run).
+
+## What's next
+
+1. **First-run choreography** (FIRST_RUN_EXPERIENCE.md): the bubble +
+   blue-button state in MachinesWindowView, the "one more thing" sheet,
+   deferred-apply-at-ready plumbing, and the `machine.user = ""` fixture
+   seeding change. The last code piece before the stranger's path is whole.
+2. Data side of the catalog: E1 (baseline masters with current heliosAgent
+   baked in) → build-catalog.sh → upload to macxserver.com/images/. Also
+   settle the root-password policy here.
+3. Todd's manual GUI pass (menu bar + download flow + Users panel), then
+   v0.9.9 — which also proves A5/A6 end-to-end.
+4. Run the UserAdmin live test against Solaris 2.6 + 4.1.4 too (one env var
+   each when those guests are booted).
 
 ## Committed / push state
 
-- X repo: 13 commits UNPUSHED on this Mac (11 from 07-09/07-10 morning +
-  bcc423b release pipeline + 70343d6 image downloader). **Push before
-  switching machines.**
+- X repo: 16 commits UNPUSHED on this Mac (11 from 07-09/07-10 morning +
+  bcc423b release pipeline + 70343d6 image downloader + fc3ca77 status/user
+  docs + 79f22dc first-run docs + 5f160c8 UserAdmin core + this Users-panel
+  commit). **Push before switching machines.**
 - SPARCplug: 1 commit unpushed (0e7690c build-catalog.sh).
 - cx repos: no changes.
 

@@ -198,10 +198,22 @@ design session:
   **passed against the live NetBSD guest 2026-07-10**. Solaris 2.6 and
   4.1.4 live passes still to run (same test, point SPARCPLUG_LIVE_LOCK
   at their locks when booted).
-- `UsersPanel` (SwiftXServer): the panel + sheets, modeled on
-  DnsAdminPanelView. NOT BUILT.
-- AppDelegate: chip wiring + the first-ready empty-user prompt + the
-  `bundledUser` seeding change. NOT BUILT (FIRST_RUN_EXPERIENCE.md).
+- `UsersPanel` (SwiftXServer) -- **BUILT 2026-07-10.** `UsersPanelView` +
+  `UsersWindowController`, modeled on DnsAdminPanelView (blocking
+  HeliosClient off-main, one short-lived client per op, live providers so
+  the window survives a stop/start). Account list (system accounts uid<100
+  behind a toggle; the launcher account chipped; root/template/system
+  dimmed and undeletable), an Add sheet (username normalized at the edit
+  boundary, password x2, the 8-char note, "use for this machine's
+  launchers"), and a Delete confirm with a separate "also delete the home
+  directory" checkbox (default off). Wired into the Overview's Helios Admin
+  Agents row (a Users chip, gated on the box answering AND a known OS) and
+  the Machines menu's per-machine Admin submenu. "Use for launchers" adopts
+  the new account as `machine.user` + stores the password in the telnet
+  Keychain slot (`adoptMachineLogin`, shared with the first-run flow).
+- AppDelegate: chip + menu wiring DONE 2026-07-10. Still to build: the
+  first-ready empty-user prompt + the `bundledUser` seeding change
+  (FIRST_RUN_EXPERIENCE.md).
 - No agent or protocol changes. No SPARCplug changes beyond publish-prep
   usage.
 

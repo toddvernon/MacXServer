@@ -101,6 +101,7 @@
 		4F02B5CCB3CFC0346069D8C0 /* FileLogSink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 140669078B4415BC3F9231E7 /* FileLogSink.swift */; };
 		4F78DEE7E171A88F4B7F77D3 /* SwiftXCaptureCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DCC618596FA8C20C15E6B2E9 /* SwiftXCaptureCore.framework */; };
 		4FCE78B59023498DFDA48216 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFA6328DA36A5A04C713B7DA /* SyntaxHighlighter.swift */; };
+		5067FD2ECBBB3F6AA268A2E7 /* UsersPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2672C2507F257E0E2FB5BA06 /* UsersPanelView.swift */; };
 		50C2987BA7EFE3F73D71450A /* SiblingChain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DF3816F21F8223631A5A34F /* SiblingChain.swift */; };
 		524BCFD2085230BAB71EB3A2 /* Listener.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F1158F5435634F1A10649BF /* Listener.swift */; };
 		524FF377489F25AA621755AB /* HeliosClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34AE12DBBBB2FA9C63CB7B79 /* HeliosClient.swift */; };
@@ -211,6 +212,7 @@
 		A28407E2DBBFA42DAF9F3312 /* CaptureRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAC62ACBA7F3823A5692AE28 /* CaptureRow.swift */; };
 		A3CC6D087EAFBC46F623BABE /* ListHostsReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A62BC2A07E827BE7CE8AB08 /* ListHostsReply.swift */; };
 		A5245F182E02C6390234D417 /* CaptureDiff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A98AC70D70135F3AC3BE174 /* CaptureDiff.swift */; };
+		A59B05225BEF00C3A9468EF5 /* UsersWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BAEC5BA76738337F559BB2D /* UsersWindowController.swift */; };
 		A5AB05A99D041AAFD23BB475 /* Framer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2BBD4D4DAD4A758CA64CEF04 /* Framer.framework */; };
 		A6266AC0AC52C35A23267900 /* ExtensionDumper.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0C0657F2AA6EBAD71334B12 /* ExtensionDumper.swift */; };
 		A66844BB25F9C25212498A01 /* ResourceTokenizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CCC075B9924815E3DCE9E28 /* ResourceTokenizer.swift */; };
@@ -525,6 +527,7 @@
 		229CD6E160BAEBE66D75DE50 /* PolyFillRectangle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PolyFillRectangle.swift; sourceTree = "<group>"; };
 		249B65BE76E9610A9C5FD44C /* MapWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapWindow.swift; sourceTree = "<group>"; };
 		24C3F64CBB1DECCF198D7C6A /* Screen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Screen.swift; sourceTree = "<group>"; };
+		2672C2507F257E0E2FB5BA06 /* UsersPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsersPanelView.swift; sourceTree = "<group>"; };
 		26A6DB349FED3AF919909A38 /* ByteOrder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteOrder.swift; sourceTree = "<group>"; };
 		270DDAF90379577868C75505 /* BigRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BigRequests.swift; sourceTree = "<group>"; };
 		27688847AABCA828671B5564 /* HeliosLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeliosLauncher.swift; sourceTree = "<group>"; };
@@ -665,6 +668,7 @@
 		98C8414A92564449D31C67BA /* RecordModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordModel.swift; sourceTree = "<group>"; };
 		99D8819B2D75DF2BBD0A4E03 /* screen.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = screen.c; sourceTree = "<group>"; };
 		9B9110C1C1FB8F567AE61674 /* fullwidth.inc */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.pascal; path = fullwidth.inc; sourceTree = "<group>"; };
+		9BAEC5BA76738337F559BB2D /* UsersWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsersWindowController.swift; sourceTree = "<group>"; };
 		9D8CF306EEFA6C0D4B55F875 /* ResourcesPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourcesPanelView.swift; sourceTree = "<group>"; };
 		9DF3816F21F8223631A5A34F /* SiblingChain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiblingChain.swift; sourceTree = "<group>"; };
 		9EA4751386598E533E3D9E4A /* Machine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Machine.swift; sourceTree = "<group>"; };
@@ -1019,6 +1023,8 @@
 				5572289CEA5A6228AAD86A49 /* SparcPlugConsoleWindowController.swift */,
 				2C19C1C2C0742B8FA8C8E81C /* SparcShutdownProgressWindowController.swift */,
 				B2919BA52AEB8B568EBADB7D /* SparcStationWelcomeWindowController.swift */,
+				2672C2507F257E0E2FB5BA06 /* UsersPanelView.swift */,
+				9BAEC5BA76738337F559BB2D /* UsersWindowController.swift */,
 			);
 			path = SwiftXServer;
 			sourceTree = "<group>";
@@ -1917,6 +1923,8 @@
 				9A48C3F777EA2702E773B9FC /* SparcPlugConsoleWindowController.swift in Sources */,
 				3AF3AA0AED9093070C7F81CD /* SparcShutdownProgressWindowController.swift in Sources */,
 				234C8AFC02F1E9BE48F51F71 /* SparcStationWelcomeWindowController.swift in Sources */,
+				5067FD2ECBBB3F6AA268A2E7 /* UsersPanelView.swift in Sources */,
+				A59B05225BEF00C3A9468EF5 /* UsersWindowController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
