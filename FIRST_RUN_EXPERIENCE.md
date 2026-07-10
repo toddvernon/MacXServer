@@ -1,9 +1,9 @@
 # First-run experience -- the stranger's first five minutes
 
-Status: **designed 2026-07-10 (Todd's UX, this session), not built.**
-Depends on HELIOS_USER_MANAGEMENT.md (the add-user engine) and the curated
-image downloader (shipped 2026-07-10). This is the choreography layer over
-both.
+Status: **BUILT 2026-07-10.** The choreography over the curated image
+downloader + the UserAdmin engine. Not yet eyeballed in the real app (it's
+UI + AppDelegate orchestration; needs the Xcode rebuild + a local catalog
+to click through) -- that's part of Todd's manual GUI pass.
 
 ## The settled shape (Todd, 2026-07-10)
 
@@ -59,18 +59,30 @@ the user dismisses the "one more thing" popup, the machine still has no
 user; the empty-`machine.user` + ready condition re-offers it on the next
 boot (the invitation-not-a-gate rule).
 
-## What this flow requires
+## What this flow requires (all BUILT 2026-07-10 except the last)
 
-- The `UserAdmin` engine + Users panel (HELIOS_USER_MANAGEMENT.md --
-  host-driven option ratified 2026-07-10).
-- Deferred-apply plumbing: pending-login state on the machine flow
-  (credentials held until ready fires, then the pipeline runs).
-- The bubble overlay + blue-button state in MachinesWindowView, driven by
-  the same registry state the rows read.
-- Fixture seeding change: `machine.user = ""` on fresh installs (today's
-  NSUserName() fallback writes a lie for anyone who isn't Todd).
+- The `UserAdmin` engine + Users panel (HELIOS_USER_MANAGEMENT.md) -- DONE.
+- Deferred-apply plumbing -- DONE. `pendingFirstLogin[id]` holds the
+  credentials; `applyPendingFirstLogin` fires from the engine's `onReady`
+  and runs the UserAdmin pipeline over the now-live daemon, then
+  `adoptMachineLogin` sets `machine.user` + the telnet Keychain slot. The
+  row shows "Creating your login..." (`applyingLogin`) while it runs; a
+  failure keeps the guest up and points at the Users panel to retry.
+- The bubble + blue-button state in MachinesWindowView -- DONE. Driven by
+  `MachinesModel.isFirstRun` (an emulated VM exists but none has an image);
+  the Overview shows the bubble over an imageless machine and renders
+  Download Image blue while it's true.
+- `FirstLoginWindowController` -- DONE. The "one more thing" panel
+  (username prefilled from the Mac short name, password x2, the 8-char +
+  "takes a couple of minutes to boot" notes, Add User & Start / Skip).
+- Fixture seeding change: `machine.user = ""` -- DONE. `bundledFixtures()`
+  seeds user-less; the `bundledUser` parameter (and its NSUserName/launcher
+  derivation) was removed root-and-branch since fixtures no longer carry a
+  user. (Side effect: a fresh install no longer writes the legacy
+  all-comments `~/.macxserver-launchers` template; it was documentation
+  only, zero live entries, so the fresh-install machine set is unchanged.)
 - Published masters carry root + template + daemon only (tvernon stripped
-  at publish prep).
+  at publish prep) -- NOT DONE (publish-prep step, gated on E1).
 
 ## Adjacent first-launch items (not this flow, same milestone)
 

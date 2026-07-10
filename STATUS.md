@@ -88,26 +88,39 @@ yet.
   OS) + Machines-menu Admin item. "Use for launchers" adopts the account as
   machine.user + telnet Keychain (adoptMachineLogin, shared with first run).
 
+- **First-run flow BUILT** (this commit). The stranger's path is code-
+  complete: `isFirstRun` bubble + blue Download button, the "one more
+  thing -- add a user" panel (FirstLoginWindowController), deferred-apply
+  (pendingFirstLogin held until the engine's onReady, then the UserAdmin
+  pipeline runs and adoptMachineLogin sets user + Keychain), and the row's
+  "Creating your login..." state. Fixtures now seed `user: ""`; the
+  `bundledUser` param + its NSUserName/launcher derivation were removed
+  root-and-branch.
+
 ## What's next
 
-1. **First-run choreography** (FIRST_RUN_EXPERIENCE.md): the bubble +
-   blue-button state in MachinesWindowView, the "one more thing" sheet,
-   deferred-apply-at-ready plumbing, and the `machine.user = ""` fixture
-   seeding change. The last code piece before the stranger's path is whole.
+1. **Todd's manual GUI pass** — the whole thing now needs eyeballing in
+   the real app: menu-bar reorg, download flow, Users panel, AND the
+   first-run choreography (bubble → blue Download → download → "one more
+   thing" → boot → login created → xterm). Point it at a local catalog via
+   SPARCPLUG_CATALOG_URL=file://… to click the download path.
 2. Data side of the catalog: E1 (baseline masters with current heliosAgent
-   baked in) → build-catalog.sh → upload to macxserver.com/images/. Also
-   settle the root-password policy here.
-3. Todd's manual GUI pass (menu bar + download flow + Users panel), then
-   v0.9.9 — which also proves A5/A6 end-to-end.
+   baked in) → build-catalog.sh → upload to macxserver.com/images/. Settle
+   the root-password policy for published masters here (the one open
+   decision).
+3. Cut v0.9.9 — also proves A5/A6 end-to-end.
 4. Run the UserAdmin live test against Solaris 2.6 + 4.1.4 too (one env var
    each when those guests are booted).
+5. Legacy cleanup (own decision): DefaultLaunchers.seedContent is now
+   orphaned (fresh install no longer seeds the legacy launcher file);
+   retire DefaultLaunchers.swift when convenient.
 
 ## Committed / push state
 
-- X repo: 16 commits UNPUSHED on this Mac (11 from 07-09/07-10 morning +
-  bcc423b release pipeline + 70343d6 image downloader + fc3ca77 status/user
-  docs + 79f22dc first-run docs + 5f160c8 UserAdmin core + this Users-panel
-  commit). **Push before switching machines.**
+- X repo: 18 commits UNPUSHED on this Mac (11 from 07-09/07-10 morning +
+  release pipeline + image downloader + status/user docs + first-run docs +
+  UserAdmin core + Users panel + this first-run-flow commit). **Push before
+  switching machines.**
 - SPARCplug: 1 commit unpushed (0e7690c build-catalog.sh).
 - cx repos: no changes.
 

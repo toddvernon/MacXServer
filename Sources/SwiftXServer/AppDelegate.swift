@@ -68,6 +68,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// One download per machine at a time; entries clear on finish/failure.
     private var imageDownloadTasks: [UUID: Task<Void, Never>] = [:]
     private var imageDownloadPhases: [UUID: ImageDownloadPhase] = [:]
+    /// First-run deferred login: credentials collected in the "one more thing"
+    /// step, held until the machine boots to ready, then applied by the
+    /// UserAdmin pipeline (FIRST_RUN_EXPERIENCE.md). Keyed by machine id.
+    private var pendingFirstLogin: [UUID: (user: String, password: String)] = [:]
+    /// Machines whose first-run login is being applied right now (guest ready,
+    /// UserAdmin running). Drives the row's "creating your login" state.
+    private var applyingLogin: Set<UUID> = []
+    /// The first-login window controller (one at a time; first run is serial).
+    private var firstLoginWindow: FirstLoginWindowController?
     /// The unified Machines window (the front door) + its observable model. Built
     /// at launch. `refreshMachines` mirrors the registry + live controller state
     /// into the model (both the `machines` list for the master/Settings and the
@@ -196,30 +205,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// Load the machine registry, migrating the legacy launchers file on first
-    /// run. `bundledUser` is only consulted when migration has to seed a bundled
-    /// machine with no launcher group to copy from (rare -- the seeded launchers
-    /// file normally supplies a loopback group), so we derive it best-effort.
+    /// run. Bundled fixtures now seed user-less (the first-run flow fills the
+    /// login), so there's no longer a bundledUser to derive.
     private func loadMachineRegistry() {
-        // The legacy launchers dotfile is one-shot migration input: it's read
-        // (seeding it first if absent) only when machines.json doesn't exist
-        // yet. Once machines.json exists the dotfile is dead config and is
-        // never opened again (audit F8, 2026-07-09 -- it used to be parsed on
-        // every startup just to derive bundledUser, so a stale file's first
-        // user could silently become the user on a newly injected fixture).
-        // Post-migration bundledUser falls back to the Mac's own login name;
-        // it only matters if a fixture ever has to be injected fresh, and
-        // both live machines.json files already carry their fixtures.
-        let machinesExist = FileManager.default.fileExists(atPath: MachinesFileLoader.defaultPath)
-        let bundledUser: String
-        if machinesExist {
-            bundledUser = NSUserName()
-        } else {
-            let launchers = LauncherFileLoader.loadOrSeed(seed: DefaultLaunchers.seedContent)
-            bundledUser = launchers.entries.first(where: { Self.isLoopbackHost($0.host) })?.user
-                ?? launchers.entries.first?.user ?? NSUserName()
-        }
-        self.registry = MachineRegistry.load(bundledImagePath: preferences.sparcDiskImagePath,
-                                             bundledUser: bundledUser)
+        self.registry = MachineRegistry.load(bundledImagePath: preferences.sparcDiskImagePath)
         // The launcher file is imported ONCE (MachinesFileLoader.loadOrMigrate, on
         // the first run when machines.json doesn't exist yet). After that the JSON
         // registry is authoritative and edited in-app via the Machine Editor -- we
@@ -438,6 +427,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             else { progress = 1.0 }
         } else if !m.isInstalledEmulatedVM {
             dot = .notInstalled; statusText = "Not installed"; stateWord = "no image"
+        } else if applyingLogin.contains(m.id) {
+            // First-run: guest is ready, the add-user pipeline is running.
+            // Keep the thermometer pegged + moving so it reads as the last
+            // step of boot, not a stall.
+            dot = .booting; statusText = "Creating your login\u{2026}"
+            stateWord = "finishing setup"; progress = 1.0
         } else if state == .running && ready {
             dot = .running; statusText = "Running"; stateWord = "running"
             progress = 1.0
@@ -877,6 +872,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // Fetch the fresh guest's sysinfo now instead of waiting out the
             // prober's next 3-minute tick.
             self?.probeAllSoon()
+            // First-run deferred login: the guest is finally answering, so
+            // apply the account collected in the "one more thing" step.
+            self?.applyPendingFirstLogin(machineID: id)
         }
         engine.onBootStalled { [weak self] reason in
             // Wedged guest -- make sure the user sees it and can Force Quit.
@@ -2400,13 +2398,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                         }
                     })
                 // Installed and triple-verified: attach it to the machine.
-                // The row flips to Stopped; Start goes live. No auto-boot.
+                // The row flips to Stopped; Start goes live.
                 if var updated = self.registry?.machine(machineID) {
                     updated.imagePath = destination.path
                     self.registry?.update(updated)
                 }
                 self.finishImageDownload(machineID)
                 self.afterMachineMutation()
+                // First-run: a freshly-downloaded machine with no login yet is
+                // the "one more thing -- add a user" moment. A machine that
+                // already has a user (a re-download, or a BYO setup) skips it.
+                if let m = self.registry?.machine(machineID),
+                   m.user.isEmpty {
+                    self.presentFirstLoginStep(for: machineID)
+                }
             } catch ImageDownloadError.cancelled {
                 self.finishImageDownload(machineID)
             } catch {
@@ -2422,6 +2427,100 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         imageDownloadTasks[id] = nil
         imageDownloadPhases[id] = nil
         refreshMachines()
+    }
+
+    // MARK: - First-run login (FIRST_RUN_EXPERIENCE.md)
+
+    /// The "one more thing -- add a user" step. Collects a username + password,
+    /// then boots the machine and defers the UserAdmin pipeline to `onReady`.
+    /// Skipping leaves the machine user-less; the empty-user state re-offers
+    /// this on the next boot (invitation, not a gate).
+    @MainActor
+    func presentFirstLoginStep(for machineID: UUID) {
+        guard let m = registry?.machine(machineID) else { return }
+        // Suggest the Mac's short login name, lowercased + cleaned to the
+        // username rules, so Enter-through works for the common case.
+        let suggested = String(NSUserName().lowercased()
+            .filter { "abcdefghijklmnopqrstuvwxyz0123456789".contains($0) }
+            .prefix(8))
+        firstLoginWindow = FirstLoginWindowController(
+            machineName: m.name,
+            suggestedUsername: suggested,
+            onCreate: { [weak self] user, password in
+                self?.beginFirstLogin(machineID: machineID, user: user,
+                                      password: password)
+            },
+            onSkip: { /* user-less; re-offered on next ready */ })
+        firstLoginWindow?.showWindow()
+    }
+
+    /// Stash the pending credentials and boot. The account is created at
+    /// `onReady` (the daemon must answer before /etc/passwd can be touched).
+    @MainActor
+    private func beginFirstLogin(machineID: UUID, user: String, password: String) {
+        pendingFirstLogin[machineID] = (user, password)
+        startMachine(machineID)
+    }
+
+    /// Fired from `onReady`: if a login is pending for this machine, run the
+    /// UserAdmin add-user pipeline over its now-live daemon, then adopt the
+    /// account as the machine's launcher login. Runs off-main (HeliosClient is
+    /// blocking); the row shows "creating your login" while it does.
+    @MainActor
+    private func applyPendingFirstLogin(machineID id: UUID) {
+        guard let creds = pendingFirstLogin[id],
+              let m = registry?.machine(id), let os = m.os else { return }
+        pendingFirstLogin[id] = nil
+        applyingLogin.insert(id)
+        refreshMachines()
+
+        let host = "127.0.0.1"
+        let port = m.resolvedPorts.helios
+        let secret = heliosSecret(host: host, user: m.user, port: port)
+        let hash = UserAdmin.desHash(password: creds.password)
+        let req = UserAdmin.AddRequest(name: creds.user, hash: hash)
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let outcome: Result<Void, Error>
+            let client = HeliosClient(host: host, port: port, timeout: 60, secret: secret)
+            defer { client.close() }
+            do {
+                try client.connect()
+                _ = try client.hello()
+                _ = try UserAdmin.addUser(req, os: os, transport: client)
+                outcome = .success(())
+            } catch { outcome = .failure(error) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.applyingLogin.remove(id)
+                switch outcome {
+                case .success:
+                    // Adopt the new account as the machine's launcher login
+                    // (sets machine.user + telnet Keychain). Launchers go live.
+                    self.adoptMachineLogin(machineID: id, user: creds.user,
+                                           password: creds.password)
+                case .failure(let error):
+                    self.refreshMachines()
+                    // The guest is up; only the account write failed. Offer the
+                    // Users panel as the retry path.
+                    let alert = NSAlert()
+                    alert.messageText = "Couldn\u{2019}t create the login"
+                    alert.informativeText = "The machine is running, but adding "
+                        + "\u{201C}\(creds.user)\u{201D} failed: "
+                        + Self.describeUserAdminError(error)
+                        + "\n\nYou can try again from the Users panel "
+                        + "(Overview \u{2192} Users)."
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                }
+            }
+        }
+    }
+
+    private static func describeUserAdminError(_ error: Error) -> String {
+        if let e = error as? UserAdminError { return e.errorDescription ?? "\(e)" }
+        if let e = error as? HeliosClient.HeliosError { return e.errorDescription ?? "\(e)" }
+        return error.localizedDescription
     }
 
     /// The Machines menu and its submenus compute enablement explicitly at build

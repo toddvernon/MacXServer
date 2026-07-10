@@ -53,11 +53,10 @@ public final class MachineRegistry {
     public static func load(path: String = MachinesFileLoader.defaultPath,
                             launchersPath: String = LauncherFileLoader.defaultPath,
                             bundledImagePath: String,
-                            bundledUser: String,
                             log: ServerLogSink? = nil) -> MachineRegistry {
         let file = MachinesFileLoader.loadOrMigrate(
             path: path, launchersPath: launchersPath,
-            bundledImagePath: bundledImagePath, bundledUser: bundledUser, log: log)
+            bundledImagePath: bundledImagePath, log: log)
         let registry = MachineRegistry(machines: file.machines, path: path, log: log)
         registry.assignMissingPortBlocks()
         return registry

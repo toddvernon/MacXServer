@@ -15,8 +15,7 @@ final class MachineRegistryTests: XCTestCase {
         let registry = MachineRegistry.load(
             path: path,
             launchersPath: "/nonexistent-launchers",   // force the empty-launchers path
-            bundledImagePath: "/tmp/bundled.qcow2",
-            bundledUser: "tvernon")
+            bundledImagePath: "/tmp/bundled.qcow2")
         // First run seeds one imageless bundled fixture per guest OS, persisted.
         XCTAssertEqual(registry.machines.count, MachineOS.allCases.count)
         XCTAssertTrue(registry.machines.allSatisfy { $0.bundled && $0.image == nil })
@@ -284,7 +283,7 @@ final class MachineRegistryTests: XCTestCase {
             .write(toFile: path, atomically: true, encoding: .utf8)
         let registry = MachineRegistry.load(
             path: path, launchersPath: "/nonexistent-launchers",
-            bundledImagePath: "", bundledUser: "t")
+            bundledImagePath: "")
         XCTAssertEqual(registry.machine(legacy.id)?.ports, ImagePorts.block(5))
     }
 

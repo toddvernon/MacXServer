@@ -183,6 +183,15 @@ final class MachinesModel: ObservableObject {
     func row(_ id: UUID) -> MachineRow? { rows[id] }
     func isRunning(_ id: UUID) -> Bool { runningMachineIDs.contains(id) }
 
+    /// Fresh-install state: there's an emulated VM to run but none has a disk
+    /// image yet. Drives the first-run bubble + the blue (prominent) Download
+    /// button (FIRST_RUN_EXPERIENCE.md). State-derived, not a dismissed-once
+    /// flag, so it honestly returns if every image is later removed.
+    var isFirstRun: Bool {
+        let emulated = machines.filter { $0.kind == .emulatedVM }
+        return !emulated.isEmpty && emulated.allSatisfy { $0.image == nil }
+    }
+
     // The master list's three sections, each sorted by name (case-insensitive).
     // A machine you create lands in Virtual (emulated) or External by its kind;
     // the machines we ship carry `bundled` and group at the top.

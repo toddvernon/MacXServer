@@ -307,8 +307,7 @@ final class MachineFileTests: XCTestCase {
         command = xterm
         """)
         let machines = MachineMigrator.migrate(launchers: launchers,
-                                               bundledImagePath: "/tmp/bundled.qcow2",
-                                               bundledUser: "tvernon")
+                                               bundledImagePath: "/tmp/bundled.qcow2")
         let solaris = machines.first { $0.name == "solaris" }
         let u5 = machines.first { $0.name == "u5" }
         XCTAssertEqual(solaris?.kind, .emulatedVM)
@@ -337,21 +336,21 @@ final class MachineFileTests: XCTestCase {
         command = xterm
         """)
         let machines = MachineMigrator.migrate(launchers: launchers,
-                                               bundledImagePath: "/tmp/b.qcow2",
-                                               bundledUser: "tvernon")
+                                               bundledImagePath: "/tmp/b.qcow2")
         XCTAssertEqual(machines.count, 1)
         XCTAssertTrue(machines.contains { $0.name == "u5" && $0.kind == .externalHost })
         XCTAssertFalse(machines.contains { $0.bundled })
     }
 
     func testEnsuringBundledSeedsOneImagelessFixturePerOS() throws {
-        let seeded = MachineMigrator.ensuringBundled([], user: "tvernon")
+        let seeded = MachineMigrator.ensuringBundled([])
         let fixtures = try XCTUnwrap(seeded)
         XCTAssertEqual(fixtures.count, MachineOS.allCases.count)
         XCTAssertEqual(Set(fixtures.compactMap { $0.os }), Set(MachineOS.allCases))
         XCTAssertTrue(fixtures.allSatisfy { $0.bundled && $0.kind == .emulatedVM })
         XCTAssertTrue(fixtures.allSatisfy { $0.image == nil && !$0.isInstalledEmulatedVM })
-        XCTAssertTrue(fixtures.allSatisfy { $0.user == "tvernon" })
+        // User-less by design: the first-run flow fills the login.
+        XCTAssertTrue(fixtures.allSatisfy { $0.user.isEmpty })
         // Every fixture seeds the starter xterm palette (helios transport, so
         // no passwords), giving a freshly-attached guest launchers to click.
         XCTAssertTrue(fixtures.allSatisfy {
@@ -368,12 +367,12 @@ final class MachineFileTests: XCTestCase {
         let solaris = Machine(name: "Solaris 2.6", kind: .emulatedVM, os: .solaris26,
                               bundled: true, host: "127.0.0.1", user: "tvernon",
                               imagePath: "/tmp/solaris.qcow2")
-        let grown = try XCTUnwrap(MachineMigrator.ensuringBundled([solaris], user: "tvernon"))
+        let grown = try XCTUnwrap(MachineMigrator.ensuringBundled([solaris]))
         XCTAssertEqual(grown.count, MachineOS.allCases.count)
         let kept = grown.first { $0.os == .solaris26 }
         XCTAssertEqual(kept?.id, solaris.id)
         XCTAssertEqual(kept?.image?.path, "/tmp/solaris.qcow2")
         // Once all three exist, it's a no-op.
-        XCTAssertNil(MachineMigrator.ensuringBundled(grown, user: "tvernon"))
+        XCTAssertNil(MachineMigrator.ensuringBundled(grown))
     }
 }

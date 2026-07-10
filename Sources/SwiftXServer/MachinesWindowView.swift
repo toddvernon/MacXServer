@@ -226,6 +226,9 @@ private struct MachineOverviewPage: View {
         ScrollView {
             if let row {
                 VStack(alignment: .leading, spacing: 16) {
+                    if model.isFirstRun && row.canDownload {
+                        firstRunBubble(row)
+                    }
                     statusLine(row)
                     bootBar(row)
                     lifecycle(row)
@@ -238,6 +241,32 @@ private struct MachineOverviewPage: View {
                 Text("No status.").foregroundStyle(.secondary).padding(20)
             }
         }
+    }
+
+    /// The first-run "just getting started" prompt over an imageless machine.
+    /// The Download button below is rendered blue (prominent) while this shows,
+    /// so the eye lands on the next thing to do (FIRST_RUN_EXPERIENCE.md).
+    private func firstRunBubble(_ row: MachineRow) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 22))
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Just getting started?")
+                    .font(.headline)
+                Text("Download a starter image and launch a SPARCstation. "
+                     + "It becomes this machine\u{2019}s disk, then you\u{2019}ll "
+                     + "add a login and it boots.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(Color.accentColor.opacity(0.10),
+                    in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(Color.accentColor.opacity(0.25)))
     }
 
     /// No dot here (the master list carries it); the thermometer below is the
@@ -337,10 +366,9 @@ private struct MachineOverviewPage: View {
                     if row.canDownload {
                         // Imageless + known OS: fetch the curated image; it
                         // becomes this machine's disk (IMAGE_DOWNLOAD_PLAN.md).
-                        Button("Download Image\u{2026}") { model.onDownload?(row.id) }
-                            .help("Download the curated starter image for "
-                                  + "this machine's guest OS and attach it as "
-                                  + "its disk")
+                        // Blue (prominent) during first run -- it's the next
+                        // thing to do.
+                        downloadButton(row)
                     }
                 }
                 Button("Console") { model.onConsole?(row.id) }.disabled(!row.canConsole)
@@ -353,6 +381,20 @@ private struct MachineOverviewPage: View {
         // nothing -- which is truthful. The Helios Secret entry point moved to
         // Settings -> Connection 2026-07-09: a credential is a setting, and it
         // was only ever here because the lifecycle slot happened to be empty.)
+    }
+
+    /// Download Image button -- prominent (blue) during first run so it reads
+    /// as the next step; plain bordered afterward (adding a second machine's
+    /// image is a routine action, not a call to action).
+    @ViewBuilder private func downloadButton(_ row: MachineRow) -> some View {
+        let button = Button("Download Image\u{2026}") { model.onDownload?(row.id) }
+            .help("Download the curated starter image for this machine's "
+                  + "guest OS and attach it as its disk")
+        if model.isFirstRun {
+            button.buttonStyle(.borderedProminent)
+        } else {
+            button
+        }
     }
 
     @ViewBuilder private func launchers(_ row: MachineRow) -> some View {

@@ -103,6 +103,7 @@
 		4FCE78B59023498DFDA48216 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFA6328DA36A5A04C713B7DA /* SyntaxHighlighter.swift */; };
 		5067FD2ECBBB3F6AA268A2E7 /* UsersPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2672C2507F257E0E2FB5BA06 /* UsersPanelView.swift */; };
 		50C2987BA7EFE3F73D71450A /* SiblingChain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DF3816F21F8223631A5A34F /* SiblingChain.swift */; };
+		51A131C3E565B5EA73587EF8 /* FirstLoginWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71DEC91B55FB8298BC62A6E9 /* FirstLoginWindowController.swift */; };
 		524BCFD2085230BAB71EB3A2 /* Listener.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F1158F5435634F1A10649BF /* Listener.swift */; };
 		524FF377489F25AA621755AB /* HeliosClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34AE12DBBBB2FA9C63CB7B79 /* HeliosClient.swift */; };
 		528A50EAC0A4E1E29A65AB16 /* PointerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96CD807BE28C18051D249341 /* PointerConfig.swift */; };
@@ -626,6 +627,7 @@
 		6BE27AB785C095890470146B /* SolarisFilename.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SolarisFilename.swift; sourceTree = "<group>"; };
 		6BF6DEE9FEFA41D7E7FDF6B0 /* Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preferences.swift; sourceTree = "<group>"; };
 		6D7F5F989DC183873905FFA9 /* RenderGlyphPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderGlyphPayload.swift; sourceTree = "<group>"; };
+		71DEC91B55FB8298BC62A6E9 /* FirstLoginWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstLoginWindowController.swift; sourceTree = "<group>"; };
 		72417D022F2F31889B53A1F9 /* ImageLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLock.swift; sourceTree = "<group>"; };
 		7373DBA33520C13870C991F9 /* MachinesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachinesWindowController.swift; sourceTree = "<group>"; };
 		73D88FEB83C29D484A115494 /* CaptureEditorController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureEditorController.swift; sourceTree = "<group>"; };
@@ -1003,6 +1005,7 @@
 				E1B24EA7F92416621AE189BE /* FileBrowserPanelModel.swift */,
 				7BE8F4BB2DE857AB05561760 /* FileBrowserPanelView.swift */,
 				78BF0DBF7C4EC068F491C51C /* FileBrowserWindowController.swift */,
+				71DEC91B55FB8298BC62A6E9 /* FirstLoginWindowController.swift */,
 				800EAF3DF38A3331010EBCEF /* FontMappingsPanelView.swift */,
 				AEFF605BCF9A3DD6DE699A8C /* FontMappingsWindowController.swift */,
 				5E8D016741559664DDE33E25 /* FontMappingSyntaxHighlighter.swift */,
@@ -1902,6 +1905,7 @@
 				CD6207CD20C7BB5E07192385 /* FileBrowserPanelModel.swift in Sources */,
 				AB5D422EA561CE842B9FC4FD /* FileBrowserPanelView.swift in Sources */,
 				96E287CFE88A07A994EE63F8 /* FileBrowserWindowController.swift in Sources */,
+				51A131C3E565B5EA73587EF8 /* FirstLoginWindowController.swift in Sources */,
 				6E52B4D8B95C5CE47D5BC99C /* FontMappingSyntaxHighlighter.swift in Sources */,
 				87A1DD9EB10D2164474F1FE8 /* FontMappingsPanelView.swift in Sources */,
 				D4D553D0E4374B73B34236E1 /* FontMappingsWindowController.swift in Sources */,

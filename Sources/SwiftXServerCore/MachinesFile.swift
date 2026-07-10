@@ -54,8 +54,7 @@ public struct MachinesFile: Codable, Equatable, Sendable {
 /// anything else → an external host -- and a bundled machine is always present
 /// even when the old launchers named none.
 public enum MachineMigrator {
-    public static func migrate(launchers: LauncherFile, bundledImagePath: String,
-                               bundledUser: String) -> [Machine] {
+    public static func migrate(launchers: LauncherFile, bundledImagePath: String) -> [Machine] {
         var machines: [Machine] = []
 
         for group in launchers.groups() {
@@ -92,15 +91,19 @@ public enum MachineMigrator {
         return machines
     }
 
-    /// The machines we ship: one bundled fixture per guest OS, imageless (the user
-    /// attaches a disk image, then runs it). Stable identity is the `bundled` flag
-    /// plus `os`, so `ensuringBundled` never duplicates a fixture the user has
-    /// already attached an image to. All the per-OS behavior (ports, boot command,
-    /// halt) derives from `os`, so this stays a terse list.
-    public static func bundledFixtures(user: String) -> [Machine] {
+    /// The machines we ship: one bundled fixture per guest OS, imageless AND
+    /// user-less (the user attaches a disk image, then the first-run flow
+    /// creates their login and fills `user`). Seeding a user here would write
+    /// a lie for anyone who isn't the developer -- the empty user is the
+    /// signal the first-run "add a user" step keys on (FIRST_RUN_EXPERIENCE.md).
+    /// Stable identity is the `bundled` flag plus `os`, so `ensuringBundled`
+    /// never duplicates a fixture the user has already set up. All the per-OS
+    /// behavior (ports, boot command, halt) derives from `os`, so this stays
+    /// a terse list.
+    public static func bundledFixtures() -> [Machine] {
         MachineOS.allCases.map { os in
             Machine(name: os.displayName, kind: .emulatedVM, os: os, bundled: true,
-                    host: "127.0.0.1", user: user, transport: .helios,
+                    host: "127.0.0.1", user: "", transport: .helios,
                     display: "10.0.2.2:0", imagePath: nil,
                     launchers: defaultXtermLaunchers)
         }
@@ -129,10 +132,10 @@ public enum MachineMigrator {
     /// Guarantee every bundled fixture is present, injecting only the missing ones
     /// (matched by `bundled && os`, so an already-attached fixture is preserved).
     /// Returns nil when nothing was added, so the caller can skip a needless write.
-    public static func ensuringBundled(_ machines: [Machine], user: String) -> [Machine]? {
+    public static func ensuringBundled(_ machines: [Machine]) -> [Machine]? {
         var result = machines
         var added = false
-        for fixture in bundledFixtures(user: user)
+        for fixture in bundledFixtures()
         where !machines.contains(where: { $0.bundled && $0.os == fixture.os }) {
             result.append(fixture)
             added = true
@@ -174,7 +177,6 @@ public enum MachinesFileLoader {
         path: String = defaultPath,
         launchersPath: String = LauncherFileLoader.defaultPath,
         bundledImagePath: String,
-        bundledUser: String,
         log: ServerLogSink? = nil
     ) -> MachinesFile {
         let fm = FileManager.default
@@ -182,8 +184,8 @@ public enum MachinesFileLoader {
             let launchers: LauncherFile = (try? String(contentsOfFile: launchersPath, encoding: .utf8))
                 .map { LauncherFile.parse($0) } ?? LauncherFile(entries: [], warnings: [])
             var machines = MachineMigrator.migrate(
-                launchers: launchers, bundledImagePath: bundledImagePath, bundledUser: bundledUser)
-            machines = MachineMigrator.ensuringBundled(machines, user: bundledUser) ?? machines
+                launchers: launchers, bundledImagePath: bundledImagePath)
+            machines = MachineMigrator.ensuringBundled(machines) ?? machines
             let file = MachinesFile(machines: machines)
             do {
                 try file.encoded().write(toFile: path, atomically: true, encoding: .utf8)
@@ -197,7 +199,7 @@ public enum MachinesFileLoader {
             let file = try MachinesFile.decode(String(contentsOfFile: path, encoding: .utf8))
             // Existing installs predate the bundled fixtures; inject any that are
             // missing and persist so their ids are stable from here on.
-            guard let grown = MachineMigrator.ensuringBundled(file.machines, user: bundledUser)
+            guard let grown = MachineMigrator.ensuringBundled(file.machines)
             else { return file }
             let updated = MachinesFile(machines: grown)
             do {
