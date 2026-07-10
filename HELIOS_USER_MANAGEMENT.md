@@ -184,16 +184,24 @@ design session:
   slirp/loopback posture (DECISIONS 2026-07-09: hostfwds bind 127.0.0.1)
   bounds the exposure to the user's own Mac.
 
-## Build shape (when ratified)
+## Build shape
 
-- `UserAdmin` in SwiftXServerCore: pure per-OS line builders + parsers
-  (passwd/shadow/master.passwd), DES crypt wrapper, the orchestration
-  over HeliosClient. Unit tests for every builder/parser per OS; the
-  pipeline testable against a mock client transcript.
+- `UserAdmin` in SwiftXServerCore — **BUILT 2026-07-10.** Pure per-OS line
+  builders + parsers (passwd/shadow/master.passwd), the crypt(3) DES
+  wrapper, uid allocation, and the add/delete/list pipelines over a
+  `UserAdminTransport` protocol (HeliosClient conforms as-is). 21 unit
+  tests pin the record formats, the commit ordering per OS (the mock
+  guest's operation log IS the assertion), the refusal paths, and the
+  rm-guard. Plus `UserAdminLiveTests`: a SPARCPLUG_LIVE_TEST-gated
+  add -> run-as-the-new-user (`id` via the daemon's getpwnam euid-drop)
+  -> delete cycle, discovered via the image lock's secret+heliosPort --
+  **passed against the live NetBSD guest 2026-07-10**. Solaris 2.6 and
+  4.1.4 live passes still to run (same test, point SPARCPLUG_LIVE_LOCK
+  at their locks when booted).
 - `UsersPanel` (SwiftXServer): the panel + sheets, modeled on
-  DnsAdminPanelView.
+  DnsAdminPanelView. NOT BUILT.
 - AppDelegate: chip wiring + the first-ready empty-user prompt + the
-  `bundledUser` seeding change.
+  `bundledUser` seeding change. NOT BUILT (FIRST_RUN_EXPERIENCE.md).
 - No agent or protocol changes. No SPARCplug changes beyond publish-prep
   usage.
 

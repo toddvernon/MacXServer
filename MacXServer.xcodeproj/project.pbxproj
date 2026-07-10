@@ -146,6 +146,7 @@
 		7196A9FEBFACF56AE07FDBBE /* state.c in Sources */ = {isa = PBXBuildFile; fileRef = 933900DA1413694A309C3371 /* state.c */; };
 		72EC6B0E2F408F557C694503 /* TranslateCoordinatesReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE68EE02C86045BB80B3BC6F /* TranslateCoordinatesReply.swift */; };
 		73E716EAD532C1E1EB060F06 /* InternAtomReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2208DECA33F851E933FDDC72 /* InternAtomReply.swift */; };
+		751E9DB1D33481F33D3CBD66 /* UserAdmin.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD3C7A8070A90F6E665D2D2B /* UserAdmin.swift */; };
 		754D04D6B8EE5F9B2E41A37F /* SessionCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 647F424858AD927AB62198E9 /* SessionCapture.swift */; };
 		7569630E54BF6D661AC5F2E2 /* FontResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BDF02BBA9F2D1A1948961B8 /* FontResolver.swift */; };
 		758144B0A968AAF9054A5F97 /* SwiftXCaptureUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08FC1E8C330E95BC28022D41 /* SwiftXCaptureUI.framework */; };
@@ -733,6 +734,7 @@
 		CC70683836ABB9630D476F12 /* Text16Requests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Text16Requests.swift; sourceTree = "<group>"; };
 		CC732D2D44A5F1A36A63C730 /* WireTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireTrace.swift; sourceTree = "<group>"; };
 		CC87F0A11485FCD81C9C03CF /* XkbCompatPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XkbCompatPayload.swift; sourceTree = "<group>"; };
+		CD3C7A8070A90F6E665D2D2B /* UserAdmin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserAdmin.swift; sourceTree = "<group>"; };
 		CF4CCC220A0B3E2C80BD79F3 /* CreatePixmap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreatePixmap.swift; sourceTree = "<group>"; };
 		CF8E857042775D639F8A4128 /* BigReqEnableReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BigReqEnableReply.swift; sourceTree = "<group>"; };
 		D18E227C587C3A9702D779C3 /* ShmDumper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShmDumper.swift; sourceTree = "<group>"; };
@@ -920,6 +922,7 @@
 				149BF1A018D63F3CDF368D84 /* TelnetLauncher.swift */,
 				083DB3D34E0342BD8558A89E /* TerminalEmulator.swift */,
 				4C1A25FED24F27AFE4307E0F /* TerminalView.swift */,
+				CD3C7A8070A90F6E665D2D2B /* UserAdmin.swift */,
 				18BB04B0B20E574B91DE7719 /* USKeymap.swift */,
 				010B57FDC5A36184A078543D /* ValueListReader.swift */,
 				1358892F3CB410549B5A7DDC /* WindowBridge.swift */,
@@ -1662,6 +1665,7 @@
 				0706A2A52CF3962CDED507E4 /* TerminalEmulator.swift in Sources */,
 				92BA1FD11A9885DF3397BC0F /* TerminalView.swift in Sources */,
 				2A9488BF82A47D5171A135C7 /* USKeymap.swift in Sources */,
+				751E9DB1D33481F33D3CBD66 /* UserAdmin.swift in Sources */,
 				DAB9115BC3D19F15AEC7B764 /* ValueListReader.swift in Sources */,
 				67F43B9F55D042F11243BA5B /* WMHints.swift in Sources */,
 				130F8B57DD364AC8CD1FC637 /* WindowBridge.swift in Sources */,
