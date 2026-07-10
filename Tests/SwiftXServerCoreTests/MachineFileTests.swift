@@ -209,12 +209,11 @@ final class MachineFileTests: XCTestCase {
     func testEngineConfigForEmulatedVM() {
         let m = Machine(name: "s", kind: .emulatedVM, os: .solaris26,
                         host: "127.0.0.1", user: "t", imagePath: "/tmp/disk.qcow2")
-        let cfg = m.makeEngineConfig(tftpDirectory: "/tmp/tftp")
+        let cfg = m.makeEngineConfig()
         XCTAssertEqual(cfg?.diskImage.path, "/tmp/disk.qcow2")
         // Memory is not per-machine: every VM gets the SS-5 max.
         XCTAssertEqual(cfg?.memoryMB, 256)
         XCTAssertEqual(cfg?.ports, .solaris26)
-        XCTAssertEqual(cfg?.tftpDirectory, "/tmp/tftp")
     }
 
     func testEngineConfigNilForExternalAndImageless() {

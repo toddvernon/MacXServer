@@ -76,8 +76,6 @@
 		3A1EB41FF8C63E84867BC314 /* OpenFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = 094C02A823F59A170DC8EBB9 /* OpenFont.swift */; };
 		3AF3AA0AED9093070C7F81CD /* SparcShutdownProgressWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C19C1C2C0742B8FA8C8E81C /* SparcShutdownProgressWindowController.swift */; };
 		3F0CC3CBEA92E105621DC697 /* XInputDumper.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4EBC5BAECE3AC68C05D1391 /* XInputDumper.swift */; };
-		3F41CC2F6A11021062D43807 /* SparcConfigWindows.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3E7E9D57468CC49753116B8 /* SparcConfigWindows.swift */; };
-		3F5F406D5099337F54E3CD91 /* SparcConfigModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEFC7BD6CACFBA30C8181E24 /* SparcConfigModel.swift */; };
 		40DAE7B9761570F2DC2A4B58 /* InputEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0F55E248A51B7A196B4FB7 /* InputEvents.swift */; };
 		41242B184A4ED29DEF85D137 /* ResourceSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7374467A89FB169ED5220A3 /* ResourceSyntaxHighlighter.swift */; };
 		420AB3F0F2B59C4B8F77FABA /* MachineController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AFEA4B6C22608A7965AD06A /* MachineController.swift */; };
@@ -763,7 +761,6 @@
 		F03EEBE0EED09E2CBBD62DD5 /* GetKeyboardControlReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GetKeyboardControlReply.swift; sourceTree = "<group>"; };
 		F04C9320D2980D91CF50A3F5 /* CaptureSyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSyntaxHighlighter.swift; sourceTree = "<group>"; };
 		F053A2250444A41E4F9079AA /* ShapeRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShapeRequests.swift; sourceTree = "<group>"; };
-		F3E7E9D57468CC49753116B8 /* SparcConfigWindows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparcConfigWindows.swift; sourceTree = "<group>"; };
 		F420A33EB754EB1F6D056150 /* QmpClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QmpClient.swift; sourceTree = "<group>"; };
 		F449EE99556157173AE28DFE /* LineNumberGutter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineNumberGutter.swift; sourceTree = "<group>"; };
 		F4565EE71368DDEE198B44E6 /* AllocColorReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AllocColorReply.swift; sourceTree = "<group>"; };
@@ -781,7 +778,6 @@
 		FE5D3FBBC2EC9489C3814F4D /* DECdrawing.inc */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.pascal; path = DECdrawing.inc; sourceTree = "<group>"; };
 		FEAAC6D6AB02404456535F45 /* PixelBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PixelBuffer.swift; sourceTree = "<group>"; };
 		FEE6A6705C9966B512531E70 /* utf8.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = utf8.h; sourceTree = "<group>"; };
-		FEFC7BD6CACFBA30C8181E24 /* SparcConfigModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparcConfigModel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1011,8 +1007,6 @@
 				C7374467A89FB169ED5220A3 /* ResourceSyntaxHighlighter.swift */,
 				88810E35C04DE11A6F2F4593 /* SecretEntryField.swift */,
 				D899EE8C17AAED546A288ECA /* ServerEntry.swift */,
-				FEFC7BD6CACFBA30C8181E24 /* SparcConfigModel.swift */,
-				F3E7E9D57468CC49753116B8 /* SparcConfigWindows.swift */,
 				5572289CEA5A6228AAD86A49 /* SparcPlugConsoleWindowController.swift */,
 				2C19C1C2C0742B8FA8C8E81C /* SparcShutdownProgressWindowController.swift */,
 				B2919BA52AEB8B568EBADB7D /* SparcStationWelcomeWindowController.swift */,
@@ -1908,8 +1902,6 @@
 				97C15F9A81F88978A46CC73B /* SecretEntryField.swift in Sources */,
 				2D357D8D959034DDAE7AADB5 /* ServerEntry.swift in Sources */,
 				97505EDAD43827D812042553 /* ServerMain.swift in Sources */,
-				3F5F406D5099337F54E3CD91 /* SparcConfigModel.swift in Sources */,
-				3F41CC2F6A11021062D43807 /* SparcConfigWindows.swift in Sources */,
 				9A48C3F777EA2702E773B9FC /* SparcPlugConsoleWindowController.swift in Sources */,
 				3AF3AA0AED9093070C7F81CD /* SparcShutdownProgressWindowController.swift in Sources */,
 				234C8AFC02F1E9BE48F51F71 /* SparcStationWelcomeWindowController.swift in Sources */,

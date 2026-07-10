@@ -1,130 +1,104 @@
 # Status 2026-07-10
 
-## Headline: settings cleanup day executed, then revised live. All four
-phases of SETTINGS_CLEANUP_PLAN.md shipped (9 of 10 audit findings
-closed, F3 deferred to SHORTCUTS by design), and Todd's manual pass drove
-an evening round: sections regrouped by PLANE (Helios and Telnet/SSH each
-own a section, transport demoted to launcher config), helios secret keyed
-by host, prober candidacy = secret-saved. See the three 2026-07-09
-DECISIONS entries. Next session opens on X11 work (MCP bridge lead, or
-the CLIPBOARD/editres gaps).
+## Headline: menu-bar reorganization day. The macOS menu bar went from
+macXserver / Edit / X11Server / Machines / Window to **macXserver /
+Machines / Edit / X11Server** (Window deleted). The app menu was trimmed to
+the macOS-standard minimum; server config editors and capture actions moved
+to the X11Server menu where they belong. The TFTP "Shared Folder" feature
+was removed entirely (menu, UI, prefs, and the VM launch wiring). The
+Machines menu is now a dynamic live-launch surface -- only reachable
+machines show. And the Helios prober sweep was parallelized. Suite green,
+1503 tests. Earlier today: the prober aliveness-oracle work (see the
+2026-07-10 DECISIONS entry).
 
-## 2026-07-10 (laptop, remote): prober = aliveness oracle
+## What happened this session (menu-bar work)
 
-Todd noticed launcher chips stayed clickable with every machine
-unreachable. Rework (see DECISIONS 2026-07-10): HeliosClient gained a
-typed .connectionRefused; reach states are now unknown / up /
-unauthorized / noAgent / unreachable; EVERY external with a host is
-probed (secretless boxes get honest states, telnet-only machines get
-live dots); one shared launcherEnabled rule dims chips + menu items only
-on confirmed unreachable or helios-transport-without-answering-agent;
-words ride the colors everywhere (master-list state word, chip-dim
-caption, Helios section status sentence). Suite green, 1506 tests.
-NOTE: 2026-07-09's commits (9) + these are still UNPUSHED from this Mac
--- Todd declined the /sos push; push before switching machines.
+Three logical changes, all landed and building clean:
 
-## Evening revision 2026-07-09 (Todd's manual pass, after the morning phases)
+1. **Menu reorg.** New bar: macXserver / Machines / Edit / X11Server.
+   - **macXserver** trimmed to standard (About, Acknowledgements /
+     Preferences / Hide-Others-Show / Quit). The server config editors and
+     capture items that used to clutter it are gone from here.
+   - **Machines** promoted to the "File" slot (first app-specific menu) --
+     it's the meat of the app, so it reads as primary.
+   - **X11Server** absorbed the strays: status line / Drop All Clients /
+     Edit Resources / Edit Font Mappings / **Capture** submenu (Open,
+     Reveal Folder, Discard All -- captures are recordings of the X
+     protocol stream, so they're server-adjacent).
+   - **Window** deleted. With it went Cmd-M / Cmd-W (the X clients aren't
+     documents; the standard window list added nothing here).
 
-- Fleet dots mystery solved: every fleet agent was fine (all accept
-  secret "test"; verified by direct hello) -- the per-Mac Debug secret
-  store ~/.macxserver-dev-secrets.json just lacked 8 of 11 entries on the
-  desktop. Backfilled; memory updated (switching-Macs checklist + the
-  fail-closed-auth note).
-- Settings sections are planes now: Machine / Connection (host, user) /
-  Helios (port, secret, live status line) / Telnet-SSH (ports, password,
-  shell prompt, always visible) / Disk Image. Launchers became their own
-  TAB (Overview / Settings / Launchers) holding "Show windows on",
-  "Connect with", and the list; per-tab drafts commit only the fields
-  they own, so the tabs can't clobber each other.
-- "Connect with" = how launcher commands sign in, nothing more. Prober
-  candidacy is secret-saved-only; secretless external = gray "not watched
-  (no Helios secret)" instead of a bogus "refused" orange.
-- Helios secret keyed helios:<host> (was user@host; editing User detached
-  the secret -- the ipc confusion). Legacy entries migrate on read.
-- Wording: "this Mac" never "this server"; effective-default gray
-  placeholders say so in the caption; Overview section renamed "Helios
-  Admin Agents".
+2. **Shared Folder (TFTP) removed, root and branch.** It was slirp's
+   built-in TFTP server (guest pulls with `tftp 10.0.2.2`) -- useless for
+   real files, and the Helios file browser is the daily path now. Deleted:
+   the menu item, both UI files (`SparcConfigWindows.swift` +
+   `SparcConfigModel.swift`, 225 lines, existed only for this), the
+   Preferences keys / accessors / default dir, the `QemuEngine.tftpDirectory`
+   capability + the `,tftp=` nic append + the `SPARCPLUG_TFTP_DIR` dev
+   override, the `makeEngineConfig(tftpDirectory:)` param, the VM launch
+   wiring in `engineConfig(for:)`, and the 3 covering tests. Net ~455 lines
+   removed.
 
-## What happened this session
+3. **Machines menu is dynamic.** New `machineReachableForMenu` gate: an
+   emulated VM shows only when running AND ready; an external host shows
+   unless the prober confirmed it unreachable (up / unknown / unauthorized /
+   noAgent all still show -- a box you can reach some way). Stopped VMs and
+   dead hosts drop off; start or add machines from the Machines window. If
+   the registry is non-empty but nothing's reachable, a disabled "No
+   machines reachable" line shows instead of a bare menu. Fixed a latent
+   bug while here: the probe completion refreshed only the window
+   (`refreshMachines`), not the menu -- promoted it to `refreshSparcMenu`
+   so external-host visibility tracks probes live.
 
-Todd confirmed the three morning decisions as recommended: delete
-networkMode + bind loopback, drop the DNS OS gate, ports/MAC facts to
-Overview. (Context that drove the first one: VM-to-VM networking someday
-is unaffected -- each guest is its own slirp NAT; guest A can reach guest
-B via 10.0.2.2:port even with loopback binding, and a real shared segment
-would be a new netdev + fresh design anyway.)
-
-- **Phase 1a (F2)**: `MachineNetworkMode` deleted (was decoded/encoded,
-  read by nothing); qemu hostfwds now `hostfwd=tcp:127.0.0.1:...` --
-  guests are no longer LAN-reachable. DECISIONS entry.
-- **Phase 1b (F1)**: editable Ports row (telnet/ssh/helios) in Settings ->
-  Connection for BOTH kinds; blank = derived, placeholders show the
-  derived block, all-blank clears the override. Commit-time collision
-  check via new `MachineRegistry.portBlockClaimant` (+ tests); fields
-  freeze while running. The port-conflict dialog's "fix it in Settings"
-  is finally true.
-- **Phase 2**: section reorg to Machine / Connection / Login / X11
-  Launchers / Disk Image. Renames: Transport -> "Connect with" (Telnet /
-  SSH / Helios agent), DISPLAY -> "Show windows on" (moved to Launchers),
-  Prompt -> "Shell prompt", Identity -> "Machine"; OS picker shows
-  displayName. Runtime section dissolved to an Overview monospaced
-  ports+MAC facts line. Helios Secret moved Overview -> Settings ->
-  Connection; dialog text rewritten. Hover tooltips promoted to visible
-  fieldCaption footnotes everywhere (incl. the F10 telnet-PATH asymmetry
-  in the launcher-command caption).
-- **Phase 3**: F5 menu parity (both kinds get Admin submenu = File
-  Transfer + DNS, gates mirror the Overview; external Helios Secret menu
-  item retired). F9 launcher-name uniqueness blocks Done in the editor
-  sheet. F6 telnet Keychain account = user@host:port with one-shot
-  fallback migration (old entry left alone). F4 DNS admin no longer
-  OS-gated.
-- **Phase 4**: F7 verbose field/parse removed from LauncherFile (doc block
-  fixed); F8 startup no longer reads ~/.macxserver-launchers when
-  machines.json exists (bundledUser falls back to NSUserName()); loopback
-  host list deduped (MachinesFile.isLoopback now public, AppDelegate
-  delegates). F3 ledgered in SHORTCUTS. DECISIONS entries x3 (loopback
-  bind, settings naming doctrine, keychain key). Audit doc annotated
-  per-finding shipped/deferred.
+4. **Prober sweep parallelized.** `probeQueue` is now concurrent; a pass
+   fans every job out at once (DispatchGroup + a lock-guarded
+   `ProbeResultCollector`, `@unchecked Sendable`), and `group.notify` posts
+   the batch on main when the slowest probe returns. A pass's wall-clock
+   dropped from ~3s x hosts (up to ~30s+ with several dead boxes on the
+   11-machine fleet) to ~one 3s timeout. Cadence unchanged (3 min + the
+   event-driven immediate passes); only per-pass latency improved.
 
 ## What's working / what's broken
 
-- swift test green after every phase: 1506 tests, 0 failures (2 new port
-  tests added).
-- machines.json migration is automatic: legacy networkMode key ignored on
-  decode, old telnet Keychain entry copied forward on first use.
-- NOT yet done: the manual pass (Phase 4 tail) -- needs a human on the
-  GUI. Checklist: rebuild in Xcode (model + UI changed), one fixture VM
-  (boot, xterm launch, DNS, File Transfer, Back Up), one real host (ipc
-  or ss5: probe dot, DNS, File Transfer, telnet launch with progress
-  window), spot-check menu vs Overview verb parity, eyeball the new
-  Settings sections + captions.
+- swift build + swift test both green: 1503 tests, 0 failures (was 1506;
+  the 3 removed tests were exactly the TFTP ones).
+- **xcodegen was re-run** after deleting the two SparcConfig files -- the
+  regenerated `.xcodeproj` has zero SparcConfig references, so Xcode opens
+  clean.
+- NOT yet verified in the real app: this is menu UI + deleted files, none
+  of which `swift build` can visually confirm. Needs an Xcode rebuild +
+  eyeball (see checklist below).
 
-## Behavior changes to notice while testing
+## Manual pass checklist (needs a human on the GUI)
 
-- Guest ports refuse connections from other LAN machines now (loopback
-  bind) -- expected, it's the F2 fix.
-- First telnet launch per VM may prompt once if the legacy shared
-  user@host Keychain entry doesn't match that VM (the per-machine key fix
-  working as intended).
-- External machines' menu: Helios Secret is gone; set it in Settings ->
-  Connection.
+- Rebuild in Xcode (model + UI changed; `MacXServer.xcodeproj`, not swift
+  build).
+- Eyeball the new menu bar: macXserver / Machines / Edit / X11Server, no
+  Window menu. Confirm the app menu is trimmed and X11Server holds the
+  config editors + Capture submenu.
+- Confirm the Machines menu shows only reachable machines: boot a fixture
+  VM and watch it appear once ready; stop it and watch it drop. Point at a
+  live external host (ipc/ss5) and a dead one -- only the live one shows.
+- Sanity-check that removing Shared Folder didn't break VM launch (boot a
+  guest, launch an xterm).
 
 ## What's next
 
 1. Todd's manual pass per the checklist above; fix anything it surfaces.
 2. Back to X11 land: MCP bridge is the standing lead; image download per
-   IMAGE_DOWNLOAD_PLAN.md behind it; CLIPBOARD/editres gaps in the
-   feature matrix as the protocol-side alternative.
+   IMAGE_DOWNLOAD_PLAN.md behind it; CLIPBOARD/editres gaps in the feature
+   matrix as the protocol-side alternative.
 
-## Committed this session
+## Committed / push state
 
-- swift-x: 81719de (1a), 164066d (1b), 7aac433 (2), 6e80a27 (3), + the
-  Phase 4 commit on top.
+- This session's menu-bar work is committed on top of the 10 still-UNPUSHED
+  commits from 2026-07-09 / the morning of 2026-07-10 (settings cleanup +
+  prober aliveness oracle). **Nothing has been pushed from this Mac** --
+  push before switching machines or the work is stranded here.
 - SPARCplug, cx repos: no changes.
 
 ## Switching Macs
 
-- Code + model changed: rebuild in Xcode on the other Mac before running
-  the app (MacXServer.xcodeproj, not swift build).
+- Code + model + `.xcodeproj` changed: rebuild in Xcode on the other Mac
+  before running (and it'll `git pull` the regenerated project).
 - No VMs running, no image locks.
-- No new memories written yet this session.

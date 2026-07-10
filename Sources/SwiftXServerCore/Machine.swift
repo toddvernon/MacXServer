@@ -356,22 +356,20 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
 
     /// Reconstruct the `QemuEngineConfig` for an emulated VM. Helper + firmware
     /// come from the app bundle (via `defaultConfig`); this machine overrides the
-    /// disk image, ports, and (when on) the TFTP shared folder. Memory is not
-    /// per-machine: every VM gets the SS-5 maximum (defaultConfig's 256MB).
-    /// Returns nil for an external host or an image-less emulated VM. Mirrors the
-    /// old AppDelegate.makeSparcConfig, now driven by the machine instead of globals.
-    public func makeEngineConfig(bundle: Bundle = .main,
-                                 tftpDirectory: String? = nil) -> QemuEngineConfig? {
+    /// disk image and ports. Memory is not per-machine: every VM gets the SS-5
+    /// maximum (defaultConfig's 256MB). Returns nil for an external host or an
+    /// image-less emulated VM. Mirrors the old AppDelegate.makeSparcConfig, now
+    /// driven by the machine instead of globals.
+    public func makeEngineConfig(bundle: Bundle = .main) -> QemuEngineConfig? {
         guard kind == .emulatedVM, let image = image else { return nil }
         var config = QemuEngine.defaultConfig(bundle: bundle)
-        // Dev escape hatches win over the machine's values: defaultConfig has
-        // already applied SPARCPLUG_DISK_IMAGE / SPARCPLUG_TFTP_DIR from the
-        // env, so only overwrite when the env DIDN'T set them. Before this the
-        // per-machine values always clobbered the env vars, making them dead on
-        // the app path (they only worked in tests). See CODE_AUDIT §2a.
+        // The dev escape hatch wins over the machine's value: defaultConfig has
+        // already applied SPARCPLUG_DISK_IMAGE from the env, so only overwrite
+        // when the env DIDN'T set it. Before this the per-machine value always
+        // clobbered the env var, making it dead on the app path (it only worked
+        // in tests). See CODE_AUDIT §2a.
         let env = ProcessInfo.processInfo.environment
         if (env["SPARCPLUG_DISK_IMAGE"]?.isEmpty ?? true) { config.diskImage = image }
-        if (env["SPARCPLUG_TFTP_DIR"]?.isEmpty ?? true) { config.tftpDirectory = tftpDirectory }
         config.ports = resolvedPorts
         config.macAddress = resolvedMacAddress
         config.os = os

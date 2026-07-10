@@ -95,11 +95,6 @@ public struct QemuEngineConfig: Sendable, Equatable {
     /// concurrent guests never collide; the default is the historical bundled-VM
     /// MAC so a config built without a machine keeps the old guest identity.
     public var macAddress: String
-    /// When non-nil, slirp serves this directory over its built-in TFTP server
-    /// on the guest gateway (10.0.2.2). nil = no TFTP (the `-nic` line omits
-    /// `tftp=`). The caller is responsible for the directory existing; slirp
-    /// is read-only and won't create it.
-    public var tftpDirectory: String?
     /// The guest OS. The single per-OS input to the engine: the SCSI boot unit,
     /// boot-command, clean-halt markers, and X bin dirs all derive from it via the
     /// `MachineOS` guest profile. nil = unknown -> the engine falls back to Solaris
@@ -108,14 +103,13 @@ public struct QemuEngineConfig: Sendable, Equatable {
 
     public init(helper: URL, firmwareDir: URL, diskImage: URL, memoryMB: Int = 256,
                 ports: ImagePorts = .solaris26, macAddress: String = "DE:AD:BE:EF:F3:E5",
-                tftpDirectory: String? = nil, os: MachineOS? = nil) {
+                os: MachineOS? = nil) {
         self.helper = helper
         self.firmwareDir = firmwareDir
         self.diskImage = diskImage
         self.memoryMB = memoryMB
         self.ports = ports
         self.macAddress = macAddress
-        self.tftpDirectory = tftpDirectory
         self.os = os
     }
 
@@ -922,14 +916,9 @@ public final class QemuEngine: @unchecked Sendable {
         // interfaces, exposing guest telnet to the LAN (fixed 2026-07-09, see
         // DECISIONS.md). Guest-to-guest via 10.0.2.2:PORT still works -- slirp
         // delivers those to the host's loopback. Per-machine MAC (stable across
-        // reboots, unique per machine so concurrent guests never collide). When
-        // a shared folder is configured, append slirp's built-in TFTP server
-        // pointed at it; the guest pulls files with `tftp 10.0.2.2`.
+        // reboots, unique per machine so concurrent guests never collide).
         let p = config.ports
-        var nic = "user,model=lance,mac=\(config.macAddress),hostfwd=tcp:127.0.0.1:\(p.telnet)-:23,hostfwd=tcp:127.0.0.1:\(p.ssh)-:22,hostfwd=tcp:127.0.0.1:\(p.helios)-:2125"
-        if let tftp = config.tftpDirectory, !tftp.isEmpty {
-            nic += ",tftp=\(tftp)"
-        }
+        let nic = "user,model=lance,mac=\(config.macAddress),hostfwd=tcp:127.0.0.1:\(p.telnet)-:23,hostfwd=tcp:127.0.0.1:\(p.ssh)-:22,hostfwd=tcp:127.0.0.1:\(p.helios)-:2125"
         var args = [
             "-M", "SS-5",                                   // SPARCstation 5 (sun4m)
             "-m", String(config.memoryMB),                  // RAM in MB
@@ -1067,14 +1056,8 @@ public final class QemuEngine: @unchecked Sendable {
             diskImage = applicationSupportDir().appendingPathComponent(diskImageFilename)
         }
 
-        // Dev override for the shared folder, so the bundled engine can be
-        // exercised with TFTP before/independent of the Preferences toggle.
-        // The app normally sets tftpDirectory from Preferences instead.
-        let tftpDir = env["SPARCPLUG_TFTP_DIR"].flatMap { $0.isEmpty ? nil : $0 }
-
         return QemuEngineConfig(helper: helper, firmwareDir: firmwareDir,
-                                diskImage: diskImage,
-                                tftpDirectory: tftpDir)
+                                diskImage: diskImage)
     }
 
     // MARK: - I/O (all on `queue`)

@@ -38,13 +38,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// state, not an app-global. Cleared the moment state leaves `.running` (so
     /// shutdown dims Admin immediately, and a fresh boot starts dimmed until the
     /// daemon actually answers).
-    /// Shared model for the SPARCstation Config window (shared folder; the
-    /// disk-image and Claude-development sections were removed in the P2 /
-    /// /tmp/sparkplug-retirement work). Created lazily; binds to the one
-    /// instance so windows stay consistent. Writes flow to Preferences.
-    private var sparcConfigModel: SparcConfigModel?
-    /// One reused window controller per Config section.
-    private var sparcConfigWindows: [SparcConfigSection: SparcConfigWindowController] = [:]
     /// Open capture-viewer windows. The viewer supports multiple windows so
     /// several captures can be compared; each removes itself here on close.
     private var captureViewers: [CaptureViewerWindowController] = []
@@ -99,8 +92,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
     /// Latest probe result per machine id. Main-thread only.
     private var probeResults: [UUID: HeliosProbeResult] = [:]
-    /// Serial queue for the blocking socket work (HeliosClient is sync).
-    private let probeQueue = DispatchQueue(label: "macxserver.helios.prober", qos: .utility)
+    /// Concurrent queue for the blocking socket work (HeliosClient is sync). A
+    /// pass fans every job out at once, so its wall-clock is ~one client timeout
+    /// instead of the sum across hosts -- a dead box no longer holds up the
+    /// results for the live ones behind it.
+    private let probeQueue = DispatchQueue(label: "macxserver.helios.prober",
+                                           qos: .utility, attributes: .concurrent)
     private var probeTimer: Timer?
     /// Coalesces probeAllSoon() bursts (mutations arrive in flurries).
     private var probePassScheduled = false
@@ -604,17 +601,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                   action: #selector(openMachinesWindow(_:)), keyEquivalent: "")
         listItem.target = self
         menu.addItem(listItem)
-        // Shared Folder is a global engine setting (one TFTP dir served to every
-        // guest), so it lives at the menu's top level, not under a machine. It
-        // moved here when the per-machine Config submenu retired (P2).
-        let sharedFolder = NSMenuItem(title: "Shared Folder\u{2026}",
-                                      action: #selector(openSparcConfig(_:)), keyEquivalent: "")
-        sharedFolder.target = self
-        sharedFolder.representedObject = SparcConfigSection.sharedFolder
-        menu.addItem(sharedFolder)
         menu.addItem(.separator())
 
-        for m in registry?.machines ?? [] {
+        // Dynamic launch surface (2026-07-10): only machines the app can (or
+        // suspects it can) reach get a submenu. An emulated VM must be running and
+        // ready; an external host must not be confirmed unreachable (up / unknown /
+        // agent-down all still show -- a live box you can telnet into). Stopped VMs
+        // and dead hosts drop off; start or add machines from the Machines window.
+        let shown = (registry?.machines ?? []).filter { machineReachableForMenu($0) }
+        for m in shown {
             let header = NSMenuItem(title: m.name, action: nil, keyEquivalent: "")
             let sub = NSMenu(title: m.name)
             sub.autoenablesItems = false
@@ -622,6 +617,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             header.submenu = sub
             menu.addItem(header)
         }
+        // Non-empty registry but nothing reachable: say so rather than show a
+        // menu that looks broken (just the list item + a separator).
+        if shown.isEmpty && !(registry?.machines.isEmpty ?? true) {
+            let none = NSMenuItem(title: "No machines reachable", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            menu.addItem(none)
+        }
+    }
+
+    /// Whether a machine earns a spot in the Machines menu (the live-launch
+    /// surface). Emulated: running and ready. External: anything the prober
+    /// hasn't confirmed dead (up / unknown / unauthorized / noAgent) -- a box you
+    /// can reach some way. Mirrors the reach model behind `launcherEnabled`.
+    @MainActor
+    private func machineReachableForMenu(_ m: Machine) -> Bool {
+        if m.kind == .emulatedVM {
+            let ctrl = registry?.controller(m.id)
+            return ctrl?.engine.state == .running && (ctrl?.isReady ?? false)
+        }
+        return (probeResults[m.id]?.reach ?? .unknown) != .unreachable
     }
 
     /// Populate one machine's submenu: lifecycle verbs (every emulated VM, gated
@@ -760,21 +775,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// Resolve one machine's engine config: helper + firmware from the app
     /// bundle (or SPARCPLUG_ENGINE_DIR in dev), everything else -- image, memory,
-    /// ports, MAC, OS profile -- from the machine itself. The shared folder
-    /// (TFTP) is a global preference served to every guest. nil for an external
+    /// ports, MAC, OS profile -- from the machine itself. nil for an external
     /// host or an image-less VM.
     private func engineConfig(for machine: Machine) -> QemuEngineConfig? {
-        // Create the shared dir if it's missing so slirp (read-only, won't
-        // create it) has something to serve. Failure to create just means no
-        // shared folder this run, not a failed launch.
-        var tftpDir: String? = nil
-        if preferences.sparcTftpEnabled {
-            let dir = (preferences.sparcTftpDirectory as NSString).expandingTildeInPath
-            try? FileManager.default.createDirectory(
-                atPath: dir, withIntermediateDirectories: true)
-            tftpDir = dir
-        }
-        return machine.makeEngineConfig(tftpDirectory: tftpDir)
+        return machine.makeEngineConfig()
     }
 
     /// Build a FRESH controller for one machine from its current config and wire
@@ -803,11 +807,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         engine.onStateChange { [weak self] state in
             guard let self else { return }
             self.consoles[id]?.setState(state)
-            // Keep the Shared Folder window's "restart to apply" note in sync:
-            // the folder is read at engine launch, so it can't take effect
-            // while ANY guest is up (they all serve the same dir).
-            self.sparcConfigModel?.sparcEngineRunning =
-                !(self.registry?.runningMachineIDs.isEmpty ?? true)
             // Anything other than steady .running (boot-in-progress counts as
             // .running too, but shutdown/stop don't) means the daemon isn't
             // answering -- drop readiness so Admin dims. onReady re-enables it.
@@ -970,7 +969,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func installMainMenu() {
         let main = NSMenu()
 
-        // App menu (the bold one, always titled with the process name).
+        // App menu (the bold one, always titled with the process name). Kept to
+        // the macOS-standard minimum: About / Preferences / Hide / Quit. The
+        // server config editors and capture actions that used to live here moved
+        // to the X11Server menu where they belong (2026-07-10 menu reorg).
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(NSMenuItem(title: "About MacXServer",
@@ -987,42 +989,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                keyEquivalent: ",")
         prefs.target = self
         appMenu.addItem(prefs)
-
-        let resources = NSMenuItem(title: "Edit Resources\u{2026}",
-                                   action: #selector(openResources(_:)),
-                                   keyEquivalent: "")
-        resources.target = self
-        appMenu.addItem(resources)
-
-        let fonts = NSMenuItem(title: "Edit Font Mappings\u{2026}",
-                               action: #selector(openFontMappings(_:)),
-                               keyEquivalent: "")
-        fonts.target = self
-        appMenu.addItem(fonts)
-
-        appMenu.addItem(.separator())
-
-        // Capture actions — the toggle lives in Preferences (Capture
-        // tab). These are pure actions on the captures folder so they
-        // belong here, not on the status-bar menu.
-        let openCapture = NSMenuItem(title: "Open Capture\u{2026}",
-                                     action: #selector(openCapture(_:)),
-                                     keyEquivalent: "")
-        openCapture.target = self
-        appMenu.addItem(openCapture)
-
-        let revealCaptures = NSMenuItem(title: "Reveal Captures Folder",
-                                        action: #selector(revealCapturesFolder(_:)),
-                                        keyEquivalent: "")
-        revealCaptures.target = self
-        appMenu.addItem(revealCaptures)
-
-        let discardCaptures = NSMenuItem(title: "Discard All Captures\u{2026}",
-                                         action: #selector(discardAllCaptures(_:)),
-                                         keyEquivalent: "")
-        discardCaptures.target = self
-        appMenu.addItem(discardCaptures)
-
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: "Hide MacXServer",
                                    action: #selector(NSApplication.hide(_:)),
@@ -1042,6 +1008,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         appMenuItem.submenu = appMenu
         main.addItem(appMenuItem)
 
+        // Machines menu -- the meat of the app, so it sits in the "File" slot
+        // right after the app menu. Rebuilt from the registry: the list window, a
+        // submenu per machine (bundled VM lifecycle verbs, launchers for all,
+        // Helios secret for external hosts), plus add/edit.
+        let machinesMenuItem = NSMenuItem()
+        let mMenu = NSMenu(title: "Machines")
+        self.machinesMenu = mMenu
+        rebuildMachinesMenu(mMenu)
+        machinesMenuItem.submenu = mMenu
+        main.addItem(machinesMenuItem)
+
         // Edit menu — Cut/Copy/Paste route through the responder chain via
         // selectors `cut:` `copy:` `paste:`. FlippedXView implements `copy:`
         // and `paste:`; with target=nil and a key equivalent set, AppKit
@@ -1059,9 +1036,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         editMenuItem.submenu = editMenu
         main.addItem(editMenuItem)
 
-        // X11Server menu -- the X server as a quiet service: its live status and
-        // the occasional control (Drop All Clients, moved here from the App menu).
-        // The config (scale, clipboard, Motif frame) stays in Preferences.
+        // X11Server menu -- everything scoped to the X server itself: its live
+        // status, the occasional control (Drop All Clients), the config editors
+        // (Resources, Font Mappings), and the capture actions in their own
+        // submenu (captures are recordings of the X protocol stream). The
+        // Preferences-tab config (scale, clipboard, Motif frame) stays in Prefs.
         let serverMenuItem = NSMenuItem()
         let serverMenu = NSMenu(title: "X11Server")
         serverMenu.autoenablesItems = false
@@ -1077,36 +1056,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                               action: #selector(dropAllClients(_:)), keyEquivalent: "")
         drop.target = self
         serverMenu.addItem(drop)
+
+        serverMenu.addItem(.separator())
+        let resources = NSMenuItem(title: "Edit Resources\u{2026}",
+                                   action: #selector(openResources(_:)),
+                                   keyEquivalent: "")
+        resources.target = self
+        serverMenu.addItem(resources)
+        let fonts = NSMenuItem(title: "Edit Font Mappings\u{2026}",
+                               action: #selector(openFontMappings(_:)),
+                               keyEquivalent: "")
+        fonts.target = self
+        serverMenu.addItem(fonts)
+
+        // Capture submenu -- the toggle lives in Preferences (Capture tab); these
+        // are pure actions on the captures folder.
+        serverMenu.addItem(.separator())
+        let captureItem = NSMenuItem(title: "Capture", action: nil, keyEquivalent: "")
+        let captureMenu = NSMenu(title: "Capture")
+        let openCapture = NSMenuItem(title: "Open Capture\u{2026}",
+                                     action: #selector(openCapture(_:)),
+                                     keyEquivalent: "")
+        openCapture.target = self
+        captureMenu.addItem(openCapture)
+        let revealCaptures = NSMenuItem(title: "Reveal Captures Folder",
+                                        action: #selector(revealCapturesFolder(_:)),
+                                        keyEquivalent: "")
+        revealCaptures.target = self
+        captureMenu.addItem(revealCaptures)
+        let discardCaptures = NSMenuItem(title: "Discard All Captures\u{2026}",
+                                         action: #selector(discardAllCaptures(_:)),
+                                         keyEquivalent: "")
+        discardCaptures.target = self
+        captureMenu.addItem(discardCaptures)
+        captureItem.submenu = captureMenu
+        serverMenu.addItem(captureItem)
+
         serverMenuItem.submenu = serverMenu
         main.addItem(serverMenuItem)
 
-        // Machines menu -- rebuilt from the registry: the list window, a submenu
-        // per machine (bundled VM lifecycle verbs, launchers for all, Helios
-        // secret for external hosts), plus add/edit. Replaces the old fixed
-        // SPARCstation menu and the flat Launchers menu.
-        let machinesMenuItem = NSMenuItem()
-        let mMenu = NSMenu(title: "Machines")
-        self.machinesMenu = mMenu
-        rebuildMachinesMenu(mMenu)
-        machinesMenuItem.submenu = mMenu
-        main.addItem(machinesMenuItem)
-
-        // Window menu -- minimise / close are handy when an X window is up.
-        let windowMenuItem = NSMenuItem()
-        let windowMenu = NSMenu(title: "Window")
-        windowMenu.addItem(NSMenuItem(title: "Minimize",
-                                      action: #selector(NSWindow.performMiniaturize(_:)),
-                                      keyEquivalent: "m"))
-        windowMenu.addItem(NSMenuItem(title: "Close",
-                                      action: #selector(NSWindow.performClose(_:)),
-                                      keyEquivalent: "w"))
-        windowMenu.addItem(.separator())
-        windowMenu.addItem(NSMenuItem(title: "Bring All to Front",
-                                      action: #selector(NSApplication.arrangeInFront(_:)),
-                                      keyEquivalent: ""))
-        windowMenuItem.submenu = windowMenu
-        main.addItem(windowMenuItem)
-        NSApp.windowsMenu = windowMenu
+        // No Window menu: the X clients aren't documents and the standard window
+        // list added nothing here. Killed in the 2026-07-10 reorg along with the
+        // now-orphaned Minimize/Close/Bring-All-to-Front items.
 
         NSApp.mainMenu = main
     }
@@ -1138,29 +1129,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             acknowledgementsController = AcknowledgementsWindowController()
         }
         acknowledgementsController?.showWindow()
-    }
-
-    /// Shared Config model, created on first use and seeded with the current
-    /// engine-running state so the Shared Folder window's "restart to apply"
-    /// note is correct the instant it opens. Any running guest counts: they all
-    /// serve the same shared dir, read at their own launch.
-    @MainActor
-    private func ensureSparcConfigModel() -> SparcConfigModel {
-        if let model = sparcConfigModel { return model }
-        let running = !(registry?.runningMachineIDs.isEmpty ?? true)
-        let model = SparcConfigModel(preferences: preferences, engineRunning: running)
-        sparcConfigModel = model
-        return model
-    }
-
-    @MainActor
-    @objc private func openSparcConfig(_ sender: Any?) {
-        guard let section = (sender as? NSMenuItem)?.representedObject as? SparcConfigSection else { return }
-        let model = ensureSparcConfigModel()
-        let controller = sparcConfigWindows[section]
-            ?? SparcConfigWindowController(section: section, model: model)
-        sparcConfigWindows[section] = controller
-        controller.showWindow()
     }
 
     @MainActor
@@ -1366,6 +1334,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let isEmulated: Bool
     }
 
+    /// Thread-safe sink for a parallel probe pass: the concurrent workers each
+    /// `add` their result under the lock, then the completion `drain`s the batch.
+    /// A reference type so there's no captured `var` for the concurrency checker
+    /// to flag -- the mutation rides through the lock, not a shared inout.
+    /// `@unchecked Sendable` is honest here: every access goes through `lock`.
+    private final class ProbeResultCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private var results: [(UUID, HeliosProbeResult)] = []
+        func add(_ id: UUID, _ result: HeliosProbeResult) {
+            lock.lock()
+            results.append((id, result))
+            lock.unlock()
+        }
+        func drain() -> [(UUID, HeliosProbeResult)] {
+            lock.lock()
+            defer { lock.unlock() }
+            return results
+        }
+    }
+
     /// Start the recurring prober: an immediate pass, then every 3 minutes.
     /// Cheap when nothing qualifies -- no sockets are opened for machines that
     /// aren't helios-configured externals or ready emulated guests.
@@ -1421,17 +1409,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func runProbePass() {
         let jobs = probeJobs()
         guard !jobs.isEmpty else { return }
-        probeQueue.async { [weak self] in
-            var results: [(UUID, HeliosProbeResult)] = []
-            for job in jobs {
-                results.append((job.id, Self.probe(job)))
+        // Fan the probes out concurrently (probeQueue is concurrent): each blocks
+        // its own thread for up to the client timeout. The collector's internal
+        // lock makes the appends safe; group.notify posts the whole batch once,
+        // on main, when the slowest probe returns.
+        let group = DispatchGroup()
+        let collector = ProbeResultCollector()
+        for job in jobs {
+            group.enter()
+            probeQueue.async {
+                collector.add(job.id, Self.probe(job))
+                group.leave()
             }
-            DispatchQueue.main.async {
-                guard let self else { return }
-                for (id, result) in results { self.probeResults[id] = result }
-                self.adoptDetectedOSes(results)
-                self.refreshMachines()
-            }
+        }
+        group.notify(queue: .main) { [weak self] in
+            guard let self else { return }
+            let results = collector.drain()
+            for (id, result) in results { self.probeResults[id] = result }
+            self.adoptDetectedOSes(results)
+            // refreshSparcMenu (not just refreshMachines): a probe can change
+            // which external hosts are reachable, and the Machines menu now
+            // shows only reachable machines, so the menu must rebuild too.
+            self.refreshSparcMenu()
         }
     }
 
