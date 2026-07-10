@@ -1,104 +1,102 @@
-# Status 2026-07-10
+# Status 2026-07-10 (afternoon roll)
 
-## Headline: menu-bar reorganization day. The macOS menu bar went from
-macXserver / Edit / X11Server / Machines / Window to **macXserver /
-Machines / Edit / X11Server** (Window deleted). The app menu was trimmed to
-the macOS-standard minimum; server config editors and capture actions moved
-to the X11Server menu where they belong. The TFTP "Shared Folder" feature
-was removed entirely (menu, UI, prefs, and the VM launch wiring). The
-Machines menu is now a dynamic live-launch surface -- only reachable
-machines show. And the Helios prober sweep was parallelized. Suite green,
-1503 tests. Earlier today: the prober aliveness-oracle work (see the
-2026-07-10 DECISIONS entry).
+## Headline: release-blocker day. A readiness audit this morning found four
+launch blockers; by afternoon the two engineering ones are closed — the
+release pipeline now embeds + signs the SPARCplug engine and attaches the
+GPL source bundle (punchlist A5/A4), and the curated image downloader is
+built end-to-end (Track C / IMAGE_DOWNLOAD_PLAN.md). Suite 1516 green.
+What's left before a public v0.9.9 is data + design: publish the catalog
+(E1 gate), architect Helios-driven user management (shipped images can't
+carry Todd's account as the only login), and settle the first-launch
+experience. (Morning entry: menu-bar reorg — see git log for the previous
+roll.)
 
-## What happened this session (menu-bar work)
+## What happened this session
 
-Three logical changes, all landed and building clean:
+**1. Release-readiness audit** (subagent, full-tree). Verdict: closer than
+expected — 11 signed/notarized releases already shipped, pipeline proven,
+first-run clean, secrets hygiene clean, licensing thorough. Four blockers:
+(a) Release bundle ships without the qemu engine (A5 never wired), (b) GPL
+source bundle promised but never attached, (c) image downloader missing,
+(d) public v0.9.8 is a month stale and predates the 2026-07-06 remote-DoS
+fix. Should-fix list: Gatekeeper first-launch walkthrough for the site,
+MARKETING_VERSION clobbered by xcodegen regen, no update check, a
+user-facing known-limitations page, duplicate OPCODE_STATUS rows (3, 22).
 
-1. **Menu reorg.** New bar: macXserver / Machines / Edit / X11Server.
-   - **macXserver** trimmed to standard (About, Acknowledgements /
-     Preferences / Hide-Others-Show / Quit). The server config editors and
-     capture items that used to clutter it are gone from here.
-   - **Machines** promoted to the "File" slot (first app-specific menu) --
-     it's the meat of the app, so it reads as primary.
-   - **X11Server** absorbed the strays: status line / Drop All Clients /
-     Edit Resources / Edit Font Mappings / **Capture** submenu (Open,
-     Reveal Folder, Discard All -- captures are recordings of the X
-     protocol stream, so they're server-adjacent).
-   - **Window** deleted. With it went Cmd-M / Cmd-W (the X clients aren't
-     documents; the standard window list added nothing here).
+**2. Blockers (a)+(b) closed — release.sh** (commit bcc423b). MacXServer
+releases now hard-fail without a sane SPARCplug dist/ (relink audit via
+otool, binary version cross-checked against qemu.lock); after export the
+engine is embedded (Contents/Helpers + Resources/qemu-firmware, the layout
+QemuEngine.defaultConfig resolves) and signed inside-out (dylibs → helper
+with qemu.entitlements → outer re-seal) before the unchanged notarize
+tail; the GPL corresponding-source bundle is assembled per release and
+attached to the GitHub release. Signing recipe re-validated on a scratch
+bundle with the real Developer ID (verify clean, JIT entitlements present,
+helper boots and loads bundled dylibs). Version-bump fix: the old sed hit
+only the framework targets' MARKETING_VERSION; both app targets now carry
+real defaults in project.yml behind "# release-version <App>" markers that
+release.sh bumps + regenerates. Remaining proof: the first real release
+run + A6 clean-Mac acceptance.
 
-2. **Shared Folder (TFTP) removed, root and branch.** It was slirp's
-   built-in TFTP server (guest pulls with `tftp 10.0.2.2`) -- useless for
-   real files, and the Helios file browser is the daily path now. Deleted:
-   the menu item, both UI files (`SparcConfigWindows.swift` +
-   `SparcConfigModel.swift`, 225 lines, existed only for this), the
-   Preferences keys / accessors / default dir, the `QemuEngine.tftpDirectory`
-   capability + the `,tftp=` nic append + the `SPARCPLUG_TFTP_DIR` dev
-   override, the `makeEngineConfig(tftpDirectory:)` param, the VM launch
-   wiring in `engineConfig(for:)`, and the 3 covering tests. Net ~455 lines
-   removed.
-
-3. **Machines menu is dynamic.** New `machineReachableForMenu` gate: an
-   emulated VM shows only when running AND ready; an external host shows
-   unless the prober confirmed it unreachable (up / unknown / unauthorized /
-   noAgent all still show -- a box you can reach some way). Stopped VMs and
-   dead hosts drop off; start or add machines from the Machines window. If
-   the registry is non-empty but nothing's reachable, a disabled "No
-   machines reachable" line shows instead of a bare menu. Fixed a latent
-   bug while here: the probe completion refreshed only the window
-   (`refreshMachines`), not the menu -- promoted it to `refreshSparcMenu`
-   so external-host visibility tracks probes live.
-
-4. **Prober sweep parallelized.** `probeQueue` is now concurrent; a pass
-   fans every job out at once (DispatchGroup + a lock-guarded
-   `ProbeResultCollector`, `@unchecked Sendable`), and `group.notify` posts
-   the batch on main when the slowest probe returns. A pass's wall-clock
-   dropped from ~3s x hosts (up to ~30s+ with several dead boxes on the
-   11-machine fleet) to ~one 3s timeout. Cadence unchanged (3 min + the
-   event-driven immediate passes); only per-pass latency improved.
+**3. Blocker (c) closed — curated image downloader** (commit 70343d6, X;
+0e7690c, SPARCplug). ImageCatalog + ImageDownloader in SwiftXServerCore:
+catalog fetch-on-click keyed by MachineOS (wrong-image-to-wrong-machine
+impossible by construction), then stream-with-progress → sha256(gz) →
+gunzip → sha256(image) → GuestOSDetector banner check → atomic move into
+~/Library/Application Support/macXserver/Images/. Download Image… on the
+Overview of any imageless emulated VM with a known OS; the welcome
+window's dead stub routes into the same flow; row thermometer does
+download duty with per-phase status + Cancel; on success the image
+attaches and Start goes live. Catalog pinned to
+https://macxserver.com/images/catalog.json (Todd's call — DECISIONS
+2026-07-10; the plan had said oldsilicon.com), SPARCPLUG_CATALOG_URL dev
+override. SPARCplug's build-catalog.sh emits the upload-ready staging dir.
+13 new tests, all file:// fixtures. Ledgered in SHORTCUTS: images dir has
+no preference UI yet, no factory-reset re-download, catalog not hosted
+yet.
 
 ## What's working / what's broken
 
-- swift build + swift test both green: 1503 tests, 0 failures (was 1506;
-  the 3 removed tests were exactly the TFTP ones).
-- **xcodegen was re-run** after deleting the two SparcConfig files -- the
-  regenerated `.xcodeproj` has zero SparcConfig references, so Xcode opens
-  clean.
-- NOT yet verified in the real app: this is menu UI + deleted files, none
-  of which `swift build` can visually confirm. Needs an Xcode rebuild +
-  eyeball (see checklist below).
+- swift build clean, swift test: **1516 tests, 0 failures** (was 1503;
+  +13 new for catalog/downloader, one name fix).
+- xcodegen re-run; the .xcodeproj carries the new core files + app-target
+  versions (0.9.8 / 0.9.1).
+- The Download button fails cleanly until the catalog is uploaded (by
+  design — SHORTCUTS has the exit plan). Test the full flow any time with
+  SPARCPLUG_CATALOG_URL=file:///…/catalog.json against build-catalog.sh
+  output.
+- NOT yet verified in the real app: the download UI (needs the Xcode
+  rebuild + a local catalog), plus yesterday's menu-bar work — the manual
+  GUI checklist from the morning roll still stands.
 
-## Manual pass checklist (needs a human on the GUI)
+## What's next (agreed with Todd this afternoon)
 
-- Rebuild in Xcode (model + UI changed; `MacXServer.xcodeproj`, not swift
-  build).
-- Eyeball the new menu bar: macXserver / Machines / Edit / X11Server, no
-  Window menu. Confirm the app menu is trimmed and X11Server holds the
-  config editors + Capture submenu.
-- Confirm the Machines menu shows only reachable machines: boot a fixture
-  VM and watch it appear once ready; stop it and watch it drop. Point at a
-  live external host (ipc/ss5) and a dead one -- only the live one shows.
-- Sanity-check that removing Shared Folder didn't break VM launch (boot a
-  guest, launch an xterm).
-
-## What's next
-
-1. Todd's manual pass per the checklist above; fix anything it surfaces.
-2. Back to X11 land: MCP bridge is the standing lead; image download per
-   IMAGE_DOWNLOAD_PLAN.md behind it; CLIPBOARD/editres gaps in the feature
-   matrix as the protocol-side alternative.
+1. **Architect Helios-driven add-user / delete-user.** Needed for first
+   run: published images can't ship with Todd's account as the only
+   login. Agent-side verbs vs host-driven run_command orchestration, DES
+   hash host-side, per-OS realities (Solaris useradd+shadow, 4.1.4
+   hand-edited passwd, NetBSD useradd -p), home-dir skeleton, UI surface
+   (Users panel under Helios Admin Agents), and the first-ready prompt.
+   Design doc in flight.
+2. **First-launch experience** — the full stranger's journey from
+   macxserver.com download through Gatekeeper, first app open, image
+   download, first boot, user creation, first xterm. Discussion next.
+3. Data side of the catalog: E1 (baseline-configured masters with current
+   heliosAgent baked in) → build-catalog.sh → upload.
+4. Todd's manual GUI pass (menu bar + download flow), then v0.9.9 — which
+   also proves A5/A6 end-to-end.
 
 ## Committed / push state
 
-- This session's menu-bar work is committed on top of the 10 still-UNPUSHED
-  commits from 2026-07-09 / the morning of 2026-07-10 (settings cleanup +
-  prober aliveness oracle). **Nothing has been pushed from this Mac** --
-  push before switching machines or the work is stranded here.
-- SPARCplug, cx repos: no changes.
+- X repo: 13 commits UNPUSHED on this Mac (11 from 07-09/07-10 morning +
+  bcc423b release pipeline + 70343d6 image downloader). **Push before
+  switching machines.**
+- SPARCplug: 1 commit unpushed (0e7690c build-catalog.sh).
+- cx repos: no changes.
 
 ## Switching Macs
 
-- Code + model + `.xcodeproj` changed: rebuild in Xcode on the other Mac
-  before running (and it'll `git pull` the regenerated project).
-- No VMs running, no image locks.
+- Code + project.yml + .xcodeproj changed: rebuild in Xcode on the other
+  Mac after pulling.
+- A netbsd guest was live under the Xcode debug build most of the day
+  (lock held at images/netbsd/…); shut it down before /eos if wrapping up.
