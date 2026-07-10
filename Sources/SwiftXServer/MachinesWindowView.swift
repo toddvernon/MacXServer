@@ -166,10 +166,12 @@ private struct MachineDetailContainer: View {
 
     enum DetailTab: Hashable { case overview, settings, launchers }
 
-    /// A VM with no disk image can't run, so its Overview is a dead end — open
-    /// straight to Settings where the image gets set.
+    /// An imageless VM with a known OS opens to Overview — its Download… button
+    /// is the fool-proof install path. Only an imageless VM whose OS is also
+    /// unset (nothing to download) opens to Settings, where both get fixed.
     private var defaultTab: DetailTab {
-        (machine.kind == .emulatedVM && machine.image == nil) ? .settings : .overview
+        (machine.kind == .emulatedVM && machine.image == nil && machine.os == nil)
+            ? .settings : .overview
     }
 
     var body: some View {
@@ -319,7 +321,11 @@ private struct MachineOverviewPage: View {
     @ViewBuilder private func lifecycle(_ row: MachineRow) -> some View {
         if row.showsLifecycle {
             HStack(spacing: 8) {
-                if row.canShutDown || row.canForceQuit {
+                if row.isDownloading {
+                    // The thermometer above carries the phase; the only verb
+                    // that makes sense mid-download is stopping it.
+                    Button("Cancel Download") { model.onCancelDownload?(row.id) }
+                } else if row.canShutDown || row.canForceQuit {
                     if row.canShutDown {
                         Button("Shut Down") { model.onShutDown?(row.id) }
                     }
@@ -328,6 +334,14 @@ private struct MachineOverviewPage: View {
                     }
                 } else {
                     Button("Start") { model.onStart?(row.id) }.disabled(!row.canStart)
+                    if row.canDownload {
+                        // Imageless + known OS: fetch the curated image; it
+                        // becomes this machine's disk (IMAGE_DOWNLOAD_PLAN.md).
+                        Button("Download Image\u{2026}") { model.onDownload?(row.id) }
+                            .help("Download the curated starter image for "
+                                  + "this machine's guest OS and attach it as "
+                                  + "its disk")
+                    }
                 }
                 Button("Console") { model.onConsole?(row.id) }.disabled(!row.canConsole)
                 Button("Back Up") { model.onBackup?(row.id) }.disabled(!row.canBackup)

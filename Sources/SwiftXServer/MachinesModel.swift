@@ -65,6 +65,13 @@ struct MachineRow: Identifiable, Equatable {
     let canForceQuit: Bool
     let canBackup: Bool
     let canConsole: Bool
+
+    /// An imageless emulated VM whose OS is known can fetch its curated image
+    /// (IMAGE_DOWNLOAD_PLAN.md): the Overview shows Download… next to Start.
+    let canDownload: Bool
+    /// A curated-image download is in flight for this machine: the thermometer
+    /// does download duty and the lifecycle row offers Cancel.
+    let isDownloading: Bool
     // The Admin Agents rule (Todd, 2026-07-07): an admin verb is available
     // when the box is ANSWERING over Helios -- emulated = running and ready
     // (readiness IS the helios liveness signal), external = the prober's
@@ -127,6 +134,11 @@ final class MachinesModel: ObservableObject {
     /// Window); it's a launch gesture, not launcher config.
     var onLaunch: ((UUID, String, Bool) -> Void)?
     var onSetHeliosSecret: ((UUID) -> Void)?
+    /// Download this machine's curated starter image (imageless emulated VM
+    /// with a known OS; see MachineRow.canDownload).
+    var onDownload: ((UUID) -> Void)?
+    /// Cancel the in-flight image download.
+    var onCancelDownload: ((UUID) -> Void)?
     /// Open the machine's DNS (/etc/resolv.conf) admin window.
     var onDnsAdmin: ((UUID) -> Void)?
     /// Open the machine's Helios file browser (Overview → Admin Agents).

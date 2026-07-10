@@ -34,6 +34,32 @@ a date and rationale.
 - ~~**Only *one* emulated VM is engine-wired at a time, but which one resolves dynamically.**~~ Closed 2026-07-06 by P2 (the un-deferred milestone #6). Every emulated VM has full lifecycle (Start/Shut Down/Force Quit/Console/Back Up + DNS admin), any number run concurrently, each with its own fresh-per-start controller, console window (keyed by machine id — no more console follow/steal), per-boot secret, sticky port block, and derived MAC. The `bundledMachine` single-target resolver, `resolveBundledMachine()`, and the Preferences image round-trip are deleted. See DECISIONS 2026-07-06.
 - **Bundled machines are three imageless fixtures, seeded and imageless on purpose.** As of 2026-07-06 `MachineMigrator.ensuringBundled` guarantees one bundled fixture per `MachineOS` (Solaris 2.6 / SunOS 4.1.4 / NetBSD), injected at load (matched by `bundled && os`, so an attached fixture is preserved) and persisted. They come up *imageless* — the user attaches a disk image and runs it. Consequence: `bundledImagePath` (the Preferences disk-image path) no longer auto-attaches to a seeded Solaris on a truly fresh install; `migrate` only uses it for a loopback launcher group. The `bundled` flag (persisted on `Machine`, emitted only when true) is what marks a fixture: it protects the machine from removal (`canRemoveSelection` / `onRemove` gate on `machine.bundled`, not the engine-wired id), groups it in the "Bundled Machines" list section, and locks its kind/host/OS in the editor. A machine you create in the editor is always `bundled == false`, so it sorts into Virtual (emulated) or External by kind. Real version (shipping): seed each fixture pointing at its shipped/downloadable image, and expose a per-fixture user/canonical-config read from image metadata. Also: the three-image bundling itself (the actual qcow2s) is the SPARCplug roadmap, not shipped in-app yet.
 
+### Curated image download (2026-07-10)
+
+- **The images directory is fixed, no preference UI.** Downloads land in
+  `~/Library/Application Support/macXserver/Images/`
+  (`ImageDownloader.defaultImagesDirectory`), created on first download. The
+  design (IMAGE_DOWNLOAD_PLAN.md) calls for one global images-directory
+  preference; v1 ships the default-only behavior ("even that is optional —
+  the default just works"). Real version: a Choose-directory control in
+  Preferences feeding the downloader, existing images left where they are
+  (paths are per-machine, so moving the directory never breaks attached
+  machines).
+- **No re-download over an existing image (factory reset).** The pipeline
+  refuses to clobber an existing file at the destination
+  (`ImageDownloadError.destinationExists`) — honest v0 per the plan: delete
+  the file in Finder, then Download again. Real version: a stopped-only
+  "Restore Factory Image…" behind an explicit destructive confirm, renaming
+  the current image to a dated `factory-reset` backup sibling first (the
+  SparcBackup naming machinery exists).
+- **The catalog isn't hosted yet.** The code pins
+  `https://macxserver.com/images/catalog.json` (DECISIONS 2026-07-10) but
+  nothing is uploaded, so the Download button currently fails with a clean
+  fetch error. Exit plan: run SPARCplug's `build-catalog.sh` against
+  baseline-configured masters with the current Helios daemon baked in
+  (PLUGIN_V1_PUNCHLIST E1) and upload the staging dir. Test the wired flow
+  any time via `SPARCPLUG_CATALOG_URL=file:///.../catalog.json`.
+
 ### Guest OS profile + per-OS shutdown (2026-07-05)
 
 - **Per-OS host behavior is centralized in the `MachineOS` guest profile** (`Machine.swift`) with exhaustive switches — `bootDiskUnit`, `bootCommand`, `ports` (via ImagePorts), `shutdownCommand`, `cleanHaltMarkers`, `xBinDirs`, `displayName`. `QemuEngineConfig` carries a single `os` and derives all of it (`config.profile`). This is the forcing function (a missing OS won't compile) that closes the class of bug where a hardcoded Solaris assumption silently breaks a BSD guest. Full matrix + audit recipe in `GUEST_OS_PROFILE.md`. **When adding an OS or a new divergent behavior, put it in the profile — do not hardcode Solaris on a guest-interaction path.**

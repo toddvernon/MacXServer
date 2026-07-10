@@ -9,7 +9,10 @@ import SwiftUI
 // offers to pick an existing image or download a starter image.
 final class SparcStationWelcomeWindowController: NSWindowController {
 
-    init(onChooseImage: @escaping () -> Void,
+    /// `osName` is the target machine's guest OS display name ("Solaris 2.6",
+    /// "NetBSD"); nil when the machine's OS isn't set yet.
+    init(osName: String?,
+         onChooseImage: @escaping () -> Void,
          onDownload: @escaping () -> Void) {
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 460),
@@ -21,6 +24,7 @@ final class SparcStationWelcomeWindowController: NSWindowController {
         super.init(window: panel)
 
         let view = SparcStationWelcomeView(
+            osName: osName,
             chooseImage: { [weak self] in self?.close(); onChooseImage() },
             download:    { [weak self] in self?.close(); onDownload() },
             cancel:      { [weak self] in self?.close() }
@@ -39,9 +43,12 @@ final class SparcStationWelcomeWindowController: NSWindowController {
 }
 
 private struct SparcStationWelcomeView: View {
+    let osName: String?
     let chooseImage: () -> Void
     let download: () -> Void
     let cancel: () -> Void
+
+    private var os: String { osName ?? "a vintage Sun OS" }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -54,13 +61,13 @@ private struct SparcStationWelcomeView: View {
             Text("Start a SPARCstation")
                 .font(.title2.weight(.semibold))
 
-            Text("macXserver includes a built-in SPARCstation 5 — a complete vintage Sun workstation running Solaris 2.6, emulated on your Mac with no hardware required. Its X apps render right here through macXserver.")
+            Text("macXserver includes a built-in SPARCstation 5 — a complete vintage Sun workstation running \(os), emulated on your Mac with no hardware required. Its X apps render right here through macXserver.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("To boot it, point macXserver at a Solaris disk image: choose a qcow2 image you already have, or download a prebuilt starter image from macXserver.com.")
+            Text("To boot it, point macXserver at a \(os) disk image: choose a qcow2 image you already have, or download a prebuilt starter image.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

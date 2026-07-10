@@ -1,10 +1,29 @@
 # Curated image download — design plan
 
-Status: **designed 2026-07-06, not built.** The Track C download machinery from
+Status: **BUILT 2026-07-10** (app side + publishing script; hosting upload
+pending). `ImageCatalog` + `ImageDownloader` in SwiftXServerCore (13 tests,
+file:// fixtures), Download… on the Overview of any imageless emulated VM
+with a known OS, the welcome window's stub routes into the same flow, and
+SPARCplug's `build-catalog.sh` emits the catalog + gz payloads. Built to
+this design with one deviation: the catalog lives on **macxserver.com**
+(`https://macxserver.com/images/catalog.json`), not oldsilicon.com — Todd's
+call 2026-07-10, see DECISIONS. What's still open before the button works
+for the public: run `build-catalog.sh` against baseline-configured masters
+(PLUGIN_V1_PUNCHLIST E1) and upload the staging dir to macxserver.com/images/.
+Deliberately not in v1 (ledgered in SHORTCUTS): the images-directory
+preference UI (fixed to `~/Library/Application Support/macXserver/Images/`)
+and re-download-over-existing (factory reset).
+
+The original design follows, kept because the requirements + verification
+rationale are the reference for future work on this machinery.
+
+---
+
+The Track C download machinery from
 SPARCSTATION_PLUGIN.md ("code ships, data downloads") updated for the P2
 machine-manager world: three bundled fixtures, per-machine images, sticky
 ports, guest-OS detection. Todd's requirements from the 2026-07-06 session are
-the spine of this doc. Build it after the P2 test phase.
+the spine of this doc.
 
 ## Requirements (Todd, 2026-07-06)
 

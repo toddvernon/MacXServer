@@ -31,15 +31,16 @@ priority order:
    below). What's left is A6 (clean-Mac acceptance on a fresh no-Homebrew
    account) plus the first real release run, which is the end-to-end proof of
    the wiring + notarization of the combined bundle.
-2. **Install the disk image (Track C + E).** C1 downloader (NSURLSession ->
-   SHA256 -> gunzip -> Application Support), C2 `manifest.json` + actually
-   hosting the gzipped qcow2, C3 install sheet + state detection, E1 confirm the
-   shipping image is baseline-configured **and has the current Helios daemon
-   baked in**.
+2. **Install the disk image (Track C + E).** C1 + C3 DONE 2026-07-10 (the
+   downloader pipeline, Download… on the Overview, welcome-window routing;
+   see Track C below and IMAGE_DOWNLOAD_PLAN.md). What's left is the data
+   half: E1 confirm the shipping images are baseline-configured **with the
+   current Helios daemon baked in**, then run `build-catalog.sh` and upload
+   to macxserver.com/images/ (C2's hosting half).
 3. **Restore from Backup** (data safety, "fix before shipping"). Auto-backup
    exists; the in-app restore UI does not. The one real functional gap.
-4. **D2 launcher un-gray** (minor): un-gray the bundled-SPARCstation launcher
-   entry when the engine runs.
+4. ~~**D2 launcher un-gray**~~ — closed by P2 (launchers gate on ready
+   everywhere; see Track D).
 
 Not v1: L4 (kqueue watchdog -- optional, needs maintainer sign-off) and the
 re-attachable serial console for orphan reconnect (Helios covers control; the
@@ -321,14 +322,26 @@ paths. L1 (lock) + Force Quit + auto-backup remain the safety floor. See
 
 ## Track C — Install the disk image (Deliverable 2)
 
-- [ ] **C1. Downloader** (new). `NSURLSession` w/ progress → SHA256 verify
-  → gunzip → atomic move into `~/Library/Application Support/macXserver/`.
-  Net-new: the app uses zero Application Support today (all `~/.macxserver-*`
-  dotfiles), so this dir + absolute-path discipline is new but small.
-- [ ] **C2. `manifest.json` + hosting.** version/url/sha256/size; gzipped
-  qcow2 actually uploaded (OldSilicon CDN). External to the code.
-- [ ] **C3. Install sheet + state detection.** State keys off "is the qcow2
-  in Application Support."
+(Superseded in shape by IMAGE_DOWNLOAD_PLAN.md — per-machine images and a
+per-OS catalog replaced the single manifest.json — and built to that design
+2026-07-10.)
+
+- [x] **C1. Downloader. DONE 2026-07-10.** `ImageCatalog` + `ImageDownloader`
+  in SwiftXServerCore: catalog fetch on click → confirm with real sizes →
+  stream w/ progress → sha256(gz) → gunzip → sha256(image) →
+  `GuestOSDetector` banner check → atomic move into
+  `~/Library/Application Support/macXserver/Images/`. 13 tests against
+  file:// fixtures; temp partials never survive a failure.
+- [ ] **C2. Catalog + hosting.** Script half DONE 2026-07-10
+  (`build-catalog.sh` emits catalog.json + gz payloads with both checksums).
+  Hosting half OPEN: upload the staging dir to macxserver.com/images/
+  (the pinned URL; DECISIONS 2026-07-10) — gated on E1.
+- [x] **C3. Install flow + state detection. DONE 2026-07-10.** Download… on
+  the Overview of any imageless emulated VM with a known OS (the OS keys the
+  catalog — wrong-image-to-wrong-machine impossible by construction); the
+  welcome window's Download routes into the same flow; the row thermometer
+  does download duty with per-phase status text and Cancel; on success the
+  image attaches to the machine and Start goes live. No auto-boot.
 
 ## Track D — UI glue
 
@@ -346,10 +359,10 @@ paths. L1 (lock) + Force Quit + auto-backup remain the safety floor. See
   path change. Engine binary resolves from the app bundle in release, and
   from a Debug-only `project.yml` build phase that embeds
   `$SRCROOT/../SPARCplug/dist` in dev.
-- [ ] **D2. Launcher enable.** The `[host:qemu-ss5]` entry with
-  `display = 10.0.2.2:0` already works end-to-end (the `display` key exists
-  in `LauncherEntry`). v1 just un-grays it when the engine runs.
-  Auto-materializing the entry is nice-to-have, not required.
+- [x] **D2. Launcher enable. DONE (closed by P2, 2026-07-06).** Launcher
+  chips + Machines-menu items on emulated machines gate on the guest being
+  up and ready (`launcherEnabled`, one shared rule), and the bundled
+  fixtures seed their launcher groups. Nothing left here.
 
 ## Track E — Shipping image
 

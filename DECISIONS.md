@@ -1503,6 +1503,22 @@ Settings Helios section's status line describes the state in a sentence.
 
 ---
 
+## 2026-07-10: Curated-image catalog lives on macxserver.com, not oldsilicon.com
+
+The IMAGE_DOWNLOAD_PLAN.md design (2026-07-06) settled hosting on
+oldsilicon.com, where the images already live for the ZuluSCSI workflow.
+Todd's call at build time: the app fetches from the product's own domain
+instead — `https://macxserver.com/images/catalog.json`, payloads beside it
+(pinned in `ImageCatalog.defaultURL`; `SPARCPLUG_CATALOG_URL` is the dev
+override, same pattern as `SPARCPLUG_ENGINE_DIR`). Keeps the shipped app's
+network traffic pointed at its own site, and the catalog rides the same
+hosting the download button already depends on. oldsilicon.com keeps
+distributing the ZuluSCSI copies; the two audiences never needed to share
+a URL. `build-catalog.sh` (SPARCplug repo) emits a staging dir whose
+contents upload to macxserver.com/images/ as-is.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

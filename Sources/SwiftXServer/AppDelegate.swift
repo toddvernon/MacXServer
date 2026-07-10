@@ -61,6 +61,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// The machine the welcome/install flow was opened for (Start pressed on an
     /// image-less VM); chooseImageThenStart attaches the picked image to it.
     private var installTargetID: UUID?
+    /// In-flight curated-image downloads, keyed by machine id: the Task (for
+    /// Cancel) and the latest phase (the row's thermometer + status text).
+    /// One download per machine at a time; entries clear on finish/failure.
+    private var imageDownloadTasks: [UUID: Task<Void, Never>] = [:]
+    private var imageDownloadPhases: [UUID: ImageDownloadPhase] = [:]
     /// The unified Machines window (the front door) + its observable model. Built
     /// at launch. `refreshMachines` mirrors the registry + live controller state
     /// into the model (both the `machines` list for the master/Settings and the
@@ -255,6 +260,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.onForceQuit = { [weak self] id in self?.confirmForceQuit(id) }
         model.onBackup    = { [weak self] id in self?.backUpDiskImage(id) }
         model.onConsole   = { [weak self] id in self?.showConsoleWindow(id) }
+        model.onDownload  = { [weak self] id in self?.downloadCuratedImage(for: id) }
+        model.onCancelDownload = { [weak self] id in
+            self?.imageDownloadTasks[id]?.cancel()
+        }
         model.onLaunch    = { [weak self] id, name, verbose in
             self?.launchFromMachine(id, launcherName: name, verbose: verbose) }
         model.onSetHeliosSecret = { [weak self] id in self?.promptHeliosSecret(for: id) }
@@ -415,6 +424,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 dot = .externalDown; stateWord = "unreachable"
                 statusText = "External \u{00b7} unreachable"
             }
+        } else if let phase = imageDownloadPhases[m.id] {
+            // A curated-image download is in flight: the thermometer does
+            // download duty (yellow, per IMAGE_DOWNLOAD_PLAN.md). The
+            // fixed-cost phases (verify/decompress/install) report 1.0, which
+            // renders as the moving barber pole — activity, not a stall.
+            dot = .booting; statusText = phase.label; stateWord = "downloading"
+            if case .downloading(let f) = phase { progress = f }
+            else { progress = 1.0 }
         } else if !m.isInstalledEmulatedVM {
             dot = .notInstalled; statusText = "Not installed"; stateWord = "no image"
         } else if state == .running && ready {
@@ -461,11 +478,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             dot: dot, progress: progress, launcherNote: launcherNote,
             systemLine: systemLine(for: m, ready: ready),
             showsLifecycle: isEmulated,
-            canStart: (state == .stopped || state == .notInstalled),
+            canStart: (state == .stopped || state == .notInstalled)
+                && imageDownloadPhases[m.id] == nil,
             canShutDown: (state == .running && ready),
             canForceQuit: (state == .running || state == .shuttingDown),
             canBackup: (state == .stopped),
             canConsole: (consoles[m.id] != nil),
+            // Download…: an imageless emulated VM whose OS is known (the OS
+            // keys the catalog, so a wrong image can't reach a wrong machine).
+            canDownload: isEmulated && !m.isInstalledEmulatedVM && m.os != nil
+                && imageDownloadPhases[m.id] == nil,
+            isDownloading: imageDownloadPhases[m.id] != nil,
             // DNS gates on the box answering over Helios, same as File
             // Transfer. (The os != nil condition dropped 2026-07-09, audit
             // F4: the DNS panel writes a constant /etc/resolv.conf and never
@@ -2194,12 +2217,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// the machine's Settings tab.
     private func presentInstallFlow(for machine: Machine) {
         installTargetID = machine.id
-        if sparcWelcome == nil {
-            sparcWelcome = SparcStationWelcomeWindowController(
-                onChooseImage: { [weak self] in self?.chooseImageThenStart() },
-                onDownload: { [weak self] in self?.downloadStarterImage() }
-            )
-        }
+        // Rebuilt per presentation (cheap): the copy names the target
+        // machine's guest OS, which differs per fixture.
+        sparcWelcome = SparcStationWelcomeWindowController(
+            osName: machine.os?.displayName,
+            onChooseImage: { [weak self] in self?.chooseImageThenStart() },
+            onDownload: { [weak self] in self?.downloadStarterImage() }
+        )
         sparcWelcome?.showWindow()
     }
 
@@ -2224,25 +2248,110 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         startMachine(id)
     }
 
-    /// Download flow: ask where to put the image, then fetch it. The fetch
-    /// itself is Track C and not wired yet, so for now we collect the
-    /// destination and explain. When Track C lands, this downloads, verifies,
-    /// sets the path, and boots.
+    /// The welcome window's Download button: the same curated-download flow as
+    /// the Overview's Download… button, targeting the machine whose Start
+    /// opened the window.
     private func downloadStarterImage() {
-        let save = NSSavePanel()
-        save.title = "Download Starter Image"
-        save.prompt = "Choose Location"
-        save.message = "Choose where to save the Solaris starter image."
-        save.nameFieldStringValue = QemuEngine.diskImageFilename
-        guard save.runModal() == .OK, let url = save.url else { return }
+        guard let id = installTargetID else { return }
+        downloadCuratedImage(for: id)
+    }
+
+    /// The curated-image download flow (IMAGE_DOWNLOAD_PLAN.md): fetch the
+    /// catalog on click (never in the background), confirm with the real
+    /// sizes, then run the verify-everything pipeline with progress on the
+    /// machine's row. The user makes zero choices — the machine's OS keys the
+    /// catalog and the filename derives from the machine's identity, so a
+    /// wrong image can't reach a wrong machine by construction.
+    private func downloadCuratedImage(for id: UUID) {
+        guard let registry, let m = registry.machine(id),
+              m.kind == .emulatedVM, m.image == nil, let os = m.os,
+              imageDownloadTasks[id] == nil else { return }
+        Task { @MainActor in
+            let catalog: ImageCatalog
+            do {
+                catalog = try await ImageCatalog.fetch()
+            } catch {
+                self.showLaunchError("Couldn't fetch the image catalog from "
+                    + "\(ImageCatalog.catalogURL.host ?? "the server"): "
+                    + error.localizedDescription)
+                return
+            }
+            guard let entry = catalog.entry(for: os) else {
+                self.showLaunchError("The catalog doesn't carry a "
+                    + "\(os.displayName) image. Attach one you already have "
+                    + "via the machine's Settings tab.")
+                return
+            }
+            self.confirmAndRunImageDownload(machineID: id, entry: entry)
+        }
+    }
+
+    /// Confirm sheet (real sizes from the catalog), then the pipeline. The
+    /// destination is never user-chosen: bundled fixtures get the canonical
+    /// `<os>-boot.qcow2`, user machines `<os>-<shortid>.qcow2`, both in the
+    /// images directory. Disk-space preflight and the three verifications
+    /// live in ImageDownloader.
+    private func confirmAndRunImageDownload(machineID: UUID,
+                                            entry: ImageCatalog.Entry) {
+        guard let registry, let m = registry.machine(machineID),
+              let os = m.os else { return }
+        let fmt = ByteCountFormatter()
         let alert = NSAlert()
-        alert.messageText = "Download isn't available yet"
-        alert.informativeText = "The starter-image download is still being built. When it ships "
-            + "it will fetch the image to:\n\n\(url.path)\n\nFor now, use \u{201C}Choose Image\u{2026}\u{201D} "
-            + "to select a qcow2 you already have."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        alert.messageText = "Download the \(os.displayName) starter image?"
+        var info = "Downloads \(fmt.string(fromByteCount: entry.sizeGz)) from "
+            + "\(entry.url.host ?? "the catalog host") "
+            + "(\(fmt.string(fromByteCount: entry.size)) on disk). "
+            + "It becomes \u{201C}\(m.name)\u{201D}\u{2019}s disk."
+        if let notes = entry.notes, !notes.isEmpty {
+            info = notes + "\n\n" + info
+        }
+        alert.informativeText = info
+        alert.addButton(withTitle: "Download")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let destination = ImageDownloader.defaultImagesDirectory
+            .appendingPathComponent(ImageDownloader.imageFilename(
+                os: os, machineID: m.id, bundled: m.bundled))
+
+        imageDownloadPhases[machineID] = .downloading(fraction: 0)
+        refreshMachines()
+        imageDownloadTasks[machineID] = Task { @MainActor in
+            do {
+                try await ImageDownloader.install(
+                    entry: entry, destination: destination, expectedOS: os,
+                    onPhase: { [weak self] phase in
+                        Task { @MainActor [weak self] in
+                            guard let self,
+                                  self.imageDownloadPhases[machineID] != nil
+                            else { return }
+                            self.imageDownloadPhases[machineID] = phase
+                            self.refreshMachines()
+                        }
+                    })
+                // Installed and triple-verified: attach it to the machine.
+                // The row flips to Stopped; Start goes live. No auto-boot.
+                if var updated = self.registry?.machine(machineID) {
+                    updated.imagePath = destination.path
+                    self.registry?.update(updated)
+                }
+                self.finishImageDownload(machineID)
+                self.afterMachineMutation()
+            } catch ImageDownloadError.cancelled {
+                self.finishImageDownload(machineID)
+            } catch {
+                self.finishImageDownload(machineID)
+                self.showLaunchError("Image download failed: "
+                    + error.localizedDescription)
+            }
+        }
+    }
+
+    /// Clear a finished/failed/cancelled download's state and refresh the row.
+    private func finishImageDownload(_ id: UUID) {
+        imageDownloadTasks[id] = nil
+        imageDownloadPhases[id] = nil
+        refreshMachines()
     }
 
     /// The Machines menu and its submenus compute enablement explicitly at build
