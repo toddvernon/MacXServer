@@ -1519,6 +1519,41 @@ contents upload to macxserver.com/images/ as-is.
 
 ---
 
+## 2026-07-10: User management is host-driven; first run is an in-window guided flow
+
+Two calls from the first-launch design session (full designs in
+HELIOS_USER_MANAGEMENT.md and FIRST_RUN_EXPERIENCE.md):
+
+**Add/delete user rides the existing Helios verbs, host-driven.** A
+`UserAdmin` module composes per-OS sequences of read_file / run_command /
+write_file over `HeliosClient`, with the per-OS knowledge (passwd/shadow/
+master.passwd formats, pwd_mkdb, home paths) in pure unit-testable
+builders keyed by exhaustive `MachineOS` switches. Rejected: first-class
+`add_user`/`delete_user` agent verbs -- one-round-trip atomicity wasn't
+worth a fleet-wide agent redeploy, version gating, policy code in a
+deliberately-primitive agent, and guest-only testability. The
+transactional risk is handled by ordering (home dir first, the atomic
+login-enabling passwd write last). DES hash is computed host-side
+(macOS crypt(3) still does DES; verified) so cleartext never crosses the
+wire. The images were pre-staged for this by the 2026-07-04 convergence
+(`template` account, uid 1001+ reservation, gid 100).
+
+**First run guides inside the Machines window, not a wizard.** Fresh
+install: a text bubble over the detail area ("Just getting started?
+Download a starter image and launch a SPARCstation"), the Download button
+rendered blue while it's the next thing to do, then a "one more thing --
+add a user" popup when the download lands. Enter collects the credentials,
+boots the VM, and applies the login at ready (deferred-apply: the agent
+must be answering first); the boot bar carries a "creating your login"
+tail phase. Rejected: a self-contained wizard -- the guided flow teaches
+the real UI it leaves behind and doesn't duplicate the download/boot/user
+surfaces. The bubble is state-derived (shows while no emulated machine
+has an image), not a dismissed-once flag. Requires seeding fixtures with
+`machine.user = ""` (the NSUserName() fallback wrote a lie for anyone who
+isn't Todd). Still open: root-password policy for published masters.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

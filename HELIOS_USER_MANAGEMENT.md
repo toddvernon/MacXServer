@@ -1,10 +1,12 @@
 # Helios-driven user management (add / delete user)
 
-Status: **designed 2026-07-10, decision points open, not built.** Needed for
-the first-run experience: published images can't ship with Todd's account as
-the only login, so a stranger's first boot has to mint their own user. Also
-the tool that strips `tvernon` from the masters at publish time, and a
-general Users panel for the fleet.
+Status: **designed 2026-07-10, ratified same day (host-driven, option B;
+first-run flow settled -- see FIRST_RUN_EXPERIENCE.md), not built.** One
+decision still open: root-password policy for published images (#3 below).
+Needed for the first-run experience: published images can't ship with
+Todd's account as the only login, so a stranger's first boot has to mint
+their own user. Also the tool that strips `tvernon` from the masters at
+publish time, and a general Users panel for the fleet.
 
 ## Why now
 
@@ -195,13 +197,19 @@ design session:
 - No agent or protocol changes. No SPARCplug changes beyond publish-prep
   usage.
 
-## Open decisions (Todd)
+## Decisions (Todd, 2026-07-10)
 
-1. Ratify host-driven (option B) vs agent verbs (option A).
-2. The first-run frame: prompt-on-first-ready (proposed) vs make user
-   creation a step of the download flow vs leave it purely manual in the
-   Users panel.
-3. Published masters: strip tvernon only, or root password policy too
-   (ties into first-launch discussion).
-4. Fixture seeding change to `machine.user = ""` (required for the
-   first-ready prompt signal to fire for strangers).
+1. ~~Host-driven vs agent verbs~~ -- **RATIFIED: host-driven (option B).**
+2. ~~The first-run frame~~ -- **SETTLED:** the "one more thing" popup right
+   after the download completes collects username/password; Enter boots
+   the VM and the pipeline applies the login at ready (deferred-apply --
+   the agent must be answering before /etc/passwd can be touched). Full
+   choreography in FIRST_RUN_EXPERIENCE.md. In-window guided flow, not a
+   separate wizard.
+3. **OPEN: root password policy for published masters** (strip tvernon is
+   settled; the documented dev root password is the remaining question):
+   ship documented, rotate at publish, or fold a root-password-set into
+   first run. Loopback-bound hostfwds bound the exposure.
+4. ~~Fixture seeding change~~ -- **CONFIRMED:** `machine.user = ""` on
+   fresh installs; the empty user is the signal the first-run flow and
+   the re-offer-on-ready both key on.
