@@ -2009,11 +2009,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS = NO;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Xcode/Server-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"@executable_path/../Frameworks",
 				);
+				MARKETING_VERSION = 0.9.8;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.server;
 				PRODUCT_NAME = MacXServer;
 				SDKROOT = macosx;
@@ -2205,11 +2207,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS = NO;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Xcode/Capture-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"@executable_path/../Frameworks",
 				);
+				MARKETING_VERSION = 0.9.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.capture;
 				PRODUCT_NAME = MacXCapture;
 				SDKROOT = macosx;
@@ -2246,11 +2250,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS = NO;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Xcode/Server-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"@executable_path/../Frameworks",
 				);
+				MARKETING_VERSION = 0.9.8;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.server;
 				PRODUCT_NAME = MacXServer;
 				SDKROOT = macosx;
@@ -2411,11 +2417,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS = NO;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Xcode/Capture-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"@executable_path/../Frameworks",
 				);
+				MARKETING_VERSION = 0.9.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.toddvernon.swiftx.capture;
 				PRODUCT_NAME = MacXCapture;
 				SDKROOT = macosx;

@@ -16,22 +16,36 @@
 #
 # What this does, end to end:
 #   1. Sanity: validate args, check tools, confirm Developer ID cert is in Keychain.
+#      For MacXServer: also confirm the SPARCplug engine payload (sibling repo's
+#      dist/) is present, relinked (zero Homebrew paths), and version-matched to
+#      qemu.lock.
 #   2. xcodebuild archive — Release config, signed with Developer ID Application, manual style.
 #      Version is passed in via MARKETING_VERSION/CURRENT_PROJECT_VERSION build settings
 #      so no project.pbxproj edit is needed.
 #   3. xcodebuild -exportArchive — extracts the .app from the .xcarchive using
 #      a developer-id export options plist generated on the fly.
-#   4. ditto-zip the .app for notarization (preserves codesign metadata).
-#   5. xcrun notarytool submit ... --wait — uploads to Apple, blocks until done.
+#   4. MacXServer only: embed the SPARCplug qemu engine into the bundle
+#      (Contents/Helpers + Resources/qemu-firmware) and sign it inside-out —
+#      dylibs, then the helper with its JIT entitlements, then re-seal the
+#      outer .app. See PLUGIN_V1_PUNCHLIST.md Track A.
+#   5. ditto-zip the .app for notarization (preserves codesign metadata).
+#   6. xcrun notarytool submit ... --wait — uploads to Apple, blocks until done.
 #      Typical wait: 1-3 minutes. If notarization fails, the script aborts and
 #      tells you to run `xcrun notarytool log <submission-id>` for the reason.
-#   6. xcrun stapler staple — embeds the notarization ticket into the .app so
+#   7. xcrun stapler staple — embeds the notarization ticket into the .app so
 #      first-launch verification works offline.
-#   7. Re-zip the stapled .app into the final shippable artifact.
-#   8. Update appVersion in the corresponding Hugo site's hugo.toml.
-#   9. gh release create — tag <App>-v<Version>, attach the zip as <App>.zip.
-#  10. cd to the Hugo site and run ./deploy.sh so the download button points
+#   8. Re-zip the stapled .app into the final shippable artifact.
+#   9. MacXServer only: assemble the GPL corresponding-source bundle
+#      (Tools/make-gpl-source-bundle.sh) — attached to the release in step 11.
+#      This is the GPLv2 §3 obligation GPL_SOURCE.md promises; a MacXServer
+#      release without it ships a GPL binary with no source offer.
+#  10. Update appVersion in the corresponding Hugo site's hugo.toml.
+#  11. gh release create — tag <App>-v<Version>, attach the zip as <App>.zip
+#      (plus the GPL source bundle for MacXServer).
+#  12. cd to the Hugo site and run ./deploy.sh so the download button points
 #      at the new release immediately.
+#  13. Bump the app target's default MARKETING_VERSION in project.yml (the
+#      xcodegen source of truth), regenerate the .xcodeproj, commit + push.
 #
 # Why tags include the app name: both apps live in toddvernon/MacXServer, so
 # /releases/latest/download/ would be ambiguous. We use stable per-version
@@ -90,6 +104,18 @@ NOTARY_PROFILE="notary"
 PROJECT_ROOT="$HOME/dev/X"
 PROJECT_FILE="$PROJECT_ROOT/MacXServer.xcodeproj"
 
+# SPARCplug engine payload (MacXServer releases only). Built in the sibling
+# repo by build-qemu.sh + packaging/bundle-dylibs.sh: dist/ holds the relinked
+# helper (all dylib load paths rewritten to @executable_path/lib/), its
+# dylibs, and the OpenBIOS firmware. release.sh copies it into the bundle and
+# signs it with the same Developer ID as the app — SPARCplug deliberately
+# leaves signing to this pipeline so there's a single identity
+# (PLUGIN_V1_PUNCHLIST.md, settled decision 2026-06-17).
+SPARC_ROOT="$HOME/dev/SPARCplug"
+SPARC_DIST="$SPARC_ROOT/dist"
+QEMU_ENTITLEMENTS="$SPARC_ROOT/packaging/qemu.entitlements"
+QEMU_LOCK="$SPARC_ROOT/qemu.lock"
+
 # Build artifacts live in /tmp so they don't clutter the working tree.
 BUILD_DIR="/tmp/macxserver-release/$APP-$VERSION"
 ARCHIVE_PATH="$BUILD_DIR/$APP.xcarchive"
@@ -135,6 +161,58 @@ if [[ ! -f "$HUGO_DIR/hugo.toml" ]]; then
     exit 1
 fi
 echo "    hugo site: $HUGO_DIR"
+
+# SPARCplug engine payload sane? (MacXServer bundles the qemu helper; a
+# release without it ships a machine manager that can't boot a VM.)
+if [[ "$APP" == "MacXServer" ]]; then
+    if [[ ! -x "$SPARC_DIST/qemu-system-sparc" ]]; then
+        echo "ERROR: SPARCplug engine not found at $SPARC_DIST/qemu-system-sparc."
+        echo "Build it in the SPARCplug repo: build-qemu.sh, then packaging/bundle-dylibs.sh."
+        exit 1
+    fi
+    if ! ls "$SPARC_DIST/lib/"*.dylib >/dev/null 2>&1; then
+        echo "ERROR: no dylibs in $SPARC_DIST/lib — run SPARCplug packaging/bundle-dylibs.sh."
+        exit 1
+    fi
+    if [[ ! -f "$SPARC_DIST/firmware/openbios-sparc32" ]]; then
+        echo "ERROR: firmware missing at $SPARC_DIST/firmware/openbios-sparc32."
+        exit 1
+    fi
+    if [[ ! -f "$QEMU_ENTITLEMENTS" ]]; then
+        echo "ERROR: qemu entitlements not found at $QEMU_ENTITLEMENTS."
+        exit 1
+    fi
+    if [[ ! -f "$QEMU_LOCK" ]]; then
+        echo "ERROR: qemu.lock not found at $QEMU_LOCK (needed for the GPL source bundle)."
+        exit 1
+    fi
+
+    # Relink audit: a dist/ that still references Homebrew paths would load
+    # (or fail to load) machine-local libraries on a customer Mac. dylibbundler
+    # is supposed to have rewritten everything to @executable_path/lib/.
+    if otool -L "$SPARC_DIST/qemu-system-sparc" "$SPARC_DIST/lib/"*.dylib \
+        | grep -E '/(opt/homebrew|usr/local)/' ; then
+        echo "ERROR: SPARCplug dist still links against Homebrew paths (above)."
+        echo "Re-run SPARCplug packaging/bundle-dylibs.sh."
+        exit 1
+    fi
+
+    # Version cross-check: the helper we embed must be built from the QEMU
+    # release qemu.lock pins, because that's exactly what the GPL source
+    # bundle we attach claims to correspond to. (Also proves the binary
+    # actually loads its bundled dylibs on this Mac.)
+    QEMU_LOCK_VER=$(grep -E '^version[[:space:]]*=' "$QEMU_LOCK" | head -1 | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//')
+    QEMU_BIN_VER=$("$SPARC_DIST/qemu-system-sparc" --version | head -1)
+    if [[ "$QEMU_BIN_VER" != *"$QEMU_LOCK_VER"* ]]; then
+        echo "ERROR: engine version mismatch."
+        echo "  qemu.lock pins:  $QEMU_LOCK_VER"
+        echo "  dist binary is:  $QEMU_BIN_VER"
+        echo "The GPL source bundle would not correspond to the shipped binary."
+        echo "Rebuild dist/ from the pinned source (or update qemu.lock)."
+        exit 1
+    fi
+    echo "    sparcplug engine: $SPARC_DIST (QEMU $QEMU_LOCK_VER, relink clean)"
+fi
 
 # Working tree clean? (advisory — releases are easier to reason about when clean.)
 cd "$PROJECT_ROOT"
@@ -223,6 +301,48 @@ fi
 
 echo "    exported: $APP_PATH"
 
+# -------- embed SPARCplug engine (MacXServer only) --------
+
+# Layout must match QemuEngine.defaultConfig()'s bundle resolution:
+#   helper   = Contents/Helpers/qemu-system-sparc  (+ lib/ beside it, because
+#              dylibbundler rewrote load paths to @executable_path/lib/)
+#   firmware = Contents/Resources/qemu-firmware
+# Signing is inside-out (dylibs -> helper -> outer app), with the helper
+# getting the JIT entitlements (allow-jit + allow-unsigned-executable-memory;
+# without them TCG falls back to the interpreter, ~10x slower boot). The
+# recipe was proven locally in PLUGIN_V1_PUNCHLIST.md A3. Copying into the
+# bundle invalidates the app's resource seal, so the final outer re-sign is
+# mandatory, and everything here must happen BEFORE notarization so Apple
+# notarizes the combined bundle as one unit.
+
+if [[ "$APP" == "MacXServer" ]]; then
+    echo
+    echo "==> Embedding SPARCplug engine from $SPARC_DIST"
+    HELPERS_DIR="$APP_PATH/Contents/Helpers"
+    FIRMWARE_DIR="$APP_PATH/Contents/Resources/qemu-firmware"
+    mkdir -p "$HELPERS_DIR/lib" "$FIRMWARE_DIR"
+    cp "$SPARC_DIST/qemu-system-sparc" "$HELPERS_DIR/"
+    cp "$SPARC_DIST/lib/"*.dylib "$HELPERS_DIR/lib/"
+    cp "$SPARC_DIST/firmware/"* "$FIRMWARE_DIR/"
+
+    echo "==> Signing engine inside-out (Developer ID, hardened runtime)"
+    for dylib in "$HELPERS_DIR/lib/"*.dylib; do
+        codesign --force --timestamp --options=runtime \
+            --sign "$SIGN_IDENTITY" "$dylib"
+    done
+    codesign --force --timestamp --options=runtime \
+        --entitlements "$QEMU_ENTITLEMENTS" \
+        --sign "$SIGN_IDENTITY" "$HELPERS_DIR/qemu-system-sparc"
+
+    echo "==> Re-sealing outer app bundle"
+    codesign --force --timestamp --options=runtime \
+        --sign "$SIGN_IDENTITY" "$APP_PATH"
+
+    echo "==> Verifying combined bundle signature"
+    codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+    echo "    engine embedded + signed"
+fi
+
 # -------- notarize --------
 
 echo
@@ -248,6 +368,23 @@ echo "==> Creating final shippable zip: $FINAL_ZIP"
 rm -f "$FINAL_ZIP"
 ditto -c -k --keepParent "$APP_PATH" "$FINAL_ZIP"
 ls -la "$FINAL_ZIP"
+
+# -------- GPL source bundle (MacXServer only) --------
+
+# The bundled qemu helper is GPLv2; GPL_SOURCE.md promises the complete
+# corresponding source as a bundle attached to every release. Assemble it
+# now (before any publish step) so a failure here aborts the release rather
+# than shipping a GPL binary with no source offer. The upstream tarball is
+# cached under .build/gpl-source-cache after the first run.
+
+GPL_BUNDLE=""
+if [[ "$APP" == "MacXServer" ]]; then
+    echo
+    echo "==> Assembling GPL corresponding-source bundle"
+    "$PROJECT_ROOT/Tools/make-gpl-source-bundle.sh" "$BUILD_DIR"
+    GPL_BUNDLE=$(ls "$BUILD_DIR"/macxserver-gpl-source-*.tar.xz)
+    echo "    gpl bundle: $GPL_BUNDLE"
+fi
 
 # -------- Hugo site update --------
 
@@ -278,11 +415,26 @@ Applications. First-launch should be clean — no Gatekeeper warnings.
 System requirements: macOS 14.0 (Sonoma) or later.
 EOF
 
+if [[ -n "$GPL_BUNDLE" ]]; then
+    cat >> "$RELEASE_NOTES_FILE" <<EOF
+
+The macxserver-gpl-source tarball is the complete corresponding source for
+the GPL/LGPL components bundled in the app (the qemu-system-sparc helper
+and friends) — see GPL_SOURCE.md in the repo. You only need it if you want
+to rebuild the emulation engine from source.
+EOF
+fi
+
+RELEASE_ASSETS=("$FINAL_ZIP#$APP.zip")
+if [[ -n "$GPL_BUNDLE" ]]; then
+    RELEASE_ASSETS+=("$GPL_BUNDLE#$(basename "$GPL_BUNDLE")")
+fi
+
 gh release create "$TAG" \
     --repo "$REPO" \
     --title "$APP v$VERSION" \
     --notes-file "$RELEASE_NOTES_FILE" \
-    "$FINAL_ZIP#$APP.zip"
+    "${RELEASE_ASSETS[@]}"
 
 # -------- deploy Hugo site --------
 
@@ -290,42 +442,58 @@ echo
 echo "==> Deploying Hugo site so the download button picks up the new version"
 ( cd "$HUGO_DIR" && ./deploy.sh )
 
-# -------- Xcode project default version bump --------
+# -------- default version bump (project.yml is the source of truth) --------
 
 # Purely cosmetic for dev-build UX. The shipped artifact already has
-# $VERSION baked in via the xcodebuild MARKETING_VERSION override above
-# (~line 172), so this step has no bearing on what users download. What
-# it fixes: a plain `xcodebuild` / Xcode dev build picks up the project's
-# default MARKETING_VERSION, which would otherwise lag a release behind
-# until manually bumped — meaning the About dialog on dev builds shows
-# the previous shipped version. Bumping here keeps those builds honest.
+# $VERSION baked in via the xcodebuild MARKETING_VERSION override above,
+# so this step has no bearing on what users download. What it fixes: a
+# plain Xcode dev build picks up the project's default MARKETING_VERSION,
+# which would otherwise lag a release behind — the About dialog on dev
+# builds would show the previous shipped version.
 #
-# Idempotent: re-running the same version leaves the file byte-identical
-# and the `git diff` check skips the commit. Pattern is intentionally
-# tight (semver only) so the sed can't accidentally chew through
-# DYLIB_*_VERSION = 1 or other version-looking settings.
+# The bump edits project.yml, NOT the pbxproj: xcodegen regenerates the
+# pbxproj from project.yml, so a pbxproj-only bump (the old approach) was
+# clobbered back to the stale default on the next regeneration. The sed
+# targets the "# release-version <App>" marker comment so only the released
+# app's line moves (the two apps version independently; the framework
+# targets' internal 0.1.0 defaults are untouched). Then regenerate the
+# pbxproj so a fresh checkout builds with the right default immediately.
+#
+# Idempotent: re-running the same version leaves the files byte-identical
+# and the `git diff` check skips the commit.
 #
 # Runs AFTER Hugo deploy so any failure here can't strand the public
 # download button on a stale version.
 
 echo
-echo "==> Bumping default MARKETING_VERSION in project.pbxproj to $VERSION"
+echo "==> Bumping default MARKETING_VERSION for $APP to $VERSION in project.yml"
+PROJECT_YML="$PROJECT_ROOT/project.yml"
 PBXPROJ="$PROJECT_FILE/project.pbxproj"
-sed -i "" -E "s/MARKETING_VERSION = [0-9]+\.[0-9]+\.[0-9]+;/MARKETING_VERSION = $VERSION;/g" "$PBXPROJ"
-COUNT=$(grep -c "MARKETING_VERSION = $VERSION;" "$PBXPROJ" 2>/dev/null || echo 0)
-echo "    pbxproj now has MARKETING_VERSION = $VERSION in $COUNT place(s)"
+sed -i "" -E "s|MARKETING_VERSION: \"[0-9]+\.[0-9]+\.[0-9]+\" # release-version $APP|MARKETING_VERSION: \"$VERSION\" # release-version $APP|" "$PROJECT_YML"
+if ! grep -q "MARKETING_VERSION: \"$VERSION\" # release-version $APP" "$PROJECT_YML"; then
+    echo "WARNING: version-bump marker '# release-version $APP' not found in project.yml — bump skipped."
+    echo "The release itself is complete; fix the marker line by hand."
+else
+    if command -v xcodegen >/dev/null 2>&1; then
+        ( cd "$PROJECT_ROOT" && xcodegen generate >/dev/null )
+        echo "    project.yml bumped + .xcodeproj regenerated"
+    else
+        echo "WARNING: xcodegen not installed — project.yml bumped, but the"
+        echo ".xcodeproj is stale until the next 'xcodegen generate'."
+    fi
 
-# Auto-commit + push so the source tree stays in sync with what shipped.
-# Only stages the one file — any unrelated in-progress edits in the
-# working tree stay put (Todd was warned about a dirty tree at the
-# sanity-check step and chose to proceed).
-if ! ( cd "$PROJECT_ROOT" && git diff --quiet -- "$PBXPROJ" ); then
-    echo
-    echo "==> Committing pbxproj version bump"
-    ( cd "$PROJECT_ROOT" \
-        && git add "$PBXPROJ" \
-        && git commit -m "Project: bump default MARKETING_VERSION to $VERSION (post-release sync)" \
-        && git push )
+    # Auto-commit + push so the source tree stays in sync with what shipped.
+    # Only stages the version files — any unrelated in-progress edits in the
+    # working tree stay put (Todd was warned about a dirty tree at the
+    # sanity-check step and chose to proceed).
+    if ! ( cd "$PROJECT_ROOT" && git diff --quiet -- "$PROJECT_YML" "$PBXPROJ" ); then
+        echo
+        echo "==> Committing version bump"
+        ( cd "$PROJECT_ROOT" \
+            && git add "$PROJECT_YML" "$PBXPROJ" \
+            && git commit -m "Project: bump $APP default MARKETING_VERSION to $VERSION (post-release sync)" \
+            && git push )
+    fi
 fi
 
 # -------- done --------

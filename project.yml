@@ -143,6 +143,11 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.toddvernon.swiftx.capture
         PRODUCT_NAME: MacXCapture
+        # Dev-build default only; the shipped artifact gets its version from
+        # release.sh's xcodebuild MARKETING_VERSION override. The marker
+        # comment is what release.sh's post-release bump greps for — keep it.
+        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.9.1" # release-version MacXCapture
         INFOPLIST_FILE: Xcode/Capture-Info.plist
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -172,6 +177,11 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.toddvernon.swiftx.server
         PRODUCT_NAME: MacXServer
+        # Dev-build default only; the shipped artifact gets its version from
+        # release.sh's xcodebuild MARKETING_VERSION override. The marker
+        # comment is what release.sh's post-release bump greps for — keep it.
+        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.9.8" # release-version MacXServer
         INFOPLIST_FILE: Xcode/Server-Info.plist
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

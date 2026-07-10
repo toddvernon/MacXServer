@@ -26,11 +26,11 @@ browser with it (tracked in HELIOS_PLAN, beyond this doc's scope).
 What's genuinely left before a stranger can install and run the combo, in
 priority order:
 
-1. **Package the engine into the signed app (Track A).** A5 (`release.sh`
-   copy-in + sign the qemu helper inside-out with its entitlements), A6
-   (clean-Mac acceptance on a fresh no-Homebrew account), A4 (bundle layout,
-   realized by A5). The signing recipe is already proven locally (A3); this is
-   wiring it into `release.sh` + notarizing the combined bundle.
+1. **Package the engine into the signed app (Track A).** A5 + A4 DONE
+   2026-07-10 (`release.sh` copy-in + inside-out signing wired in; see Track A
+   below). What's left is A6 (clean-Mac acceptance on a fresh no-Homebrew
+   account) plus the first real release run, which is the end-to-end proof of
+   the wiring + notarization of the combined bundle.
 2. **Install the disk image (Track C + E).** C1 downloader (NSURLSession ->
    SHA256 -> gunzip -> Application Support), C2 `manifest.json` + actually
    hosting the gzipped qcow2, C3 install sheet + state detection, E1 confirm the
@@ -106,7 +106,8 @@ and survives a clean-Mac load + notarization. Engine build already exists
   `allow-unsigned-executable-memory`). Result: boots Solaris 2.6 to
   `login:` in ~14s loading only bundled dylibs + bundled ROM. This is the
   full production signing posture validated locally, minus notarization.
-- [ ] **A4. Bundle layout / dev override.** Shipped layout: helper +
+- [x] **A4. Bundle layout / dev override. DONE 2026-07-10** (realized by the
+  A5 `release.sh` copy-in, which stages exactly this layout). Shipped layout: helper +
   `lib/` into `Contents/Helpers/` (dylibbundler rewrote to
   `@executable_path/lib/`, so the dylibs live next to the helper, NOT in
   `Contents/Frameworks/`); firmware into `Contents/Resources/qemu-firmware/`.
@@ -115,11 +116,23 @@ and survives a clean-Mac load + notarization. Engine build already exists
   `QemuEngine.defaultConfig()` honors `SPARCPLUG_ENGINE_DIR` /
   `SPARCPLUG_DISK_IMAGE` so the controller runs against `dist/` with no
   bundle wiring at all (proven by the live test).
-- [ ] **A5. `release.sh` copy-in + helper signing.** Copy the SPARCplug
-  `dist/` payload in before signing; sign inside-out with the helper
-  getting `qemu.entitlements`. (See settled decision above.) The local A3
-  run already proves the signing recipe; `release.sh` just needs to run it
-  on the in-bundle copy with the Developer ID instead of ad-hoc.
+- [x] **A5. `release.sh` copy-in + helper signing. DONE 2026-07-10.**
+  `release.sh` now (a) sanity-checks the SPARCplug payload up front for
+  MacXServer releases — dist/ present, relink audit (zero
+  `/opt/homebrew` / `/usr/local` in helper or dylibs via `otool -L`), and a
+  version cross-check that the dist binary reports the `qemu.lock`-pinned
+  QEMU version (ties the shipped binary to the GPL source bundle); (b) after
+  export, copies helper + `lib/` into `Contents/Helpers/` and firmware into
+  `Contents/Resources/qemu-firmware/`, signs inside-out (dylibs → helper
+  with `qemu.entitlements` → outer app re-seal), and `codesign --verify
+  --deep --strict`s the combined bundle before the unchanged notarize/staple
+  tail. Also wired in the same change: the GPL corresponding-source bundle
+  (`Tools/make-gpl-source-bundle.sh`) is assembled during the release and
+  attached to the GitHub release next to the app zip, closing the
+  GPL_SOURCE.md promise. Recipe re-validated 2026-07-10 on a scratch bundle
+  with the real Developer ID: verify clean, JIT entitlements present, signed
+  helper boots and loads bundled dylibs. Remaining proof is the first real
+  release run + A6.
 - [ ] **A6. Clean-Mac acceptance.** Fresh account, no homebrew: drag app,
   confirm helper loads and boots. Catches a missed dylib sign (the
   library-validation failure mode).
