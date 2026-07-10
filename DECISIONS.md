@@ -1447,6 +1447,10 @@ Launchers form commits ONLY the fields it owns onto the live machine
 (and the Settings form adopts the live launcher-scoped values at commit),
 so the two tabs' drafts can't clobber each other.
 
+(The "candidacy = saved secret" rule below lasted one day -- superseded
+by the 2026-07-10 entry: the prober is an aliveness oracle now and
+probes every external with a host.)
+
 **The helios secret is keyed by host alone** (`helios:<host>`,
 lowercased). It's a per-box fact -- one daemon, one secret, whatever
 login telnet/ssh/run-as uses -- so editing User must not detach it
@@ -1455,6 +1459,47 @@ the secret" for an app-side key miss). Legacy user@host entries migrate
 forward on first read, old entry left alone. "Unauthorized" can now only
 mean the SAVED secret was refused, and the UI says "refused the saved
 secret" plus a re-enter hint in the Helios section's status line.
+
+---
+
+## 2026-07-10: The prober is an aliveness oracle; launchers dim on knowledge, not heuristics
+
+Todd's laptop-away-from-home session surfaced it: external xterm chips
+stayed clickable while every machine was unreachable. The old doctrine
+("launch verbs never gate on probe results -- probes are minutes stale")
+was a VM argument misapplied to real machines, which run for months; and
+the deeper issue was that we threw away what the TCP layer already knew.
+Todd's model, adopted wholesale:
+
+**A helios probe classifies box-aliveness independent of helios
+configuration.** Connect REFUSED (RST) = the host answered; it's alive,
+just no agent on the port. Timeout / no-route / no-resolve = the box
+isn't there (or we aren't on its network). Agent answers but denies =
+alive with an agent; auth is the only problem. `HeliosClient` gained a
+typed `.connectionRefused`, and `HeliosReachability` is now
+{unknown, up, unauthorized, noAgent, unreachable}.
+
+**Every external with a host is probed, secret or not** (supersedes
+yesterday's secret-saved candidacy, which lasted one day). A secretless
+box maps to honest states: "up, no Helios agent" (green outline dot),
+"agent present, set its secret" (orange, with words), "unreachable"
+(red outline). Telnet-only machines finally get a live dot.
+
+**Launcher gating -- one shared rule** (`launcherEnabled`, used by both
+the Overview chips and the Machines menu): emulated = up and ready, as
+before. External chips dim only on KNOWLEDGE of failure: the box is
+confirmed unreachable (no transport can work), or the launcher's
+effective transport is helios and the agent isn't answering (guaranteed
+failure). Telnet/SSH launchers on an alive box stay enabled -- a refused
+helios connect is positive proof of aliveness, so that's optimism backed
+by evidence. Unknown (first probe pending) stays optimistic.
+
+**Words ride the colors everywhere** (Todd: "the colors start to get
+confusing"): the master list subtitle ends with the state in a word or
+two (reachable / no agent / needs secret / wrong secret / unreachable /
+running / stopped ...), the Overview status text spells the state out, a
+caption under the chips explains why anything is dimmed, and the
+Settings Helios section's status line describes the state in a sentence.
 
 ---
 

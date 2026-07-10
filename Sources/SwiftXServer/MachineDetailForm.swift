@@ -220,9 +220,9 @@ struct MachineDetailForm: View {
                     }
                 }
                 fieldCaption("The password this machine's Helios agent expects. Kept "
-                           + "in your macOS Keychain. Setting it also turns on "
-                           + "monitoring: the app checks the agent every few minutes "
-                           + "and shows the result as the machine's status dot.")
+                           + "in your macOS Keychain. The app checks the machine "
+                           + "every few minutes and shows the result above and as "
+                           + "the machine's status dot.")
             } else {
                 fieldCaption("The agent inside the guest gets a fresh secret at "
                            + "every boot, automatically. There's nothing to set.")
@@ -245,15 +245,19 @@ struct MachineDetailForm: View {
             case .externalUp:
                 return "The agent is answering."
             case .externalUnauthorized:
-                return "The agent is answering but refused the saved secret. "
-                     + "Re-enter it below."
-            case .externalDown:
-                return "Not answering. Check that the agent is running and the "
-                     + "port below is right."
-            default:
                 return hasSecret
-                    ? "Checking\u{2026}"
-                    : "Not watched. Set the secret below to turn on monitoring."
+                    ? "The agent is answering but refused the saved secret. "
+                    + "Re-enter it below."
+                    : "The agent is answering and waiting for its secret. "
+                    + "Set it below."
+            case .externalNoAgent:
+                return "The machine is up, but no Helios agent answers on the "
+                     + "port below. Install the agent to manage it from here; "
+                     + "Telnet and SSH launchers work either way."
+            case .externalDown:
+                return "The machine isn't reachable from this Mac."
+            default:
+                return "Checking\u{2026}"
             }
         }()
         HStack(spacing: 6) {

@@ -516,17 +516,19 @@ final class HeliosClientTests: XCTestCase {
         }
     }
 
-    func testConnectToClosedPortFails() throws {
-        // Grab a port, then close it so nothing is listening -> connect refused.
+    func testConnectToClosedPortIsRefusedNotFailed() throws {
+        // Grab a port, then close it so nothing is listening. The connect gets
+        // an RST -> the TYPED .connectionRefused, not the generic
+        // .connectionFailed: callers use refusal as an aliveness signal (the
+        // host answered; there's just no agent on the port -- the 2026-07-10
+        // prober rework rides on this distinction).
         let probe = try MockHeliosServer { _, id in ["id": id, "ok": true, "result": [:]] }
         let deadPort = probe.port
         probe.stop()
 
         let client = HeliosClient(host: "127.0.0.1", port: deadPort, timeout: 2)
         XCTAssertThrowsError(try client.connect()) { error in
-            guard case .connectionFailed = (error as? HeliosClient.HeliosError) else {
-                return XCTFail("expected .connectionFailed, got \(error)")
-            }
+            XCTAssertEqual(error as? HeliosClient.HeliosError, .connectionRefused)
         }
     }
 }

@@ -29,6 +29,12 @@ public final class HeliosClient {
     public enum HeliosError: Error, LocalizedError, Equatable {
         case notConnected
         case connectionFailed(String)
+        /// TCP RST on connect (ECONNREFUSED): the HOST answered -- it's alive
+        /// -- but nothing is listening on the port. Distinct from
+        /// `connectionFailed`/`timedOut` because callers use it as an
+        /// aliveness signal (a box with no agent is a different state than a
+        /// box that's off; see the 2026-07-10 prober rework).
+        case connectionRefused
         case connectionClosed
         case timedOut
         /// The daemon answered `ok:false`; the associated value is its message.
@@ -39,6 +45,7 @@ public final class HeliosClient {
             switch self {
             case .notConnected:            return "not connected to the Helios daemon"
             case .connectionFailed(let m): return "Helios connection failed: \(m)"
+            case .connectionRefused:       return "Helios connection refused (host up, no agent on the port)"
             case .connectionClosed:        return "Helios connection closed by the daemon"
             case .timedOut:                return "Helios request timed out"
             case .protocolError(let m):    return "Helios error: \(m)"
@@ -367,6 +374,7 @@ public final class HeliosClient {
             guard errno == EINPROGRESS else {
                 let e = errno
                 Darwin.close(sock)
+                if e == ECONNREFUSED { throw HeliosError.connectionRefused }
                 throw HeliosError.connectionFailed("connect(): errno \(e)")
             }
             var pfd = pollfd(fd: sock, events: Int16(POLLOUT), revents: 0)
@@ -386,6 +394,7 @@ public final class HeliosClient {
             _ = getsockopt(sock, SOL_SOCKET, SO_ERROR, &soError, &len)
             if soError != 0 {
                 Darwin.close(sock)
+                if soError == ECONNREFUSED { throw HeliosError.connectionRefused }
                 throw HeliosError.connectionFailed("connect(): errno \(soError)")
             }
         }

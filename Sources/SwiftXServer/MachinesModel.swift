@@ -8,13 +8,18 @@ enum MachineStatusDot: Equatable {
     case stopped        // installed, not running
     case notInstalled   // emulated VM with no image
     // External hosts: no lifecycle we own, but the helios prober (~3 min
-    // hello) refines the dot. `.external` = never probed / not configured
-    // for helios; the others reflect the last probe. An agent that ANSWERS
-    // "unauthorized" is alive -- that's a config problem, not a dead box.
-    case external               // unknown (unprobed / no helios config)
+    // hello against EVERY external with a host) refines the dot. The TCP
+    // layer is an aliveness oracle independent of helios configuration
+    // (2026-07-10): a REFUSED connect proves the box is alive with no agent;
+    // an agent that ANSWERS "unauthorized" is alive with an agent; only a
+    // timeout / no-route means the box isn't there. Colors stay, but every
+    // surface also carries the state in words (Todd: "the colors start to
+    // get confusing").
+    case external               // unknown (first probe still pending)
     case externalUp             // agent answered hello
-    case externalUnauthorized   // agent alive but refused the secret
-    case externalDown           // connect failed / timed out
+    case externalUnauthorized   // agent alive but denied the request
+    case externalNoAgent        // box alive, nothing listening on the helios port
+    case externalDown           // unreachable: timeout / no route / no resolve
 }
 
 /// One clickable launcher under a machine (Overview page runs it on click).
@@ -33,8 +38,17 @@ struct MachineRow: Identifiable, Equatable {
     let isEmulated: Bool
     let subtitle: String        // image name, or "host · external"
     let statusText: String
+    /// The dot's meaning in a word or two ("reachable", "no agent",
+    /// "unreachable", ...), shown next to the color wherever the color alone
+    /// would have to be decoded. nil = nothing to add (e.g. unprobed).
+    let stateWord: String?
     let dot: MachineStatusDot
     let progress: Double?       // boot progress 0...1 when booting
+
+    /// One caption under the Overview's launcher chips saying why any of them
+    /// are dimmed ("machine unreachable", "Helios launchers need the agent").
+    /// nil = nothing dimmed, no note.
+    let launcherNote: String?
 
     /// One quiet line of guest facts from the agent's `sysinfo` (uname, load,
     /// swap, disk fullness, clock drift), composed by AppDelegate from the

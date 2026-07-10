@@ -78,10 +78,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: Helios prober state (see "Helios prober" section)
 
-    /// What the last probe learned about a machine's agent. `up` requires a
-    /// completed hello; `unauthorized` means the agent ANSWERED but refused the
-    /// secret (alive, misconfigured); `down` is connect-failed/timed-out.
-    enum HeliosReachability { case unknown, up, unauthorized, down }
+    /// What the last probe learned about a machine. The TCP layer is an
+    /// aliveness oracle independent of helios configuration (Todd's model,
+    /// 2026-07-10), so the states split along what physically happened:
+    /// `up` = completed hello (alive, agent, authenticated); `unauthorized` =
+    /// the agent ANSWERED but denied the request (alive, agent present, auth
+    /// is the only problem); `noAgent` = connect REFUSED -- the host sent an
+    /// RST, so the box is alive but nothing listens on the helios port
+    /// ("not configured for helios" is a property of a living machine);
+    /// `unreachable` = timeout / no-route / resolve failure -- the box is
+    /// off, gone, or we're not on its network.
+    enum HeliosReachability { case unknown, up, unauthorized, noAgent, unreachable }
     struct HeliosProbeResult {
         var reach: HeliosReachability
         var hello: HelloResult?
@@ -382,37 +389,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // recedes through shutdown, empty when stopped.
         let dot: MachineStatusDot
         let statusText: String
+        /// The dot decoded in a word or two, carried everywhere the color
+        /// shows (Todd 2026-07-10: colors stay, but words ride along).
+        let stateWord: String?
         var progress: Double? = nil
-        if !isEmulated {
-            // The helios prober refines an external box's dot. Since
-            // candidacy became secret-saved-only (2026-07-09), unknown splits
-            // two honest ways: no secret = deliberately not watched (say how
-            // to turn it on), secret-but-no-result-yet = first probe pending.
-            // And "refused" can only mean the SAVED secret was denied -- a
-            // key miss can't reach the wire anymore.
-            switch probeResults[m.id]?.reach ?? .unknown {
+        let reach = isEmulated ? nil : (probeResults[m.id]?.reach ?? .unknown)
+        if let reach {
+            // Every external with a host is probed now; the states mirror
+            // what the TCP layer + agent actually said (see HeliosReachability).
+            let hasSecret = savedHeliosSecret(host: m.host, user: m.user) != nil
+            switch reach {
             case .unknown:
-                dot = .external
-                statusText = savedHeliosSecret(host: m.host, user: m.user) == nil
-                    ? "External \u{00b7} not watched (no Helios secret)"
-                    : "External \u{00b7} checking\u{2026}"
-            case .up:           dot = .externalUp;           statusText = "External \u{00b7} agent responding"
-            case .unauthorized: dot = .externalUnauthorized; statusText = "External \u{00b7} agent refused the saved secret"
-            case .down:         dot = .externalDown;         statusText = "External \u{00b7} not responding"
+                dot = .external; stateWord = nil
+                statusText = "External \u{00b7} checking\u{2026}"
+            case .up:
+                dot = .externalUp; stateWord = "reachable"
+                statusText = "External \u{00b7} agent answering"
+            case .unauthorized:
+                dot = .externalUnauthorized
+                stateWord = hasSecret ? "wrong secret" : "needs secret"
+                statusText = hasSecret
+                    ? "External \u{00b7} agent refused the saved secret"
+                    : "External \u{00b7} agent present, set its secret in Settings"
+            case .noAgent:
+                dot = .externalNoAgent; stateWord = "no agent"
+                statusText = "External \u{00b7} up, no Helios agent"
+            case .unreachable:
+                dot = .externalDown; stateWord = "unreachable"
+                statusText = "External \u{00b7} unreachable"
             }
         } else if !m.isInstalledEmulatedVM {
-            dot = .notInstalled; statusText = "Not installed"
+            dot = .notInstalled; statusText = "Not installed"; stateWord = "no image"
         } else if state == .running && ready {
-            dot = .running; statusText = "Running"
+            dot = .running; statusText = "Running"; stateWord = "running"
             progress = 1.0
         } else if state == .running {
-            dot = .booting; statusText = "Booting"
+            dot = .booting; statusText = "Booting"; stateWord = "booting"
             progress = ctrl?.bootProgress
         } else if state == .shuttingDown {
-            dot = .booting; statusText = "Shutting down"
+            dot = .booting; statusText = "Shutting down"; stateWord = "stopping"
             progress = ctrl?.bootProgress
         } else {
-            dot = .stopped; statusText = "Stopped"
+            dot = .stopped; statusText = "Stopped"; stateWord = "stopped"
         }
 
         let subtitle = isEmulated
@@ -420,17 +438,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             : "\(m.host) · external"
 
         let chips = m.launchers.map { l -> MachineLauncherChip in
-            // Same gating as the Machines menu: an emulated guest must be up
-            // and ready for ANY transport (telnet/ssh need the guest just as
-            // much as helios -- a launch against a stopped VM only fails
-            // slowly). External hosts stay enabled; we don't own their state.
-            let enabled = !isEmulated || ready
-            return MachineLauncherChip(id: l.name, name: l.name, enabled: enabled)
+            MachineLauncherChip(id: l.name, name: l.name,
+                                enabled: launcherEnabled(machine: m, launcher: l,
+                                                         isEmulated: isEmulated,
+                                                         ready: ready, reach: reach))
+        }
+        // Why anything is dimmed, in words under the chips (nil = nothing
+        // dimmed). Kept in step with launcherEnabled's cases.
+        let launcherNote: String?
+        if chips.isEmpty || chips.allSatisfy(\.enabled) {
+            launcherNote = nil
+        } else if isEmulated {
+            launcherNote = "Launchers run once the machine is up and ready."
+        } else if reach == .unreachable {
+            launcherNote = "The machine isn't reachable from here, so launchers "
+                         + "are disabled."
+        } else {
+            launcherNote = "Dimmed launchers connect with the Helios agent, which "
+                         + "isn't answering. Telnet and SSH launchers still work."
         }
 
         return MachineRow(
             id: m.id, name: m.name, isEmulated: isEmulated,
-            subtitle: subtitle, statusText: statusText, dot: dot, progress: progress,
+            subtitle: subtitle, statusText: statusText, stateWord: stateWord,
+            dot: dot, progress: progress, launcherNote: launcherNote,
             systemLine: systemLine(for: m, ready: ready),
             showsLifecycle: isEmulated,
             canStart: (state == .stopped || state == .notInstalled),
@@ -458,6 +489,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             osIsDetected: !isEmulated && probeResults[m.id]?.sysinfo?.uname != nil,
             canSetHeliosSecret: !isEmulated,
             launchers: chips)
+    }
+
+    /// One rule for whether a launcher is runnable right now, shared by the
+    /// Overview chips and the Machines menu so they can never disagree.
+    /// Emulated: the guest must be up and ready for ANY transport (a launch
+    /// against a stopped VM only fails slowly). External (2026-07-10, Todd's
+    /// model): dim only on KNOWLEDGE of failure -- the box is confirmed
+    /// unreachable (no transport can work), or this launcher's effective
+    /// transport is helios and the agent isn't answering (a helios launch
+    /// against an absent/denying agent is a guaranteed failure). Telnet/SSH
+    /// launchers stay live on any alive box -- a REFUSED helios connect is
+    /// positive proof the box is up. Unknown (first probe pending) stays
+    /// optimistic.
+    private func launcherEnabled(machine m: Machine, launcher l: MachineLauncher,
+                                 isEmulated: Bool, ready: Bool,
+                                 reach: HeliosReachability?) -> Bool {
+        if isEmulated { return ready }
+        switch reach ?? .unknown {
+        case .unreachable: return false
+        case .up, .unknown: return true
+        case .unauthorized, .noAgent:
+            return (l.transport ?? m.transport) != .helios
+        }
     }
 
     /// Open the machine's file browser (Overview → Helios Admin Agents →
@@ -642,14 +696,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         if !m.launchers.isEmpty {
             sub.addItem(.separator())
+            let reach = isEmulated ? nil : (probeResults[m.id]?.reach ?? .unknown)
             for l in m.launchers {
                 let item = NSMenuItem(title: l.name,
                                       action: #selector(launchMachineLauncher(_:)), keyEquivalent: "")
                 item.target = self
                 item.representedObject = "\(m.id.uuidString)/\(l.name)" as NSString
-                // An emulated guest must be up and ready for ANY transport
-                // (matches the Overview chips); external launchers stay enabled.
-                item.isEnabled = !isEmulated || ready
+                // Same rule as the Overview chips (launcherEnabled): menu and
+                // window can never disagree.
+                item.isEnabled = launcherEnabled(machine: m, launcher: l,
+                                                 isEmulated: isEmulated,
+                                                 ready: ready, reach: reach)
                 sub.addItem(item)
             }
         }
@@ -1287,13 +1344,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: - Helios prober (external reachability + guest sysinfo)
     //
-    // "Has helios" gating is configuration; the prober is DISPLAY. Every ~3
-    // minutes (plus immediately at launch, after any machine mutation, after a
-    // secret change, and when a guest comes ready) it hellos each candidate
-    // box off the main thread and refines the external dot (up / unauthorized
-    // / down) plus the Overview's sysinfo line. Verbs never gate on probe
-    // results -- a probe is at worst minutes stale, and failing at use with a
-    // clear error beats a mysteriously dimmed button.
+    // The prober is the ALIVENESS ORACLE for external boxes (2026-07-10):
+    // every ~3 minutes (plus immediately at launch, after any machine
+    // mutation, after a secret change, and when a guest comes ready) it
+    // hellos every external with a host and classifies what the TCP layer +
+    // agent actually said (up / unauthorized / noAgent / unreachable).
+    // Gating doctrine: admin verbs need `up` (they ride the agent);
+    // launcher chips dim only on KNOWLEDGE of failure -- a confirmed
+    // unreachable box, or a helios-transport launcher without an answering
+    // agent (see launcherEnabled). Telnet/SSH launchers on an alive box
+    // never gate on probe staleness: real machines run for months, and
+    // failing at use with a clear error beats a mysteriously dimmed button.
 
     /// One probe job, snapshotted on the main thread so the worker never
     /// touches the registry or the Keychain.
@@ -1334,14 +1395,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         for m in registry.machines {
             if m.kind == .externalHost {
                 guard !m.host.isEmpty else { continue }
-                // Candidacy = a saved secret, nothing else (2026-07-09).
-                // Transport is launcher config now, not a monitoring opt-in,
-                // and probing a secretless box against fail-closed agents can
-                // only produce "unauthorized" -- a confusing dot for what's
-                // really "you haven't set the secret yet" (the ipc incident).
-                // No secret -> neutral gray "not watched" dot; the Helios
-                // section in Settings says how to turn monitoring on.
-                guard let secret = savedHeliosSecret(host: m.host, user: m.user) else { continue }
+                // EVERY external with a host is probed, secret or not
+                // (2026-07-10, superseding the one-day secret-saved rule): the
+                // probe is the aliveness oracle, not just a helios check. A
+                // secretless box still classifies -- refused = alive without
+                // an agent, denied = alive with an agent awaiting a secret,
+                // timeout = not there. Display maps those honestly; nothing
+                // gates a launch on them except a confirmed unreachable.
+                let secret = savedHeliosSecret(host: m.host, user: m.user)
                 jobs.append(HeliosProbeJob(id: m.id, host: m.host,
                                            port: m.resolvedPorts.helios,
                                            secret: secret, isEmulated: false))
@@ -1376,8 +1437,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// Blocking single-machine probe (runs on probeQueue): hello for
     /// liveness, then sysinfo best-effort. A protocolError on hello means the
-    /// agent ANSWERED (it's alive) -- "unauthorized" is the config signal. An
-    /// old agent's "unknown verb" on sysinfo just means no stats (pre-0.2.0).
+    /// agent ANSWERED (it's alive) -- "unauthorized" is the config signal. A
+    /// REFUSED connect means the host is alive with no agent listening. Only
+    /// timeout / no-route / resolve failure count as unreachable. An old
+    /// agent's "unknown verb" on sysinfo just means no stats (pre-0.2.0).
     nonisolated private static func probe(_ job: HeliosProbeJob) -> HeliosProbeResult {
         let client = HeliosClient(host: job.host, port: job.port,
                                   timeout: 3, secret: job.secret)
@@ -1391,8 +1454,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             let reach: HeliosReachability =
                 message.contains("unauthorized") ? .unauthorized : .up
             return HeliosProbeResult(reach: reach, hello: nil, sysinfo: nil, at: Date())
+        } catch HeliosClient.HeliosError.connectionRefused {
+            return HeliosProbeResult(reach: .noAgent, hello: nil, sysinfo: nil, at: Date())
         } catch {
-            return HeliosProbeResult(reach: .down, hello: nil, sysinfo: nil, at: Date())
+            return HeliosProbeResult(reach: .unreachable, hello: nil, sysinfo: nil, at: Date())
         }
     }
 

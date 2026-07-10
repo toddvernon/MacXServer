@@ -56,7 +56,8 @@ struct MachinesWindowView: View {
         if !items.isEmpty {
             Section(title) {
                 ForEach(items) { m in
-                    MasterRow(machine: m, dot: model.row(m.id)?.dot ?? .stopped)
+                    MasterRow(machine: m, dot: model.row(m.id)?.dot ?? .stopped,
+                              stateWord: model.row(m.id)?.stateWord)
                         .tag(m.id)
                 }
             }
@@ -123,10 +124,13 @@ struct MachinesWindowView: View {
     }
 }
 
-/// One row in the master list: a status dot, the name, and a subtitle.
+/// One row in the master list: a status dot, the name, and a subtitle that
+/// ends with the dot's meaning in a word or two -- the colors stay, but
+/// nobody should have to decode them (Todd, 2026-07-10).
 private struct MasterRow: View {
     let machine: Machine
     let dot: MachineStatusDot
+    let stateWord: String?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -141,10 +145,13 @@ private struct MasterRow: View {
     }
 
     private var subtitle: String {
+        let base: String
         switch machine.kind {
-        case .emulatedVM:   return machine.image?.lastPathComponent ?? "no disk image"
-        case .externalHost: return machine.host.isEmpty ? "external" : "\(machine.host) · external"
+        case .emulatedVM:   base = machine.image?.lastPathComponent ?? "no disk image"
+        case .externalHost: base = machine.host.isEmpty ? "external" : machine.host
         }
+        guard let stateWord else { return base }
+        return "\(base) \u{00b7} \(stateWord)"
     }
 }
 
@@ -364,6 +371,14 @@ private struct MachineOverviewPage: View {
                             }
                         }
                     }
+                    // Why anything above is dimmed, in words (nil when
+                    // nothing is).
+                    if let note = row.launcherNote {
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             .padding(.leading, 16)
@@ -470,6 +485,10 @@ struct StatusDotView: View {
                 Circle().fill(.green).frame(width: 10, height: 10)
             case .externalUnauthorized:
                 Circle().fill(.orange).frame(width: 10, height: 10)
+            case .externalNoAgent:
+                // Alive (the box answered the connect with a refusal) but
+                // unmanaged: green outline, not green fill.
+                Circle().strokeBorder(.green, lineWidth: 1.5).frame(width: 10, height: 10)
             case .externalDown:
                 Circle().strokeBorder(.red, lineWidth: 1.5).frame(width: 10, height: 10)
             }
@@ -484,10 +503,11 @@ struct StatusDotView: View {
         case .booting: return "Booting"
         case .stopped: return "Stopped"
         case .notInstalled: return "Not installed"
-        case .external: return "External host"
-        case .externalUp: return "External host, agent responding"
-        case .externalUnauthorized: return "External host, agent refused the saved secret"
-        case .externalDown: return "External host, not responding"
+        case .external: return "External host, checking"
+        case .externalUp: return "External host, Helios agent answering"
+        case .externalUnauthorized: return "External host, agent answered but denied the request"
+        case .externalNoAgent: return "External host, up but no Helios agent on its port"
+        case .externalDown: return "External host, unreachable"
         }
     }
 }

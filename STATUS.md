@@ -1,4 +1,4 @@
-# Status 2026-07-09
+# Status 2026-07-10
 
 ## Headline: settings cleanup day executed, then revised live. All four
 phases of SETTINGS_CLEANUP_PLAN.md shipped (9 of 10 audit findings
@@ -9,7 +9,21 @@ by host, prober candidacy = secret-saved. See the three 2026-07-09
 DECISIONS entries. Next session opens on X11 work (MCP bridge lead, or
 the CLIPBOARD/editres gaps).
 
-## Evening revision (Todd's manual pass, after the morning phases)
+## 2026-07-10 (laptop, remote): prober = aliveness oracle
+
+Todd noticed launcher chips stayed clickable with every machine
+unreachable. Rework (see DECISIONS 2026-07-10): HeliosClient gained a
+typed .connectionRefused; reach states are now unknown / up /
+unauthorized / noAgent / unreachable; EVERY external with a host is
+probed (secretless boxes get honest states, telnet-only machines get
+live dots); one shared launcherEnabled rule dims chips + menu items only
+on confirmed unreachable or helios-transport-without-answering-agent;
+words ride the colors everywhere (master-list state word, chip-dim
+caption, Helios section status sentence). Suite green, 1506 tests.
+NOTE: 2026-07-09's commits (9) + these are still UNPUSHED from this Mac
+-- Todd declined the /sos push; push before switching machines.
+
+## Evening revision 2026-07-09 (Todd's manual pass, after the morning phases)
 
 - Fleet dots mystery solved: every fleet agent was fine (all accept
   secret "test"; verified by direct hello) -- the per-Mac Debug secret
