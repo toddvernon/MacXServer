@@ -1,4 +1,4 @@
-# Status 2026-07-11
+# Status 2026-07-11 (evening roll)
 
 ## Headline: the active-user model is settled and built. One active user
 per machine (machine.user + telnet Keychain); launchers follow it until
@@ -43,26 +43,42 @@ as an optional override) and ask-at-launch (kills one-click launchers).
   exactly one file read, unknown-user error). Full suite 1544 / 0
   failures.
 
+**Set Active field-tested by Todd, one real bug found + fixed.** Adding
+fred/kemosabe, launching an xterm as fred: worked first try. Switching
+BACK to tvernon (same password): failed to verify. Root cause: tvernon
+and root on the NetBSD image predate UserAdmin and carry **NetBSD
+sha1crypt** hashes (`$sha1$rounds$salt$digest`, the installer's
+passwd(1) default), and passwordMatches only spoke 13-char DES. Fix:
+`UserAdmin.sha1Crypt` ported from NetBSD lib/libcrypt/crypt-sha1.c
+(iterated HMAC-SHA1 via CommonCrypto, crypt64 output with the
+byte-0-padded tail quirk), pinned against 3 vectors minted by the live
+guest's own pwhash(1), and double-checked against tvernon's real hash.
+Unknown modular-crypt formats ($1$, $2a$) now throw an honest
+"can't check this hash format" instead of a false "wrong password".
+Solaris/4.1.4 are DES-only, so this was NetBSD-specific. 3 more core
+tests (suite 1547 / 0).
+
 Also: xcodegen re-run this morning (no project.yml change today; the
 .xcodeproj was regenerated on request after yesterday's pull).
 
 ## What's working / what's broken
 
-- swift build clean; swift test **1544 tests, 0 failures**.
-- NOT yet eyeballed in the real app: everything from yesterday's list
-  (menu-bar reorg, download flow, Users panel, first-run choreography)
-  PLUS today's Set Active flow. The NetBSD guest is running under the
-  Xcode debug build; its tvernon account is a live target for trying the
-  switch after an Xcode rebuild.
+- swift build clean; swift test **1547 tests, 0 failures**.
+- Set Active verified in the real app by Todd against the running NetBSD
+  guest: add fred -> xterm launches as fred. The switch-back-to-tvernon
+  path needs one more try after an Xcode rebuild picks up the sha1crypt
+  fix.
+- Still NOT eyeballed in the real app: yesterday's list (menu-bar reorg,
+  download flow, first-run choreography).
 - The Download button still fails cleanly until the catalog is uploaded
   (by design; SPARCPLUG_CATALOG_URL=file://... to test).
 
 ## What's next
 
-1. **Todd's manual GUI pass** (carried from 07-10, grown): menu-bar
-   reorg, download flow (local catalog via SPARCPLUG_CATALOG_URL),
-   Users panel, first-run choreography, and now Set Active (try right +
-   wrong password against the running NetBSD guest).
+1. **Todd's manual GUI pass** (carried from 07-10): menu-bar reorg,
+   download flow (local catalog via SPARCPLUG_CATALOG_URL), first-run
+   choreography, and the Set Active switch back to tvernon (needs the
+   Xcode rebuild with the sha1crypt fix).
 2. Data side of the catalog: E1 baseline masters -> build-catalog.sh ->
    upload to macxserver.com/images/. Settle the root-password policy for
    published masters (the one open decision).

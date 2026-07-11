@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import CommonCrypto
 
 // UserAdmin -- host-driven add/delete/list users on a guest, over the existing
 // Helios verbs (HELIOS_USER_MANAGEMENT.md, ratified 2026-07-10).
@@ -43,6 +44,7 @@ public enum UserAdminError: Error, LocalizedError, Equatable {
     case malformedRecord(path: String, line: String)
     case commandFailed(cmd: String, exitCode: Int, output: String)
     case verifyFailed(String)
+    case unsupportedHash(String)
 
     public var errorDescription: String? {
         switch self {
@@ -63,6 +65,9 @@ public enum UserAdminError: Error, LocalizedError, Equatable {
             return "\u{201C}\(cmd)\u{201D} failed (exit \(exitCode))\(tail)"
         case .verifyFailed(let why):
             return "The account was written but verification failed: \(why)"
+        case .unsupportedHash(let format):
+            return "The account's password uses a hash format this app "
+                + "can't check (\(format))."
         }
     }
 }
@@ -505,11 +510,64 @@ public enum UserAdmin {
         return nil
     }
 
-    /// Whether `password` matches a stored DES hash. Locked and passwordless
-    /// fields ("*", "*LK*", "NP", "x", empty) never match: a real DES hash is
-    /// exactly 13 chars with both salt bytes in the crypt alphabet, and we
-    /// check that here rather than hand crypt(3) a salt it would reject.
+    /// NetBSD sha1crypt: `$sha1$<iterations>$<salt>$<digest>`. Ported from
+    /// NetBSD lib/libcrypt/crypt-sha1.c (PBKDF1-shaped iterated HMAC-SHA1,
+    /// RFC 2898 with hmac_sha1 as the PRF). Accounts that predate UserAdmin
+    /// on the NetBSD image use this -- it's what the installer's passwd(1)
+    /// writes -- so password checks must speak it, not just DES.
+    /// Returns the full formatted hash, or nil for a spec we can't parse.
+    public static func sha1Crypt(password: String, saltSpec: String) -> String? {
+        // saltSpec may be the full stored hash; only $sha1$<iter>$<salt> is
+        // read. components on "$sha1$19018$MMsmUCca$..." gives
+        // ["", "sha1", "19018", "MMsmUCca", ...].
+        let parts = saltSpec.components(separatedBy: "$")
+        guard parts.count >= 4, parts[0].isEmpty, parts[1] == "sha1",
+              let iterations = UInt32(parts[2]), iterations >= 1,
+              !parts[3].isEmpty, !password.isEmpty else { return nil }
+        let salt = parts[3]
+
+        // Prime the pump with <salt><magic><iterations>, hmac with the
+        // password as key, then iterate on the digest.
+        let pw = Array(password.utf8)
+        let prime = Array("\(salt)$sha1$\(iterations)".utf8)
+        var digest = [UInt8](repeating: 0, count: Int(CC_SHA1_DIGEST_LENGTH))
+        CCHmac(CCHmacAlgorithm(kCCHmacAlgSHA1), pw, pw.count,
+               prime, prime.count, &digest)
+        for _ in 1..<iterations {
+            var next = [UInt8](repeating: 0, count: Int(CC_SHA1_DIGEST_LENGTH))
+            CCHmac(CCHmacAlgorithm(kCCHmacAlgSHA1), pw, pw.count,
+                   digest, digest.count, &next)
+            digest = next
+        }
+
+        // crypt64 output: 3 bytes -> 4 chars, LOW six bits first. The final
+        // group covers bytes 18, 19 and pads with byte 0 -- exactly what
+        // crypt-sha1.c does, quirk and all.
+        let itoa64 = Array("./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+        var out = ""
+        func to64(_ value: UInt32) {
+            var v = value
+            for _ in 0..<4 { out.append(itoa64[Int(v & 0x3f)]); v >>= 6 }
+        }
+        for i in stride(from: 0, to: 18, by: 3) {
+            to64(UInt32(digest[i]) << 16 | UInt32(digest[i + 1]) << 8
+                 | UInt32(digest[i + 2]))
+        }
+        to64(UInt32(digest[18]) << 16 | UInt32(digest[19]) << 8
+             | UInt32(digest[0]))
+        return "$sha1$\(iterations)$\(salt)$\(out)"
+    }
+
+    /// Whether `password` matches a stored hash -- classic DES (all three
+    /// guests) or NetBSD sha1crypt (pre-UserAdmin accounts on the NetBSD
+    /// image). Locked and passwordless fields ("*", "*LK*", "NP", "x",
+    /// empty) never match: a real DES hash is exactly 13 chars with both
+    /// salt bytes in the crypt alphabet, and we check that here rather than
+    /// hand crypt(3) a salt it would reject.
     public static func passwordMatches(_ password: String, storedHash: String) -> Bool {
+        if storedHash.hasPrefix("$sha1$") {
+            return sha1Crypt(password: password, saltSpec: storedHash) == storedHash
+        }
         guard storedHash.count == 13 else { return false }
         let alphabet = Set("./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
         let salt = String(storedHash.prefix(2))
@@ -520,13 +578,19 @@ public enum UserAdmin {
     /// Verify `name`'s password: read the guest's hash-bearing file (as root,
     /// like everything here) and compare host-side. The cleartext never
     /// crosses the wire. False = wrong password OR an account that can't log
-    /// in with a password at all (locked, NP).
+    /// in with a password at all (locked, NP). A modular-crypt hash in a
+    /// format we don't speak (MD5 `$1$`, Blowfish `$2a$`, ...) throws
+    /// unsupportedHash instead of lying "wrong password".
     public static func verifyPassword(name: String, password: String,
                                       os: MachineOS,
                                       transport: UserAdminTransport) throws -> Bool {
         let content = try readString(hashFile(os: os), transport: transport)
         guard let hash = storedHash(in: content, name: name) else {
             throw UserAdminError.userNotFound(name)
+        }
+        if hash.hasPrefix("$") && !hash.hasPrefix("$sha1$") {
+            let tag = hash.components(separatedBy: "$").dropFirst().first ?? "?"
+            throw UserAdminError.unsupportedHash("$\(tag)$")
         }
         return passwordMatches(password, storedHash: hash)
     }

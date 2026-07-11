@@ -154,10 +154,18 @@ this IS an OS-sensitive verb, unlike DNS). The panel:
   log in as, on the fly. Requires the account's password, because the
   switch writes the launcher Keychain slot and a wrong one would break
   every launcher. Verified host-side: read the hash-bearing file
-  (shadow / passwd / master.passwd per OS) over Helios, re-crypt the
+  (shadow / passwd / master.passwd per OS) over Helios, re-hash the
   entered password with the stored salt, compare. The cleartext never
   crosses the wire and nothing on the guest changes. Locked fields
   (`*`, `*LK*`, `NP`) never verify, so template can't be made active.
+  Two hash formats: classic DES (all three guests; what UserAdmin
+  writes) and NetBSD sha1crypt (`$sha1$rounds$salt$digest`, what the
+  NetBSD installer's passwd(1) wrote for the image's pre-existing
+  accounts -- found the hard way when tvernon wouldn't verify on
+  2026-07-11; ported from NetBSD lib/libcrypt/crypt-sha1.c and pinned
+  against vectors minted by the guest's own pwhash(1)). Other
+  modular-crypt formats ($1$, $2a$, ...) raise an honest "can't check
+  this hash format" instead of a false "wrong password".
 - **Delete...**: confirm dialog naming the account, optional
   "also delete /home/<user>" checkbox (default off).
 - The panel header says out loud that administration runs as root over

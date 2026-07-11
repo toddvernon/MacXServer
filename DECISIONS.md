@@ -1564,10 +1564,17 @@ Active..."): pick an account, prove you know its password, and the
 account is adopted via the same `adoptMachineLogin` path the add-sheet
 checkbox and the first-run flow use. The proof is host-side --
 `UserAdmin.verifyPassword` reads the guest's hash-bearing file (shadow /
-passwd / master.passwd per OS) over Helios as root, re-crypts the entered
+passwd / master.passwd per OS) over Helios as root, re-hashes the entered
 password with the stored salt, and compares. Cleartext never crosses the
 wire; a wrong password changes nothing anywhere. Locked hash fields
-(`*`, `*LK*`, `NP`) never verify, which keeps `template` out.
+(`*`, `*LK*`, `NP`) never verify, which keeps `template` out. Two hash
+formats are spoken: classic DES (what UserAdmin writes on all three
+guests) and NetBSD sha1crypt (what the installer's passwd(1) wrote for
+the NetBSD image's pre-existing accounts; ported from
+lib/libcrypt/crypt-sha1.c after tvernon failed to verify on day one,
+pinned against vectors minted by the guest's own pwhash(1)). Unknown
+modular-crypt formats throw an honest unsupported-hash error rather
+than reporting a false "wrong password".
 
 Rejected: **per-launcher user fields** (multiplies Keychain slots and
 launcher-editor UI for a need only multi-account users have; can return

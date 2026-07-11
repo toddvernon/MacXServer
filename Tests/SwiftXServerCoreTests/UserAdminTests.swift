@@ -432,6 +432,51 @@ final class UserAdminTests: XCTestCase {
         }
     }
 
+    func testSha1CryptAgainstGuestVectors() {
+        // Minted on the live NetBSD 9.2 guest with pwhash(1) 2026-07-11 --
+        // the guest's own libcrypt is the authority the port must match.
+        let vectors = [
+            ("xyzzy123", "$sha1$23235$dCNNxjl9$9vRbYJ5ySxceoVjBqnx71Xe/RuxW"),
+            ("xyzzy123", "$sha1$4$t5BocVPb$jfqT2NwfPL44ktdsCYuDN4z0zVFW"),
+            ("swordfish", "$sha1$96$o/1bTzb7$tJBWQsFChUZ5.9WEoXmm9bDM6qap"),
+        ]
+        for (password, hash) in vectors {
+            XCTAssertEqual(UserAdmin.sha1Crypt(password: password, saltSpec: hash),
+                           hash)
+            XCTAssertTrue(UserAdmin.passwordMatches(password, storedHash: hash))
+            XCTAssertFalse(UserAdmin.passwordMatches("wrong", storedHash: hash))
+        }
+        // Unparseable specs return nil rather than a bogus hash.
+        XCTAssertNil(UserAdmin.sha1Crypt(password: "x", saltSpec: "$sha1$$salt$"))
+        XCTAssertNil(UserAdmin.sha1Crypt(password: "x", saltSpec: "$sha1$0$salt$"))
+        XCTAssertNil(UserAdmin.sha1Crypt(password: "x", saltSpec: "$1$ab$junk"))
+        XCTAssertNil(UserAdmin.sha1Crypt(password: "", saltSpec: vectors[0].1))
+    }
+
+    func testVerifyPasswordSha1CryptAccount() throws {
+        // A pre-UserAdmin NetBSD account (installer-era sha1crypt hash) must
+        // verify -- the exact case the 2026-07-11 Set Active bug hit.
+        let guest = netbsdGuest()
+        guest.files["/etc/master.passwd"]! += "olduser:$sha1$4$t5BocVPb$"
+            + "jfqT2NwfPL44ktdsCYuDN4z0zVFW:1000:100::0:0:Old:/home/olduser:/bin/sh\n"
+        XCTAssertTrue(try UserAdmin.verifyPassword(
+            name: "olduser", password: "xyzzy123", os: .netbsd, transport: guest))
+        XCTAssertFalse(try UserAdmin.verifyPassword(
+            name: "olduser", password: "nope", os: .netbsd, transport: guest))
+    }
+
+    func testVerifyPasswordUnsupportedFormatThrows() {
+        // An honest error beats a false "wrong password" for formats we
+        // don't speak (MD5 $1$, Blowfish $2a$).
+        let guest = netbsdGuest()
+        guest.files["/etc/master.passwd"]! += "md5user:$1$ab$0123456789abcdef"
+            + ":1001:100::0:0:M:/home/md5user:/bin/sh\n"
+        XCTAssertThrowsError(try UserAdmin.verifyPassword(
+            name: "md5user", password: "x", os: .netbsd, transport: guest)) { e in
+            XCTAssertEqual(e as? UserAdminError, .unsupportedHash("$1$"))
+        }
+    }
+
     func testVerifyPasswordLockedTemplateFails() throws {
         // template's field is *LK* / * on every guest -- must verify false,
         // not crash or match.
