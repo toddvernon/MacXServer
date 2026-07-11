@@ -15,8 +15,8 @@ final class UsersWindowController: NSWindowController {
          secretProvider: @escaping () -> String?,
          hostProvider: @escaping () -> String,
          portProvider: @escaping () -> UInt16,
-         launcherUserProvider: @escaping () -> String,
-         onUseForLaunchers: @escaping (_ user: String, _ password: String) -> Void) {
+         activeUserProvider: @escaping () -> String,
+         onSetActiveUser: @escaping (_ user: String, _ password: String) -> Void) {
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 560, height: 480),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .utilityWindow],
@@ -29,8 +29,8 @@ final class UsersWindowController: NSWindowController {
             secretProvider: secretProvider,
             hostProvider: hostProvider,
             portProvider: portProvider,
-            launcherUserProvider: launcherUserProvider,
-            onUseForLaunchers: onUseForLaunchers,
+            activeUserProvider: activeUserProvider,
+            onSetActiveUser: onSetActiveUser,
             onDismiss: { [weak panel] in panel?.close() }))
 
         panel.title = "\(machineName) Admin: Users"

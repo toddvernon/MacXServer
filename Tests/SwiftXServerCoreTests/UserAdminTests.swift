@@ -371,4 +371,72 @@ final class UserAdminTests: XCTestCase {
         let users = try UserAdmin.listUsers(transport: guest)
         XCTAssertEqual(users.map(\.name), ["root", "daemon", "tvernon", "template"])
     }
+
+    // MARK: Password verification
+
+    func testHashFilePerOS() {
+        XCTAssertEqual(UserAdmin.hashFile(os: .solaris26), "/etc/shadow")
+        XCTAssertEqual(UserAdmin.hashFile(os: .sunos414), "/etc/passwd")
+        XCTAssertEqual(UserAdmin.hashFile(os: .netbsd), "/etc/master.passwd")
+    }
+
+    func testStoredHashExtraction() {
+        let shadow = "root:aaAAaaAAaaAAa:10000::::::\ntodd:bbBBbbBBbbBBb:10000::::::\n"
+        XCTAssertEqual(UserAdmin.storedHash(in: shadow, name: "todd"),
+                       "bbBBbbBBbbBBb")
+        XCTAssertNil(UserAdmin.storedHash(in: shadow, name: "ghost"))
+        // Prefix discipline: "to" must not read todd's hash.
+        XCTAssertNil(UserAdmin.storedHash(in: shadow, name: "to"))
+    }
+
+    func testPasswordMatches() {
+        // Against the pinned crypt(3) vector from testDesHashKnownVector.
+        let hash = "abA5hjwYqm1.I"
+        XCTAssertTrue(UserAdmin.passwordMatches("testpass", storedHash: hash))
+        XCTAssertFalse(UserAdmin.passwordMatches("wrongpwd", storedHash: hash))
+        // DES reads only the first 8 chars; a matching prefix still passes.
+        XCTAssertTrue(UserAdmin.passwordMatches("testpassEXTRA", storedHash: hash))
+        // Locked / passwordless / placeholder fields never match anything.
+        for locked in ["*", "*LK*", "NP", "x", "", "*************"] {
+            XCTAssertFalse(UserAdmin.passwordMatches("anything", storedHash: locked),
+                           "\u{201C}\(locked)\u{201D} must never verify")
+        }
+    }
+
+    func testVerifyPasswordPerOS() throws {
+        let hash = UserAdmin.desHash(password: "secret1", salt: "ab")
+        for (os, guest) in [(MachineOS.solaris26, solarisGuest()),
+                            (.sunos414, sunosGuest()),
+                            (.netbsd, netbsdGuest())] {
+            _ = try UserAdmin.addUser(.init(name: "homer", hash: hash),
+                                      os: os, transport: guest)
+            guest.log.removeAll()
+            XCTAssertTrue(try UserAdmin.verifyPassword(
+                name: "homer", password: "secret1", os: os, transport: guest),
+                "right password must verify on \(os)")
+            XCTAssertFalse(try UserAdmin.verifyPassword(
+                name: "homer", password: "nope", os: os, transport: guest),
+                "wrong password must fail on \(os)")
+            // It read the hash-bearing file and nothing else went on the wire.
+            XCTAssertEqual(guest.log,
+                           ["read \(UserAdmin.hashFile(os: os))",
+                            "read \(UserAdmin.hashFile(os: os))"])
+        }
+    }
+
+    func testVerifyPasswordUnknownUser() {
+        let guest = solarisGuest()
+        XCTAssertThrowsError(try UserAdmin.verifyPassword(
+            name: "ghost", password: "x", os: .solaris26, transport: guest)) { e in
+            XCTAssertEqual(e as? UserAdminError, .userNotFound("ghost"))
+        }
+    }
+
+    func testVerifyPasswordLockedTemplateFails() throws {
+        // template's field is *LK* / * on every guest -- must verify false,
+        // not crash or match.
+        XCTAssertFalse(try UserAdmin.verifyPassword(
+            name: "template", password: "", os: .solaris26,
+            transport: solarisGuest()))
+    }
 }

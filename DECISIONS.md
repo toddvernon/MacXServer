@@ -1552,6 +1552,35 @@ has an image), not a dismissed-once flag. Requires seeding fixtures with
 `machine.user = ""` (the NSUserName() fallback wrote a lie for anyone who
 isn't Todd). Still open: root-password policy for published masters.
 
+## 2026-07-11: One active user per machine; switching it requires the password
+
+The launcher login model, settled after the Users panel shipped (design
+in HELIOS_USER_MANAGEMENT.md, decision #5):
+
+**Each machine has exactly one "active user"** (`machine.user` plus the
+per-machine telnet Keychain slot), and every launcher logs in as it until
+it's switched. Switching is a first-class Users-panel action ("Set
+Active..."): pick an account, prove you know its password, and the
+account is adopted via the same `adoptMachineLogin` path the add-sheet
+checkbox and the first-run flow use. The proof is host-side --
+`UserAdmin.verifyPassword` reads the guest's hash-bearing file (shadow /
+passwd / master.passwd per OS) over Helios as root, re-crypts the entered
+password with the stored salt, and compares. Cleartext never crosses the
+wire; a wrong password changes nothing anywhere. Locked hash fields
+(`*`, `*LK*`, `NP`) never verify, which keeps `template` out.
+
+Rejected: **per-launcher user fields** (multiplies Keychain slots and
+launcher-editor UI for a need only multi-account users have; can return
+later as an optional override falling back to the machine default) and
+**ask-at-launch** (a credentials prompt per click un-invents one-click
+launchers).
+
+Related call: the panel header now states that administration itself runs
+as root over the admin connection. It's unorthodox that the user never
+selects root to do admin, so the UI says it out loud instead of leaving
+it implicit -- the active user is only about what launchers log in as,
+not about what admin runs as.
+
 ---
 
 ## Decisions still to make

@@ -145,12 +145,25 @@ this IS an OS-sensitive verb, unlike DNS). The panel:
 
 - Lists accounts parsed from /etc/passwd (system accounts uid < 100
   dimmed/hidden behind a toggle; template shown dimmed as "template").
+  The account launchers log in as carries an "active" badge.
 - **Add User...**: username, full name (GECOS), password x2, the 8-char
-  note, and "Use for this machine's launchers" (default on -> sets
+  note, and "Make this the active user" (default on -> sets
   `machine.user` + Keychain). Runs the pipeline with a compact progress
   transcript; explicit Dismiss on completion (dialog doctrine).
+- **Set Active...** (added 2026-07-11): switch which account launchers
+  log in as, on the fly. Requires the account's password, because the
+  switch writes the launcher Keychain slot and a wrong one would break
+  every launcher. Verified host-side: read the hash-bearing file
+  (shadow / passwd / master.passwd per OS) over Helios, re-crypt the
+  entered password with the stored salt, compare. The cleartext never
+  crosses the wire and nothing on the guest changes. Locked fields
+  (`*`, `*LK*`, `NP`) never verify, so template can't be made active.
 - **Delete...**: confirm dialog naming the account, optional
   "also delete /home/<user>" checkbox (default off).
+- The panel header says out loud that administration runs as root over
+  the admin connection. It's a little unorthodox that you never pick
+  root to do admin, so we state it rather than leave it implicit; the
+  active user is only about what launchers log in as.
 
 ## The first-run hook
 
@@ -233,3 +246,16 @@ design session:
 4. ~~Fixture seeding change~~ -- **CONFIRMED:** `machine.user = ""` on
    fresh installs; the empty user is the signal the first-run flow and
    the re-offer-on-ready both key on.
+
+## Decisions (Todd, 2026-07-11)
+
+5. **Active-user model ratified (and built same day).** One active user
+   per machine (`machine.user` + the telnet Keychain slot); all launchers
+   assume it until switched. Switching is a first-class panel action
+   ("Set Active...") gated on proving you know the account's password,
+   verified host-side against the guest's stored DES hash
+   (`UserAdmin.verifyPassword`). Rejected: per-launcher user fields
+   (multiplies Keychain slots and launcher-editor UI for a problem only
+   multi-account users have) and ask-at-launch (a credentials prompt per
+   click un-invents launchers). Also settled: the panel states that admin
+   runs as root, instead of making the user select root.

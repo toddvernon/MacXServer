@@ -1232,20 +1232,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 portProvider: { [weak self] in
                     self?.registry?.machine(id)?.resolvedPorts.helios ?? 2125
                 },
-                launcherUserProvider: { [weak self] in
+                activeUserProvider: { [weak self] in
                     self?.registry?.machine(id)?.user ?? ""
                 },
-                onUseForLaunchers: { [weak self] user, password in
+                onSetActiveUser: { [weak self] user, password in
                     self?.adoptMachineLogin(machineID: id, user: user, password: password)
                 })
         }
         usersAdminControllers[id]?.showWindow()
     }
 
-    /// Adopt a just-created guest account as the machine's launcher login: set
-    /// `machine.user` and stash the password in the telnet Keychain slot (the
-    /// per-machine `user@host:telnetPort` key launchers read). Shared by the
-    /// Users panel's "use for launchers" checkbox and the first-run flow.
+    /// Adopt a guest account as the machine's ACTIVE USER: set `machine.user`
+    /// and stash the password in the telnet Keychain slot (the per-machine
+    /// `user@host:telnetPort` key launchers read). Shared by the Users panel
+    /// (the add-sheet checkbox and the password-verified Set Active flow) and
+    /// the first-run flow.
     @MainActor
     private func adoptMachineLogin(machineID id: UUID, user: String, password: String) {
         guard let registry, var m = registry.machine(id) else { return }

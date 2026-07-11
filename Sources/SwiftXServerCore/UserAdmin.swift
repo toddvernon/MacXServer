@@ -484,6 +484,53 @@ public enum UserAdmin {
         parsePasswd(try readString("/etc/passwd", transport: transport))
     }
 
+    // MARK: Password verification
+
+    /// Where the OS keeps the login hash. Field 2 of the record in every case;
+    /// only the file differs (same split as recordFiles' hash-bearing member).
+    public static func hashFile(os: MachineOS) -> String {
+        switch os {
+        case .solaris26: return "/etc/shadow"
+        case .sunos414:  return "/etc/passwd"
+        case .netbsd:    return "/etc/master.passwd"
+        }
+    }
+
+    /// `name`'s hash field out of a hashFile's content; nil when no record.
+    public static func storedHash(in content: String, name: String) -> String? {
+        for line in content.split(separator: "\n") where line.hasPrefix("\(name):") {
+            let f = line.components(separatedBy: ":")
+            return f.count > 1 ? f[1] : nil
+        }
+        return nil
+    }
+
+    /// Whether `password` matches a stored DES hash. Locked and passwordless
+    /// fields ("*", "*LK*", "NP", "x", empty) never match: a real DES hash is
+    /// exactly 13 chars with both salt bytes in the crypt alphabet, and we
+    /// check that here rather than hand crypt(3) a salt it would reject.
+    public static func passwordMatches(_ password: String, storedHash: String) -> Bool {
+        guard storedHash.count == 13 else { return false }
+        let alphabet = Set("./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+        let salt = String(storedHash.prefix(2))
+        guard salt.allSatisfy({ alphabet.contains($0) }) else { return false }
+        return desHash(password: password, salt: salt) == storedHash
+    }
+
+    /// Verify `name`'s password: read the guest's hash-bearing file (as root,
+    /// like everything here) and compare host-side. The cleartext never
+    /// crosses the wire. False = wrong password OR an account that can't log
+    /// in with a password at all (locked, NP).
+    public static func verifyPassword(name: String, password: String,
+                                      os: MachineOS,
+                                      transport: UserAdminTransport) throws -> Bool {
+        let content = try readString(hashFile(os: os), transport: transport)
+        guard let hash = storedHash(in: content, name: name) else {
+            throw UserAdminError.userNotFound(name)
+        }
+        return passwordMatches(password, storedHash: hash)
+    }
+
     // MARK: Plumbing
 
     private static func readString(_ path: String,

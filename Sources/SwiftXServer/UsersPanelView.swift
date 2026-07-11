@@ -20,16 +20,16 @@ struct UsersPanelView: View {
          secretProvider: @escaping () -> String?,
          hostProvider: @escaping () -> String,
          portProvider: @escaping () -> UInt16,
-         launcherUserProvider: @escaping () -> String,
-         onUseForLaunchers: @escaping (_ user: String, _ password: String) -> Void,
+         activeUserProvider: @escaping () -> String,
+         onSetActiveUser: @escaping (_ user: String, _ password: String) -> Void,
          onDismiss: (() -> Void)? = nil) {
         self.machineName = machineName
         self.onDismiss = onDismiss
         _model = StateObject(wrappedValue: UsersPanelModel(
             osProvider: osProvider, secretProvider: secretProvider,
             hostProvider: hostProvider, portProvider: portProvider,
-            launcherUserProvider: launcherUserProvider,
-            onUseForLaunchers: onUseForLaunchers))
+            activeUserProvider: activeUserProvider,
+            onSetActiveUser: onSetActiveUser))
     }
 
     var body: some View {
@@ -46,6 +46,9 @@ struct UsersPanelView: View {
         .sheet(isPresented: $model.showingAdd) {
             AddUserSheet(model: model)
         }
+        .sheet(isPresented: $model.showingSetActive) {
+            SetActiveUserSheet(model: model)
+        }
     }
 
     // MARK: Header
@@ -57,7 +60,9 @@ struct UsersPanelView: View {
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Users").font(.title2)
-                Text("Accounts on \(machineName).")
+                Text("Accounts on \(machineName). Changes here are made as "
+                     + "root over the admin connection; launchers log in as "
+                     + "the account marked active.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -73,7 +78,7 @@ struct UsersPanelView: View {
         List(selection: $model.selection) {
             ForEach(model.visibleUsers, id: \.name) { u in
                 UserRow(entry: u,
-                        isLauncherUser: u.name == model.launcherUserProvider(),
+                        isActiveUser: u.name == model.activeUserProvider(),
                         deletable: model.isDeletable(u))
                     .tag(u.name)
             }
@@ -96,6 +101,8 @@ struct UsersPanelView: View {
             Spacer()
             Button("Dismiss") { onDismiss?() }
                 .keyboardShortcut(.cancelAction)
+            Button("Set Active\u{2026}") { model.beginSetActive() }
+                .disabled(!model.canSetActiveSelection || model.busy)
             Button("Delete\u{2026}") { model.confirmDelete() }
                 .disabled(!model.canDeleteSelection || model.busy)
             Button("Reload") { model.load() }.disabled(model.busy)
@@ -118,7 +125,7 @@ struct UsersPanelView: View {
 
 private struct UserRow: View {
     let entry: PasswdEntry
-    let isLauncherUser: Bool
+    let isActiveUser: Bool
     let deletable: Bool
 
     var body: some View {
@@ -129,8 +136,8 @@ private struct UserRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(entry.name).fontWeight(deletable ? .regular : .medium)
-                    if isLauncherUser {
-                        Text("launchers").font(.caption2)
+                    if isActiveUser {
+                        Text("active").font(.caption2)
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .background(Color.accentColor.opacity(0.18),
                                         in: Capsule())
@@ -157,7 +164,7 @@ private struct AddUserSheet: View {
     @State private var fullName = ""
     @State private var password = ""
     @State private var confirm = ""
-    @State private var useForLaunchers = true
+    @State private var setActive = true
 
     private var usernameProblem: String? {
         username.isEmpty ? nil : UserAdmin.usernameProblem(username)
@@ -195,8 +202,8 @@ private struct AddUserSheet: View {
                 Text("Vintage Unix reads only the first 8 characters of the "
                      + "password.")
                     .font(.caption).foregroundStyle(.secondary)
-                Toggle("Use this account for \(model.machineLabel)\u{2019}s launchers",
-                       isOn: $useForLaunchers)
+                Toggle("Make this the active user (launchers log in as it)",
+                       isOn: $setActive)
             }
             .formStyle(.grouped)
 
@@ -212,8 +219,7 @@ private struct AddUserSheet: View {
                     .disabled(model.busy)
                 Button("Add") {
                     model.submitAdd(username: username, fullName: fullName,
-                                    password: password,
-                                    useForLaunchers: useForLaunchers)
+                                    password: password, setActive: setActive)
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
@@ -222,6 +228,54 @@ private struct AddUserSheet: View {
         }
         .padding(20)
         .frame(width: 440)
+    }
+}
+
+// MARK: - Set Active sheet
+
+/// Switching the active user requires proving you know the account's password
+/// (it lands in the launcher Keychain slot, so a wrong one would break every
+/// launcher). Verified against the guest's stored hash before anything is
+/// adopted.
+private struct SetActiveUserSheet: View {
+    @ObservedObject var model: UsersPanelModel
+    @State private var password = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Set the active user").font(.title3.weight(.semibold))
+            Text("Launchers will log in as "
+                 + "\u{201C}\(model.selection ?? "")\u{201D} from now on. "
+                 + "Enter the account\u{2019}s password to switch.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            SecureField("Password", text: $password)
+                .textFieldStyle(.roundedBorder)
+
+            if !model.setActiveError.isEmpty {
+                Text(model.setActiveError).font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                if model.busy {
+                    ProgressView().controlSize(.small)
+                    Text("Checking the password\u{2026}")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Cancel") { model.cancelSetActive() }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(model.busy)
+                Button("Set Active") { model.submitSetActive(password: password) }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(password.isEmpty || model.busy)
+            }
+        }
+        .padding(20)
+        .frame(width: 400)
     }
 }
 
@@ -250,28 +304,28 @@ final class UsersPanelModel: ObservableObject {
     @Published var bannerIsError = false
     @Published var transcript = ""
     @Published var showingAdd = false
+    @Published var showingSetActive = false
+    @Published var setActiveError = ""
 
-    let launcherUserProvider: () -> String
+    let activeUserProvider: () -> String
     private let osProvider: () -> MachineOS?
     private let secretProvider: () -> String?
     private let hostProvider: () -> String
     private let portProvider: () -> UInt16
-    private let onUseForLaunchers: (String, String) -> Void
-
-    var machineLabel: String { "this machine" }
+    private let onSetActiveUser: (String, String) -> Void
 
     init(osProvider: @escaping () -> MachineOS?,
          secretProvider: @escaping () -> String?,
          hostProvider: @escaping () -> String,
          portProvider: @escaping () -> UInt16,
-         launcherUserProvider: @escaping () -> String,
-         onUseForLaunchers: @escaping (String, String) -> Void) {
+         activeUserProvider: @escaping () -> String,
+         onSetActiveUser: @escaping (String, String) -> Void) {
         self.osProvider = osProvider
         self.secretProvider = secretProvider
         self.hostProvider = hostProvider
         self.portProvider = portProvider
-        self.launcherUserProvider = launcherUserProvider
-        self.onUseForLaunchers = onUseForLaunchers
+        self.activeUserProvider = activeUserProvider
+        self.onSetActiveUser = onSetActiveUser
     }
 
     // MARK: Derived
@@ -292,6 +346,15 @@ final class UsersPanelModel: ObservableObject {
         guard let name = selection,
               let u = users.first(where: { $0.name == name }) else { return false }
         return isDeletable(u)
+    }
+
+    /// Any real selected account can become active except `template` (it's
+    /// locked, so its password can never verify) and the one already active.
+    /// root is allowed on purpose.
+    var canSetActiveSelection: Bool {
+        guard let name = selection,
+              users.contains(where: { $0.name == name }) else { return false }
+        return name != "template" && name != activeUserProvider()
     }
 
     // MARK: Load
@@ -331,7 +394,7 @@ final class UsersPanelModel: ObservableObject {
     func cancelAdd() { if !busy { showingAdd = false } }
 
     func submitAdd(username: String, fullName: String, password: String,
-                   useForLaunchers: Bool) {
+                   setActive: Bool) {
         guard !busy else { return }
         guard let os = osProvider() else {
             setBanner("This machine\u{2019}s OS isn\u{2019}t known, so users "
@@ -341,7 +404,7 @@ final class UsersPanelModel: ObservableObject {
         busy = true
         transcript = ""
         // Hash host-side: the cleartext never crosses the wire (only the
-        // Keychain, via onUseForLaunchers, keeps it).
+        // Keychain, via onSetActiveUser, keeps it).
         let hash = UserAdmin.desHash(password: password)
         let req = UserAdmin.AddRequest(name: username, gecos: fullName, hash: hash)
         let secret = secretProvider(), host = hostProvider(), port = portProvider()
@@ -362,7 +425,7 @@ final class UsersPanelModel: ObservableObject {
                 self.busy = false
                 switch outcome {
                 case .success:
-                    if useForLaunchers { self.onUseForLaunchers(username, password) }
+                    if setActive { self.onSetActiveUser(username, password) }
                     self.showingAdd = false
                     self.setBanner("Added \u{201C}\(username)\u{201D}.", error: false)
                     self.load()
@@ -375,6 +438,60 @@ final class UsersPanelModel: ObservableObject {
         }
     }
 
+    // MARK: Set active
+
+    func beginSetActive() {
+        guard canSetActiveSelection else { return }
+        setActiveError = ""
+        showingSetActive = true
+    }
+
+    func cancelSetActive() { if !busy { showingSetActive = false } }
+
+    /// Verify the password against the guest's stored hash, then adopt the
+    /// account as the machine's active user (machine.user + telnet Keychain,
+    /// via onSetActiveUser -> adoptMachineLogin). Nothing on the guest
+    /// changes; a wrong password changes nothing anywhere.
+    func submitSetActive(password: String) {
+        guard !busy, let name = selection else { return }
+        guard let os = osProvider() else {
+            setActiveError = "This machine\u{2019}s OS isn\u{2019}t known, so "
+                + "the password can\u{2019}t be checked."
+            return
+        }
+        busy = true
+        setActiveError = ""
+        let secret = secretProvider(), host = hostProvider(), port = portProvider()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let outcome: Result<Bool, Error>
+            let client = HeliosClient(host: host, port: port, timeout: 60, secret: secret)
+            defer { client.close() }
+            do {
+                try client.connect()
+                _ = try client.hello()
+                outcome = .success(try UserAdmin.verifyPassword(
+                    name: name, password: password, os: os, transport: client))
+            } catch { outcome = .failure(error) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.busy = false
+                switch outcome {
+                case .success(true):
+                    self.onSetActiveUser(name, password)
+                    self.showingSetActive = false
+                    self.setBanner("\u{201C}\(name)\u{201D} is now the active "
+                                   + "user; launchers log in as it.", error: false)
+                case .success(false):
+                    // Stay on the sheet; wrong password is the retry case.
+                    self.setActiveError = "That isn\u{2019}t "
+                        + "\u{201C}\(name)\u{201D}\u{2019}s password."
+                case .failure(let error):
+                    self.setActiveError = Self.describe(error)
+                }
+            }
+        }
+    }
+
     // MARK: Delete
 
     func confirmDelete() {
@@ -382,9 +499,10 @@ final class UsersPanelModel: ObservableObject {
         let alert = NSAlert()
         alert.messageText = "Delete the account \u{201C}\(name)\u{201D}?"
         alert.informativeText = "This removes the login from \(hostProvider() == "127.0.0.1" ? "the machine" : hostProvider())."
-            + (name == launcherUserProvider()
-               ? "\n\nThis is the account this machine\u{2019}s launchers use; "
-               + "you\u{2019}ll need to point them at another account afterward."
+            + (name == activeUserProvider()
+               ? "\n\nThis is the machine\u{2019}s active user, the account "
+               + "launchers log in as; you\u{2019}ll need to set another "
+               + "account active afterward."
                : "")
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
