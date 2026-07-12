@@ -92,6 +92,11 @@ struct MachineRow: Identifiable, Equatable {
     /// over Helios AND a known OS, same rule File Transfer uses plus the OS.
     let canManageUsers: Bool
 
+    /// Clock admin (set the guest clock from this Mac). OS-sensitive --
+    /// ClockAdmin's date grammar and the 4.1.4 year-safety gate are per-OS --
+    /// so it uses the same rule as Users.
+    let canSyncClock: Bool
+
     /// True when the machine's OS came from the box itself (an external
     /// host's sysinfo uname). The Settings OS picker dims: the box outranks
     /// a manual pick, same as image detection does on emulated VMs.
@@ -150,6 +155,8 @@ final class MachinesModel: ObservableObject {
     var onFileTransfer: ((UUID) -> Void)?
     /// Open the machine's Users admin panel (Overview → Admin Agents).
     var onManageUsers: ((UUID) -> Void)?
+    /// Open the machine's Clock admin panel (Overview → Admin Agents).
+    var onSyncClock: ((UUID) -> Void)?
 
     // Edit actions (master toolbar + Settings page).
     /// Add a fresh default machine, persist it, and return its id to select.

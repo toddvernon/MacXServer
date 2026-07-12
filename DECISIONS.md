@@ -1624,6 +1624,53 @@ staging on the guest where real boxes can't be trusted to have it).
 
 ---
 
+## 2026-07-12: Clock admin sets guest time from the Mac; 4.1.4 year changes gate on a live Y2K probe
+
+**Context.** The fleet's clocks drift (Mostek TOD chips, no NTP anywhere),
+and SunOS 4.1.4 has a trap: the stock `/bin/date` mis-parses a year
+argument (Sun BugId 1086103) and writes a corrupt year to the TOD chip --
+the box then won't boot, and recovery is booting install media just to
+re-enter the time. Sun's fix is patch 105143-03 (deployed to Todd's whole
+4.1.4 fleet + the VM image 2026-07-12, originals kept as `date.FCS`;
+patches staged in Dropbox SPARCplug/patches). The public app can't assume
+a patched guest.
+
+**Decision.** A per-machine Clock admin agent (Overview → Helios Admin
+Agents → Clock): shows the machine's clock against the Mac's (skew from
+`sysinfo.time`, plain English) and sets it as root over Helios, with the
+Mac's NTP-true clock as the reference.
+
+- **The normal set never carries a year.** BSD date parses its digit
+  string right-to-left, so the 8-digit `date -u mmddhhmm.ss` form can't
+  touch the year field even on a stock 4.1.4 date. Field-proven on the
+  real fleet (including two reboots on ipx after year-sets).
+- **A year change on 4.1.4 gates on a live probe of the box's own date:**
+  `date '+%Y'` prints a 4-digit year only on a Y2K-patched date (the %Y
+  fix and the set-year fix shipped in the same patch); stock date answers
+  "bad format character - Y". Probe passes → normal Set Clock. Probe
+  fails (or is inconclusive -- fail closed) → the button becomes **Force
+  Set** behind an explicit warning that spells out the unbootable risk
+  and names the patch (Todd's call: the human owns the gamble, the app
+  never silently takes it).
+- Solaris 2.6 / NetBSD have no trap; they take the year form directly
+  (SVR4 `mmddHHMMccyy` suffix grammar vs BSD year-first). Every set runs
+  in UTC (`-u`) so guest TZ config can't skew it, a year set is always
+  followed by the precise no-year set, and every sync ends with a `date
+  -u` read-back verified against the Mac (15s tolerance).
+- Each set/verify is its own Helios request -- a compound set+read once
+  wedged a NetBSD guest.
+
+**Rejected:** rdate/NTP cron jobs on the guests (guest-side moving parts,
+and anything in rc-file reach can hang a boot when the network's away --
+the app-side button has no boot-path footprint at all); checksum-matching
+`/bin/date` against known patched sums as the gate (the functional probe
+recognizes any Y2K-capable date, not just the one binary we shipped).
+
+Core: `ClockAdmin.swift` (+15 tests, suite 1570). UI: `ClockPanelView` /
+`ClockWindowController`, gated like Users (agent answering + known OS).
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

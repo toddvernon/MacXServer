@@ -494,6 +494,21 @@ private struct MachineOverviewPage: View {
                              ? "Available once the machine is running and ready"
                              : "Available once the machine answers a Helios check "
                              + "and its OS is known (set both in Settings)"))
+
+                    Button {
+                        model.onSyncClock?(row.id)
+                    } label: {
+                        Label("Clock", systemImage: "clock")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!row.canSyncClock)
+                    .help(row.canSyncClock
+                          ? "Check the machine's clock and set it from this Mac"
+                          : (row.isEmulated
+                             ? "Available once the machine is running and ready"
+                             : "Available once the machine answers a Helios check "
+                             + "and its OS is known (set both in Settings)"))
                 }
             }
             .padding(.leading, 16)

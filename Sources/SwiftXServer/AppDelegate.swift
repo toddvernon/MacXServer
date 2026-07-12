@@ -59,6 +59,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var dnsAdminControllers: [UUID: DnsAdminWindowController] = [:]
     /// Per-machine Users-admin windows, keyed by machine id.
     private var usersAdminControllers: [UUID: UsersWindowController] = [:]
+    /// Per-machine Clock-admin windows, keyed by machine id.
+    private var clockAdminControllers: [UUID: ClockWindowController] = [:]
     private var sparcWelcome: SparcStationWelcomeWindowController?
     /// The machine the welcome/install flow was opened for (Start pressed on an
     /// image-less VM); chooseImageThenStart attaches the picked image to it.
@@ -261,6 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.onDnsAdmin  = { [weak self] id in self?.openDnsAdmin(machineID: id) }
         model.onFileTransfer = { [weak self] id in self?.openMachineFileTransfer(id) }
         model.onManageUsers = { [weak self] id in self?.openUsersAdmin(machineID: id) }
+        model.onSyncClock = { [weak self] id in self?.openClockAdmin(machineID: id) }
         // What a blank DISPLAY actually resolves to at launch time (this X
         // server's own address) -- the Settings field shows it as the
         // placeholder so "blank" reads as a value, not a mystery.
@@ -308,6 +311,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self.consoles.removeValue(forKey: id)?.close()
             self.dnsAdminControllers.removeValue(forKey: id)?.close()
             self.usersAdminControllers.removeValue(forKey: id)?.close()
+            self.clockAdminControllers.removeValue(forKey: id)?.close()
             // File-browser windows are keyed "<machine-id>/<launcher>" (one per
             // browsable launcher), so evict every key for this machine or its
             // windows linger holding the dead machine's host/port/user.
@@ -509,6 +513,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // per-OS record mechanics need it). An external box gets its OS
             // from sysinfo uname; an emulated VM from image detection.
             canManageUsers: (m.os != nil) && (isEmulated
+                ? (state == .running && ready)
+                : probeResults[m.id]?.reach == .up),
+            // Clock shares Users' gate: OS-sensitive (per-OS date grammar +
+            // the 4.1.4 year-safety probe) and needs the box answering.
+            canSyncClock: (m.os != nil) && (isEmulated
                 ? (state == .running && ready)
                 : probeResults[m.id]?.reach == .up),
             osIsDetected: !isEmulated && probeResults[m.id]?.sysinfo?.uname != nil,
@@ -1240,6 +1249,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 })
         }
         usersAdminControllers[id]?.showWindow()
+    }
+
+    /// Open (or focus) the Clock admin panel for a machine. Same live-provider
+    /// shape as Users admin (the panel is per-OS: date grammar and the 4.1.4
+    /// year-safety gate live in ClockAdmin).
+    @MainActor
+    private func openClockAdmin(machineID id: UUID) {
+        guard let m = registry?.machine(id) else { return }
+        if clockAdminControllers[id] == nil {
+            let hostFor: () -> String = { [weak self] in
+                guard let m = self?.registry?.machine(id) else { return "127.0.0.1" }
+                return m.kind == .emulatedVM ? "127.0.0.1" : m.host
+            }
+            clockAdminControllers[id] = ClockWindowController(
+                machineName: m.name,
+                osProvider: { [weak self] in self?.registry?.machine(id)?.os },
+                secretProvider: { [weak self] in
+                    guard let self, let m = self.registry?.machine(id) else { return nil }
+                    return self.heliosSecret(host: hostFor(), user: m.user,
+                                             port: m.resolvedPorts.helios)
+                },
+                hostProvider: hostFor,
+                portProvider: { [weak self] in
+                    self?.registry?.machine(id)?.resolvedPorts.helios ?? 2125
+                })
+        }
+        clockAdminControllers[id]?.showWindow()
     }
 
     /// Adopt a guest account as the machine's ACTIVE USER: set `machine.user`
