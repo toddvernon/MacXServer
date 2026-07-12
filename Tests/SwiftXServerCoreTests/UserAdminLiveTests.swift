@@ -45,12 +45,13 @@ final class UserAdminLiveTests: XCTestCase {
         try? UserAdmin.deleteUser(name: Self.scratchUser, os: os,
                                   removeHome: true, transport: client)
 
-        // Add, with a real DES hash.
+        // Plan first (what the Add sheet previews), then add with it.
+        let plan = try UserAdmin.planAddUser(os: os, transport: client)
         var transcript: [String] = []
         let uid = try UserAdmin.addUser(
             .init(name: Self.scratchUser, gecos: "UserAdmin live test",
                   hash: UserAdmin.desHash(password: "livetest")),
-            os: os, transport: client,
+            os: os, transport: client, plan: plan,
             progress: { transcript.append($0) })
         XCTAssertGreaterThanOrEqual(uid, UserAdmin.firstUserUID)
 
@@ -63,11 +64,14 @@ final class UserAdminLiveTests: XCTestCase {
         XCTAssertTrue(idResult.output.contains(Self.scratchUser),
                       "id said: \(idResult.output)")
 
-        // The home came from the template stamp, owned by the new uid.
-        let ls = try client.runCommand(
-            "ls -ld \(UserAdmin.homePhysicalPath(os: os, name: Self.scratchUser))",
-            cwd: nil, timeoutMs: 15_000, user: nil)
+        // The home was staged from the app-side dotfiles, owned by the new
+        // uid, where the plan said it would be.
+        let home = plan.homePhysicalPath(name: Self.scratchUser)
+        let ls = try client.runCommand("ls -ld \(home)", cwd: nil,
+                                       timeoutMs: 15_000, user: nil)
         XCTAssertEqual(ls.exitCode, 0, ls.output)
+        let dot = try client.readFile("\(home)/.cshrc", user: nil)
+        XCTAssertEqual(dot.data, CanonicalDotfiles.cshrc)
 
         // Delete (home included) and prove it's gone: getpwnam now fails, so
         // the daemon refuses the run-as before anything executes.

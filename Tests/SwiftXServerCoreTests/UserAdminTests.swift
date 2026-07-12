@@ -59,6 +59,12 @@ final class UserAdminTests: XCTestCase {
                 template:*LK*:10000::::::
 
                 """,
+            "/etc/group": """
+                root::0:root
+                staff::10:
+                users::100:
+
+                """,
         ])
     }
 
@@ -68,6 +74,12 @@ final class UserAdminTests: XCTestCase {
                 root:ccCCccCCccCCc:0:0:Operator:/:/bin/sh
                 tvernon:ddDDddDDddDDd:1000:100:Todd Vernon:/home/tvernon:/usr/local/bin/tcsh
                 template:*:1999:100:Template:/home/template:/usr/local/bin/tcsh
+
+                """,
+            "/etc/group": """
+                wheel:*:0:root
+                staff:*:10:
+                users:*:100:
 
                 """,
         ])
@@ -85,6 +97,32 @@ final class UserAdminTests: XCTestCase {
                 root:*:0:0:Charlie &:/root:/bin/sh
                 tvernon:*:1000:100:Todd Vernon:/home/tvernon:/usr/local/bin/tcsh
                 template:*:1999:100:Template:/home/template:/usr/local/bin/tcsh
+
+                """,
+            "/etc/group": """
+                wheel:*:0:root
+                users:*:100:
+
+                """,
+        ])
+    }
+
+    /// A real-hardware box (ipc-shaped): no template account, no gid-100
+    /// group, homes split across /home2 and /home, tvernon in root's group.
+    private func realBoxGuest() -> MockGuest {
+        MockGuest(files: [
+            "/etc/passwd": """
+                root:ccCCccCCccCCc:0:0:Operator:/:/bin/sh
+                nobody:*:65534:65534::/:
+                tvernon:ddDDddDDddDDd:100:0:Todd Vernon:/home2/tvernon:/usr/local/bin/tcsh
+                jimmy:eeEEeeEEeeEEe:101:10:Jimmy:/home2/jimmy:/bin/csh
+                synology:ffFFffFFffFFf:1025:1025:Synology:/home/synology:/bin/csh
+
+                """,
+            "/etc/group": """
+                wheel:*:0:root
+                staff:*:10:
+                synology:*:1025:
 
                 """,
         ])
@@ -129,10 +167,16 @@ final class UserAdminTests: XCTestCase {
     // MARK: Per-OS geometry
 
     func testPerOSGeometry() {
-        XCTAssertEqual(UserAdmin.homePhysicalPath(os: .solaris26, name: "u"),
-                       "/export/home/u")
-        XCTAssertEqual(UserAdmin.homePhysicalPath(os: .sunos414, name: "u"), "/home/u")
-        XCTAssertEqual(UserAdmin.homePhysicalPath(os: .netbsd, name: "u"), "/home/u")
+        // Solaris /home is the automount view over /export/home; a learned
+        // nonstandard parent is taken literally everywhere.
+        XCTAssertEqual(UserAdmin.physicalHomeParent(os: .solaris26, recordParent: "/home"),
+                       "/export/home")
+        XCTAssertEqual(UserAdmin.physicalHomeParent(os: .solaris26, recordParent: "/home2"),
+                       "/home2")
+        XCTAssertEqual(UserAdmin.physicalHomeParent(os: .sunos414, recordParent: "/home"),
+                       "/home")
+        XCTAssertEqual(UserAdmin.physicalHomeParent(os: .netbsd, recordParent: "/home"),
+                       "/home")
 
         XCTAssertEqual(UserAdmin.recordFiles(os: .solaris26),
                        ["/etc/shadow", "/etc/passwd"])   // login-enabling last
@@ -145,30 +189,49 @@ final class UserAdminTests: XCTestCase {
                        "/usr/sbin/pwd_mkdb -p /etc/master.passwd")
     }
 
+    /// The images' convergence-scheme plan, for pinning record formats.
+    private func imagePlan(os: MachineOS) -> UserAdmin.AddPlan {
+        UserAdmin.AddPlan(uid: 1001, gid: 100, groupName: "users",
+                          homeParent: "/home",
+                          homePhysicalParent: UserAdmin.physicalHomeParent(
+                              os: os, recordParent: "/home"),
+                          shell: "/usr/local/bin/tcsh")
+    }
+
     func testRecordLines() {
         // Solaris: x in passwd, hash in shadow with lastchg.
         XCTAssertEqual(
             UserAdmin.recordLine(os: .solaris26, file: "/etc/passwd", name: "hb",
-                                 uid: 1001, gecos: "Homer B", hash: "abXYZ",
-                                 lastChangedDays: 20614),
+                                 plan: imagePlan(os: .solaris26), gecos: "Homer B",
+                                 hash: "abXYZ", lastChangedDays: 20614),
             "hb:x:1001:100:Homer B:/home/hb:/usr/local/bin/tcsh")
         XCTAssertEqual(
             UserAdmin.recordLine(os: .solaris26, file: "/etc/shadow", name: "hb",
-                                 uid: 1001, gecos: "Homer B", hash: "abXYZ",
-                                 lastChangedDays: 20614),
+                                 plan: imagePlan(os: .solaris26), gecos: "Homer B",
+                                 hash: "abXYZ", lastChangedDays: 20614),
             "hb:abXYZ:20614::::::")
         // 4.1.4: hash inline in passwd.
         XCTAssertEqual(
             UserAdmin.recordLine(os: .sunos414, file: "/etc/passwd", name: "hb",
-                                 uid: 1001, gecos: "Homer B", hash: "abXYZ",
-                                 lastChangedDays: 20614),
+                                 plan: imagePlan(os: .sunos414), gecos: "Homer B",
+                                 hash: "abXYZ", lastChangedDays: 20614),
             "hb:abXYZ:1001:100:Homer B:/home/hb:/usr/local/bin/tcsh")
         // NetBSD: 10-field master.passwd line.
         XCTAssertEqual(
             UserAdmin.recordLine(os: .netbsd, file: "/etc/master.passwd", name: "hb",
-                                 uid: 1001, gecos: "Homer B", hash: "abXYZ",
-                                 lastChangedDays: 20614),
+                                 plan: imagePlan(os: .netbsd), gecos: "Homer B",
+                                 hash: "abXYZ", lastChangedDays: 20614),
             "hb:abXYZ:1001:100::0:0:Homer B:/home/hb:/usr/local/bin/tcsh")
+        // A learned real-box plan lands in every field.
+        let real = UserAdmin.AddPlan(uid: 1026, gid: 10, groupName: "staff",
+                                     homeParent: "/home2",
+                                     homePhysicalParent: "/home2",
+                                     shell: "/bin/csh")
+        XCTAssertEqual(
+            UserAdmin.recordLine(os: .sunos414, file: "/etc/passwd", name: "fred",
+                                 plan: real, gecos: "", hash: "abXYZ",
+                                 lastChangedDays: 20614),
+            "fred:abXYZ:1026:10::/home2/fred:/bin/csh")
     }
 
     func testAppendAndRemoveRecord() {
@@ -205,12 +268,19 @@ final class UserAdminTests: XCTestCase {
             os: .solaris26, transport: guest, lastChangedDays: 20614)
 
         XCTAssertEqual(uid, 1001)
-        // The design's ordering: reads, then home staging, then shadow BEFORE
-        // passwd (login-enabling file last), then verify.
+        // The design's ordering: read + refuse-dups, learn the plan, read the
+        // record pair, stage the home (mkdir + app-side dotfiles + ownership),
+        // then shadow BEFORE passwd (login-enabling file last), then verify.
         XCTAssertEqual(guest.log, [
-            "read /etc/passwd",
-            "read /etc/shadow",
-            "run cp -r /home/template /export/home/homer",
+            "read /etc/passwd",                       // account list + dup check
+            "read /etc/passwd",                       // plan: conventions
+            "read /etc/group",                        // plan: group names
+            "run test -x /usr/local/bin/tcsh",        // plan: shell probe
+            "read /etc/shadow",                       // record pair up front
+            "run mkdir /export/home/homer",
+            "write /export/home/homer/.cshrc",
+            "write /export/home/homer/.login",
+            "write /export/home/homer/.profile",
             "run chown -R 1001 /export/home/homer",
             "run chgrp -R 100 /export/home/homer",
             "run chmod 755 /export/home/homer",
@@ -223,6 +293,11 @@ final class UserAdminTests: XCTestCase {
             .contains("homer:x:1001:100:Homer B:/home/homer:/usr/local/bin/tcsh\n"))
         XCTAssertTrue(guest.files["/etc/shadow"]!
             .contains("homer:abHASH:20614::::::\n"))
+        // The home got the canonical dotfiles, byte-for-byte.
+        XCTAssertEqual(guest.files["/export/home/homer/.cshrc"],
+                       String(decoding: CanonicalDotfiles.cshrc, as: UTF8.self))
+        XCTAssertEqual(guest.files["/export/home/homer/.profile"],
+                       String(decoding: CanonicalDotfiles.profile, as: UTF8.self))
     }
 
     func testAddUserSunOSHashInPasswd() throws {
@@ -269,16 +344,17 @@ final class UserAdminTests: XCTestCase {
 
     func testAddUserHomeFailureLeavesRecordsUntouched() {
         let guest = solarisGuest()
-        guest.failCommandsContaining = "cp -r"
+        guest.failCommandsContaining = "mkdir"
         let before = guest.files
         XCTAssertThrowsError(try UserAdmin.addUser(
             .init(name: "homer", hash: "x"), os: .solaris26, transport: guest)) { error in
             guard case .commandFailed(let cmd, 1, _)? = error as? UserAdminError else {
                 return XCTFail("expected commandFailed, got \(error)")
             }
-            XCTAssertTrue(cmd.hasPrefix("cp -r"))
+            XCTAssertTrue(cmd.hasPrefix("mkdir"))
         }
-        // The commit point was never reached: no record file changed.
+        // The commit point was never reached: no record file changed, and no
+        // dotfile landed anywhere.
         XCTAssertEqual(guest.files, before)
     }
 
@@ -370,6 +446,111 @@ final class UserAdminTests: XCTestCase {
         let guest = solarisGuest()
         let users = try UserAdmin.listUsers(transport: guest)
         XCTAssertEqual(users.map(\.name), ["root", "daemon", "tvernon", "template"])
+    }
+
+    // MARK: Plan derivation (conventions learned from the box)
+
+    func testPlanAddUserImagesScheme() throws {
+        // Our images: the convergence scheme reads back out of the plan.
+        let plan = try UserAdmin.planAddUser(os: .solaris26, transport: solarisGuest())
+        XCTAssertEqual(plan.uid, 1001)
+        XCTAssertEqual(plan.gid, 100)
+        XCTAssertEqual(plan.groupName, "users")
+        XCTAssertEqual(plan.homeParent, "/home")
+        XCTAssertEqual(plan.homePhysicalParent, "/export/home")
+        XCTAssertEqual(plan.shell, "/usr/local/bin/tcsh")
+        XCTAssertEqual(plan.homeRecordPath(name: "hb"), "/home/hb")
+        XCTAssertEqual(plan.homePhysicalPath(name: "hb"), "/export/home/hb")
+    }
+
+    func testPlanAddUserLearnsRealBoxConventions() throws {
+        // The ipc shape: no template, homes mostly in /home2, tvernon in
+        // root's group (which must NOT be adopted), no tcsh installed.
+        let guest = realBoxGuest()
+        guest.failCommandsContaining = "test -x"
+        let plan = try UserAdmin.planAddUser(os: .sunos414, transport: guest)
+        XCTAssertEqual(plan.uid, 1001)          // first free >= 1001
+        XCTAssertEqual(plan.gid, 10)            // gid 0 excluded; tie -> smaller
+        XCTAssertEqual(plan.groupName, "staff")
+        XCTAssertEqual(plan.homeParent, "/home2")   // where the humans live
+        XCTAssertEqual(plan.homePhysicalParent, "/home2")
+        XCTAssertEqual(plan.shell, "/bin/csh")  // tcsh probe failed
+    }
+
+    func testPlanGIDNeverZero() throws {
+        // Every human in root's group -> fall back to a named group, never 0.
+        let guest = MockGuest(files: [
+            "/etc/passwd": "root:h:0:0::/:/bin/sh\n"
+                + "todd:h:100:0::/home/todd:/bin/csh\n",
+            "/etc/group": "wheel:*:0:root\nusers:*:100:\n",
+        ])
+        let plan = try UserAdmin.planAddUser(os: .sunos414, transport: guest)
+        XCTAssertEqual(plan.gid, 100)
+        XCTAssertEqual(plan.groupName, "users")
+    }
+
+    func testPlanGIDSkipsSystemGroups() throws {
+        // The real ipc shape that caught this: the only nonzero human gid is
+        // 1 (daemon -- a sloppily created account). System gids < 10 never
+        // count; fall back to staff.
+        let guest = MockGuest(files: [
+            "/etc/passwd": "root:h:0:0::/:/bin/sh\n"
+                + "tvernon:h:100:0::/home2/tvernon:/bin/csh\n"
+                + "synology:h:1025:1::/home2/synology:/bin/csh\n",
+            "/etc/group": "wheel:*:0:\ndaemon:*:1:\nstaff:*:10:\n",
+        ])
+        let plan = try UserAdmin.planAddUser(os: .sunos414, transport: guest)
+        XCTAssertEqual(plan.gid, 10)
+        XCTAssertEqual(plan.groupName, "staff")
+        XCTAssertEqual(plan.homeParent, "/home2")
+    }
+
+    func testPlanFailsWithNothingToLearn() {
+        // No human accounts, no users/staff group: refuse honestly instead
+        // of inventing a gid.
+        let guest = MockGuest(files: [
+            "/etc/passwd": "root:h:0:0::/:/bin/sh\n",
+            "/etc/group": "wheel:*:0:root\n",
+        ])
+        XCTAssertThrowsError(try UserAdmin.planAddUser(os: .sunos414,
+                                                       transport: guest)) { e in
+            guard case .planningFailed? = e as? UserAdminError else {
+                return XCTFail("expected planningFailed, got \(e)")
+            }
+        }
+    }
+
+    func testDeriveHomeParentTiePrefersDefault() {
+        let humans = UserAdmin.accountFacts(
+            "a:h:100:10::/home/a:/bin/csh\nb:h:101:10::/home2/b:/bin/csh\n")
+        XCTAssertEqual(UserAdmin.deriveHomeParent(humans: humans, os: .sunos414),
+                       "/home")
+        XCTAssertEqual(UserAdmin.deriveHomeParent(humans: [], os: .sunos414),
+                       "/home")
+    }
+
+    func testAccountFactsReadsBothRecordShapes() {
+        let facts = UserAdmin.accountFacts(
+            "todd:h:1000:100:T:/home/todd:/bin/csh\n"              // 7-field
+            + "ned:h:1001:100::0:0:N:/home/ned:/bin/sh\n"          // 10-field
+            + "not a record\n")
+        XCTAssertEqual(facts.map(\.name), ["todd", "ned"])
+        XCTAssertEqual(facts.map(\.home), ["/home/todd", "/home/ned"])
+    }
+
+    // MARK: Canonical dotfiles
+
+    func testCanonicalDotfilesEmbeddedFaithfully() {
+        // Byte counts pinned against the SPARCplug guest-config canonical
+        // copies (2026-07-11 sync) -- the tripwire for drift.
+        XCTAssertEqual(CanonicalDotfiles.cshrc.count, 3713)
+        XCTAssertEqual(CanonicalDotfiles.login.count, 425)
+        XCTAssertEqual(CanonicalDotfiles.profile.count, 1621)
+        XCTAssertEqual(CanonicalDotfiles.files.map(\.name),
+                       [".cshrc", ".login", ".profile"])
+        // The prompt block's literal ESC and BEL bytes survived embedding.
+        XCTAssertTrue(CanonicalDotfiles.cshrc.contains(0x1B))
+        XCTAssertTrue(CanonicalDotfiles.cshrc.contains(0x07))
     }
 
     // MARK: Password verification

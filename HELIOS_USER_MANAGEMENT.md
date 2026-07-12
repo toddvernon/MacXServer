@@ -91,9 +91,46 @@ DES hash). So:
 
 ## Per-OS mechanics
 
-Uniform parts (all three): uid = next free >= 1001, gid 100, home
-`/home/<user>`, shell `/usr/local/bin/tcsh`, home seeded by
-`cp -r /home/template /home/<user>` + `chown -R`. Per-OS parts:
+REWORKED 2026-07-11 (decision #6): the account's shape is no longer
+assumed from the convergence scheme -- it's **learned from the box
+itself**, because real hardware has none of our staging (ipc: no
+template account, homes in /home2, a user parked in gid 1). Before the
+Add sheet enables, `planAddUser` reads the accounts file + /etc/group
+and probes for tcsh (all read-only), then derives an `AddPlan`:
+
+- **uid**: first free >= 1001 (re-checked at commit; a stale previewed
+  uid silently bumps).
+- **gid**: the most common gid among existing human accounts (uid
+  100..<60000, not "nobody"), ignoring system gids < 10 -- ipc's
+  synology account sits in gid 1 (daemon) and adopting that would
+  compound the mistake. No countable humans -> a group named "users",
+  then "staff"; nothing defensible -> refuse with an honest error.
+- **home parent**: where the box's human accounts already live (most
+  common parent; ties prefer /home). No humans -> /home. Solaris /home
+  maps to physical /export/home; a learned parent is taken literally.
+- **shell**: /usr/local/bin/tcsh if the box has it, else /bin/csh.
+
+The sheet shows the plan ("Will create: uid 1026 . group staff (10) .
+home /home2/fred . /bin/csh") before anything is written, and the
+previewed plan is the one that executes.
+
+Home staging is app-side now: mkdir + write_file the canonical dotfiles
+(CanonicalDotfiles.swift, byte-exact base64 embeds of SPARCplug
+guest-config/dot.{cshrc,login,profile} -- the unit test pins the byte
+counts as a drift tripwire) + chown/chgrp/chmod. The guest template
+account is no longer used by anything; it stays on the images as inert
+data until the E1 publish-prep strips it. Known quirk, accepted: the
+curated dotfiles set DISPLAY=10.0.2.2:0 (the slirp host address), which
+is meaningless on real hardware -- harmless, since launchers set
+DISPLAY explicitly.
+
+The delete-side rm guard learned the same trick: "standard location"
+now means a `<parent>/<name>` path whose parent other human accounts
+actually use (plus /home and /export/home), so deleting a /home2 user
+on ipc removes the home, while a hand-edited record pointing at
+/var/tmp/oddball still never gets an rm -rf.
+
+Per-OS record parts (unchanged):
 
 | step | Solaris 2.6 | SunOS 4.1.4 | NetBSD 9.2 |
 |---|---|---|---|
@@ -267,3 +304,15 @@ design session:
    multi-account users have) and ask-at-launch (a credentials prompt per
    click un-invents launchers). Also settled: the panel states that admin
    runs as root, instead of making the user select root.
+
+6. **Templates move app-side; account shape is learned, not assumed**
+   (ratified after the ipc add-user failure -- real boxes have no
+   template account). The canonical dotfiles are embedded in the app
+   and written over Helios; uid/gid/home-parent/shell are derived from
+   the box's own passwd/group content by `planAddUser` and previewed in
+   the Add sheet before commit. No OS re-validation at add time: the
+   Users chip already gates on the agent answering + a known OS (Todd's
+   call -- don't re-litigate established knowledge). Dotfiles: the same
+   curated set everywhere, real hardware included (Todd's call). The
+   guest template account is vestigial; strip it from published masters
+   at E1.

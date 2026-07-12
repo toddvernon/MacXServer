@@ -1,4 +1,11 @@
-# Status 2026-07-11 (evening roll)
+# Status 2026-07-11 (night roll)
+
+## Headline (late addition): add-user reworked to LEARN the box's
+conventions -- Todd's ipc field test broke the template assumption
+(real boxes have no /home/template), so the curated dotfiles moved
+app-side and uid/gid/home-parent/shell are now derived from the box's
+own passwd/group and previewed in the Add sheet before commit. Suite
+1555 green. Earlier today: the active-user model (below).
 
 ## Headline: the active-user model is settled and built. One active user
 per machine (machine.user + telnet Keychain); launchers follow it until
@@ -58,12 +65,34 @@ Unknown modular-crypt formats ($1$, $2a$) now throw an honest
 Solaris/4.1.4 are DES-only, so this was NetBSD-specific. 3 more core
 tests (suite 1547 / 0).
 
+**Add-user rework: app-side templates + learned conventions** (evening;
+DECISIONS 2026-07-11 second entry, HELIOS_USER_MANAGEMENT decision #6).
+Todd added fred on ipc (real IPC): failed at `cp -r /home/template` --
+real hardware never got the convergence staging. Clean pre-commit
+failure (ordering design held), but the strategy was image-specific.
+Rework, ratified by Todd:
+- CanonicalDotfiles.swift: guest-config/dot.{cshrc,login,profile}
+  embedded byte-exact (base64; the cshrc prompt block carries literal
+  ESC/BEL). Homes are staged mkdir + write_file + chown; the guest
+  template account is vestigial (strip from masters at E1).
+- UserAdmin.planAddUser: derives uid / gid / home parent / shell from
+  the box's passwd + group + a tcsh probe. Learned live against ipc:
+  homes at /home2 (not /home), and its one countable human gid is 1
+  (daemon -- sloppy old account), which drove the "system gids < 10
+  never count" guard; ipc's plan resolves to uid 1001 / staff (10) /
+  /home2/<user> / tcsh.
+- Add sheet previews the plan ("Will create: uid ... group ... home
+  ...") before commit; the previewed plan is the one that executes.
+  Delete's rm-guard accepts the learned parents too.
+- 8 new/reworked core tests; live test now round-trips the .cshrc
+  bytes. xcodegen re-run for the new file.
+
 Also: xcodegen re-run this morning (no project.yml change today; the
 .xcodeproj was regenerated on request after yesterday's pull).
 
 ## What's working / what's broken
 
-- swift build clean; swift test **1547 tests, 0 failures**.
+- swift build clean; swift test **1555 tests, 0 failures**.
 - Set Active verified in the real app by Todd against the running NetBSD
   guest: add fred -> xterm launches as fred. The switch-back-to-tvernon
   path needs one more try after an Xcode rebuild picks up the sha1crypt
@@ -77,8 +106,9 @@ Also: xcodegen re-run this morning (no project.yml change today; the
 
 1. **Todd's manual GUI pass** (carried from 07-10): menu-bar reorg,
    download flow (local catalog via SPARCPLUG_CATALOG_URL), first-run
-   choreography, and the Set Active switch back to tvernon (needs the
-   Xcode rebuild with the sha1crypt fix).
+   choreography, the Set Active switch back to tvernon (sha1crypt fix),
+   and retry add-fred on ipc -- the plan preview should read "uid 1001
+   · group staff (10) · home /home2/fred · tcsh".
 2. Data side of the catalog: E1 baseline masters -> build-catalog.sh ->
    upload to macxserver.com/images/. Settle the root-password policy for
    published masters (the one open decision).

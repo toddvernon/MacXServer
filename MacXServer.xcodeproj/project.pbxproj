@@ -205,6 +205,7 @@
 		9A48C3F777EA2702E773B9FC /* SparcPlugConsoleWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5572289CEA5A6228AAD86A49 /* SparcPlugConsoleWindowController.swift */; };
 		9B523B1A46A96772F571953E /* RemoteLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = C62F63EBF845EE60FC8C7221 /* RemoteLauncher.swift */; };
 		9BB7D3307B03A8B3CB750ECA /* DisplayConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49986E08BB1ACA19E7567D27 /* DisplayConfig.swift */; };
+		9CD440FB01B8FEA6F11CF087 /* CanonicalDotfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 078BAFFE77845A56149C2105 /* CanonicalDotfiles.swift */; };
 		9D5D0B344AAC33D2645233DC /* SwiftXCaptureCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DCC618596FA8C20C15E6B2E9 /* SwiftXCaptureCore.framework */; };
 		9EC16C1AF8BA9761F87E5322 /* WindowEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11D1074BFEECDD897A58F4FA /* WindowEvents.swift */; };
 		9FFD0873A3CE320682EFE038 /* fullwidth.inc in Resources */ = {isa = PBXBuildFile; fileRef = 9B9110C1C1FB8F567AE61674 /* fullwidth.inc */; };
@@ -485,6 +486,7 @@
 		06B0960F3FFB48E3302289A6 /* DecodedEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DecodedEvent.swift; sourceTree = "<group>"; };
 		072EDFD88FD7352A9CADA562 /* Padding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Padding.swift; sourceTree = "<group>"; };
 		0757BE18DD417740468C179C /* SelectionEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionEvents.swift; sourceTree = "<group>"; };
+		078BAFFE77845A56149C2105 /* CanonicalDotfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanonicalDotfiles.swift; sourceTree = "<group>"; };
 		080AB3E9063C40E4DA6EEA54 /* QueryTreeReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueryTreeReply.swift; sourceTree = "<group>"; };
 		083DB3D34E0342BD8558A89E /* TerminalEmulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalEmulator.swift; sourceTree = "<group>"; };
 		08CB18B437E54871E3E40C4C /* SSHLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHLauncher.swift; sourceTree = "<group>"; };
@@ -873,6 +875,7 @@
 				D0B077D22943344CF0A6D22B /* Region */,
 				ED9981372DE4075EA32CA4AB /* AtomTable.swift */,
 				5829D0EF8D0186F481CB475F /* BootProgressReference.swift */,
+				078BAFFE77845A56149C2105 /* CanonicalDotfiles.swift */,
 				5B5CB9142796ADF99BBAA0C3 /* ClipboardPreferences.swift */,
 				DDD91EC43E7E4357E4A85980 /* CocoaWindowBridge.swift */,
 				4F832BF595210624737A573D /* ColorTable.swift */,
@@ -1608,6 +1611,7 @@
 			files = (
 				C6D787D84C8D48BEEE52D59D /* AtomTable.swift in Sources */,
 				805ABFFAF7B1A8D415BEEAFE /* BootProgressReference.swift in Sources */,
+				9CD440FB01B8FEA6F11CF087 /* CanonicalDotfiles.swift in Sources */,
 				5DFB3901BFF84E0EC0F79375 /* ClipList.swift in Sources */,
 				DA8B8A39A3346E2DDBC566BA /* ClipboardPreferences.swift in Sources */,
 				34B046119200D2455D2DF59C /* CocoaWindowBridge.swift in Sources */,

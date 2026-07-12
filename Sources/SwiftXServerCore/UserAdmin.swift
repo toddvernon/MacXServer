@@ -45,6 +45,7 @@ public enum UserAdminError: Error, LocalizedError, Equatable {
     case commandFailed(cmd: String, exitCode: Int, output: String)
     case verifyFailed(String)
     case unsupportedHash(String)
+    case planningFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -68,6 +69,8 @@ public enum UserAdminError: Error, LocalizedError, Equatable {
         case .unsupportedHash(let format):
             return "The account's password uses a hash format this app "
                 + "can't check (\(format))."
+        case .planningFailed(let why):
+            return "Couldn't work out the machine's account conventions: \(why)"
         }
     }
 }
@@ -198,20 +201,169 @@ public enum UserAdmin {
         return uid
     }
 
-    // MARK: Per-OS geometry (exhaustive switches -- the profile doctrine)
+    // MARK: The add plan (conventions learned from the box itself)
 
-    /// Where the new home PHYSICALLY lives. The passwd record always says
-    /// `/home/<name>`; on Solaris that's a symlink to /export/home, and
-    /// commands that create/remove the directory use the physical path.
-    public static func homePhysicalPath(os: MachineOS, name: String) -> String {
-        switch os {
-        case .solaris26:          return "/export/home/\(name)"
-        case .sunos414, .netbsd:  return "/home/\(name)"
+    /// Everything box-specific about a new account, derived by planAddUser
+    /// from what's actually on the machine -- our images and real hardware
+    /// have different conventions (real boxes have no template account, may
+    /// keep homes in /home2, may lack tcsh), so the plan is learned, not
+    /// assumed. HELIOS_USER_MANAGEMENT.md decision #6.
+    public struct AddPlan: Equatable, Sendable {
+        public var uid: Int
+        public var gid: Int
+        /// The gid's name from /etc/group, when it has one (UI summary only).
+        public var groupName: String?
+        /// Home parent as it appears in the record (e.g. "/home", "/home2").
+        public var homeParent: String
+        /// Where mkdir/chown/rm actually operate (Solaris /home -> /export/home).
+        public var homePhysicalParent: String
+        public var shell: String
+
+        public init(uid: Int, gid: Int, groupName: String?, homeParent: String,
+                    homePhysicalParent: String, shell: String) {
+            self.uid = uid; self.gid = gid; self.groupName = groupName
+            self.homeParent = homeParent
+            self.homePhysicalParent = homePhysicalParent
+            self.shell = shell
+        }
+
+        public func homeRecordPath(name: String) -> String { "\(homeParent)/\(name)" }
+        public func homePhysicalPath(name: String) -> String { "\(homePhysicalParent)/\(name)" }
+
+        /// One quiet line for the Add sheet: what the account will be.
+        public func summary(name: String) -> String {
+            let group = groupName.map { "\($0) (\(gid))" } ?? "gid \(gid)"
+            let who = name.isEmpty ? "<user>" : name
+            return "uid \(uid) \u{00B7} group \(group) \u{00B7} "
+                + "home \(homeParent)/\(who) \u{00B7} \(shell)"
         }
     }
 
-    /// The record's home field -- uniform on purpose (guest-config scheme).
-    public static func homeRecordPath(name: String) -> String { "/home/\(name)" }
+    /// The name:uid:gid:home facts of every account in a records file,
+    /// tolerant of both the 7-field passwd and 10-field master.passwd shapes
+    /// (the accounts file differs per OS).
+    public struct AccountFacts: Equatable, Sendable {
+        public var name: String
+        public var uid: Int
+        public var gid: Int
+        public var home: String
+    }
+
+    public static func accountFacts(_ content: String) -> [AccountFacts] {
+        content.split(separator: "\n").compactMap { line in
+            let f = line.components(separatedBy: ":")
+            if f.count == 7, let uid = Int(f[2]), let gid = Int(f[3]) {
+                return AccountFacts(name: f[0], uid: uid, gid: gid, home: f[5])
+            }
+            if f.count == 10, let uid = Int(f[2]), let gid = Int(f[3]) {
+                return AccountFacts(name: f[0], uid: uid, gid: gid, home: f[8])
+            }
+            return nil
+        }
+    }
+
+    /// The accounts convention-learning looks at: real people, not plumbing.
+    /// uid 100..<60000 covers every human on the fleet (ipc's tvernon is
+    /// uid 100) while excluding daemons and the nobody family.
+    public static func humanAccounts(_ facts: [AccountFacts]) -> [AccountFacts] {
+        facts.filter { $0.uid >= 100 && $0.uid < 60000 && $0.name != "nobody" }
+    }
+
+    /// `(name, gid)` pairs from /etc/group content.
+    public static func parseGroups(_ content: String) -> [(name: String, gid: Int)] {
+        content.split(separator: "\n").compactMap { line in
+            let f = line.components(separatedBy: ":")
+            guard f.count >= 3, let gid = Int(f[2]) else { return nil }
+            return (f[0], gid)
+        }
+    }
+
+    /// The gid a new account joins: the box's own convention -- the most
+    /// common gid among human accounts (ties broken toward the smaller gid).
+    /// System gids (< 10: wheel/root, daemon, kmem, bin, tty...) never count,
+    /// even when a human account sits in one -- ipc's real /etc/passwd had a
+    /// user parked in gid 1 (daemon), and adopting that would compound the
+    /// mistake. Falls back to a group named "users" then "staff" from
+    /// /etc/group; nil when there's no defensible answer.
+    public static func deriveGID(humans: [AccountFacts],
+                                 groupContent: String) -> (gid: Int, name: String?)? {
+        let groups = parseGroups(groupContent)
+        func name(of gid: Int) -> String? { groups.first { $0.gid == gid }?.name }
+
+        var counts: [Int: Int] = [:]
+        for h in humans where h.gid >= 10 && h.gid < 60000 {
+            counts[h.gid, default: 0] += 1
+        }
+        if let topCount = counts.values.max() {
+            let gid = counts.filter { $0.value == topCount }.keys.min()!
+            return (gid, name(of: gid))
+        }
+        for candidate in ["users", "staff"] {
+            if let g = groups.first(where: { $0.name == candidate }) {
+                return (g.gid, g.name)
+            }
+        }
+        return nil
+    }
+
+    /// The record-side home parent for a new account: where the box's human
+    /// accounts already live (most common parent, ties broken toward the OS
+    /// default then alphabetically). No humans to learn from -> "/home".
+    public static func deriveHomeParent(humans: [AccountFacts],
+                                        os: MachineOS) -> String {
+        let fallback = "/home"
+        var counts: [String: Int] = [:]
+        for h in humans {
+            let parent = (h.home as NSString).deletingLastPathComponent
+            if parent.count > 1 { counts[parent, default: 0] += 1 }
+        }
+        guard let top = counts.values.max() else { return fallback }
+        let tied = counts.filter { $0.value == top }.keys.sorted()
+        return tied.contains(fallback) ? fallback : tied[0]
+    }
+
+    /// Where mkdir/chown/rm actually operate for a record-side parent. On
+    /// Solaris the conventional /home is the automount/symlink view over
+    /// /export/home; anywhere else (and any learned nonstandard parent) the
+    /// record path IS the physical path.
+    public static func physicalHomeParent(os: MachineOS, recordParent: String) -> String {
+        switch os {
+        case .solaris26: return recordParent == "/home" ? "/export/home" : recordParent
+        case .sunos414, .netbsd: return recordParent
+        }
+    }
+
+    /// Learn the box's conventions and produce the plan the Add sheet shows
+    /// and addUser executes: reads the accounts file and /etc/group, probes
+    /// for the preferred shell. Read-only -- nothing on the guest changes.
+    public static func planAddUser(os: MachineOS,
+                                   transport: UserAdminTransport) throws -> AddPlan {
+        let accounts = try readString(accountsFile(os: os), transport: transport)
+        let facts = accountFacts(accounts)
+        let humans = humanAccounts(facts)
+
+        let uid = nextFreeUID(existing: facts.map(\.uid))
+        guard let group = deriveGID(humans: humans,
+                                    groupContent: (try? readString("/etc/group",
+                                                                   transport: transport)) ?? "")
+        else {
+            throw UserAdminError.planningFailed("no existing user accounts to "
+                + "learn a group from, and no \u{201C}users\u{201D} or "
+                + "\u{201C}staff\u{201D} group in /etc/group")
+        }
+        let homeParent = deriveHomeParent(humans: humans, os: os)
+
+        // Preferred shell if the box has it, /bin/csh (universal) otherwise.
+        let probe = try transport.runCommand("test -x \(loginShell)", cwd: nil,
+                                             timeoutMs: 10_000, user: nil)
+        let shell = probe.exitCode == 0 ? loginShell : "/bin/csh"
+
+        return AddPlan(uid: uid, gid: group.gid, groupName: group.name,
+                       homeParent: homeParent,
+                       homePhysicalParent: physicalHomeParent(os: os,
+                                                              recordParent: homeParent),
+                       shell: shell)
+    }
 
     /// The account-record files the add/delete pipeline edits, in COMMIT
     /// ORDER for add (the login-enabling file last). Delete walks it in
@@ -244,16 +396,14 @@ public enum UserAdmin {
         }
     }
 
-    /// Commands that stage the new home BEFORE the commit point: copy the
-    /// template stamp, then own it. chown by numeric uid and a separate chgrp
-    /// on purpose -- the owner.group vs owner:group separator differs across
-    /// these systems (BSD dot vs SVR4 colon); two commands sidestep it.
-    public static func homeCreationCommands(os: MachineOS, name: String, uid: Int) -> [String] {
-        let home = homePhysicalPath(os: os, name: name)
-        return [
-            "cp -r \(templateHome) \(home)",
+    /// Commands that own the freshly staged home (mkdir + app-side dotfile
+    /// writes happen first; see addUser). chown by numeric uid and a separate
+    /// chgrp on purpose -- the owner.group vs owner:group separator differs
+    /// across these systems (BSD dot vs SVR4 colon); two commands sidestep it.
+    public static func homeOwnershipCommands(home: String, uid: Int, gid: Int) -> [String] {
+        [
             "chown -R \(uid) \(home)",
-            "chgrp -R \(usersGID) \(home)",
+            "chgrp -R \(gid) \(home)",
             "chmod 755 \(home)",
         ]
     }
@@ -267,28 +417,29 @@ public enum UserAdmin {
 
     /// The new-account line for `file` (one of recordFiles). `hash` lands in
     /// whichever field the OS reads it from: shadow on Solaris, passwd field 2
-    /// on 4.1.4, master.passwd field 2 on NetBSD.
+    /// on 4.1.4, master.passwd field 2 on NetBSD. uid/gid/home/shell come
+    /// from the plan (learned from the box, not assumed).
     public static func recordLine(os: MachineOS, file: String, name: String,
-                                  uid: Int, gecos: String, hash: String,
+                                  plan: AddPlan, gecos: String, hash: String,
                                   lastChangedDays: Int) -> String {
-        let home = homeRecordPath(name: name)
+        let home = plan.homeRecordPath(name: name)
         switch os {
         case .solaris26:
             if file == "/etc/shadow" {
                 // name:hash:lastchg:min:max:warn:inactive:expire:flag
                 return "\(name):\(hash):\(lastChangedDays)::::::"
             }
-            return PasswdEntry(name: name, passwordField: "x", uid: uid,
-                               gid: usersGID, gecos: gecos, home: home,
-                               shell: loginShell).line
+            return PasswdEntry(name: name, passwordField: "x", uid: plan.uid,
+                               gid: plan.gid, gecos: gecos, home: home,
+                               shell: plan.shell).line
         case .sunos414:
-            return PasswdEntry(name: name, passwordField: hash, uid: uid,
-                               gid: usersGID, gecos: gecos, home: home,
-                               shell: loginShell).line
+            return PasswdEntry(name: name, passwordField: hash, uid: plan.uid,
+                               gid: plan.gid, gecos: gecos, home: home,
+                               shell: plan.shell).line
         case .netbsd:
             var e = MasterPasswdEntry()
-            e.name = name; e.passwordField = hash; e.uid = uid; e.gid = usersGID
-            e.gecos = gecos; e.home = home; e.shell = loginShell
+            e.name = name; e.passwordField = hash; e.uid = plan.uid; e.gid = plan.gid
+            e.gecos = gecos; e.home = home; e.shell = plan.shell
             return e.line
         }
     }
@@ -346,26 +497,34 @@ public enum UserAdmin {
     /// runs BEFORE the commit point; the login-enabling record write is last
     /// and atomic. Returns the allocated uid. `progress` gets one short line
     /// per step for the UI transcript.
+    ///
+    /// `plan` is the AddPlan the caller previewed (the Add sheet fetches one
+    /// so what it shows is what runs); nil derives one here. Either way the
+    /// uid is re-checked against the account list read at commit time -- a
+    /// stale previewed uid is silently bumped to the next free one.
     @discardableResult
     public static func addUser(_ req: AddRequest, os: MachineOS,
                                transport: UserAdminTransport,
                                lastChangedDays: Int = daysSinceEpoch(),
+                               plan: AddPlan? = nil,
                                progress: ((String) -> Void)? = nil) throws -> Int {
         if let problem = usernameProblem(req.name) {
             throw UserAdminError.invalidUsername(problem)
         }
 
-        // 1. Read the authoritative account list; refuse duplicates; pick a uid.
+        // 1. Read the authoritative account list and refuse duplicates BEFORE
+        //    learning or adopting a plan (refusals shouldn't probe anything),
+        //    then settle the uid against the list just read -- a stale
+        //    previewed uid is silently bumped to the next free one.
         progress?("Reading the machine's account list\u{2026}")
         let accountsPath = accountsFile(os: os)
         let accounts = try readRecords(accountsPath, transport: transport)
         let names = accounts.map { $0.components(separatedBy: ":").first ?? "" }
         if names.contains(req.name) { throw UserAdminError.userExists(req.name) }
-        let uids = accounts.compactMap { line -> Int? in
-            let f = line.components(separatedBy: ":")
-            return f.count > 2 ? Int(f[2]) : nil
-        }
-        let uid = nextFreeUID(existing: uids)
+        var plan = try plan ?? planAddUser(os: os, transport: transport)
+        let uids = accountFacts(accounts.joined(separator: "\n")).map(\.uid)
+        if uids.contains(plan.uid) { plan.uid = nextFreeUID(existing: uids) }
+        let uid = plan.uid
 
         // Read every record file up front (shadow too, on Solaris) so a
         // half-edited pair is caught before anything is staged.
@@ -377,9 +536,18 @@ public enum UserAdmin {
             }
         }
 
-        // 2. Stage the home from the template stamp (fallible, pre-commit).
-        progress?("Creating the home directory from the template\u{2026}")
-        for cmd in homeCreationCommands(os: os, name: req.name, uid: uid) {
+        // 2. Stage the home (fallible, pre-commit): mkdir, populate with the
+        //    app-side canonical dotfiles, then own it. No guest template
+        //    needed -- real boxes don't have one.
+        let home = plan.homePhysicalPath(name: req.name)
+        progress?("Creating the home directory\u{2026}")
+        try run("mkdir \(home)", transport: transport)
+        progress?("Writing the standard dotfiles\u{2026}")
+        for file in CanonicalDotfiles.files {
+            _ = try transport.writeFile("\(home)/\(file.name)", data: file.data,
+                                        mode: 0o644, user: nil)
+        }
+        for cmd in homeOwnershipCommands(home: home, uid: uid, gid: plan.gid) {
             try run(cmd, transport: transport)
         }
 
@@ -387,7 +555,7 @@ public enum UserAdmin {
         //    file LAST). Each write is atomic and preserves mode/owner.
         for file in recordFiles(os: os) {
             progress?("Writing \(file)\u{2026}")
-            let line = recordLine(os: os, file: file, name: req.name, uid: uid,
+            let line = recordLine(os: os, file: file, name: req.name, plan: plan,
                                   gecos: req.gecos, hash: req.hash,
                                   lastChangedDays: lastChangedDays)
             let updated = appendingRecord(contents[file] ?? "", line: line)
@@ -409,7 +577,6 @@ public enum UserAdmin {
             throw UserAdminError.verifyFailed("the new record didn't read back "
                 + "from \(accountsFile(os: os))")
         }
-        let home = homePhysicalPath(os: os, name: req.name)
         let check = try transport.runCommand("ls -ld \(home)", cwd: nil,
                                              timeoutMs: nil, user: nil)
         guard check.exitCode == 0 else {
@@ -468,16 +635,23 @@ public enum UserAdmin {
         }
 
         if removeHome {
-            // Guard the rm: only the physical path our scheme implies, and only
-            // when the record's own home field agrees (a hand-edited record
-            // pointing somewhere weird never gets an rm -rf).
-            let home = homePhysicalPath(os: os, name: name)
-            if recordedHome == homeRecordPath(name: name) {
+            // Guard the rm: only a "<parent>/<name>" path whose parent is a
+            // home parent this box actually uses -- learned from the other
+            // human accounts, plus the OS-default parents. A hand-edited
+            // record pointing somewhere weird never gets an rm -rf.
+            let others = humanAccounts(accountFacts(content)).filter { $0.name != name }
+            var allowedParents = Set(others.map {
+                ($0.home as NSString).deletingLastPathComponent
+            }.filter { $0.count > 1 })
+            allowedParents.formUnion(["/home", "/export/home"])
+            let parent = (recordedHome as NSString).deletingLastPathComponent
+            if recordedHome.hasSuffix("/\(name)") && allowedParents.contains(parent) {
+                let home = physicalHomeParent(os: os, recordParent: parent) + "/\(name)"
                 progress?("Removing \(home)\u{2026}")
                 try run("rm -rf \(home)", transport: transport)
             } else {
                 progress?("Skipping home removal: the account's home was "
-                    + "\u{201C}\(recordedHome)\u{201D}, not the standard location.")
+                    + "\u{201C}\(recordedHome)\u{201D}, not a standard location.")
             }
         }
         progress?("Done \u{2014} \u{201C}\(name)\u{201D} removed.")

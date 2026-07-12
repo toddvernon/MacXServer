@@ -173,6 +173,7 @@ private struct AddUserSheet: View {
     private var canSubmit: Bool {
         !username.isEmpty && usernameProblem == nil
             && !password.isEmpty && passwordsMatch && !model.busy
+            && model.addPlan != nil
     }
 
     var body: some View {
@@ -204,6 +205,20 @@ private struct AddUserSheet: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Make this the active user (launchers log in as it)",
                        isOn: $setActive)
+                // What the account will be, learned from the machine itself
+                // (uid, group, home parent, shell). Shown before commit so
+                // there are no surprises -- real boxes have their own
+                // conventions.
+                if let plan = model.addPlan {
+                    Text("Will create: \(plan.summary(name: username))")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if !model.addPlanError.isEmpty {
+                    Text(model.addPlanError).font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Sizing up the machine\u{2019}s account conventions\u{2026}")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             .formStyle(.grouped)
 
@@ -306,6 +321,9 @@ final class UsersPanelModel: ObservableObject {
     @Published var showingAdd = false
     @Published var showingSetActive = false
     @Published var setActiveError = ""
+    /// The learned conventions the Add sheet previews and submitAdd executes.
+    @Published var addPlan: UserAdmin.AddPlan?
+    @Published var addPlanError = ""
 
     let activeUserProvider: () -> String
     private let osProvider: () -> MachineOS?
@@ -390,8 +408,44 @@ final class UsersPanelModel: ObservableObject {
 
     // MARK: Add
 
-    func beginAdd() { showingAdd = true; transcript = "" }
+    func beginAdd() {
+        showingAdd = true
+        transcript = ""
+        fetchAddPlan()
+    }
     func cancelAdd() { if !busy { showingAdd = false } }
+
+    /// Learn the machine's account conventions (uid, group, home parent,
+    /// shell) so the sheet can show what it's about to create. Read-only.
+    private func fetchAddPlan() {
+        guard let os = osProvider() else {
+            addPlanError = "This machine\u{2019}s OS isn\u{2019}t known, so "
+                + "users can\u{2019}t be managed."
+            return
+        }
+        addPlan = nil
+        addPlanError = ""
+        busy = true
+        let secret = secretProvider(), host = hostProvider(), port = portProvider()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let outcome: Result<UserAdmin.AddPlan, Error>
+            let client = HeliosClient(host: host, port: port, timeout: 60, secret: secret)
+            defer { client.close() }
+            do {
+                try client.connect()
+                _ = try client.hello()
+                outcome = .success(try UserAdmin.planAddUser(os: os, transport: client))
+            } catch { outcome = .failure(error) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.busy = false
+                switch outcome {
+                case .success(let plan): self.addPlan = plan
+                case .failure(let error): self.addPlanError = Self.describe(error)
+                }
+            }
+        }
+    }
 
     func submitAdd(username: String, fullName: String, password: String,
                    setActive: Bool) {
@@ -407,6 +461,7 @@ final class UsersPanelModel: ObservableObject {
         // Keychain, via onSetActiveUser, keeps it).
         let hash = UserAdmin.desHash(password: password)
         let req = UserAdmin.AddRequest(name: username, gecos: fullName, hash: hash)
+        let plan = addPlan   // the previewed plan is the one that runs
         let secret = secretProvider(), host = hostProvider(), port = portProvider()
         let relay = TranscriptRelay(self)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -417,6 +472,7 @@ final class UsersPanelModel: ObservableObject {
                 try client.connect()
                 _ = try client.hello()
                 let uid = try UserAdmin.addUser(req, os: os, transport: client,
+                                                plan: plan,
                                                 progress: { relay.post($0) })
                 outcome = .success(uid)
             } catch { outcome = .failure(error) }

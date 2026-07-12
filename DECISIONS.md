@@ -1588,6 +1588,40 @@ selects root to do admin, so the UI says it out loud instead of leaving
 it implicit -- the active user is only about what launchers log in as,
 not about what admin runs as.
 
+## 2026-07-11: Add-user learns the box's conventions; templates live app-side
+
+Todd's field test on ipc (a real IPC over Helios) broke the template
+assumption within a day of shipping: `cp -r /home/template` failed
+because real hardware never got the convergence staging. The failure was
+clean (pre-commit, no record written -- the ordering design held), but
+the fix is a rethink, proposed by Todd and built same day (mechanics in
+HELIOS_USER_MANAGEMENT.md, decision #6):
+
+**The curated dotfiles are embedded in the app** (byte-exact base64 of
+SPARCplug guest-config/dot.{cshrc,login,profile}; a literal ESC/BEL in
+the cshrc prompt block rules out string literals) and written into the
+new home over the existing write_file verb. The guest template account
+is now vestigial everywhere -- strip it from published masters at E1.
+
+**The account's shape is derived from the box, not assumed**:
+`planAddUser` reads passwd + group and probes for tcsh (read-only),
+then derives uid (first free >= 1001), gid (most common human gid,
+system gids < 10 never count -- ipc's real passwd had a user parked in
+gid 1/daemon; fallback users -> staff -> honest refusal), home parent
+(where the box's humans actually live: /home2 on ipc; ties prefer
+/home), and shell (tcsh if present, else /bin/csh). The Add sheet
+previews the plan before anything commits, and the previewed plan is
+the one that runs. The delete rm-guard accepts the same learned parents
+and no others.
+
+**No OS re-validation at add time** (Todd's pushback, accepted): the
+Users chip already gates on the agent answering + a known OS; probing
+uname again would re-litigate established knowledge.
+
+Rejected along the way: a guest-side degradation ladder (probe for the
+template, fall back to skel dirs -- 4.1.4 has none, and it keeps the
+staging on the guest where real boxes can't be trusted to have it).
+
 ---
 
 ## Decisions still to make
