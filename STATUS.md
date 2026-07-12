@@ -57,13 +57,20 @@ separate (a compound set+read once wedged NetBSD). ClockAdmin.swift +
 ClockPanelView/ClockWindowController, gated like Users. 15 new core
 tests; DECISIONS 2026-07-12 (incl. rejected rdate-cron alternative --
 guest-side moving parts + boot-hang reach). xcodegen re-run.
+**Field-tested by Todd same evening: works, dialog presents both
+times.** Follow-ups from the test: both clocks now tick in lockstep
+(TimelineView projects the snapshot forward, so the skew reads
+constant; the set always uses click-time Mac truth regardless --
+0d3a2e7), and the Admin Agents card reads "Sync Clock" (028dbd5).
 
 ## What's working / what's broken
 
 - swift build + xcodebuild clean; swift test **1570 tests, 0 failures**.
-- Clock panel NOT yet eyeballed in the running app (needs an Xcode
-  rebuild; all clocks currently read in-sync, so knock a VM clock
-  sideways to see the interesting path).
+- Clock panel eyeballed by Todd: working. The Force Set warning path
+  hasn't been seen live (needs a 4.1.4 box with a wrong YEAR and a
+  stock date -- every box in the fleet is patched now, so exercising it
+  means temporarily pointing the panel at a date.FCS box or trusting
+  the fail-closed tests).
 - Still NOT eyeballed from before: menu-bar reorg, download flow,
   first-run choreography (the standing manual GUI pass).
 - ss5 heliosAgent env still carries harmless residue (REMOTEHOST, PWD
@@ -72,8 +79,8 @@ guest-side moving parts + boot-hang reach). xcodegen re-run.
 ## What's next
 
 1. **Todd's manual GUI pass** (carried): menu-bar reorg, download flow
-   (SPARCPLUG_CATALOG_URL), first-run choreography -- now plus the new
-   Clock panel (normal set + the Force Set warning path).
+   (SPARCPLUG_CATALOG_URL), first-run choreography. (Clock panel DONE
+   -- verified working in the field this evening.)
 2. **CanonicalDotfiles DISPLAY decision** (new, SHORTCUTS): strip or
    substitute the slirp DISPLAY when add-user targets an external host.
 3. Catalog data side: E1 baseline masters -> build-catalog.sh -> upload;
@@ -85,7 +92,9 @@ guest-side moving parts + boot-hang reach). xcodegen re-run.
 
 ## Committed / push state
 
-- X repo: dd66491 (clock admin agent) committed to main, NOT pushed.
+- X repo: today's arc on main, NOT pushed: dd66491 (clock admin agent)
+  -> bcba707 (STATUS roll) -> 0d3a2e7 (ticking clocks) -> 028dbd5
+  (Sync Clock label) + this roll.
 - SPARCplug / cx repos: no changes.
 
 ## Switching Macs
