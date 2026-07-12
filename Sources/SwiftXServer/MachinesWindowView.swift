@@ -498,7 +498,7 @@ private struct MachineOverviewPage: View {
                     Button {
                         model.onSyncClock?(row.id)
                     } label: {
-                        Label("Clock", systemImage: "clock")
+                        Label("Sync Clock", systemImage: "clock")
                             .labelStyle(.titleAndIcon)
                     }
                     .buttonStyle(.bordered)
