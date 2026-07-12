@@ -71,11 +71,21 @@ struct ClockPanelView: View {
     private var readingBox: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let r = model.reading {
-                LabeledContent("This Mac") {
-                    Text(Self.timeString(r.checkedAt))
-                }
-                LabeledContent(machineName) {
-                    Text(Self.timeString(r.guestDate))
+                // Both clocks tick: the Mac time is live, and the machine's
+                // is the snapshot projected forward by the same elapsed time,
+                // so the two count up together and the skew reads constant
+                // (which is the truth -- both clocks advance at 1x; the set
+                // itself always uses click-time, never these display values).
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let elapsed = context.date.timeIntervalSince(r.checkedAt)
+                    VStack(alignment: .leading, spacing: 6) {
+                        LabeledContent("This Mac") {
+                            Text(Self.timeString(context.date))
+                        }
+                        LabeledContent(machineName) {
+                            Text(Self.timeString(r.guestDate.addingTimeInterval(elapsed)))
+                        }
+                    }
                 }
                 Text(model.skewSentence)
                     .font(.callout)
