@@ -1,136 +1,98 @@
-# Status 2026-07-11 (night roll)
+# Status 2026-07-12
 
-## Headline (late addition): add-user reworked to LEARN the box's
-conventions -- Todd's ipc field test broke the template assumption
-(real boxes have no /home/template), so the curated dotfiles moved
-app-side and uid/gid/home-parent/shell are now derived from the box's
-own passwd/group and previewed in the Add sheet before commit. Suite
-1555 green. Earlier today: the active-user model (below).
-
-## Headline: the active-user model is settled and built. One active user
-per machine (machine.user + telnet Keychain); launchers follow it until
-switched; switching is a Users-panel action ("Set Active...") gated on
-proving you know the account's password, verified host-side against the
-guest's stored DES hash. The panel also now states that admin runs as
-root over the admin connection. Suite green at 1544. Yesterday's big
-manual-GUI-pass item still stands and has grown: the Set Active flow is
-on the checklist too.
+## Headline: fleet ops day -- color xterm everywhere, the 4.1.4
+date-year trap closed (Y2K patches found + deployed + reboot-proven on
+real hardware), every clock synced, and a new Clock admin agent in the
+app (dd66491) that makes future syncs a button with a Y2K-probe-gated
+Force Set path.
 
 ## What happened this session
 
-**Active-user model designed + built** (commit 45498d5; DECISIONS
-2026-07-11, HELIOS_USER_MANAGEMENT.md decision #5). The conversation
-started from "the add-sheet checkbox is the only way to point launchers
-at an account"; settled on one active user per machine, switchable on
-the fly with password proof, and rejected per-launcher user fields
-(Keychain/UI multiplication for a mostly-Todd problem; can return later
-as an optional override) and ask-at-launch (kills one-click launchers).
+**Color xterm deployed fleet-wide.** The R6 ANSI-color xterm from the
+sunos VM image copied over Helios to ipc/ipx/ss1/ss5 at
+/usr/openwin/bin/xterm (sum 37852 208 verified per box), distro binary
+preserved as xterm.orig everywhere; the VM's old `xterm.old` renamed to
+match. Verified loadable on all four (R6 shared libs present).
 
-- **Core:** `UserAdmin.verifyPassword` -- reads the hash-bearing file
-  per OS (Solaris /etc/shadow, 4.1.4 /etc/passwd, NetBSD
-  /etc/master.passwd) over Helios as root, re-crypts the entered
-  password with the stored salt host-side, compares. Cleartext never on
-  the wire; locked fields (`*`, `*LK*`, `NP`) never verify, so template
-  can't be made active. Plus `hashFile(os:)`, `storedHash(in:name:)`,
-  `passwordMatches`.
-- **Panel:** "Set Active..." button (dimmed for template and the
-  already-active account; root allowed on purpose) opens a password
-  sheet; wrong password stays on the sheet with an inline error, right
-  password adopts via the existing `adoptMachineLogin` (machine.user +
-  telnet Keychain slot). Badge renamed "launchers" -> "active"; the
-  add-sheet toggle is now "Make this the active user (launchers log in
-  as it)"; the delete warning speaks the same language.
-- **Root note:** panel header now says changes are made as root over the
-  admin connection -- Todd's call that it's unorthodox we never make you
-  select root for admin, so the UI states it instead of leaving it
-  implicit.
-- **Tests:** 6 new core tests (per-OS hash-file geometry, hash
-  extraction prefix discipline, pinned crypt vector + DES 8-char
-  truncation, locked-field refusals, per-OS verify round trips pinning
-  exactly one file read, unknown-user error). Full suite 1544 / 0
-  failures.
+**ss5 DISPLAY residue cleaned + upstream issue ledgered.** ss5's
+qcow2-heritage dotfiles set `DISPLAY=10.0.2.2:0` (slirp gateway) for
+root+tvernon; its heliosAgent had inherited it, making display-less X
+clients hang in TCP connect (looked like a bad binary). Commented out
+in all four dotfiles, agent restarted clean. The same lines turned up
+in fred's dotfiles on real ipc -- written by app-side add-user, because
+CanonicalDotfiles hardcodes the slirp DISPLAY. Fred fixed by hand;
+**SHORTCUTS gained "Canonical dotfiles on real hardware"** (the fix --
+strip/substitute DISPLAY for external hosts at plan time -- needs a
+decision on the byte-exact-embed invariant). NOT residue: ss5 runs a
+real console X session (X :0 + mwm + 3 xterms); left alone.
 
-**Set Active field-tested by Todd, one real bug found + fixed.** Adding
-fred/kemosabe, launching an xterm as fred: worked first try. Switching
-BACK to tvernon (same password): failed to verify. Root cause: tvernon
-and root on the NetBSD image predate UserAdmin and carry **NetBSD
-sha1crypt** hashes (`$sha1$rounds$salt$digest`, the installer's
-passwd(1) default), and passwordMatches only spoke 13-char DES. Fix:
-`UserAdmin.sha1Crypt` ported from NetBSD lib/libcrypt/crypt-sha1.c
-(iterated HMAC-SHA1 via CommonCrypto, crypt64 output with the
-byte-0-padded tail quirk), pinned against 3 vectors minted by the live
-guest's own pwhash(1), and double-checked against tvernon's real hash.
-Unknown modular-crypt formats ($1$, $2a$) now throw an honest
-"can't check this hash format" instead of a false "wrong password".
-Solaris/4.1.4 are DES-only, so this was NetBSD-specific. 3 more core
-tests (suite 1547 / 0).
+**The 4.1.4 date-year trap is closed.** Stock /bin/date can't set a
+year >= 2000 (BugId 1086103) and a bad year bricks the TOD (recovery =
+boot install media). Found Sun's fix -- **105143-03** (/bin/date) +
+106182-02 (/usr/5bin/date) + 105147-01 (eeprom) -- on the live ICM
+sunsite mirror, md5-verified, staged in
+`~/Dropbox/dev/SPARCplug/patches/sunos414-y2k/`. Deployed both date
+patches to the VM + all six real 4.1.4 boxes (ipc, ipx, ipx2, ss1, ss2,
+ss5; originals kept as date.FCS, patched sums 26729 8 / 05997 16).
+Proven with the two-reboot protocol: baseline reboot, year-set with the
+patched date, reboot again -- clean on the VM and on **real ipx** (real
+Mostek round-trip, back in ~75s both times).
 
-**Add-user rework: app-side templates + learned conventions** (evening;
-DECISIONS 2026-07-11 second entry, HELIOS_USER_MANAGEMENT decision #6).
-Todd added fred on ipc (real IPC): failed at `cp -r /home/template` --
-real hardware never got the convergence staging. Clean pre-commit
-failure (ordering design held), but the strategy was image-specific.
-Rework, ratified by Todd:
-- CanonicalDotfiles.swift: guest-config/dot.{cshrc,login,profile}
-  embedded byte-exact (base64; the cshrc prompt block carries literal
-  ESC/BEL). Homes are staged mkdir + write_file + chown; the guest
-  template account is vestigial (strip from masters at E1).
-- UserAdmin.planAddUser: derives uid / gid / home parent / shell from
-  the box's passwd + group + a tcsh probe. Learned live against ipc:
-  homes at /home2 (not /home), and its one countable human gid is 1
-  (daemon -- sloppy old account), which drove the "system gids < 10
-  never count" guard; ipc's plan resolves to uid 1001 / staff (10) /
-  /home2/<user> / tcsh.
-- Add sheet previews the plan ("Will create: uid ... group ... home
-  ...") before commit; the previewed plan is the one that executes.
-  Delete's rm-guard accepts the learned parents too.
-- 8 new/reworked core tests; live test now round-trips the .cshrc
-  bytes. xcodegen re-run for the new file.
-- **Field-verified by Todd on ipc (real SunOS 4.1.4) same evening:**
-  add-user works end-to-end on real hardware. The learned-conventions
-  path is proven outside the images.
+**Every fleet clock synced to the Mac** using the safe 8-digit no-year
+`date -u mmddhhmm` form (ss5 was -7d, ipc +57m, ipx +1h45m, ss2 -2h10m,
+ipx2 +10m). Gotcha discovered: a big forward jump makes the in-flight
+helios run_command report timed_out (agent deadline uses guest wall
+clock) -- harmless, verify with a fresh request.
 
-Also: xcodegen re-run this morning (no project.yml change today; the
-.xcodeproj was regenerated on request after yesterday's pull).
+**Clock admin agent shipped (dd66491).** Overview -> Helios Admin
+Agents -> **Clock**: shows plain-English skew (sysinfo.time vs Mac) and
+sets the guest clock as root, Mac = truth. Per-OS grammar validated
+live on all three guests (BSD no-year default everywhere; year forms
+only when the year is wrong; SVR4 ccyy-suffix on 2.6). 4.1.4 year
+changes gate on a live `date '+%Y'` probe of the box's own binary --
+probe fails => the button becomes **Force Set** behind an explicit
+unbootable-risk warning (Todd's call). Fail-closed core throws before
+any set reaches the box; read-back verify (15s tolerance); each request
+separate (a compound set+read once wedged NetBSD). ClockAdmin.swift +
+ClockPanelView/ClockWindowController, gated like Users. 15 new core
+tests; DECISIONS 2026-07-12 (incl. rejected rdate-cron alternative --
+guest-side moving parts + boot-hang reach). xcodegen re-run.
 
 ## What's working / what's broken
 
-- swift build clean; swift test **1555 tests, 0 failures**.
-- Set Active fully verified in the real app by Todd against the running
-  NetBSD guest: add fred -> xterm launches as fred, AND the switch back
-  to tvernon works with the sha1crypt fix. Both hash formats proven in
-  the field.
-- Still NOT eyeballed in the real app: yesterday's list (menu-bar reorg,
-  download flow, first-run choreography).
-- The Download button still fails cleanly until the catalog is uploaded
-  (by design; SPARCPLUG_CATALOG_URL=file://... to test).
+- swift build + xcodebuild clean; swift test **1570 tests, 0 failures**.
+- Clock panel NOT yet eyeballed in the running app (needs an Xcode
+  rebuild; all clocks currently read in-sync, so knock a VM clock
+  sideways to see the interesting path).
+- Still NOT eyeballed from before: menu-bar reorg, download flow,
+  first-run choreography (the standing manual GUI pass).
+- ss5 heliosAgent env still carries harmless residue (REMOTEHOST, PWD
+  from an old telnet session); clears on next boot.
 
 ## What's next
 
-1. **Todd's manual GUI pass** (carried from 07-10): menu-bar reorg,
-   download flow (local catalog via SPARCPLUG_CATALOG_URL), and first-run
-   choreography. Users-panel items all DONE: add-user verified on real
-   ipc 4.1.4, Set Active verified both directions on NetBSD.
-2. Data side of the catalog: E1 baseline masters -> build-catalog.sh ->
-   upload to macxserver.com/images/. Settle the root-password policy for
-   published masters (the one open decision).
-3. Cut v0.9.9 -- proves the A5/A6 release-pipeline work end-to-end.
-4. UserAdmin live test against Solaris 2.6 + 4.1.4 (one env var each
-   when those guests are booted).
-5. Legacy cleanup (own decision): retire orphaned DefaultLaunchers.swift.
+1. **Todd's manual GUI pass** (carried): menu-bar reorg, download flow
+   (SPARCPLUG_CATALOG_URL), first-run choreography -- now plus the new
+   Clock panel (normal set + the Force Set warning path).
+2. **CanonicalDotfiles DISPLAY decision** (new, SHORTCUTS): strip or
+   substitute the slirp DISPLAY when add-user targets an external host.
+3. Catalog data side: E1 baseline masters -> build-catalog.sh -> upload;
+   root-password policy for published masters. (The sunos414 master now
+   carries the Y2K date patches + xterm.orig convention.)
+4. Cut v0.9.9 (A5/A6 release pipeline proof).
+5. UserAdmin live test against Solaris 2.6 + 4.1.4; retire orphaned
+   DefaultLaunchers.swift.
 
 ## Committed / push state
 
-- X repo: ALL PUSHED (origin/main at 06ef180 after tonight's push).
-  Today's arc: 541245c (yesterday's stranded eos roll) -> 45498d5
-  (active-user model + Set Active) -> 1794cbf (sha1crypt fix) ->
-  c2aaa4b (learned-conventions add-user, app-side dotfiles) plus the
-  STATUS rolls (b324cdd, 8ac08f8, 06ef180).
-- SPARCplug: in sync with origin. cx repos: no changes.
+- X repo: dd66491 (clock admin agent) committed to main, NOT pushed.
+- SPARCplug / cx repos: no changes.
 
 ## Switching Macs
 
-- Swift sources changed: rebuild in Xcode on the other Mac after pulling.
-- The NetBSD guest is STILL RUNNING under this Mac's Xcode debug build
-  (lock held at images/netbsd/netbsd-boot.qcow2); shut it down before
-  /eos if wrapping up.
+- Swift sources + xcodeproj changed: pull, then rebuild in Xcode.
+- Three VMs running under this Mac's Xcode debug build (solaris26,
+  sunos414, netbsd; locks held). The sunos414 image gained today's
+  patches (date + date.FCS, xterm.orig rename) -- next quit backs it up.
+- Y2K patch tarballs are in Dropbox (SPARCplug/patches/sunos414-y2k/),
+  so they ride to the other Mac automatically.
