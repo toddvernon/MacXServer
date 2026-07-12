@@ -86,6 +86,9 @@ Rework, ratified by Todd:
   Delete's rm-guard accepts the learned parents too.
 - 8 new/reworked core tests; live test now round-trips the .cshrc
   bytes. xcodegen re-run for the new file.
+- **Field-verified by Todd on ipc (real SunOS 4.1.4) same evening:**
+  add-user works end-to-end on real hardware. The learned-conventions
+  path is proven outside the images.
 
 Also: xcodegen re-run this morning (no project.yml change today; the
 .xcodeproj was regenerated on request after yesterday's pull).
@@ -106,9 +109,8 @@ Also: xcodegen re-run this morning (no project.yml change today; the
 
 1. **Todd's manual GUI pass** (carried from 07-10): menu-bar reorg,
    download flow (local catalog via SPARCPLUG_CATALOG_URL), first-run
-   choreography, the Set Active switch back to tvernon (sha1crypt fix),
-   and retry add-fred on ipc -- the plan preview should read "uid 1001
-   · group staff (10) · home /home2/fred · tcsh".
+   choreography, and the Set Active switch back to tvernon (sha1crypt
+   fix). Add-user on ipc: DONE, verified working on real 4.1.4.
 2. Data side of the catalog: E1 baseline masters -> build-catalog.sh ->
    upload to macxserver.com/images/. Settle the root-password policy for
    published masters (the one open decision).
