@@ -96,10 +96,10 @@ Also: xcodegen re-run this morning (no project.yml change today; the
 ## What's working / what's broken
 
 - swift build clean; swift test **1555 tests, 0 failures**.
-- Set Active verified in the real app by Todd against the running NetBSD
-  guest: add fred -> xterm launches as fred. The switch-back-to-tvernon
-  path needs one more try after an Xcode rebuild picks up the sha1crypt
-  fix.
+- Set Active fully verified in the real app by Todd against the running
+  NetBSD guest: add fred -> xterm launches as fred, AND the switch back
+  to tvernon works with the sha1crypt fix. Both hash formats proven in
+  the field.
 - Still NOT eyeballed in the real app: yesterday's list (menu-bar reorg,
   download flow, first-run choreography).
 - The Download button still fails cleanly until the catalog is uploaded
@@ -108,9 +108,9 @@ Also: xcodegen re-run this morning (no project.yml change today; the
 ## What's next
 
 1. **Todd's manual GUI pass** (carried from 07-10): menu-bar reorg,
-   download flow (local catalog via SPARCPLUG_CATALOG_URL), first-run
-   choreography, and the Set Active switch back to tvernon (sha1crypt
-   fix). Add-user on ipc: DONE, verified working on real 4.1.4.
+   download flow (local catalog via SPARCPLUG_CATALOG_URL), and first-run
+   choreography. Users-panel items all DONE: add-user verified on real
+   ipc 4.1.4, Set Active verified both directions on NetBSD.
 2. Data side of the catalog: E1 baseline masters -> build-catalog.sh ->
    upload to macxserver.com/images/. Settle the root-password policy for
    published masters (the one open decision).
