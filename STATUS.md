@@ -121,10 +121,11 @@ Also: xcodegen re-run this morning (no project.yml change today; the
 
 ## Committed / push state
 
-- X repo: 2 commits ahead of origin, NOT pushed: 541245c (yesterday's
-  eos STATUS roll -- the eos push evidently didn't happen; flagged at
-  sos, Todd hasn't called the push yet) and 45498d5 (active-user model).
-  Plus this STATUS roll on top. Push at /eos or on request.
+- X repo: ALL PUSHED (origin/main at 06ef180 after tonight's push).
+  Today's arc: 541245c (yesterday's stranded eos roll) -> 45498d5
+  (active-user model + Set Active) -> 1794cbf (sha1crypt fix) ->
+  c2aaa4b (learned-conventions add-user, app-side dotfiles) plus the
+  STATUS rolls (b324cdd, 8ac08f8, 06ef180).
 - SPARCplug: in sync with origin. cx repos: no changes.
 
 ## Switching Macs
