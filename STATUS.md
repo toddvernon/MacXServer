@@ -1,4 +1,20 @@
-# Status 2026-07-12
+# Status 2026-07-13
+
+## Today so far: Overview leads with identity (ba94530). Todd's call:
+so much of the UI hinges on host + active user that the account belongs
+first on the Overview even though it's technically a setting. The
+detail header now reads "ipc (tvernon)" and an "Active user tvernon
+[Change...]" row sits at the top of the page; Change... opens the Users
+panel (the one switching mechanism, password proof intact -- no second
+path), gated like the Users card. Hostname stays editable in Settings:
+Overview is where you orient, Settings is where you change it.
+MachineRow gains activeUser. Suite 1570 green. Not yet eyeballed in the
+running app. Release-readiness picture (talked through last night):
+remaining v1 items are E1+catalog (root-password policy is the open
+decision), cut v0.9.9, A6 clean-Mac acceptance, Restore-from-Backup UI,
+and the standing GUI pass.
+
+# Rolled from 2026-07-12 (last night)
 
 ## Headline: fleet ops day -- color xterm everywhere, the 4.1.4
 date-year trap closed (Y2K patches found + deployed + reboot-proven on
@@ -92,9 +108,10 @@ constant; the set always uses click-time Mac truth regardless --
 
 ## Committed / push state
 
-- X repo: today's arc on main, NOT pushed: dd66491 (clock admin agent)
-  -> bcba707 (STATUS roll) -> 0d3a2e7 (ticking clocks) -> 028dbd5
-  (Sync Clock label) + this roll.
+- X repo: the whole two-day arc on main, NOT pushed: dd66491 (clock
+  admin agent) -> bcba707 -> 0d3a2e7 (ticking clocks) -> 028dbd5 (Sync
+  Clock label) -> 19290c2 -> ba94530 (identity-first Overview) + this
+  roll.
 - SPARCplug / cx repos: no changes.
 
 ## Switching Macs
