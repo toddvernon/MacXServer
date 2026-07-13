@@ -178,9 +178,16 @@ private struct MachineDetailContainer: View {
         VStack(spacing: 0) {
             HStack {
                 // The machine name outranks the blue section headers (title3),
-                // so it gets title2.
+                // so it gets title2. The active user rides along in the
+                // header -- identity is host + account (Todd, 2026-07-13).
                 Text(machine.name.isEmpty ? "Untitled" : machine.name)
                     .font(.title2.weight(.semibold)).lineLimit(1)
+                if !machine.user.isEmpty {
+                    Text("(\(machine.user))")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 Spacer()
                 Picker("", selection: $tab) {
                     Text("Overview").tag(DetailTab.overview)
@@ -229,6 +236,7 @@ private struct MachineOverviewPage: View {
                     if model.isFirstRun && row.canDownload {
                         firstRunBubble(row)
                     }
+                    identityLine(row)
                     statusLine(row)
                     bootBar(row)
                     lifecycle(row)
@@ -267,6 +275,35 @@ private struct MachineOverviewPage: View {
                     in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10)
             .strokeBorder(Color.accentColor.opacity(0.25)))
+    }
+
+    /// Identity leads the page: the active user is the most consequential
+    /// per-machine fact (every launcher logs in as it), so it sits first even
+    /// though it's technically a setting (Todd, 2026-07-13). Change… routes
+    /// through the Users panel -- the ONE mechanism for switching, with its
+    /// password proof (DECISIONS 2026-07-11) -- never a second path.
+    private func identityLine(_ row: MachineRow) -> some View {
+        HStack(spacing: 8) {
+            Text("Active user")
+                .foregroundStyle(.secondary)
+            Text(row.activeUser.isEmpty ? "none set" : row.activeUser)
+                .font(.system(size: 13, weight: .medium))
+            Button("Change\u{2026}") {
+                model.onManageUsers?(row.id)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!row.canManageUsers)
+            .help(row.canManageUsers
+                  ? "Switch the account launchers log in as (asks for the "
+                  + "account's password)"
+                  : (row.isEmulated
+                     ? "Available once the machine is running and ready"
+                     : "Available once the machine answers a Helios check "
+                     + "and its OS is known (set both in Settings)"))
+            Spacer()
+        }
+        .font(.system(size: 13))
     }
 
     /// No dot here (the master list carries it); the thermometer below is the

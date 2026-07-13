@@ -478,7 +478,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return MachineRow(
             id: m.id, name: m.name, isEmulated: isEmulated,
             subtitle: subtitle, statusText: statusText, stateWord: stateWord,
-            dot: dot, progress: progress, launcherNote: launcherNote,
+            dot: dot, progress: progress, activeUser: m.user,
+            launcherNote: launcherNote,
             systemLine: systemLine(for: m, ready: ready),
             showsLifecycle: isEmulated,
             canStart: (state == .stopped || state == .notInstalled)

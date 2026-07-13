@@ -45,6 +45,11 @@ struct MachineRow: Identifiable, Equatable {
     let dot: MachineStatusDot
     let progress: Double?       // boot progress 0...1 when booting
 
+    /// The machine's ACTIVE USER (machine.user): the account launchers log in
+    /// as. Leads the Overview page -- identity is host + account. Empty =
+    /// none set yet.
+    let activeUser: String
+
     /// One caption under the Overview's launcher chips saying why any of them
     /// are dimmed ("machine unreachable", "Helios launchers need the agent").
     /// nil = nothing dimmed, no note.
