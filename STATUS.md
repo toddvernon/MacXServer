@@ -1,106 +1,63 @@
-# Status 2026-07-13
+# Status 2026-07-14
 
-## Today so far: Overview leads with identity (ba94530). Todd's call:
-so much of the UI hinges on host + active user that the account belongs
-first on the Overview even though it's technically a setting. The
-detail header now reads "ipc (tvernon)" and an "Active user tvernon
-[Change...]" row sits at the top of the page; Change... opens the Users
-panel (the one switching mechanism, password proof intact -- no second
-path), gated like the Users card. Hostname stays editable in Settings:
-Overview is where you orient, Settings is where you change it.
-MachineRow gains activeUser. Suite 1570 green. Not yet eyeballed in the
-running app. Release-readiness picture (talked through last night):
-remaining v1 items are E1+catalog (root-password policy is the open
-decision), cut v0.9.9, A6 clean-Mac acceptance, Restore-from-Backup UI,
-and the standing GUI pass.
+## Today: Overview page restructured into titled sections (Todd's call).
+The identity row and the machine state block now sit under proper
+MachineSectionHeader titles like the Launchers/Admin Agents sections
+always had: **Active User** (user field + Change... button inset under
+it, inline "Active user" label dropped since the header carries it) and
+**Target Machine** (status line + boot thermometer + lifecycle buttons,
+all inset 16pt). The status line under Target Machine now leads with
+the machine name so it reads as a sentence: "NetBSD Running", "ipc
+Reachable". Pure view-layer change in MachinesWindowView.swift, no
+model changes. swift build clean. NOT yet eyeballed in the running app
+(joins the standing GUI pass, along with yesterday's identity-first
+header).
 
-# Rolled from 2026-07-12 (last night)
+# Rolled from 2026-07-13
 
-## Headline: fleet ops day -- color xterm everywhere, the 4.1.4
-date-year trap closed (Y2K patches found + deployed + reboot-proven on
-real hardware), every clock synced, and a new Clock admin agent in the
-app (dd66491) that makes future syncs a button with a Y2K-probe-gated
-Force Set path.
+## Identity-first Overview shipped (ba94530): detail header reads
+"ipc (tvernon)", Active user row leads the page, Change... opens the
+Users panel (the one switching mechanism, password proof intact).
+Hostname stays editable in Settings. Suite was 1570 green.
+Release-readiness picture: remaining v1 items are E1+catalog
+(root-password policy is the open decision), cut v0.9.9, A6 clean-Mac
+acceptance, Restore-from-Backup UI, and the standing GUI pass.
 
-## What happened this session
+# Rolled from 2026-07-12 (fleet ops day, condensed)
 
-**Color xterm deployed fleet-wide.** The R6 ANSI-color xterm from the
-sunos VM image copied over Helios to ipc/ipx/ss1/ss5 at
-/usr/openwin/bin/xterm (sum 37852 208 verified per box), distro binary
-preserved as xterm.orig everywhere; the VM's old `xterm.old` renamed to
-match. Verified loadable on all four (R6 shared libs present).
-
-**ss5 DISPLAY residue cleaned + upstream issue ledgered.** ss5's
-qcow2-heritage dotfiles set `DISPLAY=10.0.2.2:0` (slirp gateway) for
-root+tvernon; its heliosAgent had inherited it, making display-less X
-clients hang in TCP connect (looked like a bad binary). Commented out
-in all four dotfiles, agent restarted clean. The same lines turned up
-in fred's dotfiles on real ipc -- written by app-side add-user, because
-CanonicalDotfiles hardcodes the slirp DISPLAY. Fred fixed by hand;
-**SHORTCUTS gained "Canonical dotfiles on real hardware"** (the fix --
-strip/substitute DISPLAY for external hosts at plan time -- needs a
-decision on the byte-exact-embed invariant). NOT residue: ss5 runs a
-real console X session (X :0 + mwm + 3 xterms); left alone.
-
-**The 4.1.4 date-year trap is closed.** Stock /bin/date can't set a
-year >= 2000 (BugId 1086103) and a bad year bricks the TOD (recovery =
-boot install media). Found Sun's fix -- **105143-03** (/bin/date) +
-106182-02 (/usr/5bin/date) + 105147-01 (eeprom) -- on the live ICM
-sunsite mirror, md5-verified, staged in
-`~/Dropbox/dev/SPARCplug/patches/sunos414-y2k/`. Deployed both date
-patches to the VM + all six real 4.1.4 boxes (ipc, ipx, ipx2, ss1, ss2,
-ss5; originals kept as date.FCS, patched sums 26729 8 / 05997 16).
-Proven with the two-reboot protocol: baseline reboot, year-set with the
-patched date, reboot again -- clean on the VM and on **real ipx** (real
-Mostek round-trip, back in ~75s both times).
-
-**Every fleet clock synced to the Mac** using the safe 8-digit no-year
-`date -u mmddhhmm` form (ss5 was -7d, ipc +57m, ipx +1h45m, ss2 -2h10m,
-ipx2 +10m). Gotcha discovered: a big forward jump makes the in-flight
-helios run_command report timed_out (agent deadline uses guest wall
-clock) -- harmless, verify with a fresh request.
-
-**Clock admin agent shipped (dd66491).** Overview -> Helios Admin
-Agents -> **Clock**: shows plain-English skew (sysinfo.time vs Mac) and
-sets the guest clock as root, Mac = truth. Per-OS grammar validated
-live on all three guests (BSD no-year default everywhere; year forms
-only when the year is wrong; SVR4 ccyy-suffix on 2.6). 4.1.4 year
-changes gate on a live `date '+%Y'` probe of the box's own binary --
-probe fails => the button becomes **Force Set** behind an explicit
-unbootable-risk warning (Todd's call). Fail-closed core throws before
-any set reaches the box; read-back verify (15s tolerance); each request
-separate (a compound set+read once wedged NetBSD). ClockAdmin.swift +
-ClockPanelView/ClockWindowController, gated like Users. 15 new core
-tests; DECISIONS 2026-07-12 (incl. rejected rdate-cron alternative --
-guest-side moving parts + boot-hang reach). xcodegen re-run.
-**Field-tested by Todd same evening: works, dialog presents both
-times.** Follow-ups from the test: both clocks now tick in lockstep
-(TimelineView projects the snapshot forward, so the skew reads
-constant; the set always uses click-time Mac truth regardless --
-0d3a2e7), and the Admin Agents card reads "Sync Clock" (028dbd5).
+Color xterm deployed fleet-wide (ipc/ipx/ss1/ss5, distro kept as
+xterm.orig). ss5 DISPLAY residue cleaned; CanonicalDotfiles hardcoding
+the slirp DISPLAY for external hosts is a SHORTCUTS entry needing a
+decision. The 4.1.4 date-year trap is closed: Y2K date patches
+(105143-03 + 106182-02) staged in Dropbox
+(SPARCplug/patches/sunos414-y2k/), deployed to the VM + all six real
+4.1.4 boxes, reboot-proven on the VM and real ipx. Every fleet clock
+synced. Clock admin agent shipped (dd66491) with Y2K-probe-gated Force
+Set; field-tested by Todd, both clocks tick in lockstep (0d3a2e7),
+card reads "Sync Clock" (028dbd5). DECISIONS 2026-07-12.
 
 ## What's working / what's broken
 
-- swift build + xcodebuild clean; swift test **1570 tests, 0 failures**.
-- Clock panel eyeballed by Todd: working. The Force Set warning path
-  hasn't been seen live (needs a 4.1.4 box with a wrong YEAR and a
-  stock date -- every box in the fleet is patched now, so exercising it
-  means temporarily pointing the panel at a date.FCS box or trusting
-  the fail-closed tests).
-- Still NOT eyeballed from before: menu-bar reorg, download flow,
-  first-run choreography (the standing manual GUI pass).
+- swift build clean today; suite was 1570 green as of 07-13 (today's
+  change is view-only, no model surface touched).
+- Clock panel field-verified working. The Force Set warning path still
+  hasn't been seen live (every box in the fleet is patched now).
+- NOT eyeballed yet: today's Overview sections, yesterday's
+  identity-first header, menu-bar reorg, download flow, first-run
+  choreography (the standing manual GUI pass).
 - ss5 heliosAgent env still carries harmless residue (REMOTEHOST, PWD
   from an old telnet session); clears on next boot.
 
 ## What's next
 
-1. **Todd's manual GUI pass** (carried): menu-bar reorg, download flow
-   (SPARCPLUG_CATALOG_URL), first-run choreography. (Clock panel DONE
-   -- verified working in the field this evening.)
-2. **CanonicalDotfiles DISPLAY decision** (new, SHORTCUTS): strip or
+1. **Todd's manual GUI pass** (carried, grew today): Overview sections
+   (Active User / Target Machine + named status line), identity-first
+   header, menu-bar reorg, download flow (SPARCPLUG_CATALOG_URL),
+   first-run choreography.
+2. **CanonicalDotfiles DISPLAY decision** (SHORTCUTS): strip or
    substitute the slirp DISPLAY when add-user targets an external host.
 3. Catalog data side: E1 baseline masters -> build-catalog.sh -> upload;
-   root-password policy for published masters. (The sunos414 master now
+   root-password policy for published masters. (The sunos414 master
    carries the Y2K date patches + xterm.orig convention.)
 4. Cut v0.9.9 (A5/A6 release pipeline proof).
 5. UserAdmin live test against Solaris 2.6 + 4.1.4; retire orphaned
@@ -108,17 +65,19 @@ constant; the set always uses click-time Mac truth regardless --
 
 ## Committed / push state
 
-- X repo: the whole two-day arc on main, NOT pushed: dd66491 (clock
-  admin agent) -> bcba707 -> 0d3a2e7 (ticking clocks) -> 028dbd5 (Sync
-  Clock label) -> 19290c2 -> ba94530 (identity-first Overview) + this
-  roll.
-- SPARCplug / cx repos: no changes.
+- X repo: everything pushed to origin/main at /eos today, including the
+  two-day arc that had been sitting local (dd66491 clock admin agent
+  through ba94530 identity-first Overview) plus today's Overview
+  sections commit and this roll.
+- SPARCplug / cx repos: no changes, in sync.
 
 ## Switching Macs
 
-- Swift sources + xcodeproj changed: pull, then rebuild in Xcode.
-- Three VMs running under this Mac's Xcode debug build (solaris26,
-  sunos414, netbsd; locks held). The sunos414 image gained today's
-  patches (date + date.FCS, xterm.orig rename) -- next quit backs it up.
-- Y2K patch tarballs are in Dropbox (SPARCplug/patches/sunos414-y2k/),
-  so they ride to the other Mac automatically.
+- Swift sources changed: pull, then rebuild in Xcode.
+- No VMs running on this Mac right now, but all three image lock files
+  (solaris26, netbsd, sunos414) are still present under
+  ~/Dropbox/dev/SPARCplug/images/ from the 07-13 session ending without
+  a clean quit. If the other Mac sees remoteLocked, that's why. Also
+  means the sunos414 image's patched state (date + date.FCS, xterm.orig)
+  hasn't had its post-quit backup yet.
+- Y2K patch tarballs ride Dropbox (SPARCplug/patches/sunos414-y2k/).
