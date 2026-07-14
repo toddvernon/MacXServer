@@ -249,7 +249,9 @@ private struct MachineOverviewPage: View {
                 .sheet(isPresented: $showingChangeLogin) {
                     ChangeLoginSheet(machineName: row.name,
                                      currentUser: row.activeUser,
-                                     machineID: row.id, model: model)
+                                     machineID: row.id,
+                                     usesSSHKey: row.changeLoginUsesSSHKey,
+                                     model: model)
                 }
             } else {
                 Text("No status.").foregroundStyle(.secondary).padding(20)
@@ -328,8 +330,10 @@ private struct MachineOverviewPage: View {
                  + "account's password)"
         }
         if row.canChangeLogin {
-            return "Change the login launchers use (verified by signing in "
-                 + "to the machine)"
+            return row.changeLoginUsesSSHKey
+                ? "Change the login launchers use (verified with your ssh key)"
+                : "Change the login launchers use (verified by signing in "
+                + "to the machine)"
         }
         if row.isEmulated {
             return "Start the machine to change users"
@@ -633,6 +637,9 @@ private struct ChangeLoginSheet: View {
     let machineName: String
     let currentUser: String
     let machineID: UUID
+    /// ssh machines prove with the key (BatchMode), so there's no password
+    /// field -- nothing launcher-side ever uses one.
+    let usesSSHKey: Bool
     @ObservedObject var model: MachinesModel
 
     @Environment(\.dismiss) private var dismiss
@@ -642,23 +649,29 @@ private struct ChangeLoginSheet: View {
     @State private var errorText = ""
 
     private var canSubmit: Bool {
-        !username.isEmpty && !password.isEmpty && !busy
+        !username.isEmpty && (usesSSHKey || !password.isEmpty) && !busy
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Change the login").font(.title3.weight(.semibold))
             Text("Launchers will sign in to \(machineName) as this account "
-                 + "from now on. It\u{2019}s checked by actually logging in "
-                 + "before anything changes.")
+                 + "from now on. "
+                 + (usesSSHKey
+                    ? "It\u{2019}s checked with your ssh key before anything "
+                    + "changes."
+                    : "It\u{2019}s checked by actually logging in before "
+                    + "anything changes."))
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             TextField("Username", text: $username)
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
-            SecureField("Password", text: $password)
-                .textFieldStyle(.roundedBorder)
+            if !usesSSHKey {
+                SecureField("Password", text: $password)
+                    .textFieldStyle(.roundedBorder)
+            }
 
             if !errorText.isEmpty {
                 Text(errorText).font(.caption).foregroundStyle(.red)

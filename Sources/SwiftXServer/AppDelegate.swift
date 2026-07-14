@@ -45,7 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// In-flight Change Login probes, retained until they complete (the
     /// launcher's connection handlers hold it weakly, same as activeLauncher).
     /// Keyed by machine so a second submit can't stack a probe on a probe.
-    private var loginProbes: [UUID: TelnetLauncher] = [:]
+    private var loginProbes: [UUID: RemoteLauncher] = [:]
     private var progressController: LaunchProgressWindowController?
 
     /// The machine registry: the configured machines + their live controllers,
@@ -524,18 +524,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             canManageUsers: (m.os != nil) && (isEmulated
                 ? (state == .running && ready)
                 : probeResults[m.id]?.reach == .up),
-            // The agent-less tier of Change… (2026-07-14): an external box
-            // whose helios port answered REFUSED (alive, nothing listening)
-            // gets the Change Login sheet -- proof is a live telnet login,
-            // not the panel's hash check. Unknown (first probe pending)
-            // counts too: a just-added real box shouldn't have a dead button
-            // for the prober's first lap; the login attempt is its own truth.
-            // Never while the panel tier is available, never for emulated VMs
-            // (our guests all run the agent -- "not ready" means wait), and
-            // never for unauthorized (an agent EXISTS; fix the secret rather
-            // than side-step the panel).
+            // The agent-less tier of Change… (2026-07-14): any external box
+            // the Users panel can't serve gets the Change Login sheet --
+            // proof is the box's own login channel (telnet password or ssh
+            // key by transport), not the panel's hash check. That includes
+            // "unreachable": the helios dot can't see a firewall-DROP box (a
+            // Linux host dropping 2125 reads down while sshd answers; the
+            // nuc), so the login attempt is its own truth. Never while the
+            // panel tier is available, never for emulated VMs (our guests
+            // all run the agent -- "not ready" means wait), and never for
+            // unauthorized (an agent EXISTS; fix the secret rather than
+            // side-step the panel).
             canChangeLogin: !isEmulated
-                && [.noAgent, .unknown].contains(probeResults[m.id]?.reach ?? .unknown),
+                && !((m.os != nil) && probeResults[m.id]?.reach == .up)
+                && probeResults[m.id]?.reach != .unauthorized,
+            changeLoginUsesSSHKey: m.transport == .ssh,
             // Clock shares Users' gate: OS-sensitive (per-OS date grammar +
             // the 4.1.4 year-safety probe) and needs the box answering.
             canSyncClock: (m.os != nil) && (isEmulated
@@ -1305,29 +1308,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// (the add-sheet checkbox and the password-verified Set Active flow) and
     /// the first-run flow.
     @MainActor
-    private func adoptMachineLogin(machineID id: UUID, user: String, password: String) {
+    private func adoptMachineLogin(machineID id: UUID, user: String, password: String?) {
         guard let registry, var m = registry.machine(id) else { return }
         m.user = user
-        // A cleartext machines.json password outranks the Keychain at launch
-        // (Machine.resolved injects it), so a machine carrying one must have
-        // it follow the switch -- otherwise launchers keep sending the OLD
-        // account's password as the new user. Machines without one stay
-        // Keychain-only.
-        if m.password?.isEmpty == false { m.password = password }
+        // password nil = the ssh-key Change Login path: there IS no password
+        // (BatchMode proved the key), so leave every credential untouched --
+        // storing an empty string would clobber a real telnet password for
+        // some other account on the same host.
+        if let password {
+            // A cleartext machines.json password outranks the Keychain at
+            // launch (Machine.resolved injects it), so a machine carrying one
+            // must have it follow the switch -- otherwise launchers keep
+            // sending the OLD account's password as the new user. Machines
+            // without one stay Keychain-only.
+            if m.password?.isEmpty == false { m.password = password }
+            let account = "\(user)@\(m.host):\(m.resolvedPorts.telnet)"
+            try? KeychainHelper.store(account: account, password: password)
+        }
         registry.update(m)
-        let account = "\(user)@\(m.host):\(m.resolvedPorts.telnet)"
-        try? KeychainHelper.store(account: account, password: password)
         afterMachineMutation()
     }
 
     /// The agent-less tier of the Overview's Change… (2026-07-14): prove the
-    /// typed user+password by actually logging in over the box's telnetd
-    /// (TelnetLauncher probe mode -- reaches a shell, runs nothing, exits),
-    /// then adopt them via adoptMachineLogin. Same "prove you know the
-    /// account's password" doctrine as the Users panel; the proof channel is
-    /// the box's own login instead of the agent's hash check. Completion is
-    /// called on the main actor with nil on success, else a message for the
-    /// sheet's inline error.
+    /// typed login against the box's own channel -- transport ssh = a
+    /// BatchMode key check (no password; the exact trust level ssh launchers
+    /// run at), anything else = a live telnet login (TelnetLauncher probe
+    /// mode: reaches a shell, runs nothing, exits) -- then adopt via
+    /// adoptMachineLogin. Same "prove it" doctrine as the Users panel; the
+    /// proof channel is the box's login instead of the agent's hash check.
+    /// Completion is called on the main actor with nil on success, else a
+    /// message for the sheet's inline error.
     @MainActor
     private func verifyAndAdoptLogin(machineID id: UUID, user: String,
                                      password: String,
@@ -1340,23 +1350,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             completion("A login check is already running for this machine.")
             return
         }
-        let probe = TelnetLauncher.loginProbe(
-            host: m.kind == .emulatedVM ? "127.0.0.1" : m.host,
-            port: m.resolvedPorts.telnet, user: user, password: password,
-            shellPrompt: m.shellPrompt)
+        let host = m.kind == .emulatedVM ? "127.0.0.1" : m.host
+        let usesSSH = m.transport == .ssh
+        let probe: RemoteLauncher = usesSSH
+            ? SSHLauncher.loginProbe(host: host, port: m.resolvedPorts.ssh,
+                                     user: user)
+            : TelnetLauncher.loginProbe(host: host,
+                                        port: m.resolvedPorts.telnet,
+                                        user: user, password: password,
+                                        shellPrompt: m.shellPrompt)
         loginProbes[id] = probe
         probe.launch { [weak self] (result: Result<Void, Error>) in
-            // TelnetLauncher completes on the main queue already.
+            // Both launchers complete on the main queue already.
             self?.loginProbes[id] = nil
             switch result {
             case .success:
+                // ssh proved a key, not a password -- adopt the user and
+                // leave every stored credential alone.
                 self?.adoptMachineLogin(machineID: id, user: user,
-                                        password: password)
+                                        password: usesSSH ? nil : password)
                 completion(nil)
             case .failure(let error):
-                if case TelnetLaunchError.authenticationFailed = error {
+                switch error {
+                case TelnetLaunchError.authenticationFailed:
                     completion("That user and password didn\u{2019}t log in.")
-                } else {
+                case SSHLaunchError.authenticationFailed:
+                    completion("Your ssh key didn\u{2019}t log in as "
+                               + "\u{201C}\(user)\u{201D}.")
+                default:
                     completion("Couldn\u{2019}t verify the login: "
                                + error.localizedDescription)
                 }

@@ -41,11 +41,31 @@ public final class SSHLauncher: @unchecked Sendable {
     private var textCallback: ((String, Bool) -> Void)?
     private var stderrBuffer = ""
 
+    /// Login probe: run `true` on the box instead of a launch wrapper. ssh
+    /// with BatchMode either proves the key logs in as `entry.user` (exit 0)
+    /// or it doesn't -- which is exactly the trust level ssh launchers run
+    /// at, so it's the Change Login proof for ssh-transport machines (the
+    /// telnet probe can't verify a box that only runs sshd, e.g. a Linux
+    /// host; see SHORTCUTS "Change Login proof channel").
+    private let probeOnly: Bool
+
     public init(entry: LauncherEntry, displayString: String,
-                xBinDirs: String = "/usr/openwin/bin:/usr/dt/bin:/usr/bin/X11") {
+                xBinDirs: String = "/usr/openwin/bin:/usr/dt/bin:/usr/bin/X11",
+                probeOnly: Bool = false) {
         self.entry = entry
         self.displayString = displayString
         self.xBinDirs = xBinDirs
+        self.probeOnly = probeOnly
+    }
+
+    /// A login probe for one machine account: BatchMode key auth as `user`,
+    /// remote command `true`, nothing else.
+    public static func loginProbe(host: String, port: UInt16,
+                                  user: String) -> SSHLauncher {
+        let entry = LauncherEntry(name: "login probe", group: host,
+                                  host: host, command: "true", user: user,
+                                  port: port, transport: .ssh)
+        return SSHLauncher(entry: entry, displayString: "", probeOnly: true)
     }
 
     public func onStatus(_ callback: @escaping (String) -> Void) {
@@ -58,7 +78,9 @@ public final class SSHLauncher: @unchecked Sendable {
 
     public func launch(completion: @escaping (Result<Void, Error>) -> Void) {
         self.completion = completion
-        let args = Self.buildArguments(entry: entry, displayString: displayString, xBinDirs: xBinDirs)
+        let args = probeOnly
+            ? Self.buildProbeArguments(entry: entry)
+            : Self.buildArguments(entry: entry, displayString: displayString, xBinDirs: xBinDirs)
         reportStatus("Spawning: ssh \(args.joined(separator: " "))")
         reportText("ssh " + args.joined(separator: " ") + "\n", bold: true)
 
@@ -160,6 +182,21 @@ public final class SSHLauncher: @unchecked Sendable {
             "-p", String(entry.port),
             "\(entry.user)@\(entry.host)",
             remote
+        ]
+    }
+
+    /// The probe argv: same connection options as a launch, remote command
+    /// `true`. No shell wrapper, no DISPLAY, no PATH -- nothing to run, the
+    /// exit code IS the answer. Public so the unit test can pin the form.
+    public static func buildProbeArguments(entry: LauncherEntry) -> [String] {
+        return [
+            "-T",
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "ConnectTimeout=15",
+            "-p", String(entry.port),
+            "\(entry.user)@\(entry.host)",
+            "true"
         ]
     }
 

@@ -33,6 +33,28 @@ final class SSHLauncherTests: XCTestCase {
         ])
     }
 
+    /// The login probe's argv (Change Login on ssh machines): same
+    /// connection options as a launch, remote command a bare `true` -- no
+    /// shell wrapper, no DISPLAY, no PATH. Exit 0 = the key logs in as that
+    /// user, which is the whole proof.
+    func testProbeArgumentsShape() {
+        let probe = SSHLauncher.loginProbe(host: "nuc.vernon.com", port: 22,
+                                           user: "tvernon")
+        _ = probe   // the factory itself must not throw/trap
+        let entry = LauncherEntry(name: "login probe", group: "nuc.vernon.com",
+                                  host: "nuc.vernon.com", command: "true",
+                                  user: "tvernon", port: 22, transport: .ssh)
+        XCTAssertEqual(SSHLauncher.buildProbeArguments(entry: entry), [
+            "-T",
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "ConnectTimeout=15",
+            "-p", "22",
+            "tvernon@nuc.vernon.com",
+            "true"
+        ])
+    }
+
     /// The per-OS X bin dirs are prepended to PATH (CODE_AUDIT §1): sshd's
     /// minimal non-login PATH otherwise can't find a bare `xterm` that the
     /// telnet/helios transports resolve via their own prepend.

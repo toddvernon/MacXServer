@@ -98,14 +98,24 @@ struct MachineRow: Identifiable, Equatable {
     let canManageUsers: Bool
 
     /// The lightweight tier of the Overview's Change… button (2026-07-14):
-    /// an external box with NO agent to manage users through. The full Users
-    /// panel is impossible there, so Change… opens the Change Login sheet
-    /// instead -- username + password, proven by actually logging in over
-    /// the box's own telnetd before anything is adopted. Never true when
-    /// `canManageUsers` is (the panel outranks the sheet wherever the agent
-    /// answers); false for emulated VMs (our guests all run the agent, so
-    /// "not ready" means wait, not downgrade).
+    /// an external box the Users panel can't serve. Change… opens the Change
+    /// Login sheet instead, proven against the box's own login channel
+    /// (telnet password or ssh key -- see `changeLoginUsesSSHKey`) before
+    /// anything is adopted. True for ANY external state except the panel
+    /// tier and unauthorized (an agent EXISTS there; fix the secret rather
+    /// than side-step the panel) -- including "unreachable", because the
+    /// helios dot is blind to firewall-DROP boxes (a Linux host dropping
+    /// port 2125 looks down while sshd answers fine; Todd's nuc, 2026-07-14)
+    /// and the login attempt is its own truth. False for emulated VMs (our
+    /// guests all run the agent, so "not ready" means wait, not downgrade).
     let canChangeLogin: Bool
+
+    /// How the Change Login sheet proves the account: false = live telnet
+    /// login (username + password), true = ssh BatchMode key check (no
+    /// password -- ssh launchers are keys-only, so "the key logs in as that
+    /// user" is the exact trust level launchers run at). Keyed off the
+    /// machine's transport.
+    let changeLoginUsesSSHKey: Bool
 
     /// Clock admin (set the guest clock from this Mac). OS-sensitive --
     /// ClockAdmin's date grammar and the 4.1.4 year-safety gate are per-OS --

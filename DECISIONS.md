@@ -1729,6 +1729,31 @@ telnetd; suite 1573). UI: `ChangeLoginSheet` in MachinesWindowView,
 tiered tooltips, `MachineRow.canChangeLogin`. SHORTCUTS: proof channel
 is telnet-only for now.
 
+**Same-day addendum (the nuc).** Todd's Linux NUC broke both edges at
+once: it firewall-DROPs the helios port (so the TCP aliveness oracle
+reads "unreachable" -- the REFUSED-proves-alive assumption is a Sun-fleet
+fact, not a Linux fact) and it runs only sshd (so the telnet proof could
+never verify). Two changes, ratified same day:
+
+- **The proof follows the machine's transport.** ssh → an
+  `SSHLauncher.loginProbe` BatchMode key check as the typed user (remote
+  command `true`, exit 0 = proven); the sheet drops its password field
+  because there's nothing a password would protect -- ssh launchers are
+  keys-only, so "the key logs in as that user" is the exact trust level
+  they run at. telnet/helios transports keep the live telnet login.
+  `adoptMachineLogin` takes an optional password now: the ssh path
+  adopts the user and touches no stored credential.
+- **The gate widened to "the panel can't serve it".** Change… opens the
+  sheet on ANY external state except panel-available and unauthorized --
+  including "unreachable", because the helios dot is blind to
+  firewall-DROP boxes and the login attempt is its own truth. The
+  unauthorized carve-out stands (an agent exists; fix the secret).
+
+Residue in SHORTCUTS: helios-transport boxes still prove over telnet,
+and a DROP-firewalled box's dot still undersells it ("unreachable"
+while ssh works); the honest fix is folding a transport-port TCP check
+into the prober's aliveness verdict. Suite 1574.
+
 ---
 
 ## Decisions still to make
