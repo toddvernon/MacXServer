@@ -236,10 +236,8 @@ private struct MachineOverviewPage: View {
                     if model.isFirstRun && row.canDownload {
                         firstRunBubble(row)
                     }
-                    identityLine(row)
-                    statusLine(row)
-                    bootBar(row)
-                    lifecycle(row)
+                    identitySection(row)
+                    machineSection(row)
                     launchers(row)
                     adminAgents(row)
                 }
@@ -282,10 +280,18 @@ private struct MachineOverviewPage: View {
     /// though it's technically a setting (Todd, 2026-07-13). Change… routes
     /// through the Users panel -- the ONE mechanism for switching, with its
     /// password proof (DECISIONS 2026-07-11) -- never a second path.
+    private func identitySection(_ row: MachineRow) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            MachineSectionHeader("Active User")
+            identityLine(row)
+                .padding(.leading, 16)
+        }
+    }
+
+    /// The user field + Change… button; the section header above carries the
+    /// "Active User" label.
     private func identityLine(_ row: MachineRow) -> some View {
         HStack(spacing: 8) {
-            Text("Active user")
-                .foregroundStyle(.secondary)
             Text(row.activeUser.isEmpty ? "none set" : row.activeUser)
                 .font(.system(size: 13, weight: .medium))
             Button("Change\u{2026}") {
@@ -306,12 +312,28 @@ private struct MachineOverviewPage: View {
         .font(.system(size: 13))
     }
 
+    /// The target machine itself: live status, boot thermometer, and lifecycle
+    /// verbs under one header.
+    private func machineSection(_ row: MachineRow) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            MachineSectionHeader("Target Machine")
+            VStack(alignment: .leading, spacing: 16) {
+                statusLine(row)
+                bootBar(row)
+                lifecycle(row)
+            }
+            .padding(.leading, 16)
+        }
+    }
+
     /// No dot here (the master list carries it); the thermometer below is the
     /// Overview's state color.
     private func statusLine(_ row: MachineRow) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 10) {
-                Text(row.statusText).font(.system(size: 15, weight: .medium))
+                // Named so the state reads as a sentence: "NetBSD Running".
+                Text("\(row.name) \(row.statusText)")
+                    .font(.system(size: 15, weight: .medium))
                 Spacer()
                 Text(row.subtitle).font(.caption).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
