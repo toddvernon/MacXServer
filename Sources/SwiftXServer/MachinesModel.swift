@@ -97,6 +97,16 @@ struct MachineRow: Identifiable, Equatable {
     /// over Helios AND a known OS, same rule File Transfer uses plus the OS.
     let canManageUsers: Bool
 
+    /// The lightweight tier of the Overview's Change… button (2026-07-14):
+    /// an external box with NO agent to manage users through. The full Users
+    /// panel is impossible there, so Change… opens the Change Login sheet
+    /// instead -- username + password, proven by actually logging in over
+    /// the box's own telnetd before anything is adopted. Never true when
+    /// `canManageUsers` is (the panel outranks the sheet wherever the agent
+    /// answers); false for emulated VMs (our guests all run the agent, so
+    /// "not ready" means wait, not downgrade).
+    let canChangeLogin: Bool
+
     /// Clock admin (set the guest clock from this Mac). OS-sensitive --
     /// ClockAdmin's date grammar and the 4.1.4 year-safety gate are per-OS --
     /// so it uses the same rule as Users.
@@ -160,6 +170,13 @@ final class MachinesModel: ObservableObject {
     var onFileTransfer: ((UUID) -> Void)?
     /// Open the machine's Users admin panel (Overview → Admin Agents).
     var onManageUsers: ((UUID) -> Void)?
+    /// Change Login (the agent-less tier of Change…): prove user+password by
+    /// logging in over the box's telnetd, then adopt them as the machine's
+    /// active user (machine.user + telnet Keychain slot). The completion fires
+    /// on the main actor: nil = adopted, else a user-facing failure message
+    /// the sheet shows inline.
+    var onVerifyLogin: ((_ id: UUID, _ user: String, _ password: String,
+                         _ completion: @escaping (String?) -> Void) -> Void)?
     /// Open the machine's Clock admin panel (Overview → Admin Agents).
     var onSyncClock: ((UUID) -> Void)?
 

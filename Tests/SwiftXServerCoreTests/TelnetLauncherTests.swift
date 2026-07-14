@@ -44,6 +44,14 @@ final class TelnetLauncherTests: XCTestCase {
             "SunOS Release 4.1.4 (GENERIC) #2\n[ipc:[tvernon]:/home2/tvernon] "))
         XCTAssertTrue(TelnetLauncher.looksLikeShellPrompt(
             "SunOS Release 4.1.4\n[ss2.example.com:[bob]:/home/bob] %"))
+        // CRLF streams -- what telnetd actually sends. Swift's "\r\n" is ONE
+        // grapheme, so a Character split on "\n" never broke these lines and
+        // the bracket check saw the banner as line one (the 2026-07-14 bug,
+        // caught by the login probe's fake telnetd).
+        XCTAssertTrue(TelnetLauncher.looksLikeShellPrompt(
+            "Last login: Tue Jul 14\r\n[ipc:[fred]:/home2/fred] "))
+        XCTAssertTrue(TelnetLauncher.looksLikeShellPrompt(
+            "SunOS Release 4.1.4\r\nbanner line\r\nipc% "))
         // Non-prompts: login/password prompts, empty, banner-only output.
         XCTAssertFalse(TelnetLauncher.looksLikeShellPrompt("login: "))
         XCTAssertFalse(TelnetLauncher.looksLikeShellPrompt("Password:"))

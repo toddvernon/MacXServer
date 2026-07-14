@@ -31,6 +31,13 @@ public final class TelnetLauncher: @unchecked Sendable {
     private let entry: LauncherEntry
     private let password: String
     private let displayString: String
+    /// Login probe: stop at the shell prompt. The full flow proves the
+    /// credentials as a side effect of launching; probe mode makes that proof
+    /// the whole job -- connect, log in, see a shell, type exit. Nothing runs
+    /// on the box. This is how the Overview's Change Login sheet verifies an
+    /// account on a machine that has no Helios agent (the Users panel's
+    /// hash-check needs the agent; this needs only the box's own telnetd).
+    private let probeOnly: Bool
     private var connection: NWConnection?
     private var state: State = .connecting
     private var buffer = Data()
@@ -42,8 +49,24 @@ public final class TelnetLauncher: @unchecked Sendable {
     private let stateTimeout: TimeInterval = 15.0
     private var pendingEcho: [UInt8] = []
 
-    public init(entry: LauncherEntry, password: String, displayString: String) {
+    public init(entry: LauncherEntry, password: String, displayString: String,
+                probeOnly: Bool = false) {
         self.entry = entry; self.password = password; self.displayString = displayString
+        self.probeOnly = probeOnly
+    }
+
+    /// A login probe for one machine account: reaches the shell prompt and
+    /// exits, running nothing. `shellPrompt` nil = the built-in detection
+    /// (classic sigils + the fleet's bracket prompt).
+    public static func loginProbe(host: String, port: UInt16, user: String,
+                                  password: String,
+                                  shellPrompt: String? = nil) -> TelnetLauncher {
+        let entry = LauncherEntry(name: "login probe", group: host,
+                                  host: host, command: "", user: user,
+                                  port: port,
+                                  shellPrompt: shellPrompt ?? "$ ")
+        return TelnetLauncher(entry: entry, password: password,
+                              displayString: "", probeOnly: true)
     }
 
     public func onStatus(_ callback: @escaping (String) -> Void) {
@@ -84,6 +107,13 @@ public final class TelnetLauncher: @unchecked Sendable {
                 self.scheduleTimeout()
                 self.receiveLoop()
             case .failed(let err):
+                self.finish(.failure(TelnetLaunchError.connectionFailed(err.localizedDescription)))
+            case .waiting(let err):
+                // NWConnection parks a refused/unreachable connect in .waiting
+                // (it would retry when the network changes). For a LAN telnet
+                // login that's a failure NOW -- without this the launch hung
+                // with no timeout armed (none is scheduled until .ready).
+                // Surfaced by the login-probe's dead-port test, 2026-07-14.
                 self.finish(.failure(TelnetLaunchError.connectionFailed(err.localizedDescription)))
             case .cancelled:
                 break
@@ -178,6 +208,18 @@ public final class TelnetLauncher: @unchecked Sendable {
             // prompt" was the symptom against the real SS5 (2026-07-07).
             if text.contains(shellPromptNeedle) || Self.looksLikeShellPrompt(text) {
                 cancelTimeout()
+                if probeOnly {
+                    // Credentials proven (telnetd gave us a shell). Leave
+                    // without running anything.
+                    reportText("exit\n", bold: true)
+                    queueEcho("exit\r\n")
+                    sendText("exit\r\n")
+                    state = .exiting
+                    queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                        self?.finish(.success(()))
+                    }
+                    return
+                }
                 state = .sendingCommand
                 let cmd = "/bin/sh -c 'DISPLAY=\(displayString); export DISPLAY; " +
                           "nohup \(entry.command) </dev/null >/dev/null 2>&1 &'"
@@ -207,7 +249,13 @@ public final class TelnetLauncher: @unchecked Sendable {
     /// mid-login; the state timeout stays as the backstop. Internal for
     /// unit testing.
     static func looksLikeShellPrompt(_ text: String) -> Bool {
-        guard let lastLine = text.split(separator: "\n", omittingEmptySubsequences: true)
+        // components(separatedBy: .newlines), not split(separator: "\n"):
+        // Swift treats "\r\n" as ONE grapheme, so a Character split never
+        // breaks CRLF lines -- and telnetd streams are CRLF. The bug hid
+        // because the fleet's machines carry an explicit shellPrompt needle;
+        // the login probe's fake telnetd exposed it (2026-07-14).
+        guard let lastLine = text.components(separatedBy: .newlines)
+                .filter({ !$0.isEmpty })
                 .last.map({ $0.trimmingCharacters(in: .whitespaces) }),
               !lastLine.isEmpty,
               let sigil = lastLine.last else { return false }

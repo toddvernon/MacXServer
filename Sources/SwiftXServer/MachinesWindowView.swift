@@ -228,6 +228,9 @@ private struct MachineOverviewPage: View {
     /// Hops the detail pane to the Settings tab (the launcher byline's
     /// Edit link).
     let onEditLaunchers: () -> Void
+    /// The Change Login sheet (the agent-less tier of Change…; see
+    /// MachineRow.canChangeLogin).
+    @State private var showingChangeLogin = false
 
     var body: some View {
         ScrollView {
@@ -243,6 +246,11 @@ private struct MachineOverviewPage: View {
                 }
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .sheet(isPresented: $showingChangeLogin) {
+                    ChangeLoginSheet(machineName: row.name,
+                                     currentUser: row.activeUser,
+                                     machineID: row.id, model: model)
+                }
             } else {
                 Text("No status.").foregroundStyle(.secondary).padding(20)
             }
@@ -289,27 +297,53 @@ private struct MachineOverviewPage: View {
     }
 
     /// The user field + Change… button; the section header above carries the
-    /// "Active User" label.
+    /// "Active User" label. Change… is tiered (2026-07-14): agent answering →
+    /// the Users panel (hash-proof Set Active); no agent on an external box →
+    /// the Change Login sheet (proof = a live telnet login); otherwise dead
+    /// with the reason in the tooltip.
     private func identityLine(_ row: MachineRow) -> some View {
         HStack(spacing: 8) {
             Text(row.activeUser.isEmpty ? "none set" : row.activeUser)
                 .font(.system(size: 13, weight: .medium))
             Button("Change\u{2026}") {
-                model.onManageUsers?(row.id)
+                if row.canManageUsers {
+                    model.onManageUsers?(row.id)
+                } else {
+                    showingChangeLogin = true
+                }
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(!row.canManageUsers)
-            .help(row.canManageUsers
-                  ? "Switch the account launchers log in as (asks for the "
-                  + "account's password)"
-                  : (row.isEmulated
-                     ? "Available once the machine is running and ready"
-                     : "Available once the machine answers a Helios check "
-                     + "and its OS is known (set both in Settings)"))
+            .disabled(!row.canManageUsers && !row.canChangeLogin)
+            .help(changeHelp(row))
             Spacer()
         }
         .font(.system(size: 13))
+    }
+
+    /// Why Change… does what it does (or won't), one tier at a time.
+    private func changeHelp(_ row: MachineRow) -> String {
+        if row.canManageUsers {
+            return "Switch the account launchers log in as (asks for the "
+                 + "account's password)"
+        }
+        if row.canChangeLogin {
+            return "Change the login launchers use (verified by signing in "
+                 + "to the machine)"
+        }
+        if row.isEmulated {
+            return "Start the machine to change users"
+        }
+        if row.dot == .externalUnauthorized {
+            return "The machine's agent refused the saved secret \u{2014} fix "
+                 + "it in Settings, then manage users here"
+        }
+        if row.dot == .externalUp {
+            // Agent answering but canManageUsers still false = OS unknown
+            // (sysinfo usually fills it on the next probe).
+            return "Available once the machine's OS is known"
+        }
+        return "Available once the machine is reachable"
     }
 
     /// The target machine itself: live status, boot thermometer, and lifecycle
@@ -586,6 +620,85 @@ private struct MachineOverviewPage: View {
         }
         .font(.caption)
         .foregroundStyle(.secondary)
+    }
+}
+
+/// The agent-less tier of the Overview's Change… (2026-07-14): a machine with
+/// no Helios agent can't offer the Users panel, but the active user still has
+/// to be changeable where the fact lives. Same doctrine as Set Active --
+/// prove you know the account's password before anything is adopted -- with
+/// the box's own telnet login as the proof (model.onVerifyLogin runs the
+/// probe and adopts on success). Nothing on the machine changes either way.
+private struct ChangeLoginSheet: View {
+    let machineName: String
+    let currentUser: String
+    let machineID: UUID
+    @ObservedObject var model: MachinesModel
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var username = ""
+    @State private var password = ""
+    @State private var busy = false
+    @State private var errorText = ""
+
+    private var canSubmit: Bool {
+        !username.isEmpty && !password.isEmpty && !busy
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Change the login").font(.title3.weight(.semibold))
+            Text("Launchers will sign in to \(machineName) as this account "
+                 + "from now on. It\u{2019}s checked by actually logging in "
+                 + "before anything changes.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            TextField("Username", text: $username)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+            SecureField("Password", text: $password)
+                .textFieldStyle(.roundedBorder)
+
+            if !errorText.isEmpty {
+                Text(errorText).font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                if busy {
+                    ProgressView().controlSize(.small)
+                    Text("Signing in\u{2026}")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(busy)
+                Button("Change") { submit() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSubmit)
+            }
+        }
+        .padding(20)
+        .frame(width: 400)
+        .onAppear { username = currentUser }
+    }
+
+    private func submit() {
+        guard canSubmit else { return }
+        busy = true
+        errorText = ""
+        model.onVerifyLogin?(machineID, username, password) { failure in
+            busy = false
+            if let failure {
+                // Stay on the sheet; wrong password is the retry case.
+                errorText = failure
+            } else {
+                dismiss()
+            }
+        }
     }
 }
 

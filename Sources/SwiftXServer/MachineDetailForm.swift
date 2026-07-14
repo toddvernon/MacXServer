@@ -27,6 +27,14 @@ struct MachineDetailForm: View {
     @State private var imageMismatchNote: String?
     /// "Show what I'm typing" for the telnet password field.
     @State private var revealPassword = false
+    /// Declare at birth, prove to change (2026-07-14): the User field is
+    /// free-typed only while the machine has no user yet. Once one is set it
+    /// shows read-only here and changes go through the Overview's Active User
+    /// section, which verifies the password (Users panel or Change Login) --
+    /// two writable copies of the most consequential per-machine fact was how
+    /// they drifted. Snapshotted at init so the field doesn't lock mid-edit
+    /// under the auto-commit.
+    private let userDeclared: Bool
     /// The ports editor's field text (telnet / ssh / helios). Kept as strings
     /// (not bindings into `draft.ports`) so a half-typed number doesn't have to
     /// be a valid port: blank = derive, and the triple only lands on the draft
@@ -43,6 +51,7 @@ struct MachineDetailForm: View {
         if m.bundled { m.transport = .helios }
         _committed = State(initialValue: machine)
         _draft = State(initialValue: m)
+        userDeclared = !machine.user.isEmpty
         // Seed the ports editor from the explicit override only -- derived
         // ports show as placeholders, so blank keeps meaning "the usual".
         _portTelnetText = State(initialValue: machine.ports.map { String($0.telnet) } ?? "")
@@ -189,12 +198,24 @@ struct MachineDetailForm: View {
                draft.host.trimmingCharacters(in: .whitespaces).isEmpty {
                 helpNote("A host is required before an external machine is saved.")
             }
-            LabeledField("User") {
-                TextField("login user", text: $draft.user)
-                    .textFieldStyle(.roundedBorder)
+            if userDeclared {
+                LabeledField("User") {
+                    Text(draft.user)
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                fieldCaption("The account on that machine. Telnet and SSH sign "
+                           + "in as this user; the Helios agent runs commands "
+                           + "as this user. Change it from the Overview\u{2019}s "
+                           + "Active User section, which checks the password.")
+            } else {
+                LabeledField("User") {
+                    TextField("login user", text: $draft.user)
+                        .textFieldStyle(.roundedBorder)
+                }
+                fieldCaption("The account on that machine. Telnet and SSH sign in as "
+                           + "this user; the Helios agent runs commands as this user.")
             }
-            fieldCaption("The account on that machine. Telnet and SSH sign in as "
-                       + "this user; the Helios agent runs commands as this user.")
         }
     }
 

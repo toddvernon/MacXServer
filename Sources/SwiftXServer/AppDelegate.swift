@@ -42,6 +42,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// several captures can be compared; each removes itself here on close.
     private var captureViewers: [CaptureViewerWindowController] = []
     private var activeLauncher: RemoteLauncher?
+    /// In-flight Change Login probes, retained until they complete (the
+    /// launcher's connection handlers hold it weakly, same as activeLauncher).
+    /// Keyed by machine so a second submit can't stack a probe on a probe.
+    private var loginProbes: [UUID: TelnetLauncher] = [:]
     private var progressController: LaunchProgressWindowController?
 
     /// The machine registry: the configured machines + their live controllers,
@@ -264,6 +268,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.onFileTransfer = { [weak self] id in self?.openMachineFileTransfer(id) }
         model.onManageUsers = { [weak self] id in self?.openUsersAdmin(machineID: id) }
         model.onSyncClock = { [weak self] id in self?.openClockAdmin(machineID: id) }
+        model.onVerifyLogin = { [weak self] id, user, password, completion in
+            self?.verifyAndAdoptLogin(machineID: id, user: user,
+                                      password: password, completion: completion)
+        }
         // What a blank DISPLAY actually resolves to at launch time (this X
         // server's own address) -- the Settings field shows it as the
         // placeholder so "blank" reads as a value, not a mystery.
@@ -516,6 +524,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             canManageUsers: (m.os != nil) && (isEmulated
                 ? (state == .running && ready)
                 : probeResults[m.id]?.reach == .up),
+            // The agent-less tier of Change… (2026-07-14): an external box
+            // whose helios port answered REFUSED (alive, nothing listening)
+            // gets the Change Login sheet -- proof is a live telnet login,
+            // not the panel's hash check. Unknown (first probe pending)
+            // counts too: a just-added real box shouldn't have a dead button
+            // for the prober's first lap; the login attempt is its own truth.
+            // Never while the panel tier is available, never for emulated VMs
+            // (our guests all run the agent -- "not ready" means wait), and
+            // never for unauthorized (an agent EXISTS; fix the secret rather
+            // than side-step the panel).
+            canChangeLogin: !isEmulated
+                && [.noAgent, .unknown].contains(probeResults[m.id]?.reach ?? .unknown),
             // Clock shares Users' gate: OS-sensitive (per-OS date grammar +
             // the 4.1.4 year-safety probe) and needs the box answering.
             canSyncClock: (m.os != nil) && (isEmulated
@@ -1288,10 +1308,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func adoptMachineLogin(machineID id: UUID, user: String, password: String) {
         guard let registry, var m = registry.machine(id) else { return }
         m.user = user
+        // A cleartext machines.json password outranks the Keychain at launch
+        // (Machine.resolved injects it), so a machine carrying one must have
+        // it follow the switch -- otherwise launchers keep sending the OLD
+        // account's password as the new user. Machines without one stay
+        // Keychain-only.
+        if m.password?.isEmpty == false { m.password = password }
         registry.update(m)
         let account = "\(user)@\(m.host):\(m.resolvedPorts.telnet)"
         try? KeychainHelper.store(account: account, password: password)
         afterMachineMutation()
+    }
+
+    /// The agent-less tier of the Overview's Change… (2026-07-14): prove the
+    /// typed user+password by actually logging in over the box's telnetd
+    /// (TelnetLauncher probe mode -- reaches a shell, runs nothing, exits),
+    /// then adopt them via adoptMachineLogin. Same "prove you know the
+    /// account's password" doctrine as the Users panel; the proof channel is
+    /// the box's own login instead of the agent's hash check. Completion is
+    /// called on the main actor with nil on success, else a message for the
+    /// sheet's inline error.
+    @MainActor
+    private func verifyAndAdoptLogin(machineID id: UUID, user: String,
+                                     password: String,
+                                     completion: @escaping (String?) -> Void) {
+        guard let m = registry?.machine(id) else {
+            completion("The machine is gone.")
+            return
+        }
+        guard loginProbes[id] == nil else {
+            completion("A login check is already running for this machine.")
+            return
+        }
+        let probe = TelnetLauncher.loginProbe(
+            host: m.kind == .emulatedVM ? "127.0.0.1" : m.host,
+            port: m.resolvedPorts.telnet, user: user, password: password,
+            shellPrompt: m.shellPrompt)
+        loginProbes[id] = probe
+        probe.launch { [weak self] (result: Result<Void, Error>) in
+            // TelnetLauncher completes on the main queue already.
+            self?.loginProbes[id] = nil
+            switch result {
+            case .success:
+                self?.adoptMachineLogin(machineID: id, user: user,
+                                        password: password)
+                completion(nil)
+            case .failure(let error):
+                if case TelnetLaunchError.authenticationFailed = error {
+                    completion("That user and password didn\u{2019}t log in.")
+                } else {
+                    completion("Couldn\u{2019}t verify the login: "
+                               + error.localizedDescription)
+                }
+            }
+        }
     }
 
     @MainActor

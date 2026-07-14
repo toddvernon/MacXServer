@@ -1671,6 +1671,66 @@ Core: `ClockAdmin.swift` (+15 tests, suite 1570). UI: `ClockPanelView` /
 
 ---
 
+## 2026-07-14: Change… is tiered by capability; Settings stops editing the user
+
+**Context.** The 2026-07-13 identity-first Overview put the active user
+front and center, but changing it still depended on an invisible
+condition: the Users panel needs the Helios agent, so on an agent-less
+box (real hardware that never got heliosAgent) the Change… button was
+permanently dead and the only editor was the Settings form's free-typed
+User field -- on the second page, with no password proof, and a second
+writable copy of the most consequential per-machine fact.
+
+**Decision.** The Overview is the one place the active user changes, and
+what "change" means degrades with what the box supports:
+
+- **Agent answering** (emulated ready / external prober-up): Change…
+  opens the Users panel, exactly as before -- hash-verified Set Active,
+  add/delete, the works.
+- **External box, no agent** (helios port refused, or first probe still
+  pending): Change… opens a lightweight **Change Login** sheet --
+  username + password, proven by *actually logging in over the box's own
+  telnetd* (`TelnetLauncher` probe mode: reach a shell, run nothing,
+  exit) before `adoptMachineLogin` touches anything. Same "prove you
+  know the account's password" doctrine, different proof backend per
+  capability tier -- the same shape every admin verb has had since
+  2026-07-07.
+- **Agent exists but can't serve** (emulated not running, agent
+  unauthorized, box unreachable): Change… stays dead and the tooltip
+  says why. Deliberate: where the full mechanism exists, the weak one
+  isn't offered as a bypass.
+
+The Settings User field is now **declare at birth, prove to change**:
+free-typed only while the machine has no user yet; once one is set it
+renders read-only with a caption pointing at the Overview. Machine
+creation and the first-run flow are unchanged (declaring the first login
+needs no proof -- there's nothing to protect yet).
+
+**Also fixed while wiring it** (surfaced by the probe's tests):
+`adoptMachineLogin` now updates a cleartext `machine.password` when one
+is set (it used to leave the OLD account's password winning over the
+fresh Keychain entry at launch time); `TelnetLauncher` treats a
+`.waiting` NWConnection (refused/unreachable connect) as failure instead
+of hanging with no timeout armed; and `looksLikeShellPrompt` splits on
+real newlines -- Swift's `"\r\n"` is one grapheme, so the old
+`split(separator: "\n")` never broke CRLF telnetd lines and the
+bracket-prompt detection could only ever fire when an explicit
+`shellPrompt` needle saved it.
+
+**Rejected:** keeping the Settings field writable next to the Overview
+editor (two writable copies is how they drift); offering the telnet
+proof as a fallback when a known agent is merely down (invites
+side-stepping the panel); gating agent-less changes on nothing (a wrong
+password in the Keychain slot breaks every launcher -- the proof is the
+point).
+
+Core: `TelnetLauncher.loginProbe` (+3 tests incl. a scripted fake
+telnetd; suite 1573). UI: `ChangeLoginSheet` in MachinesWindowView,
+tiered tooltips, `MachineRow.canChangeLogin`. SHORTCUTS: proof channel
+is telnet-only for now.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
