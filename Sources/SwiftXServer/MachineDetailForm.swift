@@ -27,14 +27,6 @@ struct MachineDetailForm: View {
     @State private var imageMismatchNote: String?
     /// "Show what I'm typing" for the telnet password field.
     @State private var revealPassword = false
-    /// Declare at birth, prove to change (2026-07-14): the User field is
-    /// free-typed only while the machine has no user yet. Once one is set it
-    /// shows read-only here and changes go through the Overview's Active User
-    /// section, which verifies the password (Users panel or Change Login) --
-    /// two writable copies of the most consequential per-machine fact was how
-    /// they drifted. Snapshotted at init so the field doesn't lock mid-edit
-    /// under the auto-commit.
-    private let userDeclared: Bool
     /// The ports editor's field text (telnet / ssh / helios). Kept as strings
     /// (not bindings into `draft.ports`) so a half-typed number doesn't have to
     /// be a valid port: blank = derive, and the triple only lands on the draft
@@ -51,7 +43,6 @@ struct MachineDetailForm: View {
         if m.bundled { m.transport = .helios }
         _committed = State(initialValue: machine)
         _draft = State(initialValue: m)
-        userDeclared = !machine.user.isEmpty
         // Seed the ports editor from the explicit override only -- derived
         // ports show as placeholders, so blank keeps meaning "the usual".
         _portTelnetText = State(initialValue: machine.ports.map { String($0.telnet) } ?? "")
@@ -69,7 +60,6 @@ struct MachineDetailForm: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 machineSection
-                connectionSection
                 heliosSection
                 telnetSSHSection
                 if draft.kind == .emulatedVM {
@@ -170,52 +160,33 @@ struct MachineDetailForm: View {
                 helpNote("This is a bundled machine that ships with the app. Its kind, "
                        + "host, and OS are fixed; attach a disk image here to run it.")
             }
+            hostField
             osField
         }
     }
 
-    /// The facts every plane shares: where the box is, and which account the
-    /// app uses on it. (The 2026-07-09 evening regroup, Todd's call: Helios
-    /// and Telnet/SSH each got their own section below, and the launcher
-    /// transport moved down to X11 Launchers -- "Connection" kept only what's
-    /// genuinely common.)
-    private var connectionSection: some View {
-        section("Connection") {
-            LabeledField("Host") {
-                // An emulated VM is always dialed at loopback (its qemu's
-                // hostfwds live there), so the field only opens up for
-                // external hosts.
-                TextField(draft.kind == .emulatedVM ? "127.0.0.1" : "hostname or IP",
-                          text: $draft.host)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(draft.kind == .emulatedVM)
-            }
-            if draft.kind == .emulatedVM {
-                fieldCaption("Emulated VMs are always reached through this Mac, so "
-                           + "there's nothing to set.")
-            }
-            if draft.kind == .externalHost,
-               draft.host.trimmingCharacters(in: .whitespaces).isEmpty {
-                helpNote("A host is required before an external machine is saved.")
-            }
-            if userDeclared {
-                LabeledField("User") {
-                    Text(draft.user)
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                fieldCaption("The account on that machine. Telnet and SSH sign "
-                           + "in as this user; the Helios agent runs commands "
-                           + "as this user. Change it from the Overview\u{2019}s "
-                           + "Active User section, which checks the password.")
-            } else {
-                LabeledField("User") {
-                    TextField("login user", text: $draft.user)
-                        .textFieldStyle(.roundedBorder)
-                }
-                fieldCaption("The account on that machine. Telnet and SSH sign in as "
-                           + "this user; the Helios agent runs commands as this user.")
-            }
+    /// Where the box is. Lives in the Machine section since the Connection
+    /// section retired (2026-07-15): the User row it also held was a second
+    /// writable copy of the active user (the Overview owns that now), and a
+    /// one-field section wasn't earning its header -- an external host's
+    /// address is machine identity anyway.
+    @ViewBuilder private var hostField: some View {
+        LabeledField("Host") {
+            // An emulated VM is always dialed at loopback (its qemu's
+            // hostfwds live there), so the field only opens up for
+            // external hosts.
+            TextField(draft.kind == .emulatedVM ? "127.0.0.1" : "hostname or IP",
+                      text: $draft.host)
+                .textFieldStyle(.roundedBorder)
+                .disabled(draft.kind == .emulatedVM)
+        }
+        if draft.kind == .emulatedVM {
+            fieldCaption("Emulated VMs are always reached through this Mac, so "
+                       + "there's nothing to set.")
+        }
+        if draft.kind == .externalHost,
+           draft.host.trimmingCharacters(in: .whitespaces).isEmpty {
+            helpNote("A host is required before an external machine is saved.")
         }
     }
 
@@ -630,6 +601,17 @@ struct MachineDetailForm: View {
             draft.display = live.display
             if !bundled { draft.transport = live.transport }
             draft.launchers = live.launchers
+            // The active user is Overview-owned (no editor here since the
+            // Connection section retired 2026-07-15): adopt the live value so
+            // a draft that sat open through a user switch can't write the old
+            // account back. The password IS edited here (Telnet/SSH), but a
+            // user switch updates it too (adoptMachineLogin) -- keep the
+            // draft's only when this form actually changed it.
+            draft.user = live.user
+            if draft.password == committed.password {
+                draft.password = live.password
+                committed.password = live.password
+            }
         }
         guard canCommit else { return }
         committed = draft

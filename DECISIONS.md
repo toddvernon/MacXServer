@@ -1754,6 +1754,22 @@ and a DROP-firewalled box's dot still undersells it ("unreachable"
 while ssh works); the honest fix is folding a transport-port TCP check
 into the prober's aliveness verdict. Suite 1574.
 
+**Next-day addendum (2026-07-15): the Settings User field is gone
+entirely, and the Connection section with it.** The declare-at-birth
+carve-out turned out to be redundant too: a fresh VM declares its first
+login through the FirstLogin window (offered after image download,
+re-offered on every boot while user-less), and a fresh external box
+through the Change Login sheet (its gate already covers never-probed
+boxes) -- so Settings never needs to write `machine.user` at all, and
+the read-only row was just a second place to look. With the User row
+gone, Connection held only Host, which moved up into the Machine
+section (an external host's address is identity anyway). Settings'
+`commit()` now adopts the live `user` (and `password`, unless this form
+actually edited it -- adoptMachineLogin updates both on a switch) so a
+draft that sat open through an Overview user switch can't write the old
+account back; that stale-write hazard predated this change but the
+invisible field made it worth closing now.
+
 ---
 
 ## Decisions still to make
