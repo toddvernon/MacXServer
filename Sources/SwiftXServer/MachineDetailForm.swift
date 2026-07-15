@@ -516,7 +516,11 @@ struct MachineDetailForm: View {
                         }
                     }
                     .labelsHidden()
-                    .frame(width: 180)
+                    // Leading-aligned like the Launchers tab's transport
+                    // picker: a bare width frame centers the popup, which
+                    // read as the field sitting offset to the right.
+                    .fixedSize()
+                    .frame(width: 180, alignment: .leading)
                 }
             }
             if let caption = osCaption {
