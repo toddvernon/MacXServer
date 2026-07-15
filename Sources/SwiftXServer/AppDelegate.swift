@@ -293,7 +293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         // Edit (master toolbar + Settings tab). Adding runs through the Add
-        // Machine wizard (2026-07-16): nothing reaches the registry until its
+        // Machine wizard (2026-07-15): nothing reaches the registry until its
         // Create, so a cancelled add leaves no half-configured "New Machine".
         model.onWizardCreate = { [weak self] machine, telnetPassword in
             guard let self, let registry = self.registry else { return nil }

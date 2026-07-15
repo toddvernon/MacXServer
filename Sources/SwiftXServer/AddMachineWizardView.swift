@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftXServerCore
 
-/// The Add Machine wizard: the + button's one and only add path (2026-07-16).
+/// The Add Machine wizard: the + button's one and only add path (2026-07-15).
 /// Before this, integrating a machine meant visiting every tab -- name in the
 /// header, host + OS on Settings, user via Change Login on Overview, an xterm
 /// launcher on Launchers. Fine if you already know the app, hopeless if you
@@ -52,7 +52,7 @@ struct AddMachineWizardView: View {
     /// best guess at the shell prompt (the last visible line), shown for the
     /// user to validate. Always asked -- recognition heuristics are tuned on
     /// our own fleet's prompts, so a match improves the prefill but never
-    /// silently skips the question (Todd, 2026-07-16). The confirmed text
+    /// silently skips the question (Todd, 2026-07-15). The confirmed text
     /// becomes the machine's shellPrompt, the needle launches wait for.
     @State private var suspectedPrompt: String?
     @State private var promptText = ""
@@ -201,7 +201,7 @@ struct AddMachineWizardView: View {
             if suspectedPrompt != nil {
                 // Login proved, prompt shape unrecognized: show what the
                 // machine ended with and let the user fix it, instead of
-                // asking them to know their prompt cold (Todd, 2026-07-16).
+                // asking them to know their prompt cold (Todd, 2026-07-15).
                 Text("Signed in. \(displayNameOrIt)\u{2019}s command prompt "
                      + "looks like this:")
                     .font(.callout)

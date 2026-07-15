@@ -1,94 +1,116 @@
-# Status 2026-07-15 (evening roll)
+# Status 2026-07-15 (second session, other Mac)
 
-## Headline: a Settings + Overview polish day driven by Todd using the
-app live. The Settings Connection section is retired, the Change Login
-sheet got honest plain-English errors plus an explicit unverified-save
-path for boxes that are off the network, and the Overview's Active User
-line grew into a labeled read-only field with password dots.
+## Headline: the Add Machine wizard shipped. + now walks name -> host ->
+proven login -> xterm launcher -> Create, nothing touches the registry
+until the end, and the whole telnet login-proof chain got honest about
+real-world prompts (Todd field-tested against SWS2 and the 4.1.4 box
+all afternoon; every fix below came out of a live repro).
 
 ## What happened this session
 
-**Settings: Connection section retired** (af5644a; DECISIONS 2026-07-14
-next-day addendum). The User row was redundant once the Overview became
-the one place the active user changes -- and declare-at-birth was too:
-fresh VMs get the FirstLogin window (re-offered every boot while
-user-less), fresh external boxes get the Change Login sheet. Host moved
-up into the Machine section. Real hazard closed: Settings commits its
-whole draft, so a pane open through an Overview user switch would have
-written the OLD user+password back; commit() now adopts the live user
-(and password unless the Telnet/SSH field edited it).
+**Machine name moved to the detail header** (45b37c1). Todd's field
+test: a new machine's typed name silently reverted because the Settings
+draft refused to commit while Host was empty (canCommit's external-host
+gate) and leaving the pane dropped the whole draft. The header title is
+now a plain-style TextField committing straight to the registry on
+Return / focus loss; Settings has no Name row and adopts the live name
+at commit. Fresh external hosts open on the Settings tab (host is the
+one required field).
 
-**Change Login: unreachable boxes get an explicit escape hatch**
-(ff39e35 -> 353573f -> 1737020; second DECISIONS addendum). Field
-experience: powered-off ipx made its login permanently uneditable and
-the sheet showed raw NWError ("-65554 NoSuchRecord"). Probe failures now
-split by whether the box ANSWERED: a real rejection stays authoritative
-(retype only), while a proof that couldn't run shows "The machine isn't
-reachable right now to validate the username and password." (Todd's
-wording) and the Change button relabels to **Change Without Checking**
-(one affirmative button, two meanings -- a third button read as a
-duplicate). Warned, never silent; Force Set shape. ssh machines store no
-password on the unverified path either.
+**New external machines default to telnet, not helios** (736bf52). A
+just-added box has never had an agent found on it. Persisted-JSON
+convention untouched: absent transport still decodes helios (bundled
+fixtures).
 
-**Overview Active User line, iterated live with Todd** (ff39e35,
-5a9c675, 5e772f1, dc7f57f): now "User:" at status-line size + the value
-("tvernon / ••••••••", fixed eight dots only when a password is actually
-on file -- cleartext field or telnet Keychain slot, existence never
-length) in a read-only field-look box (selectable, not editable), then
-Change…. MachineRow gained hasStoredPassword.
+**Add Machine wizard** (6a9976f; DECISIONS 2026-07-15 entry). + opens
+AddMachineWizardView, the one and only add path; Cancel leaves no
+"New Machine" zombie. External: name -> host + OS -> login proved with
+the Change Login probe machinery via new onProbeLoginEndpoint (no
+registry id yet; same rejection-vs-unreachable split and Continue
+Without Checking hatch) -> pre-filled xterm launcher -> summary.
+Emulated VM: one fast fork (existing disk image w/ OS detection +
+claim check, vs download starter -> kicks onDownload after Create).
+Telnet passwords go to the launcher-read Keychain slot, never
+machines.json. onAddNew + the short-lived pendingNameEntry machinery
+retired. Ran xcodegen for the new file.
 
-**Small fixes:** OS picker sits flush left (fe4b9a7 -- bare width frame
-centered it); ~20% more air before the Target Machine / X11 Launchers /
-Admin Agents headers (e7c0837).
+**Login probe rewritten around real prompts** (e1b2adf, 9c08cc2,
+7c4993e, e92ea17, 25af3e6). The arc, each step from a live failure:
 
-**Design question settled in conversation (no code):** should first
-admin-agent use ask for the root password? No -- the helios secret IS
-the admin credential (the agent runs as root; a root-password gate is
-either unverified theater or verified by the same agent the secret
-already controls). The real completeness gap is the fleet-wide dev
-secret "test" -> unique per-box secrets, which belongs with the open
-root-password-policy decision for published masters.
+- *Silence means yes* (e1b2adf): the probe demanded positive prompt
+  recognition, so the 4.1.4 box's custom prompt turned a CORRECT
+  password into shellPromptTimeout. Probe mode now: rejection is
+  authoritative ("Login incorrect" markers + a re-presented login
+  prompt, suffix match on "ogin:" with a "Last login:" carve-out);
+  recognized prompt = instant success; otherwise output that goes
+  quiet 2.5s with no rejection = login proven. Both 4.1.4 and 2.6
+  print "Login incorrect" AND re-prompt (Todd verified), so every
+  real rejection announces itself.
+- *Suspected-prompt capture* (9c08cc2): probe passes but xterm launch
+  still needs the needle. The probe captures the last visible line;
+  the wizard shows it for validation and stores the confirmed text as
+  Machine.shellPrompt (exactly what Machine.resolved threads into
+  launches).
+- *NUL is RFC 854 padding* (7c4993e): SWS2 showed the prompt question
+  with an EMPTY field. Root cause: telnetd sends bare CR as CR NUL and
+  stripTelnetCommands passed NULs through -- invisible "\0 lines" beat
+  the sigil detection AND became the suspected prompt. NULs now die at
+  the protocol layer; capture filters remaining control chars.
+- *Always confirm, never silently decide* (e92ea17): the bracket-prompt
+  rule that then "recognized" SWS2 is our own fleet's dotfile prompt
+  echoed back -- Todd: invalid basis for skipping the question on a
+  stranger's box. The guess is now captured on EVERY telnet success
+  with output; recognition only improves the prefill. Every wizard
+  machine carries a human-confirmed needle. Saved to memory as the
+  general principle (fleet heuristics prefill, never decide).
+- *Polish* (25af3e6): caption teaches trimming the needle to the last
+  few unique characters (contains-match, tail is all that matters);
+  stripANSI grew the missing ECMA-48 two-char escape branch (ESC ( B,
+  ESC = / ESC >) so charset/keypad tails can't leak into the guess.
 
 ## What's working / what's broken
 
-- swift build clean; swift test 1574 / 0 failures (32 skipped).
-- Todd exercised the new Overview + Change Login live against real
-  boxes today (that's what drove the iterations), including the
-  unreachable path against powered-off machines. Remaining GUI-pass
-  items: Change Login ssh flavor on the nuc, menu-bar reorg, download
-  flow (SPARCPLUG_CATALOG_URL), first-run choreography.
-- Ledgered residue (SHORTCUTS "Change Login proof channel"): a
-  DROP-firewalled box's dot still says "unreachable" while ssh works;
-  honest fix is a transport-port TCP check in the prober's verdict.
-- SourceKit shows stale "no member loginProbe" diagnostics in
-  AppDelegate; the compiler disagrees (builds fine). Ignore or let
+- swift build clean; swift test 1579 / 0 failures (32 skipped). Six
+  new fake-telnetd probe tests pin the whole prompt story.
+- Wizard field-verified end to end on SWS2 (bracket prompt, instant
+  prefilled confirm) and the powered-off / custom-prompt paths.
+- Ledgered (SHORTCUTS "Telnet launch"): pre-wizard machines and the
+  Change Login sheet still gather no prompt needle; type-ahead
+  launching (send the command right after the password, drop the
+  prompt wait) is the real fleet-wide fix, its own decision with a
+  live repro. Prober transport-port aliveness check still open too.
+- SourceKit still shows stale diagnostics (phantom "no member" errors
+  in the new telnet/test code); the compiler disagrees. Ignore or let
   Xcode reindex.
 
 ## What's next
 
-1. GUI pass remainder: Change Login on the nuc (ssh flavor), menu-bar
-   reorg, download flow, first-run choreography.
-2. CanonicalDotfiles DISPLAY decision (SHORTCUTS, carried).
-3. Catalog data side: E1 baseline masters -> build-catalog.sh ->
-   upload; root-password policy for published masters -- now explicitly
-   including unique per-box helios secrets (today's design talk).
-4. Cut v0.9.9 (A5/A6 release pipeline proof).
-5. UserAdmin live test against Solaris 2.6 + 4.1.4; retire orphaned
-   DefaultLaunchers.swift. Maybe the prober transport-port aliveness
-   check.
+1. Try the xterm launcher end-to-end on a wizard-added custom-prompt
+   box (the stored needle should unlock it); consider type-ahead
+   launching as the successor to prompt needles entirely.
+2. GUI pass remainder: menu-bar reorg, download flow
+   (SPARCPLUG_CATALOG_URL), first-run choreography. Change Login ssh
+   flavor on the nuc.
+3. CanonicalDotfiles DISPLAY decision (SHORTCUTS, carried).
+4. Catalog data side: E1 baseline masters -> build-catalog.sh ->
+   upload; root-password policy + unique per-box helios secrets.
+5. Cut v0.9.9 (A5/A6 release pipeline proof).
+6. UserAdmin live test against Solaris 2.6 + 4.1.4; retire orphaned
+   DefaultLaunchers.swift (still just the old seed text, still unused).
 
 ## Committed / push state
 
-- X repo, all on main and pushed at /eos: af5644a (Connection retired)
-  -> 67f4cb0 (morning STATUS) -> fe4b9a7 (OS picker) -> ff39e35 ->
-  353573f -> 1737020 (Change Login arc) -> 5a9c675 -> 5e772f1 ->
-  dc7f57f (Active User line arc) -> e7c0837 (section air) + this roll.
+- X repo, all on main, pushed at /eos: 45b37c1 (header name) ->
+  736bf52 (telnet default) -> 6a9976f (wizard) -> e1b2adf (probe
+  silence-means-yes) -> 5546780 (SHORTCUTS) -> 9c08cc2 (suspected
+  prompt) -> 7c4993e (NUL fix) -> e92ea17 (always confirm) ->
+  25af3e6 (caption + stripANSI) + the date-fix/STATUS roll.
 - SPARCplug / cx repos: no changes this session.
 
 ## Switching Macs
 
-- Swift sources changed: pull, then rebuild in Xcode.
-- The solaris26 guest was running under this Mac's Xcode debug build at
-  /eos (lock held). If it's still up when you open the other Mac, that
-  machine will see remoteLocked -- shut it down here first if you need
-  it there.
+- Swift sources + project file changed (xcodegen ran): pull, then
+  rebuild in Xcode.
+- No VM was running this session; no image locks held.
+- One memory file added (fleet-heuristics-confirm-dont-decide); let
+  Dropbox finish syncing before opening the other Mac.

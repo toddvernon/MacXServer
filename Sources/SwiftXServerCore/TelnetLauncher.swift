@@ -54,7 +54,7 @@ public final class TelnetLauncher: @unchecked Sendable {
     private var settleWork: DispatchWorkItem?
     /// Probe mode: the last visible line on screen when the login proved out
     /// -- our best guess at the box's shell prompt. Captured on EVERY telnet
-    /// success with output, recognized shape or not (Todd, 2026-07-16: the
+    /// success with output, recognized shape or not (Todd, 2026-07-15: the
     /// recognition heuristics are tuned on our own fleet's prompts, so a
     /// match must improve the prefill, never silently skip the user's
     /// confirmation). The wizard shows it to validate and stores the
@@ -259,7 +259,7 @@ public final class TelnetLauncher: @unchecked Sendable {
                 // Output after the password, no rejection in it, no prompt
                 // shape we recognize -- probably a banner/motd ahead of a
                 // custom prompt. Let the line go quiet, then call the login
-                // proven (the less-aggressive probe, 2026-07-16): telnetd
+                // proven (the less-aggressive probe, 2026-07-15): telnetd
                 // only keeps a session open past the password by spawning
                 // the shell, and every real rejection announces itself. A
                 // wizard user can't be asked what their prompt looks like.
@@ -375,7 +375,7 @@ public final class TelnetLauncher: @unchecked Sendable {
             // never application data. Left in the buffer it forms invisible
             // "lines" that broke both the generic prompt detection and the
             // wizard's suspected-prompt capture (an empty-looking Prompt
-            // field, Todd's SWS2 test 2026-07-16).
+            // field, Todd's SWS2 test 2026-07-15).
             if bytes[i] == 0x00 { i += 1; continue }
             guard bytes[i] == 0xFF, i + 1 < bytes.count else {
                 clean.append(bytes[i]); i += 1; continue

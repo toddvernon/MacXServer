@@ -130,7 +130,7 @@ final class TelnetLoginProbeTests: XCTestCase {
         XCTAssertFalse(sent.contains("/bin/sh"), "probe sent a command: \(sent)")
         XCTAssertFalse(sent.contains("nohup"), "probe sent a command: \(sent)")
         XCTAssertTrue(sent.contains("exit"), "probe never logged out: \(sent)")
-        // Recognized or not, the guess is always captured (Todd 2026-07-16:
+        // Recognized or not, the guess is always captured (Todd 2026-07-15:
         // recognition is a heuristic tuned on our own fleet's prompts -- a
         // match improves the prefill, it never skips the user's confirm).
         XCTAssertEqual(probe.suspectedShellPrompt, "[ipc:[fred]:/home2/fred]")
@@ -164,7 +164,7 @@ final class TelnetLoginProbeTests: XCTestCase {
     }
 
     func testProbeUnrecognizedPromptStillSucceeds() throws {
-        // The less-aggressive probe (2026-07-16): a shell prompt shaped like
+        // The less-aggressive probe (2026-07-15): a shell prompt shaped like
         // nothing we know must NOT read as a failed login. Todd's field test:
         // a real 4.1.4 box with a custom prompt beat both the "$ " needle and
         // the generic sigil detection, and the probe called a correct
@@ -257,7 +257,7 @@ final class TelnetLoginProbeTests: XCTestCase {
         // RFC 854: telnetd (SunOS included) transmits a bare CR as CR NUL.
         // Un-stripped NULs formed invisible "lines" that beat the sigil
         // detection AND surfaced as an empty-looking Prompt field in the
-        // wizard (Todd's SWS2 test, 2026-07-16). With NUL treated as the
+        // wizard (Todd's SWS2 test, 2026-07-15). With NUL treated as the
         // protocol padding it is, a classic "% " prompt behind CR NUL
         // noise is recognized instantly and captured clean for the confirm.
         let server = try FakeTelnetd(

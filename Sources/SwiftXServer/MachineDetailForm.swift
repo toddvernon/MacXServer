@@ -133,7 +133,7 @@ struct MachineDetailForm: View {
     /// 2026-07-09 settings reorg -- see MACHINE_SETTINGS_AUDIT.md section 2.
     /// OS moved in from Connection: it's machine identity, driving boot
     /// config, halt command, port block, and X paths, nothing about
-    /// connecting. The Name row left for the detail HEADER 2026-07-16 -- the
+    /// connecting. The Name row left for the detail HEADER 2026-07-15 -- the
     /// header is the single writer now, so naming works from any tab and a
     /// name edit can't be held hostage by this form's host-required gate.)
     private var machineSection: some View {
@@ -602,7 +602,7 @@ struct MachineDetailForm: View {
             if !bundled { draft.transport = live.transport }
             draft.launchers = live.launchers
             // The name is header-owned (the Name row left this form
-            // 2026-07-16): adopt the live value so a draft that sat open
+            // 2026-07-15): adopt the live value so a draft that sat open
             // through a header rename can't write the old name back.
             draft.name = live.name
             committed.name = live.name

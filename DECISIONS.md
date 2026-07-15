@@ -1792,7 +1792,7 @@ draft that sat open through an Overview user switch can't write the old
 account back; that stale-write hazard predated this change but the
 invisible field made it worth closing now.
 
-## 2026-07-16: Adding a machine is a wizard; nothing commits until Create
+## 2026-07-15: Adding a machine is a wizard; nothing commits until Create
 
 **Decision:** The Machines window's + button opens an Add Machine wizard
 (`AddMachineWizardView`) -- the one and only add path -- and the machine
