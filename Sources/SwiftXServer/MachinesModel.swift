@@ -171,11 +171,6 @@ final class MachinesModel: ObservableObject {
     @Published var rows: [UUID: MachineRow] = [:]
     /// The selected machine in the master list.
     @Published var selection: UUID?
-    /// A just-created machine whose name the user hasn't typed yet: the detail
-    /// header seeds its name field EMPTY (so the "Machine name" hint shows) and
-    /// grabs focus. Cleared when a name commits. The registry keeps the
-    /// "New Machine" default underneath, so a nameless machine never persists.
-    var pendingNameEntry: UUID?
 
     /// The ids of every machine whose qemu is currently live. A running
     /// machine's image can't be edited out from under it and it can't be
@@ -220,8 +215,20 @@ final class MachinesModel: ObservableObject {
     var onSyncClock: ((UUID) -> Void)?
 
     // Edit actions (master toolbar + Settings page).
-    /// Add a fresh default machine, persist it, and return its id to select.
-    var onAddNew: (() -> UUID?)?
+    /// Create a machine the Add Machine wizard fully configured: add it to the
+    /// registry as-is and return its id to select. The optional password is a
+    /// telnet login the wizard collected -- it goes to the Keychain slot the
+    /// launchers read (user@host:port), never into machines.json.
+    var onWizardCreate: ((_ machine: Machine, _ telnetPassword: String?) -> UUID?)?
+    /// The wizard's login proof: same probe as onVerifyLogin (transport ssh =
+    /// BatchMode key check, else a live telnet login) but against a bare
+    /// endpoint -- the machine doesn't exist in the registry until the wizard
+    /// finishes -- and it adopts NOTHING. Completion on the main actor: nil =
+    /// the login proved out, else the failure to show inline (unreachable
+    /// failures carry canSaveUnverified, unlocking Continue Without Checking).
+    var onProbeLoginEndpoint: ((_ host: String, _ transport: LauncherTransport,
+                                _ user: String, _ password: String,
+                                _ completion: @escaping (VerifyLoginFailure?) -> Void) -> Void)?
     /// Commit edits to an existing machine (matched by id).
     var onCommit: ((Machine) -> Void)?
     /// Remove a machine by id.

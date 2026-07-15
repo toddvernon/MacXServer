@@ -8,6 +8,8 @@ import SwiftXServerCore
 /// Plain HSplitView (not NavigationSplitView) per the documented NSPanel gotcha.
 struct MachinesWindowView: View {
     @ObservedObject var model: MachinesModel
+    /// The Add Machine wizard sheet (the + button's one and only add path).
+    @State private var showingAddWizard = false
 
     var body: some View {
         HSplitView {
@@ -17,6 +19,9 @@ struct MachinesWindowView: View {
                 .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 760, minHeight: 480)
+        .sheet(isPresented: $showingAddWizard) {
+            AddMachineWizardView(model: model)
+        }
     }
 
     // MARK: Master (machine list + add/remove/clone)
@@ -75,10 +80,7 @@ struct MachinesWindowView: View {
     private var toolbar: some View {
         HStack(spacing: 4) {
             Button {
-                if let id = model.onAddNew?() {
-                    model.pendingNameEntry = id
-                    model.selection = id
-                }
+                showingAddWizard = true
             } label: { Image(systemName: "plus") }
                 .help("Add a machine")
 
@@ -243,29 +245,18 @@ private struct MachineDetailContainer: View {
         // Overview/Settings click afterward sticks.
         .onChange(of: machine.id, initial: true) {
             tab = defaultTab
-            if model.pendingNameEntry == machine.id {
-                // Just created: empty field so the "Machine name" hint shows,
-                // and the cursor lands there ready to type. The async hop lets
-                // the field exist before focus is asked for (NSPanel hosting).
-                nameText = ""
-                DispatchQueue.main.async { nameFocused = true }
-            } else {
-                nameText = machine.name
-            }
+            nameText = machine.name
         }
     }
 
     /// Persist a header rename. Empty or unchanged text snaps the field back to
-    /// the live name instead (a nameless machine can't exist -- the registry
-    /// keeps "New Machine" until something real is typed).
+    /// the live name instead (a nameless machine can't exist).
     private func commitName() {
         let trimmed = nameText.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, trimmed != machine.name else {
-            // Keep the hint showing on a still-unnamed new machine.
-            if model.pendingNameEntry != machine.id { nameText = machine.name }
+            nameText = machine.name
             return
         }
-        model.pendingNameEntry = nil
         nameText = trimmed
         var m = machine
         m.name = trimmed

@@ -46,6 +46,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// launcher's connection handlers hold it weakly, same as activeLauncher).
     /// Keyed by machine so a second submit can't stack a probe on a probe.
     private var loginProbes: [UUID: RemoteLauncher] = [:]
+    /// The Add Machine wizard's in-flight login proof. Separate from
+    /// loginProbes because the machine it's probing doesn't exist in the
+    /// registry yet (there's no id to key by).
+    private var wizardProbe: RemoteLauncher?
     private var progressController: LaunchProgressWindowController?
 
     /// The machine registry: the configured machines + their live controllers,
@@ -288,22 +292,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return "\(self.advertisedHost):\(self.displayNumber)"
         }
 
-        // Edit (master toolbar + Settings tab).
-        model.onAddNew = { [weak self] in
+        // Edit (master toolbar + Settings tab). Adding runs through the Add
+        // Machine wizard (2026-07-16): nothing reaches the registry until its
+        // Create, so a cancelled add leaves no half-configured "New Machine".
+        model.onWizardCreate = { [weak self] machine, telnetPassword in
             guard let self, let registry = self.registry else { return nil }
-            // Default to an external host: it's immediately usable with just a
-            // host + user. Flipping the kind to emulated VM in the editor gets
-            // the machine its sticky port block (registry.update assigns it).
-            // Telnet, not helios: a machine you just added has never had an
-            // agent found on it, and every vintage box can at least telnet.
-            // Helios becomes the right default only once the agent is real
-            // (the bundled fixtures ship it; a hand-added box opts in on the
-            // Launchers tab).
-            let m = Machine(name: "New Machine", kind: .externalHost,
-                            host: "", user: "", transport: .telnet)
-            registry.add(m)
+            registry.add(machine)
+            // A telnet password the wizard collected goes to the same
+            // Keychain slot adoptMachineLogin fills -- the one launchers
+            // actually read. Never into machines.json.
+            if let pw = telnetPassword, !pw.isEmpty, !machine.user.isEmpty {
+                let account = "\(machine.user)@\(machine.host):\(machine.resolvedPorts.telnet)"
+                try? KeychainHelper.store(account: account, password: pw)
+            }
             self.afterMachineMutation()
-            return m.id
+            return machine.id
+        }
+        model.onProbeLoginEndpoint = { [weak self] host, transport, user, password, completion in
+            guard let self else { return }
+            guard self.wizardProbe == nil else {
+                completion(VerifyLoginFailure(
+                    message: "A login check is already running.",
+                    canSaveUnverified: false))
+                return
+            }
+            // The machine isn't in the registry yet, so ports are the
+            // external-host defaults (the wizard doesn't expose overrides).
+            let endpoint = Machine(name: "wizard-probe", kind: .externalHost,
+                                   host: host, user: user, transport: transport)
+            let probe: RemoteLauncher = transport == .ssh
+                ? SSHLauncher.loginProbe(host: host,
+                                         port: endpoint.resolvedPorts.ssh,
+                                         user: user)
+                : TelnetLauncher.loginProbe(host: host,
+                                            port: endpoint.resolvedPorts.telnet,
+                                            user: user, password: password,
+                                            shellPrompt: nil)
+            self.wizardProbe = probe
+            probe.launch { [weak self] (result: Result<Void, Error>) in
+                self?.wizardProbe = nil
+                switch result {
+                case .success:
+                    // Proof only -- the wizard adopts at Create, not here.
+                    completion(nil)
+                case .failure(let error):
+                    completion(Self.loginProbeFailure(error, user: user))
+                }
+            }
         }
         model.onCommit = { [weak self] machine in
             guard let self, let registry = self.registry else { return }

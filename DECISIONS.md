@@ -1792,6 +1792,49 @@ draft that sat open through an Overview user switch can't write the old
 account back; that stale-write hazard predated this change but the
 invisible field made it worth closing now.
 
+## 2026-07-16: Adding a machine is a wizard; nothing commits until Create
+
+**Decision:** The Machines window's + button opens an Add Machine wizard
+(`AddMachineWizardView`) -- the one and only add path -- and the machine
+doesn't touch the registry until the wizard's Create. The name moved to
+the detail header the same day (a plain-style field that commits straight
+to the registry on Return / focus loss; Settings adopts the live name at
+commit and has no Name row), and new external machines default to telnet
+transport, not helios.
+
+**Why:** Todd's field test adding a powered-off external box surfaced
+the whole birth story at once. (1) Integrating a machine meant visiting
+every surface -- name in the header, host + OS on Settings, user via
+Change Login on Overview, an xterm launcher on Launchers -- fine if you
+already know the app, hopeless if you don't. (2) The old +-creates-a-
+"New Machine"-stub design made a zombie: the Settings draft refused to
+commit while the host field was empty (canCommit's external-host gate),
+so a typed name silently reverted when you left the pane. Creating
+nothing until the wizard finishes kills the zombie class outright --
+Cancel leaves no residue. (3) A just-added box has never had an agent
+found on it, so helios-by-default was a lie; every vintage box can at
+least telnet. (The persisted-JSON convention is untouched: absent
+transport still decodes as helios, which is what the bundled fixtures
+mean.)
+
+**Shape:** External hosts get the full walk: name -> host + OS -> login
+(proved with the same probe as Change Login via a new endpoint-based
+`onProbeLoginEndpoint` -- the machine has no registry id yet -- with the
+same authoritative-rejection vs continue-without-checking split) -> a
+pre-filled xterm launcher (bare `xterm`; the per-OS xBinDirs already put
+the X program folders on the PATH) -> summary/Create. Emulated VMs
+establish ONE thing fast -- hooking up an existing disk image (picker +
+GuestOSDetector + image-claim check) vs creating a new machine from a
+downloaded starter image (OS pick; download kicks off right after
+Create) -- and get out; FirstLogin and the Download choreography own the
+rest. Telnet passwords go to the launcher-read Keychain slot
+(user@host:port), never machines.json.
+
+**Rejected:** a modal name prompt on + (fixes only birth, not the tab
+scatter); promoting the Machine section onto Overview (unwinds the
+2026-07-09 operate/configure tab split); keeping a quick-add stub path
+alongside the wizard (two add paths, and the stub is the zombie).
+
 ---
 
 ## Decisions still to make
