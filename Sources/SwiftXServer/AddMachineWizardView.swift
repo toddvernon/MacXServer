@@ -210,9 +210,11 @@ struct AddMachineWizardView: View {
                         .textFieldStyle(.roundedBorder)
                 }
                 caption("Launchers wait for this text to know the machine is "
-                      + "ready for a command. If that isn\u{2019}t the prompt "
-                      + "(it might be a message that printed after signing "
-                      + "in), correct it here.")
+                      + "ready for a command. Edit it down to just the last "
+                      + "few characters that are unique to the prompt; "
+                      + "that\u{2019}s all that gets matched. If it isn\u{2019}t "
+                      + "the prompt at all (a message that printed after "
+                      + "signing in), replace it.")
             }
             if let failure {
                 errorText(failure.message)

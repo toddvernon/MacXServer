@@ -342,6 +342,19 @@ public final class TelnetLauncher: @unchecked Sendable {
                         i = text.index(after: i)
                     }
                     continue
+                } else {
+                    // Everything else ESC introduces is an ECMA-48 escape:
+                    // optional intermediates (0x20-0x2F) then one final byte
+                    // (0x30-0x7E). Covers charset designation (ESC ( B) and
+                    // keypad modes (ESC = / ESC >), whose printable tails
+                    // would otherwise leak into the wizard's prompt guess.
+                    i = text.index(after: i)
+                    while i < text.endIndex {
+                        let c = text[i]
+                        i = text.index(after: i)
+                        if !(c >= "\u{20}" && c <= "\u{2F}") { break }
+                    }
+                    continue
                 }
             }
             result.append(text[i])
