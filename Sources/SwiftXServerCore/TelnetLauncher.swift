@@ -47,6 +47,11 @@ public final class TelnetLauncher: @unchecked Sendable {
     private var statusCallback: ((String) -> Void)?
     private var textCallback: ((String, Bool) -> Void)?
     private let stateTimeout: TimeInterval = 15.0
+    /// Probe mode's quiet window: output arrived after the password with no
+    /// rejection and no recognized prompt in it; once the line stays quiet
+    /// this long, the login counts as proven (see the waitingForShell doc).
+    private let settleQuiet: TimeInterval = 2.5
+    private var settleWork: DispatchWorkItem?
     private var pendingEcho: [UInt8] = []
 
     public init(entry: LauncherEntry, password: String, displayString: String,
@@ -194,8 +199,14 @@ public final class TelnetLauncher: @unchecked Sendable {
                 scheduleTimeout()
             }
         case .waitingForShell:
+            // Rejection is authoritative in every mode: the message markers,
+            // plus a bare re-presented login prompt -- what telnetd does on a
+            // bad password regardless of message wording (SunOS 4.1.4 and
+            // Solaris 2.6 both print "Login incorrect" AND re-prompt; the
+            // re-prompt check covers a telnetd whose message we don't know).
             if lower.contains("ogin incorrect") || lower.contains("ermission denied")
-                || lower.contains("authentication fail") {
+                || lower.contains("authentication fail")
+                || Self.looksLikeLoginReprompt(text, loginPrompt: entry.loginPrompt) {
                 finish(.failure(TelnetLaunchError.authenticationFailed))
                 return
             }
@@ -208,16 +219,11 @@ public final class TelnetLauncher: @unchecked Sendable {
             // prompt" was the symptom against the real SS5 (2026-07-07).
             if text.contains(shellPromptNeedle) || Self.looksLikeShellPrompt(text) {
                 cancelTimeout()
+                cancelSettle()
                 if probeOnly {
                     // Credentials proven (telnetd gave us a shell). Leave
                     // without running anything.
-                    reportText("exit\n", bold: true)
-                    queueEcho("exit\r\n")
-                    sendText("exit\r\n")
-                    state = .exiting
-                    queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                        self?.finish(.success(()))
-                    }
+                    finishProbeSuccess()
                     return
                 }
                 state = .sendingCommand
@@ -236,10 +242,37 @@ public final class TelnetLauncher: @unchecked Sendable {
                         self?.finish(.success(()))
                     }
                 }
+            } else if probeOnly {
+                // Output after the password, no rejection in it, no prompt
+                // shape we recognize -- probably a banner/motd ahead of a
+                // custom prompt. Let the line go quiet, then call the login
+                // proven (the less-aggressive probe, 2026-07-16): telnetd
+                // only keeps a session open past the password by spawning
+                // the shell, and every real rejection announces itself. A
+                // wizard user can't be asked what their prompt looks like.
+                scheduleSettle()
             }
         default:
             break
         }
+    }
+
+    /// A re-presented login prompt after the password went in: telnetd's
+    /// language-independent "no". The last non-blank line must END with the
+    /// login-prompt needle (the default "ogin:" matches login:/Login:, and
+    /// the suffix rule also catches getty's hostname-prefixed "ipc login:"),
+    /// with one explicit carve-out: a line ending in "Last login:" -- a motd
+    /// line, or a receive chunk cut off right at those words -- is the
+    /// SUCCESS banner, never a rejection. Internal for unit testing.
+    static func looksLikeLoginReprompt(_ text: String, loginPrompt: String) -> Bool {
+        guard let lastLine = text.components(separatedBy: .newlines)
+                .filter({ !$0.isEmpty })
+                .last.map({ $0.trimmingCharacters(in: .whitespaces) }),
+              !lastLine.isEmpty else { return false }
+        let lower = lastLine.lowercased()
+        let needle = loginPrompt.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !needle.isEmpty, lower.hasSuffix(needle) else { return false }
+        return !lower.contains("last login")
     }
 
     /// Generic shell-prompt detection: the last non-blank line ends with one
@@ -403,6 +436,15 @@ public final class TelnetLauncher: @unchecked Sendable {
             case .waitingForLogin: err = .loginTimeout
             case .waitingForPassword: err = .passwordTimeout
             case .waitingForShell:
+                if self.probeOnly {
+                    // The password went in and nothing rejected it for the
+                    // whole window -- a silent shell is still a shell. Only
+                    // reachable when literally no output followed the
+                    // password (any output arms the shorter settle timer).
+                    self.reportStatus("Login accepted (no output after the password).")
+                    self.finishProbeSuccess()
+                    return
+                }
                 err = .shellPromptTimeout
                 let needle = self.entry.shellPrompt.trimmingCharacters(in: .whitespaces)
                 self.reportStatus("Shell prompt \"\(needle)\" not found in remote output.")
@@ -419,11 +461,48 @@ public final class TelnetLauncher: @unchecked Sendable {
         timeoutWork = nil
     }
 
+    /// Arm (or re-arm -- every fresh chunk restarts the clock) probe mode's
+    /// quiet window. Fires only if the session is still sitting in
+    /// waitingForShell: quiet after an accepted password, no rejection seen,
+    /// prompt shape unrecognized -> the login is proven.
+    private func scheduleSettle() {
+        settleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, case .waitingForShell = self.state else { return }
+            self.reportStatus("Login accepted (shell prompt shape not recognized).")
+            self.finishProbeSuccess()
+        }
+        settleWork = work
+        queue.asyncAfter(deadline: .now() + settleQuiet, execute: work)
+    }
+
+    private func cancelSettle() {
+        settleWork?.cancel()
+        settleWork = nil
+    }
+
+    /// Probe mode's one success exit: credentials proven, log back out
+    /// without running anything. The exit lands whenever the shell is ready
+    /// to read it (type-ahead), so this works even when the prompt was never
+    /// recognized.
+    private func finishProbeSuccess() {
+        cancelTimeout()
+        cancelSettle()
+        reportText("exit\n", bold: true)
+        queueEcho("exit\r\n")
+        sendText("exit\r\n")
+        state = .exiting
+        queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.finish(.success(()))
+        }
+    }
+
     // MARK: - Completion
 
     private func finish(_ result: Result<Void, Error>) {
         guard completion != nil else { return }
         cancelTimeout()
+        cancelSettle()
         connection?.cancel()
         connection = nil
         let cb = completion

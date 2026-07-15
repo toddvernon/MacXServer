@@ -45,6 +45,7 @@
 		2196392377C0BA66F93EC223 /* QueryColorsReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FAD63B04A2A7DD757392604 /* QueryColorsReply.swift */; };
 		21B2AB1A7087735C89A037B8 /* ChangeWindowAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA677B3680A675B37565D97F /* ChangeWindowAttributes.swift */; };
 		225AA42BE38CE43B05C091F4 /* ColormapOpcodes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57839F72E974453A096C3B78 /* ColormapOpcodes.swift */; };
+		2306D4F7A9A259CDE7E5C2D4 /* AddMachineWizardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 921AA6316A66B23B1DFAEAC4 /* AddMachineWizardView.swift */; };
 		234C8AFC02F1E9BE48F51F71 /* SparcStationWelcomeWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2919BA52AEB8B568EBADB7D /* SparcStationWelcomeWindowController.swift */; };
 		236BB1AE5A38AA507E59B1FC /* ResolvConfSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33B808ACA8D2CA0E7DB5848 /* ResolvConfSyntaxHighlighter.swift */; };
 		238A08408DCAFC21E29EE343 /* KeyboardOpcodes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9DA8205C0055712457E54F /* KeyboardOpcodes.swift */; };
@@ -669,6 +670,7 @@
 		9105F039F6EA455004282947 /* ResourcesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourcesWindowController.swift; sourceTree = "<group>"; };
 		917E7DA782B705024B83FFA6 /* ImageDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDownloader.swift; sourceTree = "<group>"; };
 		9195416EA75B7F94DF3A019A /* HostAccessOpcodes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostAccessOpcodes.swift; sourceTree = "<group>"; };
+		921AA6316A66B23B1DFAEAC4 /* AddMachineWizardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddMachineWizardView.swift; sourceTree = "<group>"; };
 		922000AB00BCCACC83151145 /* unicode.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = unicode.c; sourceTree = "<group>"; };
 		933900DA1413694A309C3371 /* state.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = state.c; sourceTree = "<group>"; };
 		9636060671824233822A91EA /* ImageText8.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageText8.swift; sourceTree = "<group>"; };
@@ -1008,6 +1010,7 @@
 				5BE0FF1EFBED314B4606F7AC /* AcknowledgementsLicenseTexts.swift */,
 				3DC8E9A54EA9EFFCD82D4663 /* AcknowledgementsView.swift */,
 				5949B465CC3BB8FD9461BACE /* AcknowledgementsWindowController.swift */,
+				921AA6316A66B23B1DFAEAC4 /* AddMachineWizardView.swift */,
 				EA59B9723B98DBA33C9A52E9 /* AppDelegate.swift */,
 				C5E8C9C0E5E981D043EBC161 /* BarberPoleFill.swift */,
 				116047AC358563FA7B621807 /* ClockPanelView.swift */,
@@ -1912,6 +1915,7 @@
 				5E36B7B5E83D3F992A53BE66 /* AcknowledgementsLicenseTexts.swift in Sources */,
 				E1571640C350B28E52A81393 /* AcknowledgementsView.swift in Sources */,
 				08FC4D70AF6406AB4EA3631F /* AcknowledgementsWindowController.swift in Sources */,
+				2306D4F7A9A259CDE7E5C2D4 /* AddMachineWizardView.swift in Sources */,
 				855D5C96B247907D25F2E066 /* AppDelegate.swift in Sources */,
 				30AA32F8EEAACFBF94D2D8FF /* BarberPoleFill.swift in Sources */,
 				C16E2ED664E8110A6FE7B7B7 /* ClockPanelView.swift in Sources */,

@@ -159,6 +159,93 @@ final class TelnetLoginProbeTests: XCTestCase {
         }
     }
 
+    func testProbeUnrecognizedPromptStillSucceeds() throws {
+        // The less-aggressive probe (2026-07-16): a shell prompt shaped like
+        // nothing we know must NOT read as a failed login. Todd's field test:
+        // a real 4.1.4 box with a custom prompt beat both the "$ " needle and
+        // the generic sigil detection, and the probe called a correct
+        // password a failure. Success = the password went in, output arrived,
+        // no rejection, line went quiet.
+        let server = try FakeTelnetd(
+            banner: "SunOS UNIX (ipc)\r\n\r\nlogin: ",
+            script: [
+                (expect: "fred", respond: "Password:"),
+                (expect: "kemosabe",
+                 respond: "Last login: Tue Jul 14\r\nYou have mail.\r\nipc*"),
+            ])
+        defer { server.stop() }
+
+        let probe = TelnetLauncher.loginProbe(host: "127.0.0.1", port: server.port,
+                                              user: "fred", password: "kemosabe")
+        let done = XCTestExpectation(description: "probe completes")
+        var outcome: Result<Void, Error>?
+        probe.launch { result in
+            outcome = result
+            done.fulfill()
+        }
+        // Settle window (2.5s) + exit grace (0.5s) + slack.
+        wait(for: [done], timeout: 10)
+
+        guard case .success = outcome else {
+            return XCTFail("unrecognized prompt must not fail the probe: "
+                           + "\(String(describing: outcome))")
+        }
+        let sent = server.received
+        XCTAssertFalse(sent.contains("/bin/sh"), "probe sent a command: \(sent)")
+        XCTAssertTrue(sent.contains("exit"), "probe never logged out: \(sent)")
+    }
+
+    func testProbeSilentRepromptIsAuthenticationFailed() throws {
+        // A telnetd that re-presents "login:" after the password without any
+        // message: the language-independent rejection. (The whole fleet also
+        // prints "Login incorrect"; this covers a box that doesn't.)
+        let server = try FakeTelnetd(
+            banner: "login: ",
+            script: [
+                (expect: "fred", respond: "Password:"),
+                (expect: "wrongpw", respond: "\r\nlogin: "),
+            ])
+        defer { server.stop() }
+
+        let probe = TelnetLauncher.loginProbe(host: "127.0.0.1", port: server.port,
+                                              user: "fred", password: "wrongpw")
+        let done = XCTestExpectation(description: "probe completes")
+        var outcome: Result<Void, Error>?
+        probe.launch { result in
+            outcome = result
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 10)
+
+        guard case .failure(let error) = outcome else {
+            return XCTFail("silent re-prompt should fail: \(String(describing: outcome))")
+        }
+        guard case TelnetLaunchError.authenticationFailed = error else {
+            return XCTFail("expected authenticationFailed, got \(error)")
+        }
+    }
+
+    func testLoginRepromptDetectorShapes() {
+        // The default needle is "ogin:" (matches login:/Login:). Suffix rule
+        // with the one carve-out: "Last login:" -- a motd line, or a receive
+        // chunk cut off exactly at those words -- is the SUCCESS banner and
+        // must never read as a rejection.
+        XCTAssertTrue(TelnetLauncher.looksLikeLoginReprompt("\r\nlogin: ",
+                                                            loginPrompt: "ogin:"))
+        XCTAssertTrue(TelnetLauncher.looksLikeLoginReprompt("Login incorrect\r\nLogin:",
+                                                            loginPrompt: "ogin:"))
+        XCTAssertTrue(TelnetLauncher.looksLikeLoginReprompt("\r\nipc login: ",
+                                                            loginPrompt: "ogin:"))
+        XCTAssertFalse(TelnetLauncher.looksLikeLoginReprompt("Last login:",
+                                                             loginPrompt: "ogin:"))
+        XCTAssertFalse(TelnetLauncher.looksLikeLoginReprompt("Last Login:",
+                                                             loginPrompt: "ogin:"))
+        XCTAssertFalse(TelnetLauncher.looksLikeLoginReprompt(
+            "Last login: Tue Jul 14 on ttyp0\r\n[ipc:[fred]:/home2/fred] ",
+            loginPrompt: "ogin:"))
+        XCTAssertFalse(TelnetLauncher.looksLikeLoginReprompt("", loginPrompt: "ogin:"))
+    }
+
     func testProbeRefusedConnectionFails() throws {
         // A port nothing listens on: the probe must fail (connection error or
         // login timeout), never hang past its own state timeouts, and never
