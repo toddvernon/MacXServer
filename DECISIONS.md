@@ -1762,9 +1762,11 @@ changes, same doctrine. (1) Probe failures now split into "the box
 answered and REJECTED the login" (authoritative -- retype is the only
 path, exactly as before) vs "the proof couldn't run" (name didn't
 resolve, nothing answering, conversation died). Only the second reveals
-a warned Save Without Checking block in the sheet -- the clock panel's
-Force Set shape: when the honest path is gone the override is explicit,
-never silent. The rejected alternative from the main entry ("gating
+the warned escape hatch: the sheet's Change button relabels to **Change
+Without Checking** and adopts as-is (one affirmative button with two
+meanings, Todd's call -- a separate third button read as a duplicate of
+Change). The clock panel's Force Set shape: when the honest path is
+gone the override is explicit, never silent. The rejected alternative from the main entry ("gating
 agent-less changes on nothing") stays rejected; this hatch only exists
 where no proof is POSSIBLE, and the warning says what a wrong login
 costs (launchers fail to sign in until corrected). (2) The unreachable

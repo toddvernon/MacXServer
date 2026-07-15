@@ -661,6 +661,10 @@ private struct ChangeLoginSheet: View {
         !username.isEmpty && (usesSSHKey || !password.isEmpty) && !busy
     }
 
+    /// True after a proof that couldn't run (box unreachable): the Change
+    /// button relabels to "Change Without Checking" and adopts as-is.
+    private var unverifiedMode: Bool { failure?.canSaveUnverified == true }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Change the login").font(.title3.weight(.semibold))
@@ -686,10 +690,11 @@ private struct ChangeLoginSheet: View {
                 Text(failure.message).font(.caption).foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
                 if failure.canSaveUnverified {
-                    // The escape hatch's warning; its button sits in the
-                    // action row below, aligned with Cancel/Change (Todd,
-                    // 2026-07-15). Explicit and warned, never a silent
-                    // fallback -- the clock panel's Force Set shape.
+                    // The escape hatch's warning; the Change button below
+                    // relabels to "Change Without Checking" rather than a
+                    // third button appearing (Todd, 2026-07-15). Explicit
+                    // and warned, never a silent fallback -- the clock
+                    // panel's Force Set shape.
                     Text("You can save this login without checking it. "
                          + "It\u{2019}ll be used as-is the next time the "
                          + "machine is on the network; if it\u{2019}s "
@@ -706,22 +711,26 @@ private struct ChangeLoginSheet: View {
                     Text("Signing in\u{2026}")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if failure?.canSaveUnverified == true {
-                    Button("Save Without Checking") {
-                        model.onAdoptLoginUnverified?(machineID, username,
-                                                      password)
-                        dismiss()
-                    }
-                    .disabled(!canSubmit)
-                }
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                     .disabled(busy)
-                Button("Change") { submit() }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!canSubmit)
+                // One affirmative button, two meanings: normally it runs the
+                // proof; after an unreachable failure it relabels and adopts
+                // as-is (the check can't run, and a second affirmative
+                // button just read as a duplicate).
+                Button(unverifiedMode ? "Change Without Checking" : "Change") {
+                    if unverifiedMode {
+                        model.onAdoptLoginUnverified?(machineID, username,
+                                                      password)
+                        dismiss()
+                    } else {
+                        submit()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canSubmit)
             }
         }
         .padding(20)
