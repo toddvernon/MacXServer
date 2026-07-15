@@ -171,6 +171,11 @@ final class MachinesModel: ObservableObject {
     @Published var rows: [UUID: MachineRow] = [:]
     /// The selected machine in the master list.
     @Published var selection: UUID?
+    /// A just-created machine whose name the user hasn't typed yet: the detail
+    /// header seeds its name field EMPTY (so the "Machine name" hint shows) and
+    /// grabs focus. Cleared when a name commits. The registry keeps the
+    /// "New Machine" default underneath, so a nameless machine never persists.
+    var pendingNameEntry: UUID?
 
     /// The ids of every machine whose qemu is currently live. A running
     /// machine's image can't be edited out from under it and it can't be

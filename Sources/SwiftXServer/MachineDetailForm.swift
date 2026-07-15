@@ -7,9 +7,10 @@ import SwiftXServerCore
 /// (Return in any field, and on leaving the pane: switching machine/tab or
 /// closing the window), so you can't lose an edit by forgetting to save. The
 /// draft is still a value-copy (not a live binding into the registry) so a
-/// half-finished or invalid edit -- empty name, empty external host, an image two
+/// half-finished or invalid edit -- empty external host, an image two
 /// machines both claim -- simply doesn't commit and says why inline; navigating
-/// away from an invalid edit drops it (a nameless machine can't exist). A bundled
+/// away from an invalid edit drops it. (The name is edited in the detail
+/// HEADER, not here, so a rename never rides this form's gates.) A bundled
 /// fixture locks the fields that are its identity (kind, host, OS); its image is
 /// frozen while it's running.
 struct MachineDetailForm: View {
@@ -128,20 +129,15 @@ struct MachineDetailForm: View {
         }
     }
 
-    /// What this machine IS: name, kind, OS. (Was "Identity"; renamed in the
+    /// What this machine IS: kind, OS, host. (Was "Identity"; renamed in the
     /// 2026-07-09 settings reorg -- see MACHINE_SETTINGS_AUDIT.md section 2.
     /// OS moved in from Connection: it's machine identity, driving boot
     /// config, halt command, port block, and X paths, nothing about
-    /// connecting.)
+    /// connecting. The Name row left for the detail HEADER 2026-07-16 -- the
+    /// header is the single writer now, so naming works from any tab and a
+    /// name edit can't be held hostage by this form's host-required gate.)
     private var machineSection: some View {
         section("Machine") {
-            LabeledField("Name") {
-                TextField("Machine name", text: $draft.name)
-                    .textFieldStyle(.roundedBorder)
-            }
-            if draft.name.trimmingCharacters(in: .whitespaces).isEmpty {
-                helpNote("A name is required before the machine is saved.")
-            }
             LabeledField("Kind") {
                 // Bundled: the kind is load-bearing identity. Running (incl.
                 // shutting down): flipping a live VM to external would strand
@@ -605,6 +601,11 @@ struct MachineDetailForm: View {
             draft.display = live.display
             if !bundled { draft.transport = live.transport }
             draft.launchers = live.launchers
+            // The name is header-owned (the Name row left this form
+            // 2026-07-16): adopt the live value so a draft that sat open
+            // through a header rename can't write the old name back.
+            draft.name = live.name
+            committed.name = live.name
             // The active user is Overview-owned (no editor here since the
             // Connection section retired 2026-07-15): adopt the live value so
             // a draft that sat open through a user switch can't write the old
@@ -630,6 +631,8 @@ struct MachineDetailForm: View {
 
     private var canCommit: Bool {
         guard draft != committed else { return false }
+        // Belt-and-suspenders: the name is header-owned and adopted from the
+        // live machine above, so it can only be empty if the registry's is.
         guard !draft.name.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
         if draft.kind == .externalHost,
            draft.host.trimmingCharacters(in: .whitespaces).isEmpty { return false }

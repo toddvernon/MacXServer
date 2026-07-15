@@ -75,7 +75,10 @@ struct MachinesWindowView: View {
     private var toolbar: some View {
         HStack(spacing: 4) {
             Button {
-                if let id = model.onAddNew?() { model.selection = id }
+                if let id = model.onAddNew?() {
+                    model.pendingNameEntry = id
+                    model.selection = id
+                }
             } label: { Image(systemName: "plus") }
                 .help("Add a machine")
 
@@ -163,15 +166,28 @@ private struct MachineDetailContainer: View {
     let machine: Machine
     @ObservedObject var model: MachinesModel
     @State private var tab: DetailTab = .overview
+    /// The header name field's text. The header OWNS the name (single writer,
+    /// same pattern as the Overview owning the active user since 2026-07-15) --
+    /// the Settings form has no Name row and adopts the live name at commit.
+    @State private var nameText: String = ""
+    @FocusState private var nameFocused: Bool
 
     enum DetailTab: Hashable { case overview, settings, launchers }
 
     /// An imageless VM with a known OS opens to Overview — its Download… button
-    /// is the fool-proof install path. Only an imageless VM whose OS is also
-    /// unset (nothing to download) opens to Settings, where both get fixed.
+    /// is the fool-proof install path. An imageless VM whose OS is also unset
+    /// (nothing to download) opens to Settings, where both get fixed; so does
+    /// an external host with no address yet (the host field is the one thing a
+    /// fresh external machine needs before anything works).
     private var defaultTab: DetailTab {
-        (machine.kind == .emulatedVM && machine.image == nil && machine.os == nil)
-            ? .settings : .overview
+        if machine.kind == .emulatedVM && machine.image == nil && machine.os == nil {
+            return .settings
+        }
+        if machine.kind == .externalHost
+            && machine.host.trimmingCharacters(in: .whitespaces).isEmpty {
+            return .settings
+        }
+        return .overview
     }
 
     var body: some View {
@@ -180,8 +196,18 @@ private struct MachineDetailContainer: View {
                 // The machine name outranks the blue section headers (title3),
                 // so it gets title2. The active user rides along in the
                 // header -- identity is host + account (Todd, 2026-07-13).
-                Text(machine.name.isEmpty ? "Untitled" : machine.name)
-                    .font(.title2.weight(.semibold)).lineLimit(1)
+                // The name is edited right here (plain-style field, standard
+                // inline-rename look): it commits on Return / focus loss, and
+                // an empty or unchanged edit snaps back to the live name.
+                TextField("Machine name", text: $nameText)
+                    .textFieldStyle(.plain)
+                    .font(.title2.weight(.semibold))
+                    // Hug the text like the Text() this replaced, so the
+                    // "(user)" suffix stays right next to the name.
+                    .fixedSize(horizontal: true, vertical: false)
+                    .focused($nameFocused)
+                    .onSubmit { commitName() }
+                    .onChange(of: nameFocused) { if !nameFocused { commitName() } }
                 if !machine.user.isEmpty {
                     Text("(\(machine.user))")
                         .font(.title2)
@@ -215,7 +241,38 @@ private struct MachineDetailContainer: View {
         // because this window is NSPanel-hosted, where @State-on-.id() reset is
         // unreliable. Fires only when the selected machine changes, so a manual
         // Overview/Settings click afterward sticks.
-        .onChange(of: machine.id, initial: true) { tab = defaultTab }
+        .onChange(of: machine.id, initial: true) {
+            tab = defaultTab
+            if model.pendingNameEntry == machine.id {
+                // Just created: empty field so the "Machine name" hint shows,
+                // and the cursor lands there ready to type. The async hop lets
+                // the field exist before focus is asked for (NSPanel hosting).
+                nameText = ""
+                DispatchQueue.main.async { nameFocused = true }
+            } else {
+                nameText = machine.name
+            }
+        }
+    }
+
+    /// Persist a header rename. Empty or unchanged text snaps the field back to
+    /// the live name instead (a nameless machine can't exist -- the registry
+    /// keeps "New Machine" until something real is typed).
+    private func commitName() {
+        let trimmed = nameText.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != machine.name else {
+            // Keep the hint showing on a still-unnamed new machine.
+            if model.pendingNameEntry != machine.id { nameText = machine.name }
+            return
+        }
+        model.pendingNameEntry = nil
+        nameText = trimmed
+        var m = machine
+        m.name = trimmed
+        // Deferred a runloop turn: focus-loss commits fire inside view updates,
+        // and onCommit republishes the model (same reason as the detail forms).
+        let model = self.model
+        DispatchQueue.main.async { model.onCommit?(m) }
     }
 }
 
