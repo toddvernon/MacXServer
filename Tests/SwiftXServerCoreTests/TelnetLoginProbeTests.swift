@@ -252,6 +252,69 @@ final class TelnetLoginProbeTests: XCTestCase {
         XCTAssertFalse(TelnetLauncher.looksLikeLoginReprompt("", loginPrompt: "ogin:"))
     }
 
+    func testProbeCRNULPaddingDoesNotHidePrompt() throws {
+        // RFC 854: telnetd (SunOS included) transmits a bare CR as CR NUL.
+        // Un-stripped NULs formed invisible "lines" that beat the sigil
+        // detection AND surfaced as an empty-looking Prompt field in the
+        // wizard (Todd's SWS2 test, 2026-07-16). With NUL treated as the
+        // protocol padding it is, a classic "% " prompt behind CR NUL
+        // noise is recognized outright -- no suspected prompt to confirm.
+        let server = try FakeTelnetd(
+            banner: "SunOS 5.6\r\n\r\nlogin: ",
+            script: [
+                (expect: "fred", respond: "Password:"),
+                (expect: "kemosabe",
+                 respond: "Last login: Tue Jul 14\r\u{0}\r\nsws2% \r\u{0}"),
+            ])
+        defer { server.stop() }
+
+        let probe = TelnetLauncher.loginProbe(host: "127.0.0.1", port: server.port,
+                                              user: "fred", password: "kemosabe")
+        let done = XCTestExpectation(description: "probe completes")
+        var outcome: Result<Void, Error>?
+        probe.launch { result in
+            outcome = result
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 10)
+
+        guard case .success = outcome else {
+            return XCTFail("CR NUL padding must not fail the probe: "
+                           + "\(String(describing: outcome))")
+        }
+        XCTAssertNil(probe.suspectedShellPrompt,
+                     "a recognized % prompt needs no confirmation")
+    }
+
+    func testProbeCRNULPaddingUnrecognizedPromptCapturedClean() throws {
+        // Same padding, but a prompt shape we don't know: the suspected
+        // prompt handed to the wizard must be the visible text, never a
+        // control-character line that renders as an empty field.
+        let server = try FakeTelnetd(
+            banner: "SunOS 5.6\r\n\r\nlogin: ",
+            script: [
+                (expect: "fred", respond: "Password:"),
+                (expect: "kemosabe",
+                 respond: "Last login: Tue Jul 14\r\u{0}\r\nsws2*\r\u{0}"),
+            ])
+        defer { server.stop() }
+
+        let probe = TelnetLauncher.loginProbe(host: "127.0.0.1", port: server.port,
+                                              user: "fred", password: "kemosabe")
+        let done = XCTestExpectation(description: "probe completes")
+        var outcome: Result<Void, Error>?
+        probe.launch { result in
+            outcome = result
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 10)
+
+        guard case .success = outcome else {
+            return XCTFail("probe failed: \(String(describing: outcome))")
+        }
+        XCTAssertEqual(probe.suspectedShellPrompt, "sws2*")
+    }
+
     func testProbeRefusedConnectionFails() throws {
         // A port nothing listens on: the probe must fail (connection error or
         // login timeout), never hang past its own state timeouts, and never

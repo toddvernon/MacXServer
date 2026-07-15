@@ -352,6 +352,13 @@ public final class TelnetLauncher: @unchecked Sendable {
         let bytes = Array(data)
         var i = 0
         while i < bytes.count {
+            // RFC 854: in ASCII mode a bare CR is transmitted as CR NUL --
+            // SunOS telnetd does exactly this -- so NUL is protocol padding,
+            // never application data. Left in the buffer it forms invisible
+            // "lines" that broke both the generic prompt detection and the
+            // wizard's suspected-prompt capture (an empty-looking Prompt
+            // field, Todd's SWS2 test 2026-07-16).
+            if bytes[i] == 0x00 { i += 1; continue }
             guard bytes[i] == 0xFF, i + 1 < bytes.count else {
                 clean.append(bytes[i]); i += 1; continue
             }
@@ -482,8 +489,14 @@ public final class TelnetLauncher: @unchecked Sendable {
             // validate it instead of being asked to know it cold.
             let text = Self.stripANSI(String(data: self.buffer, encoding: .utf8)
                 ?? String(data: self.buffer, encoding: .ascii) ?? "")
+            // Control characters (bell, backspace, stray padding) can lurk in
+            // real prompt lines; they'd make the wizard's field look empty or
+            // subtly wrong, so only printable text survives into the guess.
             let lastLine = text.components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .map { line in
+                    String(line.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+                        .trimmingCharacters(in: .whitespaces)
+                }
                 .filter { !$0.isEmpty }
                 .last
             self.suspectedShellPrompt = lastLine
