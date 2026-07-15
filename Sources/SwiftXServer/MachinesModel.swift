@@ -29,6 +29,18 @@ struct MachineLauncherChip: Identifiable, Equatable {
     let enabled: Bool
 }
 
+/// Why a Change Login proof failed. `canSaveUnverified` keeps the two
+/// meanings apart: false = the box answered and REJECTED the login (the
+/// proof is authoritative, retyping is the only path forward), true = the
+/// proof never ran because the box couldn't be reached -- the sheet
+/// explains why and may offer the explicit save-without-checking escape
+/// hatch (same shape as the clock panel's Force Set: the honest path is
+/// gone, so the override is explicit and warned, never silent).
+struct VerifyLoginFailure {
+    let message: String
+    let canSaveUnverified: Bool
+}
+
 /// The live *operate* state of a machine, as the Overview page renders it.
 /// AppDelegate computes these from the registry + controller state (the same
 /// source the Machines menu reads), so the window and the menu never disagree.
@@ -49,6 +61,13 @@ struct MachineRow: Identifiable, Equatable {
     /// as. Leads the Overview page -- identity is host + account. Empty =
     /// none set yet.
     let activeUser: String
+
+    /// True when a password for the active user is on file (the cleartext
+    /// machines.json field or the telnet Keychain slot). Existence only,
+    /// never the value: the Overview's Active User line shows fixed-width
+    /// dots next to the name so "there IS a saved password" is visible at
+    /// a glance.
+    let hasStoredPassword: Bool
 
     /// One caption under the Overview's launcher chips saying why any of them
     /// are dimmed ("machine unreachable", "Helios launchers need the agent").
@@ -183,10 +202,15 @@ final class MachinesModel: ObservableObject {
     /// Change Login (the agent-less tier of Change…): prove user+password by
     /// logging in over the box's telnetd, then adopt them as the machine's
     /// active user (machine.user + telnet Keychain slot). The completion fires
-    /// on the main actor: nil = adopted, else a user-facing failure message
-    /// the sheet shows inline.
+    /// on the main actor: nil = adopted, else a failure the sheet shows inline
+    /// (and, when the proof never ran, the save-without-checking offer).
     var onVerifyLogin: ((_ id: UUID, _ user: String, _ password: String,
-                         _ completion: @escaping (String?) -> Void) -> Void)?
+                         _ completion: @escaping (VerifyLoginFailure?) -> Void) -> Void)?
+    /// Adopt a login the proof couldn't check (the box is off the network
+    /// right now): the Change Login sheet's explicit escape hatch, offered
+    /// only behind its own warning after an unreachable failure. Nothing is
+    /// verified; a wrong login surfaces as launcher sign-in failures.
+    var onAdoptLoginUnverified: ((_ id: UUID, _ user: String, _ password: String) -> Void)?
     /// Open the machine's Clock admin panel (Overview → Admin Agents).
     var onSyncClock: ((UUID) -> Void)?
 

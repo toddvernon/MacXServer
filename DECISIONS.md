@@ -1754,6 +1754,26 @@ and a DROP-firewalled box's dot still undersells it ("unreachable"
 while ssh works); the honest fix is folding a transport-port TCP check
 into the prober's aliveness verdict. Suite 1574.
 
+**Next-day addendum (2026-07-15): unreachable boxes get an explicit
+Save Without Checking hatch.** Field experience (ipx powered off): the
+proof-first rule made a offline box's login permanently uneditable, and
+the failure surfaced as raw NWError text ("-65554 NoSuchRecord"). Two
+changes, same doctrine. (1) Probe failures now split into "the box
+answered and REJECTED the login" (authoritative -- retype is the only
+path, exactly as before) vs "the proof couldn't run" (name didn't
+resolve, nothing answering, conversation died). Only the second reveals
+a warned Save Without Checking block in the sheet -- the clock panel's
+Force Set shape: when the honest path is gone the override is explicit,
+never silent. The rejected alternative from the main entry ("gating
+agent-less changes on nothing") stays rejected; this hatch only exists
+where no proof is POSSIBLE, and the warning says what a wrong login
+costs (launchers fail to sign in until corrected). (2) The unreachable
+message is now plain English naming the likely cause (powered off / not
+on the network; refused; no answer) instead of NWError vocabulary. Also
+the Overview's Active User line now shows fixed-width dots after the
+username when a password is on file (existence only, never length --
+cleartext field or the telnet Keychain slot).
+
 **Next-day addendum (2026-07-15): the Settings User field is gone
 entirely, and the Connection section with it.** The declare-at-birth
 carve-out turned out to be redundant too: a fresh VM declares its first

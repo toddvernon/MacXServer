@@ -307,6 +307,12 @@ private struct MachineOverviewPage: View {
         HStack(spacing: 8) {
             Text(row.activeUser.isEmpty ? "none set" : row.activeUser)
                 .font(.system(size: 13, weight: .medium))
+            if row.hasStoredPassword {
+                // A saved password exists -- existence only, fixed eight
+                // dots, never its length.
+                Text("/ \u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}")
+                    .foregroundStyle(.secondary)
+            }
             Button("Change\u{2026}") {
                 if row.canManageUsers {
                     model.onManageUsers?(row.id)
@@ -646,7 +652,10 @@ private struct ChangeLoginSheet: View {
     @State private var username = ""
     @State private var password = ""
     @State private var busy = false
-    @State private var errorText = ""
+    /// The last proof failure, shown inline. When the proof couldn't run at
+    /// all (box off the network) it also unlocks the save-without-checking
+    /// block below the error.
+    @State private var failure: VerifyLoginFailure?
 
     private var canSubmit: Bool {
         !username.isEmpty && (usesSSHKey || !password.isEmpty) && !busy
@@ -673,9 +682,30 @@ private struct ChangeLoginSheet: View {
                     .textFieldStyle(.roundedBorder)
             }
 
-            if !errorText.isEmpty {
-                Text(errorText).font(.caption).foregroundStyle(.red)
+            if let failure {
+                Text(failure.message).font(.caption).foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
+                if failure.canSaveUnverified {
+                    // The escape hatch (same shape as the clock panel's Force
+                    // Set): the proof can't run while the box is off the
+                    // network, so the override is explicit and warned --
+                    // never a silent fallback.
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("You can save this login without checking it. "
+                             + "It\u{2019}ll be used as-is the next time the "
+                             + "machine is on the network; if it\u{2019}s "
+                             + "wrong, launchers will fail to sign in until "
+                             + "it\u{2019}s corrected here.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Save Without Checking") {
+                            model.onAdoptLoginUnverified?(machineID, username,
+                                                          password)
+                            dismiss()
+                        }
+                        .disabled(!canSubmit)
+                    }
+                }
             }
 
             HStack {
@@ -702,12 +732,13 @@ private struct ChangeLoginSheet: View {
     private func submit() {
         guard canSubmit else { return }
         busy = true
-        errorText = ""
-        model.onVerifyLogin?(machineID, username, password) { failure in
+        failure = nil
+        model.onVerifyLogin?(machineID, username, password) { result in
             busy = false
-            if let failure {
-                // Stay on the sheet; wrong password is the retry case.
-                errorText = failure
+            if let result {
+                // Stay on the sheet; wrong password is the retry case, and
+                // an unreachable box reveals the save-without-checking block.
+                failure = result
             } else {
                 dismiss()
             }

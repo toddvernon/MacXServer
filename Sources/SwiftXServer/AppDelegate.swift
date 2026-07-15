@@ -272,6 +272,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self?.verifyAndAdoptLogin(machineID: id, user: user,
                                       password: password, completion: completion)
         }
+        // The sheet's explicit escape hatch after an unreachable proof: adopt
+        // as-is. ssh machines never use a password (keys only), so nothing
+        // credential-shaped is stored for them.
+        model.onAdoptLoginUnverified = { [weak self] id, user, password in
+            guard let self, let m = self.registry?.machine(id) else { return }
+            let pw = (m.transport == .ssh || password.isEmpty) ? nil : password
+            self.adoptMachineLogin(machineID: id, user: user, password: pw)
+        }
         // What a blank DISPLAY actually resolves to at launch time (this X
         // server's own address) -- the Settings field shows it as the
         // placeholder so "blank" reads as a value, not a mystery.
@@ -487,6 +495,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             id: m.id, name: m.name, isEmulated: isEmulated,
             subtitle: subtitle, statusText: statusText, stateWord: stateWord,
             dot: dot, progress: progress, activeUser: m.user,
+            hasStoredPassword: machineHasStoredPassword(m),
             launcherNote: launcherNote,
             systemLine: systemLine(for: m, ready: ready),
             showsLifecycle: isEmulated,
@@ -1302,6 +1311,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         clockAdminControllers[id]?.showWindow()
     }
 
+    /// Whether the machine's active user has a password on file: the
+    /// cleartext machines.json field, or the telnet Keychain slot
+    /// adoptMachineLogin writes (same account format). Existence only --
+    /// the value never reaches the row.
+    private func machineHasStoredPassword(_ m: Machine) -> Bool {
+        guard !m.user.isEmpty else { return false }
+        if m.password?.isEmpty == false { return true }
+        let account = "\(m.user)@\(m.host):\(m.resolvedPorts.telnet)"
+        return KeychainHelper.retrieve(account: account) != nil
+    }
+
     /// Adopt a guest account as the machine's ACTIVE USER: set `machine.user`
     /// and stash the password in the telnet Keychain slot (the per-machine
     /// `user@host:telnetPort` key launchers read). Shared by the Users panel
@@ -1337,17 +1357,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// adoptMachineLogin. Same "prove it" doctrine as the Users panel; the
     /// proof channel is the box's login instead of the agent's hash check.
     /// Completion is called on the main actor with nil on success, else a
-    /// message for the sheet's inline error.
+    /// VerifyLoginFailure for the sheet's inline error -- split into "the box
+    /// rejected it" (authoritative no) vs "the proof couldn't run" (box off
+    /// the network), because only the second earns the save-without-checking
+    /// offer.
     @MainActor
     private func verifyAndAdoptLogin(machineID id: UUID, user: String,
                                      password: String,
-                                     completion: @escaping (String?) -> Void) {
+                                     completion: @escaping (VerifyLoginFailure?) -> Void) {
         guard let m = registry?.machine(id) else {
-            completion("The machine is gone.")
+            completion(VerifyLoginFailure(message: "The machine is gone.",
+                                          canSaveUnverified: false))
             return
         }
         guard loginProbes[id] == nil else {
-            completion("A login check is already running for this machine.")
+            completion(VerifyLoginFailure(
+                message: "A login check is already running for this machine.",
+                canSaveUnverified: false))
             return
         }
         let host = m.kind == .emulatedVM ? "127.0.0.1" : m.host
@@ -1371,17 +1397,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                         password: usesSSH ? nil : password)
                 completion(nil)
             case .failure(let error):
-                switch error {
-                case TelnetLaunchError.authenticationFailed:
-                    completion("That user and password didn\u{2019}t log in.")
-                case SSHLaunchError.authenticationFailed:
-                    completion("Your ssh key didn\u{2019}t log in as "
-                               + "\u{201C}\(user)\u{201D}.")
-                default:
-                    completion("Couldn\u{2019}t verify the login: "
-                               + error.localizedDescription)
-                }
+                completion(Self.loginProbeFailure(error, user: user))
             }
+        }
+    }
+
+    /// Map a login-probe error to what the sheet should say and offer. The
+    /// dividing line is whether the box ANSWERED: an authentication rejection
+    /// is authoritative (no escape hatch -- retype and retry), while anything
+    /// that kept the proof from running at all (name didn't resolve, nothing
+    /// answering, connection died) gets a plain-English "why you're seeing
+    /// this" instead of raw NWError text, plus the save-without-checking
+    /// offer -- a box that's off the network shouldn't make its login
+    /// permanently uneditable.
+    private static func loginProbeFailure(_ error: Error,
+                                          user: String) -> VerifyLoginFailure {
+        switch error {
+        case TelnetLaunchError.authenticationFailed:
+            return VerifyLoginFailure(
+                message: "That user and password didn\u{2019}t log in.",
+                canSaveUnverified: false)
+        case SSHLaunchError.authenticationFailed:
+            return VerifyLoginFailure(
+                message: "Your ssh key didn\u{2019}t log in as "
+                       + "\u{201C}\(user)\u{201D}.",
+                canSaveUnverified: false)
+        case TelnetLaunchError.connectionFailed(let detail):
+            // The common shapes in plain English; the raw detail only rides
+            // along when we don't recognize it (protocol jargon stays out of
+            // dialogs).
+            let d = detail.lowercased()
+            let reason: String
+            if d.contains("nosuchrecord") || d.contains("resolve")
+                || d.contains("hostname") {
+                reason = "its name doesn\u{2019}t resolve right now, which "
+                       + "usually means it\u{2019}s powered off or not on "
+                       + "the network"
+            } else if d.contains("refused") {
+                reason = "it\u{2019}s on the network, but nothing answered "
+                       + "on the telnet port"
+            } else if d.contains("timed out") || d.contains("timeout") {
+                reason = "it didn\u{2019}t answer"
+            } else {
+                reason = "it couldn\u{2019}t be reached (\(detail))"
+            }
+            return VerifyLoginFailure(
+                message: "The login can\u{2019}t be checked by signing in: "
+                       + "\(reason).",
+                canSaveUnverified: true)
+        default:
+            // Telnet prompt timeouts, ssh connection exits, spawn failures:
+            // the conversation never finished, so the login was neither
+            // proven nor disproven -- the hatch stays available.
+            return VerifyLoginFailure(
+                message: "The login couldn\u{2019}t be checked: "
+                       + error.localizedDescription,
+                canSaveUnverified: true)
         }
     }
 
