@@ -48,11 +48,12 @@ struct AddMachineWizardView: View {
     @State private var password = ""
     @State private var busy = false
     @State private var failure: VerifyLoginFailure?
-    /// Set when the login proved out but the probe didn't recognize the shell
-    /// prompt: its best guess (the last quiet line), shown for the user to
-    /// validate. The confirmed text becomes the machine's shellPrompt -- the
-    /// needle launches wait for -- so the xterm launcher works on a box whose
-    /// prompt the generic detection can't see.
+    /// Set on every telnet login proof that produced output: the probe's
+    /// best guess at the shell prompt (the last visible line), shown for the
+    /// user to validate. Always asked -- recognition heuristics are tuned on
+    /// our own fleet's prompts, so a match improves the prefill but never
+    /// silently skips the question (Todd, 2026-07-16). The confirmed text
+    /// becomes the machine's shellPrompt, the needle launches wait for.
     @State private var suspectedPrompt: String?
     @State private var promptText = ""
     /// What the user actually confirmed (Continue past the prompt question):

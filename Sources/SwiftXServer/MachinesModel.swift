@@ -226,11 +226,11 @@ final class MachinesModel: ObservableObject {
     /// finishes -- and it adopts NOTHING. Completion on the main actor: a nil
     /// failure = the login proved out, else the failure to show inline
     /// (unreachable failures carry canSaveUnverified, unlocking Continue
-    /// Without Checking). On a telnet success where the prompt shape wasn't
-    /// recognized, suspectedPrompt carries the probe's best guess (the last
-    /// quiet line) -- the wizard shows it for the user to validate and stores
-    /// the confirmed text as the machine's shellPrompt so launches can find
-    /// the prompt the probe couldn't.
+    /// Without Checking). On any telnet success that produced output,
+    /// suspectedPrompt carries the probe's best guess at the shell prompt
+    /// (the last visible line) -- the wizard always has the user validate it
+    /// (heuristic recognition improves the prefill, never skips the ask) and
+    /// stores the confirmed text as the machine's shellPrompt needle.
     var onProbeLoginEndpoint: ((_ host: String, _ transport: LauncherTransport,
                                 _ user: String, _ password: String,
                                 _ completion: @escaping (_ failure: VerifyLoginFailure?,

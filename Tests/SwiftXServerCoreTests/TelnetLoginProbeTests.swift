@@ -130,9 +130,10 @@ final class TelnetLoginProbeTests: XCTestCase {
         XCTAssertFalse(sent.contains("/bin/sh"), "probe sent a command: \(sent)")
         XCTAssertFalse(sent.contains("nohup"), "probe sent a command: \(sent)")
         XCTAssertTrue(sent.contains("exit"), "probe never logged out: \(sent)")
-        // Recognized outright -- no suspected prompt to hand back (launches
-        // will recognize it the same way; no needle needed).
-        XCTAssertNil(probe.suspectedShellPrompt)
+        // Recognized or not, the guess is always captured (Todd 2026-07-16:
+        // recognition is a heuristic tuned on our own fleet's prompts -- a
+        // match improves the prefill, it never skips the user's confirm).
+        XCTAssertEqual(probe.suspectedShellPrompt, "[ipc:[fred]:/home2/fred]")
     }
 
     func testProbeWrongPasswordIsAuthenticationFailed() throws {
@@ -258,7 +259,7 @@ final class TelnetLoginProbeTests: XCTestCase {
         // detection AND surfaced as an empty-looking Prompt field in the
         // wizard (Todd's SWS2 test, 2026-07-16). With NUL treated as the
         // protocol padding it is, a classic "% " prompt behind CR NUL
-        // noise is recognized outright -- no suspected prompt to confirm.
+        // noise is recognized instantly and captured clean for the confirm.
         let server = try FakeTelnetd(
             banner: "SunOS 5.6\r\n\r\nlogin: ",
             script: [
@@ -282,8 +283,8 @@ final class TelnetLoginProbeTests: XCTestCase {
             return XCTFail("CR NUL padding must not fail the probe: "
                            + "\(String(describing: outcome))")
         }
-        XCTAssertNil(probe.suspectedShellPrompt,
-                     "a recognized % prompt needs no confirmation")
+        XCTAssertEqual(probe.suspectedShellPrompt, "sws2%",
+                       "the recognized prompt should prefill the confirm, clean of padding")
     }
 
     func testProbeCRNULPaddingUnrecognizedPromptCapturedClean() throws {

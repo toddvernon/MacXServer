@@ -52,13 +52,15 @@ public final class TelnetLauncher: @unchecked Sendable {
     /// this long, the login counts as proven (see the waitingForShell doc).
     private let settleQuiet: TimeInterval = 2.5
     private var settleWork: DispatchWorkItem?
-    /// Probe mode, settle path only: the last non-blank line on screen when
-    /// the output went quiet -- our best guess at the box's shell prompt.
-    /// The wizard shows it to the user to validate and stores the confirmed
-    /// text as `Machine.shellPrompt`, which is exactly the needle launches
-    /// wait for. nil when the prompt was recognized outright (no needle
-    /// needed) or when no output followed the password. Read it after the
-    /// completion fires.
+    /// Probe mode: the last visible line on screen when the login proved out
+    /// -- our best guess at the box's shell prompt. Captured on EVERY telnet
+    /// success with output, recognized shape or not (Todd, 2026-07-16: the
+    /// recognition heuristics are tuned on our own fleet's prompts, so a
+    /// match must improve the prefill, never silently skip the user's
+    /// confirmation). The wizard shows it to validate and stores the
+    /// confirmed text as `Machine.shellPrompt`, the needle launches wait
+    /// for. nil only when no output followed the password. Read it after
+    /// the completion fires.
     public private(set) var suspectedShellPrompt: String?
     private var pendingEcho: [UInt8] = []
 
@@ -230,7 +232,10 @@ public final class TelnetLauncher: @unchecked Sendable {
                 cancelSettle()
                 if probeOnly {
                     // Credentials proven (telnetd gave us a shell). Leave
-                    // without running anything.
+                    // without running anything. The recognized line is still
+                    // only a heuristic guess -- capture it so the wizard can
+                    // have the user confirm it rather than trusting us.
+                    captureSuspectedPrompt()
                     finishProbeSuccess()
                     return
                 }
@@ -484,22 +489,7 @@ public final class TelnetLauncher: @unchecked Sendable {
         settleWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self, case .waitingForShell = self.state else { return }
-            // The line went quiet; whatever it ends with is our best guess
-            // at the shell prompt. Offered to the caller so the user can
-            // validate it instead of being asked to know it cold.
-            let text = Self.stripANSI(String(data: self.buffer, encoding: .utf8)
-                ?? String(data: self.buffer, encoding: .ascii) ?? "")
-            // Control characters (bell, backspace, stray padding) can lurk in
-            // real prompt lines; they'd make the wizard's field look empty or
-            // subtly wrong, so only printable text survives into the guess.
-            let lastLine = text.components(separatedBy: .newlines)
-                .map { line in
-                    String(line.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
-                        .trimmingCharacters(in: .whitespaces)
-                }
-                .filter { !$0.isEmpty }
-                .last
-            self.suspectedShellPrompt = lastLine
+            self.captureSuspectedPrompt()
             self.reportStatus("Login accepted (shell prompt shape not recognized).")
             self.finishProbeSuccess()
         }
@@ -510,6 +500,23 @@ public final class TelnetLauncher: @unchecked Sendable {
     private func cancelSettle() {
         settleWork?.cancel()
         settleWork = nil
+    }
+
+    /// The last visible line of post-password output: our best guess at the
+    /// shell prompt, handed to the wizard for the user to confirm. Control
+    /// characters (bell, backspace, stray padding) can lurk in real prompt
+    /// lines and would make the wizard's field look empty or subtly wrong,
+    /// so only printable text survives into the guess.
+    private func captureSuspectedPrompt() {
+        let text = Self.stripANSI(String(data: buffer, encoding: .utf8)
+            ?? String(data: buffer, encoding: .ascii) ?? "")
+        suspectedShellPrompt = text.components(separatedBy: .newlines)
+            .map { line in
+                String(line.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+                    .trimmingCharacters(in: .whitespaces)
+            }
+            .filter { !$0.isEmpty }
+            .last
     }
 
     /// Probe mode's one success exit: credentials proven, log back out
