@@ -306,14 +306,13 @@ private struct MachineOverviewPage: View {
     private func identityLine(_ row: MachineRow) -> some View {
         HStack(spacing: 10) {
             // One labeled line, same size as the Target Machine status line
-            // (Todd, 2026-07-15): "Username / Password: tvernon / ••••••••".
-            // Dots only when a password is actually on file -- existence,
-            // never length.
+            // (Todd, 2026-07-15): "User: tvernon / ••••••••". Dots only when
+            // a password is actually on file -- existence, never length.
             let value = row.activeUser.isEmpty ? "none set" : row.activeUser
             let dots = row.hasStoredPassword
                 ? " / \u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}"
                 : ""
-            Text("Username / Password: \(value)\(dots)")
+            Text("User: \(value)\(dots)")
                 .font(.system(size: 15, weight: .medium))
             Button("Change\u{2026}") {
                 if row.canManageUsers {
