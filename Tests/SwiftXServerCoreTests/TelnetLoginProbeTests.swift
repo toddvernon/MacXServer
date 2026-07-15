@@ -130,6 +130,9 @@ final class TelnetLoginProbeTests: XCTestCase {
         XCTAssertFalse(sent.contains("/bin/sh"), "probe sent a command: \(sent)")
         XCTAssertFalse(sent.contains("nohup"), "probe sent a command: \(sent)")
         XCTAssertTrue(sent.contains("exit"), "probe never logged out: \(sent)")
+        // Recognized outright -- no suspected prompt to hand back (launches
+        // will recognize it the same way; no needle needed).
+        XCTAssertNil(probe.suspectedShellPrompt)
     }
 
     func testProbeWrongPasswordIsAuthenticationFailed() throws {
@@ -193,6 +196,9 @@ final class TelnetLoginProbeTests: XCTestCase {
         let sent = server.received
         XCTAssertFalse(sent.contains("/bin/sh"), "probe sent a command: \(sent)")
         XCTAssertTrue(sent.contains("exit"), "probe never logged out: \(sent)")
+        // The settle path's souvenir: the last quiet line is the suspected
+        // shell prompt, offered to the wizard for user validation.
+        XCTAssertEqual(probe.suspectedShellPrompt, "ipc*")
     }
 
     func testProbeSilentRepromptIsAuthenticationFailed() throws {

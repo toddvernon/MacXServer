@@ -223,12 +223,18 @@ final class MachinesModel: ObservableObject {
     /// The wizard's login proof: same probe as onVerifyLogin (transport ssh =
     /// BatchMode key check, else a live telnet login) but against a bare
     /// endpoint -- the machine doesn't exist in the registry until the wizard
-    /// finishes -- and it adopts NOTHING. Completion on the main actor: nil =
-    /// the login proved out, else the failure to show inline (unreachable
-    /// failures carry canSaveUnverified, unlocking Continue Without Checking).
+    /// finishes -- and it adopts NOTHING. Completion on the main actor: a nil
+    /// failure = the login proved out, else the failure to show inline
+    /// (unreachable failures carry canSaveUnverified, unlocking Continue
+    /// Without Checking). On a telnet success where the prompt shape wasn't
+    /// recognized, suspectedPrompt carries the probe's best guess (the last
+    /// quiet line) -- the wizard shows it for the user to validate and stores
+    /// the confirmed text as the machine's shellPrompt so launches can find
+    /// the prompt the probe couldn't.
     var onProbeLoginEndpoint: ((_ host: String, _ transport: LauncherTransport,
                                 _ user: String, _ password: String,
-                                _ completion: @escaping (VerifyLoginFailure?) -> Void) -> Void)?
+                                _ completion: @escaping (_ failure: VerifyLoginFailure?,
+                                                         _ suspectedPrompt: String?) -> Void) -> Void)?
     /// Commit edits to an existing machine (matched by id).
     var onCommit: ((Machine) -> Void)?
     /// Remove a machine by id.

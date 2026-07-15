@@ -48,6 +48,18 @@ struct AddMachineWizardView: View {
     @State private var password = ""
     @State private var busy = false
     @State private var failure: VerifyLoginFailure?
+    /// Set when the login proved out but the probe didn't recognize the shell
+    /// prompt: its best guess (the last quiet line), shown for the user to
+    /// validate. The confirmed text becomes the machine's shellPrompt -- the
+    /// needle launches wait for -- so the xterm launcher works on a box whose
+    /// prompt the generic detection can't see.
+    @State private var suspectedPrompt: String?
+    @State private var promptText = ""
+    /// What the user actually confirmed (Continue past the prompt question):
+    /// this is what Create stores as shellPrompt. Separate from promptText so
+    /// a re-proof or a back-step can't smuggle stale field text onto the
+    /// machine.
+    @State private var confirmedPrompt: String?
 
     // External branch: the first launcher.
     @State private var makeXterm = true
@@ -172,16 +184,34 @@ struct AddMachineWizardView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .onChange(of: transport) { failure = nil }
+            .onChange(of: transport) { failure = nil; suspectedPrompt = nil }
             TextField("Username", text: $username)
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
+                .onChange(of: username) { suspectedPrompt = nil }
             if transport != .ssh {
                 SecureField("Password", text: $password)
                     .textFieldStyle(.roundedBorder)
+                    .onChange(of: password) { suspectedPrompt = nil }
             } else {
                 caption("SSH signs in with your ssh key; no password is stored. "
                       + "The login is checked with the key before continuing.")
+            }
+            if suspectedPrompt != nil {
+                // Login proved, prompt shape unrecognized: show what the
+                // machine ended with and let the user fix it, instead of
+                // asking them to know their prompt cold (Todd, 2026-07-16).
+                Text("Signed in. \(displayNameOrIt)\u{2019}s command prompt "
+                     + "looks like this:")
+                    .font(.callout)
+                LabeledContent("Prompt") {
+                    TextField("", text: $promptText)
+                        .textFieldStyle(.roundedBorder)
+                }
+                caption("Launchers wait for this text to know the machine is "
+                      + "ready for a command. If that isn\u{2019}t the prompt "
+                      + "(it might be a message that printed after signing "
+                      + "in), correct it here.")
             }
             if let failure {
                 errorText(failure.message)
@@ -232,6 +262,7 @@ struct AddMachineWizardView: View {
                 summaryLine("OS", os?.displayName ?? "not set")
                 summaryLine("Login", "\(username) over \(transport.displayName)"
                             + (failure?.canSaveUnverified == true ? " (not checked)" : ""))
+                if let confirmedPrompt { summaryLine("Prompt", confirmedPrompt) }
                 if makeXterm { summaryLine("Launcher", "xterm") }
             } else if vmSource == .existingImage {
                 summaryLine("Disk image",
@@ -307,7 +338,14 @@ struct AddMachineWizardView: View {
         case .host:
             step = .login
         case .login:
-            if failure?.canSaveUnverified == true {
+            if suspectedPrompt != nil {
+                // Prompt confirmed; the proof already ran. An emptied field
+                // means "not sure" -- store nothing, launches fall back to
+                // the generic detection.
+                let trimmed = promptText.trimmingCharacters(in: .whitespaces)
+                confirmedPrompt = trimmed.isEmpty ? nil : trimmed
+                step = .launcher
+            } else if failure?.canSaveUnverified == true {
                 step = .launcher   // the explicit unchecked path
             } else {
                 runLoginProof()    // advances itself on success
@@ -329,8 +367,10 @@ struct AddMachineWizardView: View {
         case .summary:  step = kind == .externalHost ? .launcher : .vmSource
         }
         // A different page means a different question; stale proof errors
-        // shouldn't follow the user around.
+        // shouldn't follow the user around. The suspected prompt goes too --
+        // stepping back to the login page means re-proving, which regathers it.
         failure = nil
+        suspectedPrompt = nil
         busy = false
     }
 
@@ -339,13 +379,22 @@ struct AddMachineWizardView: View {
     private func runLoginProof() {
         busy = true
         failure = nil
+        suspectedPrompt = nil
+        confirmedPrompt = nil
         model.onProbeLoginEndpoint?(host.trimmingCharacters(in: .whitespaces),
                                     transport,
                                     username.trimmingCharacters(in: .whitespaces),
-                                    password) { result in
+                                    password) { result, suspected in
             busy = false
             if let result {
                 failure = result   // rejection: retype; unreachable: hatch
+            } else if let suspected, !suspected.isEmpty {
+                // Signed in, but the prompt shape wasn't recognized: stay
+                // here and ask the user to validate the probe's guess before
+                // moving on (it becomes the machine's launch-time needle).
+                failure = nil
+                suspectedPrompt = suspected
+                promptText = suspected
             } else {
                 failure = nil
                 step = .launcher
@@ -382,7 +431,8 @@ struct AddMachineWizardView: View {
             m = Machine(name: trimmedName, kind: .externalHost, os: os,
                         host: host.trimmingCharacters(in: .whitespaces),
                         user: username.trimmingCharacters(in: .whitespaces),
-                        transport: transport)
+                        transport: transport,
+                        shellPrompt: confirmedPrompt)
             if makeXterm {
                 m.launchers = [MachineLauncher(
                     name: "xterm",

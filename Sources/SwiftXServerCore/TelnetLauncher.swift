@@ -52,6 +52,14 @@ public final class TelnetLauncher: @unchecked Sendable {
     /// this long, the login counts as proven (see the waitingForShell doc).
     private let settleQuiet: TimeInterval = 2.5
     private var settleWork: DispatchWorkItem?
+    /// Probe mode, settle path only: the last non-blank line on screen when
+    /// the output went quiet -- our best guess at the box's shell prompt.
+    /// The wizard shows it to the user to validate and stores the confirmed
+    /// text as `Machine.shellPrompt`, which is exactly the needle launches
+    /// wait for. nil when the prompt was recognized outright (no needle
+    /// needed) or when no output followed the password. Read it after the
+    /// completion fires.
+    public private(set) var suspectedShellPrompt: String?
     private var pendingEcho: [UInt8] = []
 
     public init(entry: LauncherEntry, password: String, displayString: String,
@@ -469,6 +477,16 @@ public final class TelnetLauncher: @unchecked Sendable {
         settleWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self, case .waitingForShell = self.state else { return }
+            // The line went quiet; whatever it ends with is our best guess
+            // at the shell prompt. Offered to the caller so the user can
+            // validate it instead of being asked to know it cold.
+            let text = Self.stripANSI(String(data: self.buffer, encoding: .utf8)
+                ?? String(data: self.buffer, encoding: .ascii) ?? "")
+            let lastLine = text.components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+                .last
+            self.suspectedShellPrompt = lastLine
             self.reportStatus("Login accepted (shell prompt shape not recognized).")
             self.finishProbeSuccess()
         }

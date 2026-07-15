@@ -313,7 +313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             guard self.wizardProbe == nil else {
                 completion(VerifyLoginFailure(
                     message: "A login check is already running.",
-                    canSaveUnverified: false))
+                    canSaveUnverified: false), nil)
                 return
             }
             // The machine isn't in the registry yet, so ports are the
@@ -334,9 +334,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 switch result {
                 case .success:
                     // Proof only -- the wizard adopts at Create, not here.
-                    completion(nil)
+                    // A telnet settle-path success carries the probe's best
+                    // guess at the unrecognized prompt (nil from ssh probes).
+                    completion(nil, (probe as? TelnetLauncher)?.suspectedShellPrompt)
                 case .failure(let error):
-                    completion(Self.loginProbeFailure(error, user: user))
+                    completion(Self.loginProbeFailure(error, user: user), nil)
                 }
             }
         }
