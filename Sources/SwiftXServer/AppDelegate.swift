@@ -1422,28 +1422,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 message: "Your ssh key didn\u{2019}t log in as "
                        + "\u{201C}\(user)\u{201D}.",
                 canSaveUnverified: false)
-        case TelnetLaunchError.connectionFailed(let detail):
-            // The common shapes in plain English; the raw detail only rides
-            // along when we don't recognize it (protocol jargon stays out of
-            // dialogs).
-            let d = detail.lowercased()
-            let reason: String
-            if d.contains("nosuchrecord") || d.contains("resolve")
-                || d.contains("hostname") {
-                reason = "its name doesn\u{2019}t resolve right now, which "
-                       + "usually means it\u{2019}s powered off or not on "
-                       + "the network"
-            } else if d.contains("refused") {
-                reason = "it\u{2019}s on the network, but nothing answered "
-                       + "on the telnet port"
-            } else if d.contains("timed out") || d.contains("timeout") {
-                reason = "it didn\u{2019}t answer"
-            } else {
-                reason = "it couldn\u{2019}t be reached (\(detail))"
-            }
+        case TelnetLaunchError.connectionFailed:
+            // One plain sentence for every can't-connect shape (Todd's
+            // wording, 2026-07-15) -- the sub-cause (DNS, refused, timeout)
+            // wasn't earning its words in a dialog.
             return VerifyLoginFailure(
-                message: "The login can\u{2019}t be checked by signing in: "
-                       + "\(reason).",
+                message: "The machine isn\u{2019}t reachable right now to "
+                       + "validate the username and password.",
                 canSaveUnverified: true)
         default:
             // Telnet prompt timeouts, ssh connection exits, spawn failures:

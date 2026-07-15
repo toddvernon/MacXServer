@@ -686,25 +686,17 @@ private struct ChangeLoginSheet: View {
                 Text(failure.message).font(.caption).foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
                 if failure.canSaveUnverified {
-                    // The escape hatch (same shape as the clock panel's Force
-                    // Set): the proof can't run while the box is off the
-                    // network, so the override is explicit and warned --
-                    // never a silent fallback.
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("You can save this login without checking it. "
-                             + "It\u{2019}ll be used as-is the next time the "
-                             + "machine is on the network; if it\u{2019}s "
-                             + "wrong, launchers will fail to sign in until "
-                             + "it\u{2019}s corrected here.")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button("Save Without Checking") {
-                            model.onAdoptLoginUnverified?(machineID, username,
-                                                          password)
-                            dismiss()
-                        }
-                        .disabled(!canSubmit)
-                    }
+                    // The escape hatch's warning; its button sits in the
+                    // action row below, aligned with Cancel/Change (Todd,
+                    // 2026-07-15). Explicit and warned, never a silent
+                    // fallback -- the clock panel's Force Set shape.
+                    Text("You can save this login without checking it. "
+                         + "It\u{2019}ll be used as-is the next time the "
+                         + "machine is on the network; if it\u{2019}s "
+                         + "wrong, launchers will fail to sign in until "
+                         + "it\u{2019}s corrected here.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -713,6 +705,14 @@ private struct ChangeLoginSheet: View {
                     ProgressView().controlSize(.small)
                     Text("Signing in\u{2026}")
                         .font(.caption).foregroundStyle(.secondary)
+                }
+                if failure?.canSaveUnverified == true {
+                    Button("Save Without Checking") {
+                        model.onAdoptLoginUnverified?(machineID, username,
+                                                      password)
+                        dismiss()
+                    }
+                    .disabled(!canSubmit)
                 }
                 Spacer()
                 Button("Cancel") { dismiss() }
