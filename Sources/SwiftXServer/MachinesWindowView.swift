@@ -305,15 +305,26 @@ private struct MachineOverviewPage: View {
     /// with the reason in the tooltip.
     private func identityLine(_ row: MachineRow) -> some View {
         HStack(spacing: 10) {
-            // One labeled line, same size as the Target Machine status line
-            // (Todd, 2026-07-15): "User: tvernon / ••••••••". Dots only when
+            // Label at the Target Machine status-line size, value in a
+            // field-look box that's read-only (Todd, 2026-07-15) -- it
+            // changes through Change…, never by typing here. Dots only when
             // a password is actually on file -- existence, never length.
             let value = row.activeUser.isEmpty ? "none set" : row.activeUser
             let dots = row.hasStoredPassword
                 ? " / \u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}"
                 : ""
-            Text("User: \(value)\(dots)")
+            Text("User:")
                 .font(.system(size: 15, weight: .medium))
+            Text("\(value)\(dots)")
+                .font(.system(size: 13))
+                .textSelection(.enabled)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .frame(minWidth: 180, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 5)
+                    .fill(Color(nsColor: .textBackgroundColor)))
+                .overlay(RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(Color(nsColor: .separatorColor)))
             Button("Change\u{2026}") {
                 if row.canManageUsers {
                     model.onManageUsers?(row.id)
