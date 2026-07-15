@@ -294,8 +294,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // Default to an external host: it's immediately usable with just a
             // host + user. Flipping the kind to emulated VM in the editor gets
             // the machine its sticky port block (registry.update assigns it).
+            // Telnet, not helios: a machine you just added has never had an
+            // agent found on it, and every vintage box can at least telnet.
+            // Helios becomes the right default only once the agent is real
+            // (the bundled fixtures ship it; a hand-added box opts in on the
+            // Launchers tab).
             let m = Machine(name: "New Machine", kind: .externalHost,
-                            host: "", user: "", transport: .helios)
+                            host: "", user: "", transport: .telnet)
             registry.add(m)
             self.afterMachineMutation()
             return m.id
