@@ -368,6 +368,9 @@ private struct MachineOverviewPage: View {
             }
             .padding(.leading, 16)
         }
+        // ~20% more air before the header (Todd, 2026-07-15); same on the
+        // two sections below.
+        .padding(.top, 5)
     }
 
     /// No dot here (the master list carries it); the thermometer below is the
@@ -542,6 +545,7 @@ private struct MachineOverviewPage: View {
             }
             .padding(.leading, 16)
         }
+        .padding(.top, 5)
     }
 
     /// Verbs that ride the box's Helios agent (File Transfer, DNS; more to
@@ -616,6 +620,7 @@ private struct MachineOverviewPage: View {
             }
             .padding(.leading, 16)
         }
+        .padding(.top, 5)
     }
 
     /// "<prefix> Edit in Launchers." with Edit as a blue link that hops the
