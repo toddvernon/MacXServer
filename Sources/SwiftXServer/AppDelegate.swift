@@ -2742,6 +2742,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             prefs.imagesDirectoryPath = chosen
         }
         pendingFirstLogin[id] = (user: username, password: password, dns: dnsServer)
+        if ImageCatalog.devCatalogActive {
+            NSLog("macxserver: image catalog is the LOCAL DEV CATALOG (%@)",
+                  ImageCatalog.devCatalogFileURL.path)
+        }
         Task { @MainActor in
             let catalog: ImageCatalog
             do {

@@ -61,14 +61,46 @@ public struct ImageCatalog: Equatable, Sendable {
     public static let defaultURL = URL(string:
         "https://raw.githubusercontent.com/toddvernon/macxserver-images/main/catalog.json")!
 
-    /// The effective catalog URL: the `SPARCPLUG_CATALOG_URL` dev override
-    /// (points tests / local runs at a `file://` fixture) or the pinned
-    /// production URL. Same override pattern as `SPARCPLUG_ENGINE_DIR`.
+    /// Test hook only: substitutes the home directory the dev-catalog path
+    /// derives from, so the dotfile behavior is testable without touching
+    /// the real `~`. (unsafe is fine: set once at the top of a serial test,
+    /// never from production code.)
+    nonisolated(unsafe) internal static var homeOverride: String?
+
+    /// The dev-catalog dotfile (Todd, 2026-07-16): a catalog at this path is
+    /// used by DEBUG builds instead of the production URL, so running from
+    /// Xcode against a locally-built catalog needs no env var and no scheme
+    /// surgery. `build-catalog.sh --local` (SPARCplug repo) symlinks it at
+    /// the staging catalog it emits; `rm` the symlink to go back to the real
+    /// catalog. Same convention as `.macxserver-dev-secrets.json`.
+    public static var devCatalogFileURL: URL {
+        URL(fileURLWithPath: homeOverride ?? NSHomeDirectory())
+            .appendingPathComponent(".macxserver-dev-catalog.json")
+    }
+
+    /// True when a fetch will read the dev-catalog dotfile. Always false in
+    /// Release builds -- the conditional is compiled out, so a shipped app
+    /// can never be redirected by a stray file on a stranger's Mac.
+    public static var devCatalogActive: Bool {
+        #if DEBUG
+        return FileManager.default.fileExists(atPath: devCatalogFileURL.path)
+        #else
+        return false
+        #endif
+    }
+
+    /// The effective catalog URL, in precedence order: the explicit
+    /// `SPARCPLUG_CATALOG_URL` env override (tests; same pattern as
+    /// `SPARCPLUG_ENGINE_DIR`), the dev-catalog dotfile (DEBUG builds only),
+    /// then the pinned production URL.
     public static var catalogURL: URL {
         if let s = ProcessInfo.processInfo.environment["SPARCPLUG_CATALOG_URL"],
            !s.isEmpty, let u = URL(string: s) {
             return u
         }
+        #if DEBUG
+        if devCatalogActive { return devCatalogFileURL }
+        #endif
         return defaultURL
     }
 

@@ -58,6 +58,7 @@ PATHS=(
     "$HOME/.macxserver-launchers"
     "$HOME/.macxserver-fonts"
     "$HOME/.macxserver-dev-secrets.json"
+    "$HOME/.macxserver-dev-catalog.json"
     "$HOME/Library/Application Support/macXserver"
     "$HOME/Library/Saved Application State/$BUNDLE_ID.savedState"
     "$HOME/Library/Caches/$BUNDLE_ID"

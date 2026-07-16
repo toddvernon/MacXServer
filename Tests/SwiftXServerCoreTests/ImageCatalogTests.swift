@@ -74,6 +74,41 @@ final class ImageCatalogTests: XCTestCase {
         XCTAssertEqual(catalog.images.count, 2)
     }
 
+    func testDevCatalogDotfileDrivesTheCatalogURLInDebugBuilds() throws {
+        #if DEBUG
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("imgcat-home-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: home,
+                                                withIntermediateDirectories: true)
+        defer {
+            ImageCatalog.homeOverride = nil
+            try? FileManager.default.removeItem(at: home)
+        }
+        ImageCatalog.homeOverride = home.path
+
+        // The env override outranks the dotfile, so the URL assertions only
+        // hold when the runner didn't set one.
+        let envSet = !(ProcessInfo.processInfo
+            .environment["SPARCPLUG_CATALOG_URL"] ?? "").isEmpty
+
+        // No dotfile: not active, production URL.
+        XCTAssertFalse(ImageCatalog.devCatalogActive)
+        if !envSet {
+            XCTAssertEqual(ImageCatalog.catalogURL, ImageCatalog.defaultURL)
+        }
+
+        // Dotfile present: active, and (absent the env override) it IS the
+        // catalog URL.
+        try Data("{}".utf8).write(
+            to: home.appendingPathComponent(".macxserver-dev-catalog.json"))
+        XCTAssertTrue(ImageCatalog.devCatalogActive)
+        if !envSet {
+            XCTAssertEqual(ImageCatalog.catalogURL,
+                           ImageCatalog.devCatalogFileURL)
+        }
+        #endif
+    }
+
     func testCatalogURLDefaultsToThePinnedProductionURL() {
         // (The env override can't be exercised here — setenv after process
         // start isn't visible to ProcessInfo caching on all runners — but the

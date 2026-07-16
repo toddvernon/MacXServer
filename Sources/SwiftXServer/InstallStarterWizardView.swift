@@ -158,6 +158,12 @@ struct InstallStarterWizardView: View {
             caption("Downloads the starter system (about 250 MB), then the "
                   + "machine boots and your login is created automatically. "
                   + "The first boot takes a couple of minutes.")
+            if ImageCatalog.devCatalogActive {
+                // Dev builds with ~/.macxserver-dev-catalog.json present: a
+                // test session must never be mistakable for a real download.
+                caption("Using the LOCAL DEV CATALOG "
+                      + "(~/.macxserver-dev-catalog.json).")
+            }
         }
     }
 
