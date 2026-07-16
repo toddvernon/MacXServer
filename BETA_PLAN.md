@@ -68,6 +68,14 @@ phase 3; the fixed App Support default is fine for all beta testing.
 Goal: on a Mac that has never seen the dev tree, the app's Download button
 produces a booting, helios-answering guest for all three OSes.
 
+> Script side DONE 2026-07-15 (SPARCplug ad5c72c): `publish-prep.sh` is
+> the read-only verification gate (item 1's checklist, executable),
+> `docs/PUBLISH_PREP.md` carries the strip/rotate mutation recipes, and
+> `build-catalog.sh` grew `--tag` + the `--publish` GitHub tail (item 2),
+> dry-run verified. Remaining: Todd's hands-on half -- pick the root
+> password, apply the recipes per master, pass the gate, publish, then
+> the stranger download test (item 4).
+
 1. **Publish-prep each master** (the E1 verification, now a real checklist
    per image -- solaris26, sunos414, netbsd):
    - current heliosAgent binary baked in, rc-started, fail-closed auth
