@@ -318,8 +318,8 @@ private struct MachineOverviewPage: View {
     /// the one button that makes it real. The secondary existing-image path
     /// stays discoverable but quiet.
     private func starterHero(_ row: MachineRow) -> some View {
-        let os = model.machines.first { $0.id == row.id }?.os?.displayName
-            ?? "a vintage Sun OS"
+        let machineOS = model.machines.first { $0.id == row.id }?.os
+        let os = machineOS?.displayName ?? "a vintage Sun OS"
         return VStack(spacing: 16) {
             Image(systemName: "desktopcomputer")
                 .font(.system(size: 52, weight: .regular))
@@ -370,6 +370,7 @@ private struct MachineOverviewPage: View {
             InstallStarterWizardView(machineID: row.id,
                                      machineName: row.name,
                                      osName: os,
+                                     os: machineOS,
                                      model: model)
         }
     }

@@ -142,6 +142,22 @@ final class UserAdminTests: XCTestCase {
         XCTAssertNotNil(UserAdmin.usernameProblem("to:dd"))     // field separator
     }
 
+    func testReservedSystemAccountNames() {
+        // Caught at typing time so the add-user pipeline's duplicate refusal
+        // isn't the first hint (the 2026-07-16 tvernon-collision field find).
+        XCTAssertNotNil(UserAdmin.usernameProblem("root"))               // every OS
+        XCTAssertNotNil(UserAdmin.usernameProblem("root", os: .netbsd))
+        XCTAssertNotNil(UserAdmin.usernameProblem("template", os: .solaris26))
+        XCTAssertNotNil(UserAdmin.usernameProblem("tvernon", os: .sunos414))
+        XCTAssertNotNil(UserAdmin.usernameProblem("toor", os: .netbsd))
+        XCTAssertNotNil(UserAdmin.usernameProblem("ingres", os: .sunos414))
+        // Another OS's system name is fine where it doesn't exist...
+        XCTAssertNil(UserAdmin.usernameProblem("ingres", os: .solaris26))
+        // ...but with no OS known, the union applies.
+        XCTAssertNotNil(UserAdmin.usernameProblem("ingres"))
+        XCTAssertNil(UserAdmin.usernameProblem("todd", os: .netbsd))
+    }
+
     func testDesHashKnownVector() {
         // Pinned against crypt(3) on this platform (verified by hand
         // 2026-07-10) -- and DES ignores everything past 8 characters.
@@ -325,11 +341,17 @@ final class UserAdminTests: XCTestCase {
     }
 
     func testAddUserRefusesDuplicate() {
+        // A non-reserved human account: the reserved-name validator would
+        // otherwise fire first and mask the duplicate refusal under test
+        // (tvernon joined the reserved list 2026-07-16).
         let guest = solarisGuest()
+        guest.files["/etc/passwd"]!
+            += "sally:x:1001:100:Sally:/home/sally:/usr/local/bin/tcsh\n"
+        guest.files["/etc/shadow"]! += "sally:ccCCccCCccCCc:10000::::::\n"
         XCTAssertThrowsError(try UserAdmin.addUser(
-            .init(name: "tvernon", hash: "x"),
+            .init(name: "sally", hash: "x"),
             os: .solaris26, transport: guest)) { error in
-            XCTAssertEqual(error as? UserAdminError, .userExists("tvernon"))
+            XCTAssertEqual(error as? UserAdminError, .userExists("sally"))
         }
         // Nothing was staged or written.
         XCTAssertFalse(guest.log.contains { $0.hasPrefix("run") || $0.hasPrefix("write") })

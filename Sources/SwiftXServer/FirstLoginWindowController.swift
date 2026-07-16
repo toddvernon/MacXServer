@@ -17,6 +17,7 @@ final class FirstLoginWindowController: NSWindowController {
     /// boots + defers the add-user pipeline. `onSkip` closes without a login
     /// (the machine stays user-less and the flow re-offers on next ready).
     init(machineName: String,
+         os: MachineOS?,
          suggestedUsername: String,
          onCreate: @escaping (_ username: String, _ password: String) -> Void,
          onSkip: @escaping () -> Void) {
@@ -31,6 +32,7 @@ final class FirstLoginWindowController: NSWindowController {
 
         let view = FirstLoginView(
             machineName: machineName,
+            os: os,
             suggestedUsername: suggestedUsername,
             create: { [weak self] user, pass in self?.close(); onCreate(user, pass) },
             skip: { [weak self] in self?.close(); onSkip() })
@@ -49,6 +51,7 @@ final class FirstLoginWindowController: NSWindowController {
 
 private struct FirstLoginView: View {
     let machineName: String
+    let os: MachineOS?
     let suggestedUsername: String
     let create: (String, String) -> Void
     let skip: () -> Void
@@ -57,9 +60,10 @@ private struct FirstLoginView: View {
     @State private var password = ""
     @State private var confirm = ""
 
-    init(machineName: String, suggestedUsername: String,
+    init(machineName: String, os: MachineOS?, suggestedUsername: String,
          create: @escaping (String, String) -> Void, skip: @escaping () -> Void) {
         self.machineName = machineName
+        self.os = os
         self.suggestedUsername = suggestedUsername
         self.create = create
         self.skip = skip
@@ -67,7 +71,7 @@ private struct FirstLoginView: View {
     }
 
     private var usernameProblem: String? {
-        username.isEmpty ? nil : UserAdmin.usernameProblem(username)
+        username.isEmpty ? nil : UserAdmin.usernameProblem(username, os: os)
     }
     private var passwordsMatch: Bool { password == confirm }
     private var canCreate: Bool {

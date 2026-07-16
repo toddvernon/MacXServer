@@ -2784,6 +2784,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             .prefix(8))
         firstLoginWindow = FirstLoginWindowController(
             machineName: m.name,
+            os: m.os,
             suggestedUsername: suggested,
             onCreate: { [weak self] user, password in
                 self?.beginFirstLogin(machineID: machineID, user: user,

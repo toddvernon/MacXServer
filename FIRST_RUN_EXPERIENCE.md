@@ -107,8 +107,11 @@ boot (the invitation-not-a-gate rule).
   user. (Side effect: a fresh install no longer writes the legacy
   all-comments `~/.macxserver-launchers` template; it was documentation
   only, zero live entries, so the fresh-install machine set is unchanged.)
-- Published masters carry root + template + daemon only (tvernon stripped
-  at publish prep) -- NOT DONE (publish-prep step, gated on E1).
+- Published masters carry root + stock system accounts only: tvernon AND
+  template stripped at publish prep (the template account is dead weight
+  since add-user writes app-embedded dotfiles directly -- see
+  HELIOS_USER_MANAGEMENT.md; Todd re-confirmed 2026-07-16). Automated by
+  SPARCplug's `strip-release.sh`; still gated on E1 for the real publish.
 
 ## Adjacent first-launch items (not this flow, same milestone)
 

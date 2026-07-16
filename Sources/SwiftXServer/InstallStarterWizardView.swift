@@ -17,6 +17,8 @@ struct InstallStarterWizardView: View {
     let machineName: String
     /// Guest OS display name for the copy ("Solaris 2.6", ...).
     let osName: String
+    /// The guest OS itself, for the per-OS reserved-username check.
+    let os: MachineOS?
     @ObservedObject var model: MachinesModel
     @Environment(\.dismiss) private var dismiss
 
@@ -43,10 +45,11 @@ struct InstallStarterWizardView: View {
     @State private var dnsServer = ""
 
     init(machineID: UUID, machineName: String, osName: String,
-         model: MachinesModel) {
+         os: MachineOS?, model: MachinesModel) {
         self.machineID = machineID
         self.machineName = machineName
         self.osName = osName
+        self.os = os
         self.model = model
         // Prefills: the effective images directory, and the Mac's short
         // login name cleaned to the vintage-Unix username rules.
@@ -185,7 +188,7 @@ struct InstallStarterWizardView: View {
     }
 
     private var usernameProblem: String? {
-        username.isEmpty ? nil : UserAdmin.usernameProblem(username)
+        username.isEmpty ? nil : UserAdmin.usernameProblem(username, os: os)
     }
 
     private var canGoForward: Bool {

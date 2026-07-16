@@ -158,10 +158,38 @@ public enum UserAdmin {
 
     // MARK: Username + password
 
+    /// Account names that already exist on (or are conventional for) each
+    /// curated guest OS, plus our own staging names. Typing one into an
+    /// add-user surface would collide at apply time with an opaque refusal
+    /// -- the 2026-07-16 field find: "tvernon" on a gold-clone image, and a
+    /// stranger typing "root" hits the same wall on any published image --
+    /// so the validator catches it at typing time. Good-faith lists from the
+    /// stock passwd files; addUser's live duplicate check stays the backstop
+    /// for anything these miss. nil OS = the union (the safe answer when the
+    /// target system is unknown).
+    public static func reservedNames(os: MachineOS?) -> Set<String> {
+        let common: Set<String> = ["root", "daemon", "bin", "sys", "adm",
+                                   "uucp", "nobody", "template", "tvernon"]
+        let solaris: Set<String> = ["lp", "smtp", "nuucp", "listen",
+                                    "noaccess", "nobody4"]
+        let sunos: Set<String>   = ["news", "ingres", "audit", "sync",
+                                    "sysdiag", "operator"]
+        let netbsd: Set<String>  = ["toor", "operator", "games", "postfix",
+                                    "named", "ntpd", "sshd"]
+        switch os {
+        case .solaris26: return common.union(solaris)
+        case .sunos414:  return common.union(sunos)
+        case .netbsd:    return common.union(netbsd)
+        case nil:        return common.union(solaris).union(sunos).union(netbsd)
+        }
+    }
+
     /// Vintage-Unix username rules: 1-8 chars, `[a-z][a-z0-9]*` (the 4.1.4-era
-    /// limit; also keeps NIS-ish tooling and 8-char utmp fields happy).
+    /// limit; also keeps NIS-ish tooling and 8-char utmp fields happy), and
+    /// not a reserved system-account name for the target OS.
     /// Returns a user-facing reason, or nil when the name is fine.
-    public static func usernameProblem(_ name: String) -> String? {
+    public static func usernameProblem(_ name: String,
+                                       os: MachineOS? = nil) -> String? {
         if name.isEmpty { return "Enter a username." }
         if name.count > 8 {
             return "Usernames on these systems are at most 8 characters."
@@ -173,6 +201,10 @@ public enum UserAdmin {
         let allowed = Set(lower + "0123456789")
         guard name.allSatisfy({ allowed.contains($0) }) else {
             return "Usernames may only contain lowercase letters and digits."
+        }
+        if reservedNames(os: os).contains(name) {
+            return "\u{201C}\(name)\u{201D} is a system account on this "
+                 + "machine \u{2014} pick another name."
         }
         return nil
     }
@@ -508,7 +540,7 @@ public enum UserAdmin {
                                lastChangedDays: Int = daysSinceEpoch(),
                                plan: AddPlan? = nil,
                                progress: ((String) -> Void)? = nil) throws -> Int {
-        if let problem = usernameProblem(req.name) {
+        if let problem = usernameProblem(req.name, os: os) {
             throw UserAdminError.invalidUsername(problem)
         }
 
