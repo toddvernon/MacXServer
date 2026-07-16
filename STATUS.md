@@ -1,116 +1,102 @@
-# Status 2026-07-15 (second session, other Mac)
+# Status 2026-07-16 (beta-planning session, desktop)
 
-## Headline: the Add Machine wizard shipped. + now walks name -> host ->
-proven login -> xterm launcher -> Create, nothing touches the registry
-until the end, and the whole telnet login-proof chain got honest about
-real-world prompts (Todd field-tested against SWS2 and the 4.1.4 box
-all afternoon; every fix below came out of a live repro).
+## Headline: the road to friends is planned, decided, and half-built.
+BETA_PLAN.md is the new sequencing doc (gold images -> gold apps ->
+tested flows -> seed friends), Phase 0's decisions are made and
+ledgered, both hosting repos exist, and Phase 1's script side (the
+publish pipeline) is done -- restructured mid-session on Todd's catch
+so gold masters never take the publish surgery.
 
 ## What happened this session
 
-**Machine name moved to the detail header** (45b37c1). Todd's field
-test: a new machine's typed name silently reverted because the Settings
-draft refused to commit while Host was empty (canCommit's external-host
-gate) and leaving the pane dropped the whole draft. The header title is
-now a plain-style TextField committing straight to the registry on
-Return / focus loss; Settings has no Name row and adopts the live name
-at commit. Fresh external hosts open on the Settings tab (host is the
-one required field).
+**Flow validation + look-about (no code).** Mapped the two onboarding
+flows as ASCII charts before any implementation: the shipped external-
+host wizard (one pending change: seed the curated OS-keyed launcher set,
+not a single xterm) and the proposed bundled-fixture reshape (blank
+marketing detail pane + install wizard over the BUILT 2026-07-10 guts:
+download pipeline, FirstLogin, deferred add-user). Look-about found the
+real gaps: catalog never hosted (the critical path), root-password
+policy undecided, per-OS known-working app curation doesn't exist
+anywhere in code (all three fixtures get identical 7 xterms), clock
+sync is manual, Gatekeeper walkthrough still open. Charts + gaps live
+in BETA_PLAN.md's appendix and phase 3.
 
-**New external machines default to telnet, not helios** (736bf52). A
-just-added box has never had an agent found on it. Persisted-JSON
-convention untouched: absent transport still decodes helios (bundled
-fixtures).
+**BETA_PLAN.md** (4ca6cae). Four phases, Todd's order: (1) gold images
+on GitHub, (2) gold notarized apps installable like a stranger, (3)
+flow testing + onboarding iteration against gold artifacts only (reset-
+to-stranger script, nine-row test matrix, wizard reshape lands here),
+(4) friends, gated on Restore-from-Backup + known-issues + feedback
+channel. Discovery that shrank the work: release.sh already does the
+full notarize -> GitHub release loop (A5), so phase 2 is mostly a
+--beta flag.
 
-**Add Machine wizard** (6a9976f; DECISIONS 2026-07-15 entry). + opens
-AddMachineWizardView, the one and only add path; Cancel leaves no
-"New Machine" zombie. External: name -> host + OS -> login proved with
-the Change Login probe machinery via new onProbeLoginEndpoint (no
-registry id yet; same rejection-vs-unreachable split and Continue
-Without Checking hatch) -> pre-filled xterm launcher -> summary.
-Emulated VM: one fast fork (existing disk image w/ OS detection +
-claim check, vs download starter -> kicks onDownload after Create).
-Telnet passwords go to the launcher-read Keychain slot, never
-machines.json. onAddNew + the short-lived pendingNameEntry machinery
-retired. Ran xcodegen for the new file.
+**Phase 0 DONE** (650476a; DECISIONS 2026-07-15 entry). Repos created
+and live: public `toddvernon/macxserver-images` (catalog.json IN the
+repo -- the pinned raw URL already serves the empty seed catalog --
+payloads as release assets) and private `toddvernon/macxserver-beta`
+(tester README: install, Gatekeeper dance, update story, Issues as
+feedback). Reverses the 2026-07-10 macxserver.com hosting call (never
+uploaded, nothing real moved). Root password policy: rotate at publish,
+document on the quickstart page. `ImageCatalog.defaultURL` repointed at
+the raw URL; ImageCatalogTests 4/4 green. Local clones at
+~/dev/macxserver-images and ~/dev/macxserver-beta.
 
-**Login probe rewritten around real prompts** (e1b2adf, 9c08cc2,
-7c4993e, e92ea17, 25af3e6). The arc, each step from a live failure:
+**Phase 1 script side DONE** (SPARCplug ad5c72c + 26aa09c). The publish
+pipeline, restructured after Todd caught that v1 mutated gold in place:
 
-- *Silence means yes* (e1b2adf): the probe demanded positive prompt
-  recognition, so the 4.1.4 box's custom prompt turned a CORRECT
-  password into shellPromptTimeout. Probe mode now: rejection is
-  authoritative ("Login incorrect" markers + a re-presented login
-  prompt, suffix match on "ogin:" with a "Last login:" carve-out);
-  recognized prompt = instant success; otherwise output that goes
-  quiet 2.5s with no rejection = login proven. Both 4.1.4 and 2.6
-  print "Login incorrect" AND re-prompt (Todd verified), so every
-  real rejection announces itself.
-- *Suspected-prompt capture* (9c08cc2): probe passes but xterm launch
-  still needs the needle. The probe captures the last visible line;
-  the wizard shows it for validation and stores the confirmed text as
-  Machine.shellPrompt (exactly what Machine.resolved threads into
-  launches).
-- *NUL is RFC 854 padding* (7c4993e): SWS2 showed the prompt question
-  with an EMPTY field. Root cause: telnetd sends bare CR as CR NUL and
-  stripTelnetCommands passed NULs through -- invisible "\0 lines" beat
-  the sigil detection AND became the suspected prompt. NULs now die at
-  the protocol layer; capture filters remaining control chars.
-- *Always confirm, never silently decide* (e92ea17): the bracket-prompt
-  rule that then "recognized" SWS2 is our own fleet's dotfile prompt
-  echoed back -- Todd: invalid basis for skipping the question on a
-  stranger's box. The guess is now captured on EVERY telnet success
-  with output; recognition only improves the prefill. Every wizard
-  machine carries a human-confirmed needle. Saved to memory as the
-  general principle (fleet heuristics prefill, never decide).
-- *Polish* (25af3e6): caption teaches trimming the needle to the last
-  few unique characters (contains-match, tail is all that matters);
-  stripANSI grew the missing ECMA-48 two-char escape branch (ESC ( B,
-  ESC = / ESC >) so charset/keypad tails can't leak into the guess.
+- `cut-release.sh <os>`: clones gold -> release-images/<os>-release
+  .qcow2 (APFS clonefile, instant; lock-checked both sides; prints the
+  per-OS boot override -- IMAGE= for solaris, BOOT_IMG= for the rest).
+  Gold keeps tvernon + dev root password forever.
+- `publish-prep.sh <os>`: read-only gate against the RUNNING release
+  copy. Check 0 proves via the image lock that the guest isn't gold;
+  then current fail-closed daemon (0.2.0, wrong-secret probe must be
+  denied), tvernon stripped, template locked, root rotated (DES
+  recompute under stored salt), canonical dotfiles byte-exact, baseline
+  resolv.conf, 4.1.4 Y2K date sums, clock year.
+- `docs/PUBLISH_PREP.md`: the strip/rotate surgery recipes per OS
+  (userdel where it exists, read/modify/write/readback on 4.1.4).
+- `build-catalog.sh`: --tag + --publish GitHub tail (release create,
+  asset upload, catalog.json commit+push); sources ONLY release-images/
+  so publishing gold is impossible by construction. Dry-run verified.
 
 ## What's working / what's broken
 
-- swift build clean; swift test 1579 / 0 failures (32 skipped). Six
-  new fake-telnetd probe tests pin the whole prompt story.
-- Wizard field-verified end to end on SWS2 (bracket prompt, instant
-  prefilled confirm) and the powered-off / custom-prompt paths.
-- Ledgered (SHORTCUTS "Telnet launch"): pre-wizard machines and the
-  Change Login sheet still gather no prompt needle; type-ahead
-  launching (send the command right after the password, drop the
-  prompt wait) is the real fleet-wide fix, its own decision with a
-  live repro. Prober transport-port aliveness check still open too.
-- SourceKit still shows stale diagnostics (phantom "no member" errors
-  in the new telnet/test code); the compiler disagrees. Ignore or let
-  Xcode reindex.
+- swift build + full test suite untouched except ImageCatalog (4/4).
+- Guest-facing gate checks (hello version key, Y2K sums, Solaris
+  template path) written from source + memory, not yet run against a
+  live guest -- first real run may need a line or two.
+- The empty catalog is live; app Download buttons will correctly find
+  no entries until Todd's publish.
 
 ## What's next
 
-1. Try the xterm launcher end-to-end on a wizard-added custom-prompt
-   box (the stored needle should unlock it); consider type-ahead
-   launching as the successor to prompt needles entirely.
-2. GUI pass remainder: menu-bar reorg, download flow
-   (SPARCPLUG_CATALOG_URL), first-run choreography. Change Login ssh
-   flavor on the nuc.
-3. CanonicalDotfiles DISPLAY decision (SHORTCUTS, carried).
-4. Catalog data side: E1 baseline masters -> build-catalog.sh ->
-   upload; root-password policy + unique per-box helios secrets.
-5. Cut v0.9.9 (A5/A6 release pipeline proof).
-6. UserAdmin live test against Solaris 2.6 + 4.1.4; retire orphaned
-   DefaultLaunchers.swift (still just the old seed text, still unused).
+1. Todd's half of phase 1: pick the published root password, cut +
+   surger + gate each release copy, `./build-catalog.sh --publish`,
+   then the stranger download test on a clean account (all three OSes).
+2. Phase 2 script side (can start any time): release.sh --beta (repo
+   override + skip the Hugo site tail), then cut v0.9.9 and run the A6
+   clean-Mac acceptance.
+3. Phase 3 prep when testing starts: Tools/reset-to-stranger.sh + the
+   test matrix in BETA_PLAN.md.
+4. Carried: CanonicalDotfiles DISPLAY decision (SHORTCUTS), UserAdmin
+   live test vs Solaris 2.6 + 4.1.4, orphaned DefaultLaunchers.swift
+   retirement, per-OS curated launcher distillation (phase 3's big
+   net-new piece).
 
 ## Committed / push state
 
-- X repo, all on main, pushed at /eos: 45b37c1 (header name) ->
-  736bf52 (telnet default) -> 6a9976f (wizard) -> e1b2adf (probe
-  silence-means-yes) -> 5546780 (SHORTCUTS) -> 9c08cc2 (suspected
-  prompt) -> 7c4993e (NUL fix) -> e92ea17 (always confirm) ->
-  25af3e6 (caption + stripANSI) + the date-fix/STATUS roll.
-- SPARCplug / cx repos: no changes this session.
+- X repo, main, NOT pushed: 4ca6cae (BETA_PLAN) -> 650476a (phase 0) ->
+  d47545f + 1d429bd (plan notes) + this roll.
+- SPARCplug repo, main, NOT pushed: ad5c72c (publish pipeline) ->
+  26aa09c (release-copy restructure).
+- New GitHub repos pushed at creation: macxserver-images (public),
+  macxserver-beta (private).
 
 ## Switching Macs
 
-- Swift sources + project file changed (xcodegen ran): pull, then
-  rebuild in Xcode.
-- No VM was running this session; no image locks held.
-- One memory file added (fleet-heuristics-confirm-dont-decide); let
-  Dropbox finish syncing before opening the other Mac.
+- Push X + SPARCplug at /eos; the other Mac needs both plus fresh
+  clones of the two new repos if working the publish side there.
+- App code change is one line (ImageCatalog.defaultURL); Xcode rebuild
+  as usual.
+- No VM ran this session; no image locks held.
