@@ -164,7 +164,16 @@ Mac's real state. The full reset in that account:
 
 Ship it as a small guarded script (`Tools/reset-to-stranger.sh`, refuses
 to run outside the tester account) so a reset is one command, because
-there will be dozens of them.
+there will be dozens of them. *BUILT 2026-07-16*: wipes the five
+dotfiles (the sweep found two beyond the list above: .macxserver-fonts
+and .macxserver-dev-secrets.json), the App Support tree, saved window
+state + caches by bundle id, the defaults domain, all
+macxserver-launcher Keychain items, and /tmp/sparkplug. Guards: account
+name must be the tester account (MACXSERVER_TESTER_USER overrides the
+default "tester"; deliberately no force flag), and it refuses while
+MacXServer or a qemu guest is running. --dry-run previews. Account and
+process guards verified live; the wipe path first runs for real in the
+tester account.
 
 **3b. The test matrix** (each row from a fresh reset where it matters):
 
