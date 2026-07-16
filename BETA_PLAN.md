@@ -117,7 +117,13 @@ from GitHub, drag to /Applications, survive Gatekeeper, boot a Sun.
 
 1. **`release.sh --beta`** (D2): repo override + skip the site tail.
    Small, but it's the difference between "cut a beta" being one command
-   vs. a manual dance.
+   vs. a manual dance. *DONE 2026-07-16*: publishes to macxserver-beta,
+   skips the Hugo sanity check + appVersion bump + site deploy + the
+   project.yml bump/commit/push, beta-flavored release notes, and the
+   end-of-run test hint becomes the browser-download stranger recipe
+   (private repo, so the anonymous curl test can't work anyway). GPL
+   source bundle still attaches. Arg paths verified; the full pipeline
+   proof IS item 2.
 2. **Cut v0.9.9** -- the first real full release run, i.e. the remaining
    A5 proof (archive, helper copy-in + inside-out signing, notarize,
    staple, GitHub release).

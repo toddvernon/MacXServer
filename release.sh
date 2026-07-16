@@ -2,11 +2,20 @@
 # release.sh — build, sign, notarize, and ship a release of MacXServer or MacXCapture.
 #
 # Usage:
-#   ./release.sh <MacXServer|MacXCapture> <version>
+#   ./release.sh <MacXServer|MacXCapture> <version> [--beta]
 #
 # Examples:
 #   ./release.sh MacXServer 1.0.0
 #   ./release.sh MacXCapture 1.0.0
+#   ./release.sh MacXServer 0.9.9 --beta
+#
+# --beta (BETA_PLAN.md phase 2; DECISIONS 2026-07-15): the identical signed +
+# notarized + stapled artifact, but published to the PRIVATE repo
+# toddvernon/macxserver-beta instead of the public releases page, and with
+# every public-surface step skipped: no Hugo appVersion bump, no site deploy,
+# no project.yml default-version bump/commit/push. A beta cut must never
+# touch the website or the source tree. The GPL source bundle still attaches
+# (distribution to testers is still distribution).
 #
 # Prereqs (see NOTARIZE-SETUP.md):
 #   1. Apple Developer Program enrollment.
@@ -55,11 +64,24 @@ set -euo pipefail
 
 # -------- args --------
 
-APP="${1:-}"
-VERSION="${2:-}"
+APP=""
+VERSION=""
+BETA=0
+for arg in "$@"; do
+    case "$arg" in
+        --beta) BETA=1 ;;
+        -*) echo "Unknown flag: $arg"; exit 1 ;;
+        *)
+            if [[ -z "$APP" ]]; then APP="$arg"
+            elif [[ -z "$VERSION" ]]; then VERSION="$arg"
+            else echo "Too many arguments: $arg"; exit 1
+            fi
+            ;;
+    esac
+done
 
 if [[ -z "$APP" || -z "$VERSION" ]]; then
-    echo "Usage: $0 <MacXServer|MacXCapture> <version>"
+    echo "Usage: $0 <MacXServer|MacXCapture> <version> [--beta]"
     echo "Example: $0 MacXServer 1.0.0"
     exit 1
 fi
@@ -87,6 +109,12 @@ case "$APP" in
         exit 1
         ;;
 esac
+
+# Beta cuts publish to the private beta repo and never touch the site.
+if [[ "$BETA" == 1 ]]; then
+    REPO="toddvernon/macxserver-beta"
+    echo "*** BETA MODE: publishing to $REPO; Hugo + version-bump steps skipped ***"
+fi
 
 # -------- config --------
 
@@ -155,12 +183,14 @@ if ! gh auth status >/dev/null 2>&1; then
 fi
 echo "    gh CLI: ok"
 
-# Hugo site exists?
-if [[ ! -f "$HUGO_DIR/hugo.toml" ]]; then
-    echo "ERROR: Hugo site not found at $HUGO_DIR"
-    exit 1
+# Hugo site exists? (Not needed for a beta cut, which never touches it.)
+if [[ "$BETA" == 0 ]]; then
+    if [[ ! -f "$HUGO_DIR/hugo.toml" ]]; then
+        echo "ERROR: Hugo site not found at $HUGO_DIR"
+        exit 1
+    fi
+    echo "    hugo site: $HUGO_DIR"
 fi
-echo "    hugo site: $HUGO_DIR"
 
 # SPARCplug engine payload sane? (MacXServer bundles the qemu helper; a
 # release without it ships a machine manager that can't boot a VM.)
@@ -388,16 +418,18 @@ fi
 
 # -------- Hugo site update --------
 
-echo
-echo "==> Updating Hugo site appVersion in $HUGO_DIR/hugo.toml"
-if grep -q "^  appVersion = " "$HUGO_DIR/hugo.toml"; then
-    sed -i "" "s|^  appVersion = .*|  appVersion = \"$VERSION\"|" "$HUGO_DIR/hugo.toml"
-else
-    # Param doesn't exist yet — append it under [params].
-    sed -i "" "/^\[params\]/a\\
+if [[ "$BETA" == 0 ]]; then
+    echo
+    echo "==> Updating Hugo site appVersion in $HUGO_DIR/hugo.toml"
+    if grep -q "^  appVersion = " "$HUGO_DIR/hugo.toml"; then
+        sed -i "" "s|^  appVersion = .*|  appVersion = \"$VERSION\"|" "$HUGO_DIR/hugo.toml"
+    else
+        # Param doesn't exist yet — append it under [params].
+        sed -i "" "/^\[params\]/a\\
   appVersion = \"$VERSION\"" "$HUGO_DIR/hugo.toml"
+    fi
+    grep "^  appVersion = " "$HUGO_DIR/hugo.toml"
 fi
-grep "^  appVersion = " "$HUGO_DIR/hugo.toml"
 
 # -------- GitHub release --------
 
@@ -406,7 +438,21 @@ echo
 echo "==> Creating GitHub release: $TAG (repo: $REPO)"
 
 RELEASE_NOTES_FILE="$BUILD_DIR/release-notes.md"
-cat > "$RELEASE_NOTES_FILE" <<EOF
+if [[ "$BETA" == 1 ]]; then
+    cat > "$RELEASE_NOTES_FILE" <<EOF
+$APP v$VERSION (beta)
+
+Signed and notarized for macOS. Download the zip below IN A BROWSER,
+unzip, drag the .app to Applications — the repo README has the full
+install walkthrough. Feedback goes in this repo's Issues; first-five-
+minutes friction is a first-class bug report.
+
+Known issues: (edit this release's notes as they're found.)
+
+System requirements: macOS 14.0 (Sonoma) or later.
+EOF
+else
+    cat > "$RELEASE_NOTES_FILE" <<EOF
 $APP v$VERSION
 
 Signed and notarized for macOS. Download below, unzip, drag the .app to
@@ -414,6 +460,7 @@ Applications. First-launch should be clean — no Gatekeeper warnings.
 
 System requirements: macOS 14.0 (Sonoma) or later.
 EOF
+fi
 
 if [[ -n "$GPL_BUNDLE" ]]; then
     cat >> "$RELEASE_NOTES_FILE" <<EOF
@@ -438,9 +485,11 @@ gh release create "$TAG" \
 
 # -------- deploy Hugo site --------
 
-echo
-echo "==> Deploying Hugo site so the download button picks up the new version"
-( cd "$HUGO_DIR" && ./deploy.sh )
+if [[ "$BETA" == 0 ]]; then
+    echo
+    echo "==> Deploying Hugo site so the download button picks up the new version"
+    ( cd "$HUGO_DIR" && ./deploy.sh )
+fi
 
 # -------- default version bump (project.yml is the source of truth) --------
 
@@ -465,34 +514,40 @@ echo "==> Deploying Hugo site so the download button picks up the new version"
 # Runs AFTER Hugo deploy so any failure here can't strand the public
 # download button on a stale version.
 
-echo
-echo "==> Bumping default MARKETING_VERSION for $APP to $VERSION in project.yml"
-PROJECT_YML="$PROJECT_ROOT/project.yml"
-PBXPROJ="$PROJECT_FILE/project.pbxproj"
-sed -i "" -E "s|MARKETING_VERSION: \"[0-9]+\.[0-9]+\.[0-9]+\" # release-version $APP|MARKETING_VERSION: \"$VERSION\" # release-version $APP|" "$PROJECT_YML"
-if ! grep -q "MARKETING_VERSION: \"$VERSION\" # release-version $APP" "$PROJECT_YML"; then
-    echo "WARNING: version-bump marker '# release-version $APP' not found in project.yml — bump skipped."
-    echo "The release itself is complete; fix the marker line by hand."
+if [[ "$BETA" == 1 ]]; then
+    echo
+    echo "==> Beta cut: skipping the project.yml default-version bump (no source-tree"
+    echo "    edits, no commit, no push — the shipped artifact has $VERSION baked in)."
 else
-    if command -v xcodegen >/dev/null 2>&1; then
-        ( cd "$PROJECT_ROOT" && xcodegen generate >/dev/null )
-        echo "    project.yml bumped + .xcodeproj regenerated"
+    echo
+    echo "==> Bumping default MARKETING_VERSION for $APP to $VERSION in project.yml"
+    PROJECT_YML="$PROJECT_ROOT/project.yml"
+    PBXPROJ="$PROJECT_FILE/project.pbxproj"
+    sed -i "" -E "s|MARKETING_VERSION: \"[0-9]+\.[0-9]+\.[0-9]+\" # release-version $APP|MARKETING_VERSION: \"$VERSION\" # release-version $APP|" "$PROJECT_YML"
+    if ! grep -q "MARKETING_VERSION: \"$VERSION\" # release-version $APP" "$PROJECT_YML"; then
+        echo "WARNING: version-bump marker '# release-version $APP' not found in project.yml — bump skipped."
+        echo "The release itself is complete; fix the marker line by hand."
     else
-        echo "WARNING: xcodegen not installed — project.yml bumped, but the"
-        echo ".xcodeproj is stale until the next 'xcodegen generate'."
-    fi
+        if command -v xcodegen >/dev/null 2>&1; then
+            ( cd "$PROJECT_ROOT" && xcodegen generate >/dev/null )
+            echo "    project.yml bumped + .xcodeproj regenerated"
+        else
+            echo "WARNING: xcodegen not installed — project.yml bumped, but the"
+            echo ".xcodeproj is stale until the next 'xcodegen generate'."
+        fi
 
-    # Auto-commit + push so the source tree stays in sync with what shipped.
-    # Only stages the version files — any unrelated in-progress edits in the
-    # working tree stay put (Todd was warned about a dirty tree at the
-    # sanity-check step and chose to proceed).
-    if ! ( cd "$PROJECT_ROOT" && git diff --quiet -- "$PROJECT_YML" "$PBXPROJ" ); then
-        echo
-        echo "==> Committing version bump"
-        ( cd "$PROJECT_ROOT" \
-            && git add "$PROJECT_YML" "$PBXPROJ" \
-            && git commit -m "Project: bump $APP default MARKETING_VERSION to $VERSION (post-release sync)" \
-            && git push )
+        # Auto-commit + push so the source tree stays in sync with what shipped.
+        # Only stages the version files — any unrelated in-progress edits in the
+        # working tree stay put (Todd was warned about a dirty tree at the
+        # sanity-check step and chose to proceed).
+        if ! ( cd "$PROJECT_ROOT" && git diff --quiet -- "$PROJECT_YML" "$PBXPROJ" ); then
+            echo
+            echo "==> Committing version bump"
+            ( cd "$PROJECT_ROOT" \
+                && git add "$PROJECT_YML" "$PBXPROJ" \
+                && git commit -m "Project: bump $APP default MARKETING_VERSION to $VERSION (post-release sync)" \
+                && git push )
+        fi
     fi
 fi
 
@@ -504,16 +559,29 @@ echo "==> Done."
 echo
 echo "    Release: https://github.com/$REPO/releases/tag/$TAG"
 echo "    Download: $DOWNLOAD_URL"
-echo "    Site updated: $(grep -oE 'baseURL = "[^"]*"' "$HUGO_DIR/hugo.toml" | sed 's|baseURL = ||; s|"||g')"
+if [[ "$BETA" == 0 ]]; then
+    echo "    Site updated: $(grep -oE 'baseURL = "[^"]*"' "$HUGO_DIR/hugo.toml" | sed 's|baseURL = ||; s|"||g')"
+fi
 echo
-# `unzip` here is deliberate: it loses ditto's codesign-friendly metadata,
-# so a `spctl -a` on the result fails with "sealed resource missing or
-# invalid". That's the canary -- if you ever run this snippet and the app
-# DOES open clean, something has changed about how the zip was built and
-# you should re-validate the release with `ditto -x -k` + `spctl`. End
-# users get the app via Finder / Archive Utility (ditto-equivalent), so
-# they're fine; this hint is for the release operator only.
-echo "Test the download:"
-echo "    curl -L -o /tmp/test.zip \"$DOWNLOAD_URL\" && \\"
-echo "    unzip /tmp/test.zip -d /tmp/test && \\"
-echo "    open /tmp/test/$PRODUCT_NAME.app"
+if [[ "$BETA" == 1 ]]; then
+    # Private repo: anonymous curl 404s, and the whole point of the beta test
+    # is installing like a stranger — browser download so the quarantine bit
+    # is real, then Finder unzip + drag to /Applications (A6 acceptance,
+    # BETA_PLAN.md phase 2).
+    echo "Test it like a stranger (fresh macOS account is best):"
+    echo "    open \"https://github.com/$REPO/releases/tag/$TAG\""
+    echo "    download $APP.zip IN THE BROWSER, unzip in Finder, drag to"
+    echo "    /Applications, first-launch through the Gatekeeper dialogs."
+else
+    # `unzip` here is deliberate: it loses ditto's codesign-friendly metadata,
+    # so a `spctl -a` on the result fails with "sealed resource missing or
+    # invalid". That's the canary -- if you ever run this snippet and the app
+    # DOES open clean, something has changed about how the zip was built and
+    # you should re-validate the release with `ditto -x -k` + `spctl`. End
+    # users get the app via Finder / Archive Utility (ditto-equivalent), so
+    # they're fine; this hint is for the release operator only.
+    echo "Test the download:"
+    echo "    curl -L -o /tmp/test.zip \"$DOWNLOAD_URL\" && \\"
+    echo "    unzip /tmp/test.zip -d /tmp/test && \\"
+    echo "    open /tmp/test/$PRODUCT_NAME.app"
+fi
