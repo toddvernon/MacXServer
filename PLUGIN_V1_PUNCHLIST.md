@@ -132,8 +132,10 @@ and survives a clean-Mac load + notarization. Engine build already exists
   attached to the GitHub release next to the app zip, closing the
   GPL_SOURCE.md promise. Recipe re-validated 2026-07-10 on a scratch bundle
   with the real Developer ID: verify clean, JIT entitlements present, signed
-  helper boots and loads bundled dylibs. Remaining proof is the first real
-  release run + A6.
+  helper boots and loads bundled dylibs. First real release run PROVEN
+  2026-07-16: v0.9.9 cut via `release.sh --beta` end to end (archive,
+  embed, inside-out sign, notarize Accepted, staple validated, published
+  to macxserver-beta with the GPL bundle attached). Remaining proof: A6.
 - [ ] **A6. Clean-Mac acceptance.** Fresh account, no homebrew: drag app,
   confirm helper loads and boots. Catches a missed dylib sign (the
   library-validation failure mode).

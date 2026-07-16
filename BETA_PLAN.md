@@ -126,7 +126,13 @@ from GitHub, drag to /Applications, survive Gatekeeper, boot a Sun.
    proof IS item 2.
 2. **Cut v0.9.9** -- the first real full release run, i.e. the remaining
    A5 proof (archive, helper copy-in + inside-out signing, notarize,
-   staple, GitHub release).
+   staple, GitHub release). *DONE 2026-07-16*: MacXServer-v0.9.9 live on
+   macxserver-beta (MacXServer.zip + GPL source bundle), notarization
+   Accepted, staple validated, spctl says "Notarized Developer ID", and
+   zero public-surface steps ran (grep-verified). One speed bump worth
+   remembering: Apple 403'd notarization until the team's updated
+   Program License Agreement was accepted at developer.apple.com --
+   that's the first thing to check on any future mystery notary failure.
 3. **A6 clean-Mac acceptance** (punchlist, still open): fresh macOS
    account, no homebrew. Download the zip **in a browser** so the
    quarantine bit is real, drag to /Applications, first launch. Confirms
