@@ -279,27 +279,34 @@ private struct MachineOverviewPage: View {
     /// The Change Login sheet (the agent-less tier of Change…; see
     /// MachineRow.canChangeLogin).
     @State private var showingChangeLogin = false
+    /// The starter-image install wizard (the imageless machine's hero pane).
+    @State private var showingInstallWizard = false
 
     var body: some View {
         ScrollView {
             if let row {
-                VStack(alignment: .leading, spacing: 16) {
-                    if model.isFirstRun && row.canDownload {
-                        firstRunBubble(row)
+                if row.canDownload && !row.isDownloading {
+                    // Imageless machine with a known OS: the whole page is the
+                    // invitation (DECISIONS 2026-07-16). No status, no tabs to
+                    // hunt through -- marketing copy and one install button
+                    // that opens the starter wizard.
+                    starterHero(row)
+                } else {
+                    VStack(alignment: .leading, spacing: 16) {
+                        identitySection(row)
+                        machineSection(row)
+                        launchers(row)
+                        adminAgents(row)
                     }
-                    identitySection(row)
-                    machineSection(row)
-                    launchers(row)
-                    adminAgents(row)
-                }
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .sheet(isPresented: $showingChangeLogin) {
-                    ChangeLoginSheet(machineName: row.name,
-                                     currentUser: row.activeUser,
-                                     machineID: row.id,
-                                     usesSSHKey: row.changeLoginUsesSSHKey,
-                                     model: model)
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .sheet(isPresented: $showingChangeLogin) {
+                        ChangeLoginSheet(machineName: row.name,
+                                         currentUser: row.activeUser,
+                                         machineID: row.id,
+                                         usesSSHKey: row.changeLoginUsesSSHKey,
+                                         model: model)
+                    }
                 }
             } else {
                 Text("No status.").foregroundStyle(.secondary).padding(20)
@@ -307,30 +314,64 @@ private struct MachineOverviewPage: View {
         }
     }
 
-    /// The first-run "just getting started" prompt over an imageless machine.
-    /// The Download button below is rendered blue (prominent) while this shows,
-    /// so the eye lands on the next thing to do (FIRST_RUN_EXPERIENCE.md).
-    private func firstRunBubble(_ row: MachineRow) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 22))
+    /// The imageless machine's whole detail pane: what this machine is, and
+    /// the one button that makes it real. The secondary existing-image path
+    /// stays discoverable but quiet.
+    private func starterHero(_ row: MachineRow) -> some View {
+        let os = model.machines.first { $0.id == row.id }?.os?.displayName
+            ?? "a vintage Sun OS"
+        return VStack(spacing: 16) {
+            Image(systemName: "desktopcomputer")
+                .font(.system(size: 52, weight: .regular))
+                .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Just getting started?")
-                    .font(.headline)
-                Text("Download a starter image and launch a SPARCstation. "
-                     + "It becomes this machine\u{2019}s disk, then you\u{2019}ll "
-                     + "add a login and it boots.")
-                    .font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 28)
+
+            Text("A complete vintage Sun workstation")
+                .font(.title2.weight(.semibold))
+
+            Text("\u{201C}\(row.name)\u{201D} is a SPARCstation 5 running \(os), "
+                 + "emulated right here on your Mac \u{2014} no hardware "
+                 + "required. Its programs open as windows on this desktop, "
+                 + "rendered in modern quality.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Install a ready-to-boot starter disk and it\u{2019}s running "
+                 + "in a few minutes.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                showingInstallWizard = true
+            } label: {
+                Text("Install a Bootable Starter Disk Image\u{2026}")
+                    .frame(maxWidth: 320)
             }
-            Spacer(minLength: 0)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(.top, 6)
+
+            Button("Use a disk image I already have\u{2026}") {
+                model.onChooseExistingImage?(row.id)
+            }
+            .buttonStyle(.plain)
+            .font(.callout)
+            .foregroundStyle(.tint)
         }
-        .padding(14)
-        .background(Color.accentColor.opacity(0.10),
-                    in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10)
-            .strokeBorder(Color.accentColor.opacity(0.25)))
+        .padding(.horizontal, 40)
+        .padding(.bottom, 28)
+        .frame(maxWidth: .infinity)
+        .sheet(isPresented: $showingInstallWizard) {
+            InstallStarterWizardView(machineID: row.id,
+                                     machineName: row.name,
+                                     osName: os,
+                                     model: model)
+        }
     }
 
     /// Identity leads the page: the active user is the most consequential
@@ -527,14 +568,9 @@ private struct MachineOverviewPage: View {
                         Button("Force Quit") { model.onForceQuit?(row.id) }
                     }
                 } else {
+                    // (canDownload machines never reach here: the starter
+                    // hero replaces the whole Overview until an image lands.)
                     Button("Start") { model.onStart?(row.id) }.disabled(!row.canStart)
-                    if row.canDownload {
-                        // Imageless + known OS: fetch the curated image; it
-                        // becomes this machine's disk (IMAGE_DOWNLOAD_PLAN.md).
-                        // Blue (prominent) during first run -- it's the next
-                        // thing to do.
-                        downloadButton(row)
-                    }
                 }
                 Button("Console") { model.onConsole?(row.id) }.disabled(!row.canConsole)
                 Button("Back Up") { model.onBackup?(row.id) }.disabled(!row.canBackup)
@@ -546,20 +582,6 @@ private struct MachineOverviewPage: View {
         // nothing -- which is truthful. The Helios Secret entry point moved to
         // Settings -> Connection 2026-07-09: a credential is a setting, and it
         // was only ever here because the lifecycle slot happened to be empty.)
-    }
-
-    /// Download Image button -- prominent (blue) during first run so it reads
-    /// as the next step; plain bordered afterward (adding a second machine's
-    /// image is a routine action, not a call to action).
-    @ViewBuilder private func downloadButton(_ row: MachineRow) -> some View {
-        let button = Button("Download Image\u{2026}") { model.onDownload?(row.id) }
-            .help("Download the curated starter image for this machine's "
-                  + "guest OS and attach it as its disk")
-        if model.isFirstRun {
-            button.buttonStyle(.borderedProminent)
-        } else {
-            button
-        }
     }
 
     @ViewBuilder private func launchers(_ row: MachineRow) -> some View {

@@ -300,6 +300,7 @@
 		DFDEEB94B88F910EA5D67C92 /* ListFontsWithInfoReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA702D2172834EE15B4B3B75 /* ListFontsWithInfoReply.swift */; };
 		E035146C627DC8354DFC132F /* XkbReplies.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9722C3D78DB5EED6943B8C25 /* XkbReplies.swift */; };
 		E0A53EC8F18101242E7701E9 /* HeaderOnlyRequests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A616C20EEA3CAD2D9FED95 /* HeaderOnlyRequests.swift */; };
+		E0E42900B0681322884A856D /* InstallStarterWizardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CACA213D1D708F6BC55F3DEE /* InstallStarterWizardView.swift */; };
 		E1571640C350B28E52A81393 /* AcknowledgementsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DC8E9A54EA9EFFCD82D4663 /* AcknowledgementsView.swift */; };
 		E1B0BA224B0D5012685CF188 /* XInputEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C454C4D8B6F5C18502884BF2 /* XInputEvents.swift */; };
 		E20C921F03E5395B6A7D1364 /* ResourceTables.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E38DA72875F2CB1EE5A11B /* ResourceTables.swift */; };
@@ -744,6 +745,7 @@
 		C76A152407B14710EA2CB14C /* module.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = module.modulemap; sourceTree = "<group>"; };
 		C7A616C20EEA3CAD2D9FED95 /* HeaderOnlyRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeaderOnlyRequests.swift; sourceTree = "<group>"; };
 		C9F771FDFB6E892C7CB0786F /* LauncherFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherFile.swift; sourceTree = "<group>"; };
+		CACA213D1D708F6BC55F3DEE /* InstallStarterWizardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallStarterWizardView.swift; sourceTree = "<group>"; };
 		CB63974F52A5D72CE6236173 /* DnsAdminPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DnsAdminPanelView.swift; sourceTree = "<group>"; };
 		CBD7E512E41311E9DB831229 /* NetworkInterfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkInterfaces.swift; sourceTree = "<group>"; };
 		CBE4AC747DCEF1D5F6CD5460 /* GetPointerControlReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GetPointerControlReply.swift; sourceTree = "<group>"; };
@@ -1024,6 +1026,7 @@
 				800EAF3DF38A3331010EBCEF /* FontMappingsPanelView.swift */,
 				AEFF605BCF9A3DD6DE699A8C /* FontMappingsWindowController.swift */,
 				5E8D016741559664DDE33E25 /* FontMappingSyntaxHighlighter.swift */,
+				CACA213D1D708F6BC55F3DEE /* InstallStarterWizardView.swift */,
 				0E258256D3272BB2D8791127 /* LaunchProgressWindowController.swift */,
 				2250F15262ACC1559F9A85D1 /* MachineDetailForm.swift */,
 				578B16F1070CD9862036A9B7 /* MachinesModel.swift */,
@@ -1929,6 +1932,7 @@
 				6E52B4D8B95C5CE47D5BC99C /* FontMappingSyntaxHighlighter.swift in Sources */,
 				87A1DD9EB10D2164474F1FE8 /* FontMappingsPanelView.swift in Sources */,
 				D4D553D0E4374B73B34236E1 /* FontMappingsWindowController.swift in Sources */,
+				E0E42900B0681322884A856D /* InstallStarterWizardView.swift in Sources */,
 				47CEC874DF3A4F67087217C2 /* LaunchProgressWindowController.swift in Sources */,
 				5394F3B898174900DA39F448 /* MachineDetailForm.swift in Sources */,
 				8E87F071EDBD1044E7FDE74A /* MachinesModel.swift in Sources */,

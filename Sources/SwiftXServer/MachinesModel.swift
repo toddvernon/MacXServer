@@ -191,6 +191,24 @@ final class MachinesModel: ObservableObject {
     /// Download this machine's curated starter image (imageless emulated VM
     /// with a known OS; see MachineRow.canDownload).
     var onDownload: ((UUID) -> Void)?
+    /// The install wizard's commit (DECISIONS 2026-07-16): everything the
+    /// stranger flow collects in one gesture -- where images live, the login
+    /// to create at first boot, and an optional DNS server to point the guest
+    /// at. AppDelegate stashes the deferred work, kicks the curated download,
+    /// and boots at completion; nothing happens on Cancel.
+    var onInstallStarter: ((_ id: UUID, _ imagesDir: String,
+                            _ username: String, _ password: String,
+                            _ dnsServer: String?) -> Void)?
+    /// NSOpenPanel for the wizard's image-location step; returns the chosen
+    /// directory path or nil.
+    var onPickImagesDirectory: (() -> String?)?
+    /// The effective images directory (the preference, or the App Support
+    /// default) -- the wizard's location-step prefill.
+    var imagesDirectory: (() -> String)?
+    /// The hero pane's "use a disk image I already have" path: pick a qcow2,
+    /// attach it to this machine, and boot (the welcome window's Choose Image
+    /// semantics).
+    var onChooseExistingImage: ((UUID) -> Void)?
     /// Cancel the in-flight image download.
     var onCancelDownload: ((UUID) -> Void)?
     /// Open the machine's DNS (/etc/resolv.conf) admin window.
@@ -263,15 +281,6 @@ final class MachinesModel: ObservableObject {
     var selectedMachine: Machine? { machines.first { $0.id == selection } }
     func row(_ id: UUID) -> MachineRow? { rows[id] }
     func isRunning(_ id: UUID) -> Bool { runningMachineIDs.contains(id) }
-
-    /// Fresh-install state: there's an emulated VM to run but none has a disk
-    /// image yet. Drives the first-run bubble + the blue (prominent) Download
-    /// button (FIRST_RUN_EXPERIENCE.md). State-derived, not a dismissed-once
-    /// flag, so it honestly returns if every image is later removed.
-    var isFirstRun: Bool {
-        let emulated = machines.filter { $0.kind == .emulatedVM }
-        return !emulated.isEmpty && emulated.allSatisfy { $0.image == nil }
-    }
 
     // The master list's three sections, each sorted by name (case-insensitive).
     // A machine you create lands in Virtual (emulated) or External by its kind;

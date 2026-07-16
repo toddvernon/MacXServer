@@ -31,6 +31,7 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         static let pointerRightClick     = "pointer.rightClick"     // int
         static let xtermScrollbarThumbOverride = "xterm.scrollbarThumbOverride" // bool
         static let sparcDiskImagePath = "sparcplug.diskImagePath"   // string; LEGACY, migration-read only
+        static let imagesDirectory    = "images.directory"          // string; "" = default App Support location
     }
 
     /// Where server-side captures land when capture is enabled. /tmp is
@@ -103,6 +104,18 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         get { defaults.string(forKey: Key.captureDirectory) ?? Self.defaultCaptureDirectory }
         set {
             defaults.set(newValue, forKey: Key.captureDirectory)
+            NotificationCenter.default.post(name: Self.didChange, object: self)
+        }
+    }
+
+    /// Where downloaded guest disk images live. Empty/absent = the default
+    /// (`ImageDownloader.defaultImagesDirectory`, in Application Support).
+    /// Set from the install wizard's location step (DECISIONS 2026-07-16);
+    /// one global directory, filenames stay derived (never user-chosen).
+    var imagesDirectoryPath: String {
+        get { defaults.string(forKey: Key.imagesDirectory) ?? "" }
+        set {
+            defaults.set(newValue, forKey: Key.imagesDirectory)
             NotificationCenter.default.post(name: Self.didChange, object: self)
         }
     }

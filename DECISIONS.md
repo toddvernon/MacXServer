@@ -1879,6 +1879,48 @@ phase 3 will decide from testing.
 
 ---
 
+## 2026-07-16: The bundled-machine install is a wizard; the in-window bubble flow is retired
+
+Supersedes the "first run is an in-window guided flow" half of the
+2026-07-10 entry. That call predated the Add Machine wizard, and the wizard
+won in the field (Todd, field-testing 2026-07-15: "that turned out really
+good"): commit-nothing-until-the-end, no half-configured state on Cancel,
+every question asked once in walk order.
+
+**Shape (built same day):** An imageless machine with a known OS shows a
+**hero pane** as its entire Overview -- marketing copy ("a complete vintage
+Sun workstation... emulated right here on your Mac") + one prominent
+"Install a Bootable Starter Disk Image..." button + a quiet
+existing-image escape. The button opens `InstallStarterWizardView`:
+location -> login -> network -> summary/Install & Boot.
+
+- **Location** asks where images live (resolves the deferred D4 from
+  2026-07-15): prefilled with the effective directory, persists as ONE
+  global preference (`images.directory`), stored only when it differs from
+  the App Support default so an untouched prefill tracks a future default
+  move. Filenames stay derived, never user-chosen.
+- **Login** is the old "one more thing" panel as a step (same username
+  rules, same 8-char caption); the wizard collects it BEFORE the download,
+  so completion boots straight into the deferred-apply pipeline with no
+  post-download popup.
+- **Network** defaults to "built-in, nothing to configure" and never
+  touches the guest; the explicit alternative writes `nameserver <ip>` to
+  /etc/resolv.conf in the same onReady window as the account creation.
+  DNS failure is soft (login is the product; DNS is a preference).
+- **Summary is the confirm** -- the wizard path skips the old NSAlert
+  size-confirm sheet; legacy paths (welcome window, + wizard's
+  download-starter fork) keep it and keep the post-download FirstLogin
+  panel.
+
+**Retired:** the first-run bubble, the blue-prominent Download button, and
+`MachinesModel.isFirstRun` (the hero pane is per-machine state-derived, so
+the "honestly comes back if images are deleted" property survives).
+Credentials stashed by the wizard are cleared on catalog failure, download
+failure, and cancel -- a pending login must never outlive the install that
+collected it.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

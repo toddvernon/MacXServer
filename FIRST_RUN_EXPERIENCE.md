@@ -1,11 +1,37 @@
 # First-run experience -- the stranger's first five minutes
 
-Status: **BUILT 2026-07-10.** The choreography over the curated image
-downloader + the UserAdmin engine. Not yet eyeballed in the real app (it's
-UI + AppDelegate orchestration; needs the Xcode rebuild + a local catalog
-to click through) -- that's part of Todd's manual GUI pass.
+Status: **REBUILT AS A WIZARD 2026-07-16** (DECISIONS 2026-07-16; the Add
+Machine wizard proved the pattern in the field and superseded the
+2026-07-10 in-window shape). Still not yet eyeballed live end to end --
+that needs the published catalog + the tester account (BETA_PLAN phase 3).
 
-## The settled shape (Todd, 2026-07-10)
+## The current shape (Todd, 2026-07-16)
+
+An imageless bundled machine's Overview IS the invitation: a hero pane
+with marketing copy and one prominent **Install a Bootable Starter Disk
+Image...** button (plus a quiet "use a disk image I already have" escape).
+The button opens the install wizard (`InstallStarterWizardView`), which
+collects everything up front and commits nothing until the last step:
+
+1. **Location** -- where disk images live. Prefilled with the default
+   (App Support); persists as the one global images-directory preference.
+2. **Your login** -- the old "one more thing" panel as a step: username
+   prefilled from the Mac short name, password x2, the 8-char note.
+3. **Network** -- default "built-in, nothing to configure" (guest
+   untouched); optionally a DNS server, written to the guest at first
+   boot, changeable later in the DNS panel.
+4. **Summary -> Install & Boot** -- the confirm. Download runs on the row
+   thermometer, the machine boots at completion, and the account (+ DNS)
+   applies at ready ("creating your login..." tail). No popups after the
+   wizard closes.
+
+The bubble + blue-button choreography below is the superseded 2026-07-10
+design, kept for the pieces that still hold: the deferred-apply pipeline,
+the failure handling, and the payoff sequence are unchanged, and the
+FirstLogin panel still serves the legacy paths (welcome window, the + 
+wizard's download-starter fork, the skip-then-next-boot re-offer).
+
+## The superseded shape (Todd, 2026-07-10)
 
 In-window guided flow, not a separate wizard. The Machines window looks
 exactly as it does today; a first-run prompt overlays the detail area and

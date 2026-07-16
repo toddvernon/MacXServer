@@ -189,16 +189,17 @@ tester account.
 | Gatekeeper first launch | fresh account, browser-downloaded build |
 | App replace (update story) | new build over old: machines/images/keychain survive |
 
-**3c. Iterate.** Findings drive the already-sketched wizard reshape (the
-two validated flow charts from the 2026-07-15 session, appendix below):
-blank marketing detail pane for imageless fixtures, the install wizard
-container over the built download/first-login guts, optional DNS step,
-curated per-OS launcher seeding (the biggest net-new piece: distill the
-ss2 sweep + feature matrix into "works on this OS AND present on this
-image" launcher sets, validated against the actual masters). Sequence by
-what testing shows hurts most, not by the sketch order. FIRST_RUN docs
-get updated to match what ships (the in-window-vs-wizard DECISIONS append
-lands with that work).
+**3c. Iterate.** *The wizard reshape shipped early (2026-07-16, Todd's
+call after the Add Machine wizard field test; DECISIONS 2026-07-16):*
+hero marketing pane on imageless machines, `InstallStarterWizardView`
+(location -> login -> network -> summary) over the built
+download/first-login guts, optional DNS applied at ready, images
+directory asked with a prefilled default (D4 resolved). Bubble +
+isFirstRun retired. Build clean, 1579/0. Remaining 3c work: curated
+per-OS launcher seeding (the biggest net-new piece: distill the ss2
+sweep + feature matrix into "works on this OS AND present on this image"
+launcher sets, validated against the actual masters), plus whatever live
+testing surfaces.
 
 **3d. Onboarding surface.** The site's download page grows the Gatekeeper
 walkthrough (from 2's screenshots) and a five-minute quickstart that

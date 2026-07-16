@@ -81,7 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// First-run deferred login: credentials collected in the "one more thing"
     /// step, held until the machine boots to ready, then applied by the
     /// UserAdmin pipeline (FIRST_RUN_EXPERIENCE.md). Keyed by machine id.
-    private var pendingFirstLogin: [UUID: (user: String, password: String)] = [:]
+    private var pendingFirstLogin: [UUID: (user: String, password: String, dns: String?)] = [:]
     /// Machines whose first-run login is being applied right now (guest ready,
     /// UserAdmin running). Drives the row's "creating your login" state.
     private var applyingLogin: Set<UUID> = []
@@ -264,6 +264,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.onDownload  = { [weak self] id in self?.downloadCuratedImage(for: id) }
         model.onCancelDownload = { [weak self] id in
             self?.imageDownloadTasks[id]?.cancel()
+        }
+        // The starter-install wizard (DECISIONS 2026-07-16): the hero pane's
+        // one path from imageless fixture to running machine.
+        model.onInstallStarter = { [weak self] id, dir, user, password, dns in
+            self?.beginStarterInstall(machineID: id, imagesDir: dir,
+                                      username: user, password: password,
+                                      dnsServer: dns)
+        }
+        model.onPickImagesDirectory = { [weak self] in self?.pickImagesDirectory() }
+        model.imagesDirectory = { [weak self] in
+            self?.effectiveImagesDirectory().path
+                ?? ImageDownloader.defaultImagesDirectory.path
+        }
+        model.onChooseExistingImage = { [weak self] id in
+            self?.chooseImageThenStart(for: id)
         }
         model.onLaunch    = { [weak self] id, name, verbose in
             self?.launchFromMachine(id, launcherName: name, verbose: verbose) }
@@ -2522,6 +2537,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sparcWelcome?.showWindow()
     }
 
+    /// The hero pane's existing-image path: same semantics, explicit target.
+    func chooseImageThenStart(for id: UUID) {
+        installTargetID = id
+        chooseImageThenStart()
+    }
+
     /// Pick an existing qcow2, attach it to the install-flow machine, and boot.
     private func chooseImageThenStart() {
         guard let registry, let id = installTargetID, var m = registry.machine(id) else { return }
@@ -2582,10 +2603,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// Confirm sheet (real sizes from the catalog), then the pipeline. The
-    /// destination is never user-chosen: bundled fixtures get the canonical
-    /// `<os>-boot.qcow2`, user machines `<os>-<shortid>.qcow2`, both in the
-    /// images directory. Disk-space preflight and the three verifications
-    /// live in ImageDownloader.
+    /// wizard path skips this -- its summary step IS the confirm -- and calls
+    /// runImageDownload directly.
     private func confirmAndRunImageDownload(machineID: UUID,
                                             entry: ImageCatalog.Entry) {
         guard let registry, let m = registry.machine(machineID),
@@ -2604,8 +2623,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         alert.addButton(withTitle: "Download")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        runImageDownload(machineID: machineID, entry: entry)
+    }
 
-        let destination = ImageDownloader.defaultImagesDirectory
+    /// The verify-everything download pipeline with progress on the machine's
+    /// row. The destination directory is the images-directory preference (or
+    /// the App Support default); the FILENAME is never user-chosen: bundled
+    /// fixtures get the canonical `<os>-boot.qcow2`, user machines
+    /// `<os>-<shortid>.qcow2`. Disk-space preflight and the three
+    /// verifications live in ImageDownloader. At completion: a wizard install
+    /// (pending login stashed) boots straight away; a legacy path with no
+    /// user yet gets the "one more thing" panel.
+    private func runImageDownload(machineID: UUID, entry: ImageCatalog.Entry) {
+        guard let registry, let m = registry.machine(machineID),
+              let os = m.os else { return }
+        let destination = effectiveImagesDirectory()
             .appendingPathComponent(ImageDownloader.imageFilename(
                 os: os, machineID: m.id, bundled: m.bundled))
 
@@ -2632,16 +2664,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 }
                 self.finishImageDownload(machineID)
                 self.afterMachineMutation()
-                // First-run: a freshly-downloaded machine with no login yet is
-                // the "one more thing -- add a user" moment. A machine that
-                // already has a user (a re-download, or a BYO setup) skips it.
-                if let m = self.registry?.machine(machineID),
-                   m.user.isEmpty {
+                if self.pendingFirstLogin[machineID] != nil {
+                    // Wizard install: the login (and optional DNS) was
+                    // collected up front. Boot now; onReady applies it.
+                    self.startMachine(machineID)
+                } else if let m = self.registry?.machine(machineID),
+                          m.user.isEmpty {
+                    // Legacy paths (welcome window, + wizard's download
+                    // fork): the "one more thing -- add a user" moment.
                     self.presentFirstLoginStep(for: machineID)
                 }
             } catch ImageDownloadError.cancelled {
+                // A cancelled install must not leave credentials armed for
+                // some unrelated later boot.
+                self.pendingFirstLogin[machineID] = nil
                 self.finishImageDownload(machineID)
             } catch {
+                self.pendingFirstLogin[machineID] = nil
                 self.finishImageDownload(machineID)
                 self.showLaunchError("Image download failed: "
                     + error.localizedDescription)
@@ -2654,6 +2693,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         imageDownloadTasks[id] = nil
         imageDownloadPhases[id] = nil
         refreshMachines()
+    }
+
+    // MARK: - Starter-install wizard (DECISIONS 2026-07-16)
+
+    /// Where downloaded images land: the preference if set, else the App
+    /// Support default. One global directory; filenames stay derived.
+    private func effectiveImagesDirectory() -> URL {
+        let pref = Preferences().imagesDirectoryPath
+        guard !pref.isEmpty else { return ImageDownloader.defaultImagesDirectory }
+        return URL(fileURLWithPath: (pref as NSString).expandingTildeInPath,
+                   isDirectory: true)
+    }
+
+    /// The wizard's location step: a directories-only open panel.
+    private func pickImagesDirectory() -> String? {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Images Folder"
+        panel.prompt = "Choose"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.path
+    }
+
+    /// The install wizard's commit: persist the images-directory choice,
+    /// stash the deferred login (+ optional DNS), and kick the curated
+    /// download. The pipeline's completion boots the machine; `onReady`
+    /// applies the account. Catalog/entry failures clear the stash --
+    /// credentials must never outlive the install that collected them.
+    @MainActor
+    private func beginStarterInstall(machineID id: UUID, imagesDir: String,
+                                     username: String, password: String,
+                                     dnsServer: String?) {
+        guard let registry, let m = registry.machine(id),
+              m.kind == .emulatedVM, m.image == nil, let os = m.os,
+              imageDownloadTasks[id] == nil else { return }
+        // The directory choice persists as the one global preference, and
+        // only when it differs from the default (an untouched prefill stays
+        // "default" so the default can move in a future version).
+        let chosen = (imagesDir as NSString).expandingTildeInPath
+        let prefs = Preferences()
+        if chosen == ImageDownloader.defaultImagesDirectory.path {
+            prefs.imagesDirectoryPath = ""
+        } else {
+            prefs.imagesDirectoryPath = chosen
+        }
+        pendingFirstLogin[id] = (user: username, password: password, dns: dnsServer)
+        Task { @MainActor in
+            let catalog: ImageCatalog
+            do {
+                catalog = try await ImageCatalog.fetch()
+            } catch {
+                self.pendingFirstLogin[id] = nil
+                self.showLaunchError("Couldn't fetch the image catalog from "
+                    + "\(ImageCatalog.catalogURL.host ?? "the server"): "
+                    + error.localizedDescription)
+                return
+            }
+            guard let entry = catalog.entry(for: os) else {
+                self.pendingFirstLogin[id] = nil
+                self.showLaunchError("The catalog doesn't carry a "
+                    + "\(os.displayName) image. Attach one you already have "
+                    + "via \u{201C}Use a disk image I already have\u{201D}.")
+                return
+            }
+            self.runImageDownload(machineID: id, entry: entry)
+        }
     }
 
     // MARK: - First-run login (FIRST_RUN_EXPERIENCE.md)
@@ -2685,7 +2793,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// `onReady` (the daemon must answer before /etc/passwd can be touched).
     @MainActor
     private func beginFirstLogin(machineID: UUID, user: String, password: String) {
-        pendingFirstLogin[machineID] = (user, password)
+        pendingFirstLogin[machineID] = (user: user, password: password, dns: nil)
         startMachine(machineID)
     }
 
@@ -2709,12 +2817,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let outcome: Result<Void, Error>
+            // The wizard's optional DNS choice rides the same ready window.
+            // Its failure is deliberately soft: the login is the product of
+            // this pipeline, DNS is a preference -- report, don't fail.
+            var dnsFailure: String?
             let client = HeliosClient(host: host, port: port, timeout: 60, secret: secret)
             defer { client.close() }
             do {
                 try client.connect()
                 _ = try client.hello()
                 _ = try UserAdmin.addUser(req, os: os, transport: client)
+                if let dns = creds.dns, !dns.isEmpty {
+                    do {
+                        let payload = Data("nameserver \(dns)\n".utf8)
+                        _ = try client.writeFile("/etc/resolv.conf", data: payload)
+                    } catch {
+                        dnsFailure = Self.describeUserAdminError(error)
+                    }
+                }
                 outcome = .success(())
             } catch { outcome = .failure(error) }
             DispatchQueue.main.async {
@@ -2726,6 +2846,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     // (sets machine.user + telnet Keychain). Launchers go live.
                     self.adoptMachineLogin(machineID: id, user: creds.user,
                                            password: creds.password)
+                    if let dnsFailure {
+                        let alert = NSAlert()
+                        alert.messageText = "DNS wasn\u{2019}t set"
+                        alert.informativeText = "Your login was created and the "
+                            + "machine is running, but writing the DNS server "
+                            + "failed: \(dnsFailure)\n\nIt can be set from the "
+                            + "DNS panel (Overview \u{2192} DNS)."
+                        alert.addButton(withTitle: "OK")
+                        alert.runModal()
+                    }
                 case .failure(let error):
                     self.refreshMachines()
                     // The guest is up; only the account write failed. Offer the
@@ -2744,7 +2874,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    private static func describeUserAdminError(_ error: Error) -> String {
+    nonisolated private static func describeUserAdminError(_ error: Error) -> String {
         if let e = error as? UserAdminError { return e.errorDescription ?? "\(e)" }
         if let e = error as? HeliosClient.HeliosError { return e.errorDescription ?? "\(e)" }
         return error.localizedDescription
