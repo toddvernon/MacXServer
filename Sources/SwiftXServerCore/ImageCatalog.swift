@@ -54,9 +54,12 @@ public struct ImageCatalog: Equatable, Sendable {
 
     // MARK: - Where the catalog lives
 
-    /// The pinned production catalog URL (Todd, 2026-07-10: hosted on the
-    /// product's own site). The payloads live beside it.
-    public static let defaultURL = URL(string: "https://macxserver.com/images/catalog.json")!
+    /// The pinned production catalog URL (Todd, 2026-07-15: the index lives
+    /// in the public macxserver-images repo, so the raw URL is stable across
+    /// image releases; the payloads are that repo's release assets, which the
+    /// catalog entries point at). See DECISIONS 2026-07-15.
+    public static let defaultURL = URL(string:
+        "https://raw.githubusercontent.com/toddvernon/macxserver-images/main/catalog.json")!
 
     /// The effective catalog URL: the `SPARCPLUG_CATALOG_URL` dev override
     /// (points tests / local runs at a `file://` fixture) or the pinned

@@ -1,7 +1,10 @@
 # Beta plan -- gold images, gold apps, tested flows, then friends
 
-Status: **DRAFT 2026-07-15** (this session's planning artifact; supersedes
-nothing, sequences everything). The premise, from Todd: all the remaining
+Status: **ACTIVE 2026-07-15. Phase 0 DONE same day** -- Todd confirmed the
+shapes; both repos exist (`macxserver-images` public with the live pinned
+catalog URL serving an empty catalog, `macxserver-beta` private with the
+tester README), D1-D3 are ledgered in DECISIONS 2026-07-15, and
+`ImageCatalog.defaultURL` points at the raw catalog URL. Next: phase 1. The premise, from Todd: all the remaining
 first-run and onboarding work is gated on *him* being able to test the
 product like a stranger. So the order is (1) gold images downloadable from
 GitHub, (2) gold notarized app builds installable from GitHub, (3) iterate
@@ -17,7 +20,7 @@ mode, the verification passes, and the testing itself.
 
 ---
 
-## Phase 0 -- decisions to pin (one sitting, before any work)
+## Phase 0 -- decisions to pin (DONE 2026-07-15; kept for rationale)
 
 **D1. Images host on GitHub, in their own public repo.** Reverses the
 2026-07-10 DECISIONS entry (catalog on macxserver.com); Todd's call

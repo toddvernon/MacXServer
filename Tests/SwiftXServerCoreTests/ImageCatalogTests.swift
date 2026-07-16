@@ -79,6 +79,7 @@ final class ImageCatalogTests: XCTestCase {
         // start isn't visible to ProcessInfo caching on all runners — but the
         // pinned default is load-bearing: it's what ships.)
         XCTAssertEqual(ImageCatalog.defaultURL.absoluteString,
-                       "https://macxserver.com/images/catalog.json")
+                       "https://raw.githubusercontent.com/toddvernon/"
+                       + "macxserver-images/main/catalog.json")
     }
 }

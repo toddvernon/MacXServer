@@ -1837,6 +1837,48 @@ alongside the wizard (two add paths, and the stub is the zombie).
 
 ---
 
+## 2026-07-15: Beta hosting is GitHub on both sides; published root password rotates at publish
+
+Three calls from the beta-planning session (the full sequencing lives in
+BETA_PLAN.md; Todd confirmed the shapes same day). The premise: everything
+left before seeding friends is gated on Todd testing like a stranger, which
+needs gold images and gold app builds downloadable from real hosting.
+
+**Images move to GitHub** (reverses the 2026-07-10 "catalog lives on
+macxserver.com" entry -- that hosting was never uploaded, so nothing real
+moves). New public repo `toddvernon/macxserver-images`: `catalog.json` is
+IN the repo, fetched via the raw URL (stable across image releases,
+diffable history for free); the ~250 MB gzipped qcow2 payloads are release
+assets, one tag per published image set (`v2026.07`, ...), 2 GB/file
+ceiling and free egress. Public because the app fetches anonymously; same
+distribution posture as the oldsilicon.com ZuluSCSI copies.
+`ImageCatalog.defaultURL` now pins
+`https://raw.githubusercontent.com/toddvernon/macxserver-images/main/catalog.json`;
+`SPARCPLUG_CATALOG_URL` stays the dev override. `build-catalog.sh` grows
+the matching BASE_URL + upload tail (SPARCplug side, phase 1).
+
+**Beta app builds go to a new private repo** `toddvernon/macxserver-beta`,
+NOT the public MacXServer releases page -- half-tested 0.9.x builds
+shouldn't be a visitor's first impression, and inviting a friend as a
+collaborator hands them Releases and the Issues tab (the feedback channel)
+in one gesture. `release.sh` grows a `--beta` mode (phase 2): repo
+override + skip the Hugo site bump/deploy tail, which must never run for
+a beta cut.
+
+**Published masters get a fresh documented root password at publish prep**
+(closes HELIOS_USER_MANAGEMENT decision 3 for beta). Rotate at publish,
+print it on the download/quickstart page: the VMs are loopback-bound
+(2026-07-09), the exposure story is local-Mac, and a documented root
+password is a feature for the tinkerer audience. Folding a
+root-password-set step into the first-run wizard remains open for the
+phase-3 wizard reshape, deliberately not a gate now.
+
+**Deferred, not decided:** the images-directory wizard step (whether the
+user picks where images land, or the App Support default stays fixed) --
+phase 3 will decide from testing.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
