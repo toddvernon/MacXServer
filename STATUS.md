@@ -1,90 +1,71 @@
-# Status 2026-07-17 (session roll, desktop)
+# Status 2026-07-17 (second roll, Mac Studio)
 
-## Headline: the bundled release images are actually clean now. All three
-stripped, swept, and verified; the local dev catalog rebuilt and armed off
-the stripped set; the sunos414 "BAD" verdict turned out to be a false
-alarm from a 4.1.4 ls quirk. Plus a small app fix: an imageless bundled
-machine locks to the Overview install pitch.
+## Headline: the Mac Studio now has its own stripped local catalog, armed.
+Same pipeline as yesterday's run (cut x3, strip x3, build-catalog --local),
+executed fresh on this machine because the catalog artifacts are per-Mac.
+Wizard testing against a clean stripped catalog can continue here.
 
 ## What happened this session
 
-**Imageless bundled machines show Overview only** (MachinesWindowView).
-When a bundled machine has no image yet, the Overview/Settings/Launchers
-segmented picker disappears and the pane pins to the starter-hero install
-pitch. The page switch is guarded (not just picker-hidden), so losing the
-image while sitting on Settings snaps back to the invitation instead of
-stranding a dead tab. Scoped to bundled machines: a user-created
-imageless VM keeps all three tabs since Settings is where it gets fixed.
+**Sorted out which Mac had what.** Yesterday's roll said "desktop" but the
+armed catalog, catalog-staging/, and release-images/ turned out to live on
+the other Mac (this Studio's repos were 15/7 behind at /sos and had no
+artifacts). No harm, the pipeline is per-Mac by design; today's run gave
+the Studio its own set.
 
-**The strip list grew: fred and synology** (Todd's calls). fred is his
-second daily test account; it really was on solaris26 and netbsd gold
-(stripped from both, record + home). synology (uid 1025, his NAS-mount
-login) was found in 4.1.4's passwd and joined the list too. Both are in
-strip-release.sh and the publish-prep gate now.
+**Full cut/strip/build on the Studio.** All three release copies cut from
+the Dropbox gold masters, stripped over helios with readback verifies
+(tvernon, fred, synology, template; homes parents swept to lost+found --
+sunos414 gave up the usual cx tars and redeploy scripts, solaris26 its
+TT_DB and tmp), then ./build-catalog.sh --local built catalog-staging
+(499M/591M/324M payloads, tag v2026.07) and armed
+~/.macxserver-dev-catalog.json. No --root-password on this run, same as
+the laptop's local build: the copies keep the dev root password until the
+publish pass. Guests halted cleanly; no qemu, no locks.
 
-**sunos414 was never bad.** Booted the "BAD" copy to debug the rm
-failure: records and homes were already gone. The real bug was the
-verify: SunOS 4.1.4 ls prints "not found" but EXITS 0 on a missing
-operand (old-BSD ls), so the ls -d existence check false-alarmed. Exit
-codes otherwise propagate fine over helios (proved with exit 3). Both
-scripts now verify with `sh -c 'test -d ...'`; the gate had the same bug
-inverted and would have failed a CLEAN 4.1.4 image forever. No re-cut
-was needed.
-
-**Homes-parent sweep** (new surgery step + gate check). Gold accumulates
-dev residue outside any account's home: cx build tars, test binaries,
-redeploy scripts on 4.1.4; TT_DB + tmp on solaris26; tmp on netbsd.
-strip-release.sh now sweeps everything but lost+found out of the homes
-parent (each removal logged); publish-prep gates on it. Watch item:
-TT_DB is ToolTalk's per-filesystem db dir, regenerable on demand, but if
-dt-apps misbehave on the published solaris26 it's the first suspect
-(whitelisting it next to lost+found is a one-liner).
-
-**All three release copies stripped + verified, catalog rebuilt.**
-./build-catalog.sh --local ran clean off the stripped set; the armed
-dev catalog (~/.macxserver-dev-catalog.json -> catalog-staging, tag
-v2026.07) now serves exactly what users will get. Guests halted cleanly,
-no qemu running, no locks. Todd is testing the wizard flow against it.
-
-Docs updated to match: SPARCplug docs/PUBLISH_PREP.md (including the ls
-quirk warning), HELIOS_USER_MANAGEMENT.md, BETA_PLAN.md.
+**Confirmed the tvernon guard in add-user.** Todd hit the wizard's red
+"system account" message typing tvernon on netbsd; that's
+UserAdmin.usernameProblem -> reservedNames (UserAdmin.swift:170) working
+as designed (tvernon + template are reserved on every OS since the
+2026-07-16 field find). Two observations left on the table, no action
+taken: (1) the message text is slightly off on stripped images where
+tvernon no longer exists (cosmetic, arguably right anyway); (2) fred and
+synology are NOT in the reserved list, so typing fred on a gold-based
+machine still hits the opaque apply-time wall; adding them to common in
+reservedNames is a two-word change if Todd wants parity.
 
 ## What's working / what's broken
 
-- solaris26 / sunos414 / netbsd release copies: stripped (tvernon, fred,
-  synology, template), homes parents swept to lost+found, verified.
-  Trustworthy.
-- Local dev catalog armed off the stripped set. Disarm with
-  `rm ~/.macxserver-dev-catalog.json`.
-- Gold still carries all the accounts and junk BY DESIGN (gold never
-  changes); every future cut gets the full treatment automatically.
-- swift build clean after the Overview-only change; SourceKit phantom
-  errors on recent code persist (compiler disagrees, carried).
+- Studio local catalog armed off freshly stripped copies. Disarm with
+  `rm ~/.macxserver-dev-catalog.json`. Laptop has its own equivalent set.
+- All strips verified clean on the first pass, including the 4.1.4
+  test-d verify fix from yesterday (no ls false alarms).
+- No code changes this session; SourceKit phantom-error carry-over from
+  yesterday presumably still stands (nothing rebuilt today).
 
 ## What's next
 
-1. Todd's wizard-flow testing against the stripped catalog (in progress
-   when this session closed).
+1. Todd's wizard-flow testing on the Studio against the armed catalog
+   (in progress when this session closed).
 2. Todd's phase-1 half: pick the published root password, then
    cut/strip --root-password/gate/--publish x3, then the stranger
    download test.
 3. A6 clean-Mac acceptance with the v0.9.9 beta artifact.
 4. Phase 3c remainder: per-OS curated launcher seeding.
-5. Carried: CanonicalDotfiles DISPLAY decision, UserAdmin live test on
+5. Optional small one: add fred + synology to reservedNames common (see
+   above).
+6. Carried: CanonicalDotfiles DISPLAY decision, UserAdmin live test on
    2.6/4.1.4, DefaultLaunchers.swift retirement.
 
 ## Committed / push state
 
-- X repo, main: Overview-only for imageless bundled machines, strip-list
-  doc updates, this roll. Pushed at /eos (hashes in the /eos summary).
-- SPARCplug, main: fred + synology strip, homes-parent sweep, the 4.1.4
-  ls-quirk verify fix in strip + gate, PUBLISH_PREP.md. Pushed at /eos.
-- cx repos: untouched this session.
+- X repo, main: this STATUS roll only (hash in the /eos summary). All
+  other repos untouched and in sync; session outputs are gitignored
+  build artifacts (release-images/, catalog-staging/) by design.
 
 ## Switching Macs
 
-- Pull X + SPARCplug. MachinesWindowView changed: Xcode rebuild needed.
-- The armed dev catalog, catalog-staging/, release-images/, TESTIMAGES,
-  and DerivedData are all THIS-Mac-local. The other Mac needs its own
-  cut/strip/--local run to test the download flow there.
+- Both Macs now have their own armed dev catalog; they don't sync and
+  don't need to.
 - No VM left running; no image locks anywhere.
+- Nothing to pull beyond this STATUS roll.
