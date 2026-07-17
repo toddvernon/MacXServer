@@ -176,6 +176,14 @@ private struct MachineDetailContainer: View {
 
     enum DetailTab: Hashable { case overview, settings, launchers }
 
+    /// A bundled machine with no image yet shows ONLY the Overview -- the whole
+    /// pane is the starter-disk invitation (DECISIONS 2026-07-16). Settings and
+    /// Launchers would invite configuring a machine that can't run yet, so the
+    /// tab picker disappears until an image is installed.
+    private var overviewOnly: Bool {
+        machine.bundled && machine.kind == .emulatedVM && machine.image == nil
+    }
+
     /// An imageless VM with a known OS opens to Overview — its Download… button
     /// is the fool-proof install path. An imageless VM whose OS is also unset
     /// (nothing to download) opens to Settings, where both get fixed; so does
@@ -217,19 +225,24 @@ private struct MachineDetailContainer: View {
                         .lineLimit(1)
                 }
                 Spacer()
-                Picker("", selection: $tab) {
-                    Text("Overview").tag(DetailTab.overview)
-                    Text("Settings").tag(DetailTab.settings)
-                    Text("Launchers").tag(DetailTab.launchers)
+                if !overviewOnly {
+                    Picker("", selection: $tab) {
+                        Text("Overview").tag(DetailTab.overview)
+                        Text("Settings").tag(DetailTab.settings)
+                        Text("Launchers").tag(DetailTab.launchers)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             Divider()
-            switch tab {
+            // Guarded, not just picker-hidden: if the image goes away while
+            // Settings/Launchers is showing (bundled machine reset), the pane
+            // snaps back to the invitation instead of stranding a dead tab.
+            switch overviewOnly ? DetailTab.overview : tab {
             case .overview:
                 MachineOverviewPage(row: model.row(machine.id), model: model,
                                     onEditLaunchers: { tab = .launchers })
