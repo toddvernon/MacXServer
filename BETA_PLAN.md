@@ -83,9 +83,11 @@ produces a booting, helios-answering guest for all three OSes.
    per image -- solaris26, sunos414, netbsd):
    - current heliosAgent binary baked in, rc-started, fail-closed auth
      confirmed (no secret = deny-all);
-   - `template` user present and locked; canonical dotfiles current;
-   - **`tvernon` stripped** (masters carry root + template + daemon only,
-     per FIRST_RUN_EXPERIENCE.md -- the NOT DONE item);
+   - **dev accounts stripped: `tvernon`, `fred`, `synology`, and
+     `template`** (masters carry root + stock system accounts + daemon
+     only; the template keep-and-lock plan flipped to strip, and fred +
+     synology joined the list, 2026-07-16), homes parent swept to
+     lost+found only; root dotfiles vs canonical is advisory only;
    - root password per D3;
    - Y2K patches present (4.1.4), clock sane;
    - resolv.conf at the untouched slirp baseline;

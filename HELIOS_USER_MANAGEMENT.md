@@ -215,8 +215,10 @@ this IS an OS-sensitive verb, unlike DNS). The panel:
 The reason this exists. Proposed flow, to settle in the first-launch
 design session:
 
-1. Published masters carry root + template + the helios daemon ONLY
-   (tvernon stripped at publish prep, below). Bundled fixtures seed
+1. Published masters carry root + stock system accounts + the helios
+   daemon ONLY (tvernon, fred, synology, and template all stripped at
+   publish prep, below; template flipped from "keep, locked" to "strip",
+   and fred + synology joined the list, 2026-07-16). Bundled fixtures seed
    `machine.user = ""` -- which requires changing the current seeding
    (`bundledUser` falls back to `NSUserName()` today; a stranger's Mac
    login name isn't on the guest, so that fallback writes a lie).
@@ -232,8 +234,10 @@ design session:
 ## Publish-prep tie-in
 
 - Before build-catalog.sh runs against the masters (PLUGIN_V1_PUNCHLIST
-  E1), delete-user strips `tvernon` from each (home included). The same
-  feature, pointed at the masters.
+  E1), `strip-release.sh` strips `tvernon`, `fred`, `synology`, and
+  `template` from each release copy (records + homes, readback-verified)
+  and sweeps the homes parent down to lost+found; `publish-prep.sh` gates
+  on all of it.
 - Open with it: the **root password** on published images (currently a
   documented dev password, flagged in guest-config/README.md). Options
   live in the first-launch discussion: ship it documented ("the appliance
