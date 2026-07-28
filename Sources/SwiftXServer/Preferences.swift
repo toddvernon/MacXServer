@@ -24,8 +24,10 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
         static let motifFrameButtonStyle = "motifFrame.buttonStyle" // "motif" | "trafficLights"
         static let displayScale          = "display.scale"          // "auto" | "comfortable" | "compact"
         // Mouse-button mapping. Values are the X wire-button number (1, 2,
-        // or 3) each Mac physical button emits. Defaults are identity for
-        // a standard 3-button mouse.
+        // or 3) each Mac physical button emits. Defaults are 1/1/3, NOT
+        // identity: wheel-click deliberately acts as Select, because
+        // accidental middle-click paste is the classic X-on-a-Mac trap.
+        // Middle-click paste is one popup away for people who want it.
         static let pointerLeftClick      = "pointer.leftClick"      // int
         static let pointerWheelClick     = "pointer.wheelClick"     // int
         static let pointerRightClick     = "pointer.rightClick"     // int
@@ -45,13 +47,20 @@ final class Preferences: ClipboardPreferencesProvider, @unchecked Sendable {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         // Register defaults on first launch so .object(forKey:) returns the
-        // configured default instead of nil.
+        // configured default instead of nil. These ARE the new-user seed --
+        // deliberately Todd's own daily-driver settings (2026-07-28), with two
+        // exceptions: display stays "auto" so the picker fits the stranger's
+        // monitor, and capture stays OFF -- a .xtap records the full protocol
+        // stream including KeyPress events, so capture-by-default would mean
+        // recording keystrokes (passwords typed into a telnet session in an
+        // xterm) without the user asking for it. Bug reporters flip it on in
+        // X11Server > Capture > Capture Settings.
         defaults.register(defaults: [
             Key.clipboardEnabled: true,
-            Key.clipboardMode: "mac",
+            Key.clipboardMode: "xterm",
             Key.captureSessions: false,
             Key.captureDirectory: Self.defaultCaptureDirectory,
-            Key.motifFrameEnabled: false,
+            Key.motifFrameEnabled: true,
             Key.motifFrameButtonStyle: "motif",
             Key.displayScale: "auto",
             Key.pointerLeftClick: 1,

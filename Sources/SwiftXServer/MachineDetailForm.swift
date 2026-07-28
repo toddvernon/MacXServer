@@ -28,6 +28,7 @@ struct MachineDetailForm: View {
     @State private var imageMismatchNote: String?
     /// "Show what I'm typing" for the telnet password field.
     @State private var revealPassword = false
+    @State private var forgetPasswordBanner: String?
     /// The ports editor's field text (telnet / ssh / helios). Kept as strings
     /// (not bindings into `draft.ports`) so a half-typed number doesn't have to
     /// be a valid port: blank = derive, and the triple only lands on the draft
@@ -320,7 +321,32 @@ struct MachineDetailForm: View {
             fieldCaption("Password for telnet logins. Leave it blank to be asked once "
                        + "and have it kept in the macOS Keychain; type it here only if "
                        + "you're fine with it sitting in machines.json as plain text.")
+            HStack(spacing: 8) {
+                Button("Forget Password") { forgetStoredPassword() }
+                    .disabled(draft.user.isEmpty || draft.host.isEmpty)
+                if let banner = forgetPasswordBanner {
+                    Text(banner)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            fieldCaption("Removes the stored password for this machine's login -- "
+                       + "both the Keychain entry and any plain-text value above. "
+                       + "You'll be asked again on the next telnet launch.")
         }
+    }
+
+    /// The one place stored credentials can be SEEN to go away (before this,
+    /// the Keychain entry for user@host:port was write-only: created by the
+    /// first-launch prompt / Change Login and never clearable in the app).
+    /// Deletes the Keychain entry under the machine's current user/host/port
+    /// and clears the cleartext machines.json password in the same gesture.
+    private func forgetStoredPassword() {
+        let account = "\(draft.user)@\(draft.host):\(draft.resolvedPorts.telnet)"
+        KeychainHelper.delete(account: account)
+        draft.password = nil
+        commit()
+        forgetPasswordBanner = "Forgotten. You'll be asked on the next launch."
     }
 
     // MARK: Ports editor (audit F1, 2026-07-09)

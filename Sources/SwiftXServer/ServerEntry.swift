@@ -115,17 +115,18 @@ enum ServerEntry {
 
                 --capture / --no-capture override the Preferences toggle for this
                 process. When capture is on, every accepted client writes its own
-                .xtap to /tmp/macxcapture/ (configurable in Preferences).
+                .xtap to /tmp/macxcapture/ (configurable in X11Server >
+                Capture > Capture Settings).
 
                 --scale forces the display scale (2 or 3) for this process,
-                overriding the Preferences > Display setting. Without --scale,
-                the Preferences value applies (default: Auto, which prefers 3x).
+                overriding the X11Server > Display Settings value. Without
+                --scale, that value applies (default: Auto, which prefers 3x).
                 --scale 2 re-picks the logical-root size to the largest preset
                 that fits at 2x. See SCALE_PICKER.md.
 
-                --motif-frame / --no-motif-frame override the Preferences "Use
-                Motif window frame" toggle for this process only. Useful for
-                running two servers side-by-side with different chrome.
+                --motif-frame / --no-motif-frame override Display Settings'
+                "Use Motif window frame" toggle for this process only. Useful
+                for running two servers side-by-side with different chrome.
 
                 --verbose mirrors per-session and bridge traces to stderr. By default
                 they're disk-only at /tmp/macxserver/<instance>-<timestamp>.log;

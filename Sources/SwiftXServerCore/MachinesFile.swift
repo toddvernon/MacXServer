@@ -232,6 +232,12 @@ public enum MachinesFileLoader {
     /// file at `launchersPath` (parsing it if present) + the bundled image path,
     /// write the result, and return it. On a decode error, log and return empty
     /// (never clobber the user's file).
+    ///
+    /// The legacy launchers file is DELETED once machines.json exists (both
+    /// right after a successful migration write and, for installs migrated
+    /// before 2026-07-28, as a sweep on a normal load): nothing reads or
+    /// seeds it anymore, so leaving it behind just parks a stale copy of the
+    /// user's launchers in their home directory forever.
     public static func loadOrMigrate(
         path: String = defaultPath,
         launchersPath: String = LauncherFileLoader.defaultPath,
@@ -239,6 +245,15 @@ public enum MachinesFileLoader {
         log: ServerLogSink? = nil
     ) -> MachinesFile {
         let fm = FileManager.default
+        func removeLegacyLaunchersFile() {
+            guard fm.fileExists(atPath: launchersPath) else { return }
+            do {
+                try fm.removeItem(atPath: launchersPath)
+                log?.log("machines: removed legacy launchers file \(launchersPath)")
+            } catch {
+                log?.log("machines: couldn't remove legacy launchers file: \(error)")
+            }
+        }
         if !fm.fileExists(atPath: path) {
             let launchers: LauncherFile = (try? String(contentsOfFile: launchersPath, encoding: .utf8))
                 .map { LauncherFile.parse($0) } ?? LauncherFile(entries: [], warnings: [])
@@ -249,11 +264,13 @@ public enum MachinesFileLoader {
             do {
                 try file.encoded().write(toFile: path, atomically: true, encoding: .utf8)
                 log?.log("machines: migrated \(launchers.entries.count) launcher entries -> \(path)")
+                removeLegacyLaunchersFile()
             } catch {
                 log?.log("machines: migration write failed: \(error)")
             }
             return file
         }
+        removeLegacyLaunchersFile()
         do {
             let file = try MachinesFile.decode(String(contentsOfFile: path, encoding: .utf8))
             // Existing installs predate the bundled fixtures; inject any that are

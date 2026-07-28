@@ -43,6 +43,7 @@ struct InstallStarterWizardView: View {
     private enum DNSChoice { case builtIn, custom }
     @State private var dnsChoice: DNSChoice = .builtIn
     @State private var dnsServer = ""
+    @State private var dnsDomain = ""
 
     /// The account names that actually exist on the catalog image for this
     /// OS, fetched when the wizard opens. When present, username validation
@@ -154,13 +155,20 @@ struct InstallStarterWizardView: View {
                 TextField("DNS server address", text: $dnsServer)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
+                TextField("Domain name (optional)", text: $dnsDomain)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                if domainProblem {
+                    errorText("Domain names can\u{2019}t contain spaces.")
+                }
             }
             caption(dnsChoice == .builtIn
                 ? "The machine shares this Mac\u{2019}s connection and looks up "
                   + "names through public resolvers. Nothing to configure."
                 : "The machine\u{2019}s name lookups go to this server instead. "
-                  + "It\u{2019}s written to the machine at first boot and can be "
-                  + "changed later from the DNS panel.")
+                  + "The domain name completes short hostnames (ping fred "
+                  + "\u{2192} fred.example.com). Both are written to the machine "
+                  + "at first boot and can be changed later from the DNS panel.")
         }
     }
 
@@ -173,6 +181,10 @@ struct InstallStarterWizardView: View {
             summaryLine("DNS", dnsChoice == .custom
                         ? dnsServer.trimmingCharacters(in: .whitespaces)
                         : "built-in")
+            if dnsChoice == .custom,
+               !dnsDomain.trimmingCharacters(in: .whitespaces).isEmpty {
+                summaryLine("Domain", dnsDomain.trimmingCharacters(in: .whitespaces))
+            }
             caption("Downloads the starter system (about 250 MB), then the "
                   + "machine boots and your login is created automatically. "
                   + "The first boot takes a couple of minutes.")
@@ -208,6 +220,13 @@ struct InstallStarterWizardView: View {
                                         reserved: imageAccountNames)
     }
 
+    /// The trimmed domain still has interior whitespace -- resolv.conf's
+    /// `domain` directive takes exactly one token, so a space would silently
+    /// truncate what the user typed.
+    private var domainProblem: Bool {
+        dnsDomain.trimmingCharacters(in: .whitespaces).contains(" ")
+    }
+
     private var canGoForward: Bool {
         switch step {
         case .location:
@@ -217,7 +236,8 @@ struct InstallStarterWizardView: View {
                 && !password.isEmpty && password == confirm
         case .network:
             return dnsChoice == .builtIn
-                || !dnsServer.trimmingCharacters(in: .whitespaces).isEmpty
+                || (!dnsServer.trimmingCharacters(in: .whitespaces).isEmpty
+                    && !domainProblem)
         case .summary:
             return true
         }
@@ -250,6 +270,9 @@ struct InstallStarterWizardView: View {
         let dns = dnsChoice == .custom
             ? dnsServer.trimmingCharacters(in: .whitespaces)
             : nil
+        let trimmedDomain = dnsDomain.trimmingCharacters(in: .whitespaces)
+        let domain = (dnsChoice == .custom && !trimmedDomain.isEmpty)
+            ? trimmedDomain : nil
         let dir = imagesDir.trimmingCharacters(in: .whitespaces)
         let model = self.model
         let id = machineID
@@ -262,7 +285,7 @@ struct InstallStarterWizardView: View {
         DispatchQueue.main.async {
             NSLog("macxserver: install wizard commit (%@, handler wired: %@)",
                   id.uuidString, model.onInstallStarter == nil ? "NO" : "yes")
-            model.onInstallStarter?(id, dir, user, pass, dns)
+            model.onInstallStarter?(id, dir, user, pass, dns, domain)
         }
     }
 

@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let preferences: Preferences
 
     private var statusItem: NSStatusItem?
-    private var prefsController: PreferencesWindowController?
+    private var settingsControllers: [SettingsPane: SettingsPaneWindowController] = [:]
     private var resourcesController: ResourcesWindowController?
     private var acknowledgementsController: AcknowledgementsWindowController?
     private var fontMappingsController: FontMappingsWindowController?
@@ -29,10 +29,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var fileBrowserControllers: [String: FileBrowserWindowController] = [:]
     /// The Server menu's listener-status info row; kept in sync with `listenerStatus`.
     private var serverStatusMenuItem: NSMenuItem?
-    /// The top-level Machines menu, rebuilt from the registry whenever machine
-    /// state changes (rebuildMachinesMenu). Per-item enablement is computed at
-    /// rebuild time, so the menu reflects current state each rebuild.
-    private var machinesMenu: NSMenu?
     /// Whether the bundled machine's guest has answered `hello` this run lives
     /// on its `MachineController` now (`controller?.isReady`) -- it's per-machine
     /// state, not an app-global. Cleared the moment state leaves `.running` (so
@@ -81,7 +77,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// First-run deferred login: credentials collected in the "one more thing"
     /// step, held until the machine boots to ready, then applied by the
     /// UserAdmin pipeline (FIRST_RUN_EXPERIENCE.md). Keyed by machine id.
-    private var pendingFirstLogin: [UUID: (user: String, password: String, dns: String?)] = [:]
+    private var pendingFirstLogin: [UUID: (user: String, password: String,
+                                           dns: String?, domain: String?)] = [:]
     /// Machines whose first-run login is being applied right now (guest ready,
     /// UserAdmin running). Drives the row's "creating your login" state.
     private var applyingLogin: Set<UUID> = []
@@ -219,12 +216,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// login), so there's no longer a bundledUser to derive.
     private func loadMachineRegistry() {
         self.registry = MachineRegistry.load(bundledImagePath: preferences.sparcDiskImagePath)
-        // The launcher file is imported ONCE (MachinesFileLoader.loadOrMigrate, on
-        // the first run when machines.json doesn't exist yet). After that the JSON
-        // registry is authoritative and edited in-app via the Machine Editor -- we
-        // deliberately no longer reconcile from the file on every launch, so in-app
-        // edits aren't clobbered by a stale ~/.macxserver-launchers. See
-        // MACHINE_MANAGER_REFACTOR.md / SHORTCUTS.md.
+        // The legacy ~/.macxserver-launchers file is imported ONCE
+        // (MachinesFileLoader.loadOrMigrate, on the first run when
+        // machines.json doesn't exist yet) and then deleted -- since
+        // 2026-07-28 nothing seeds, reads, or reconciles it, so the JSON
+        // registry is the sole launcher truth and in-app edits can't be
+        // clobbered by a stale file. See MACHINE_MANAGER_REFACTOR.md.
     }
 
     /// One loopback list for the whole app: MachinesFile's (it drives
@@ -267,10 +264,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         // The starter-install wizard (DECISIONS 2026-07-16): the hero pane's
         // one path from imageless fixture to running machine.
-        model.onInstallStarter = { [weak self] id, dir, user, password, dns in
+        model.onInstallStarter = { [weak self] id, dir, user, password, dns, domain in
             self?.beginStarterInstall(machineID: id, imagesDir: dir,
                                       username: user, password: password,
-                                      dnsServer: dns)
+                                      dnsServer: dns, dnsDomain: domain)
         }
         model.onPickImagesDirectory = { [weak self] in self?.pickImagesDirectory() }
         model.imagesDirectory = { [weak self] in
@@ -698,17 +695,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// Refresh every machine surface after an add/edit/remove/clone: the window
-    /// model (master list + Overview rows + Settings), the Machines menu, and the
-    /// status dashboard. Config edits (name / OS / image) also reflect into any
-    /// existing console window; the engine itself picks them up on the next start
-    /// (a fresh controller is built per start).
+    /// model (master list + Overview rows + Settings) and the status item.
+    /// Config edits (name / OS / image) also reflect into any existing console
+    /// window; the engine itself picks them up on the next start (a fresh
+    /// controller is built per start).
     private func afterMachineMutation() {
         for m in registry?.machines ?? [] {
             consoles[m.id]?.setOSName(m.os?.displayName)
             consoles[m.id]?.setMachineName(m.name)
         }
         refreshMachines()
-        if let m = machinesMenu { rebuildMachinesMenu(m) }
         updateStatusMenu()
         // Host/transport edits change what the prober should be watching.
         probeAllSoon()
@@ -716,195 +712,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: - Machines menu
 
-    /// Rebuild the Machines menu from the registry: the list window, a submenu per
-    /// machine, then add/edit. Per-item enablement is computed here, and the menu
-    /// is rebuilt on every state change (refreshSparcMenu), so it stays current.
+    /// The Machines menu is deliberately static (2026-07-28): open the
+    /// dashboard, and the images-folder mover. The per-machine submenus
+    /// (lifecycle verbs, admin, launchers) were killed the same day -- they
+    /// mirrored the dashboard verb-for-verb, which meant probe-driven menu
+    /// rebuilds and a copy of the enablement rules whose only job was keeping
+    /// a second, worse surface honest (a menu item can't say WHY it's dimmed;
+    /// the Overview's dots, captions, and chips can). The dashboard is the
+    /// machine surface; the menu just takes you there.
     @MainActor
-    private func rebuildMachinesMenu(_ menu: NSMenu) {
-        menu.removeAllItems()
+    private func buildMachinesMenu(_ menu: NSMenu) {
         menu.autoenablesItems = false
-
         let listItem = NSMenuItem(title: "Machines\u{2026}",
-                                  action: #selector(openMachinesWindow(_:)), keyEquivalent: "")
+                                  action: #selector(openMachinesWindow(_:)),
+                                  keyEquivalent: "M")
+        listItem.keyEquivalentModifierMask = [.command, .shift]
         listItem.target = self
         menu.addItem(listItem)
         menu.addItem(.separator())
-
-        // Dynamic launch surface (2026-07-10): only machines the app can (or
-        // suspects it can) reach get a submenu. An emulated VM must be running and
-        // ready; an external host must not be confirmed unreachable (up / unknown /
-        // agent-down all still show -- a live box you can telnet into). Stopped VMs
-        // and dead hosts drop off; start or add machines from the Machines window.
-        let shown = (registry?.machines ?? []).filter { machineReachableForMenu($0) }
-        for m in shown {
-            let header = NSMenuItem(title: m.name, action: nil, keyEquivalent: "")
-            let sub = NSMenu(title: m.name)
-            sub.autoenablesItems = false
-            buildMachineSubmenu(sub, machine: m)
-            header.submenu = sub
-            menu.addItem(header)
-        }
-        // Non-empty registry but nothing reachable: say so rather than show a
-        // menu that looks broken (just the list item + a separator).
-        if shown.isEmpty && !(registry?.machines.isEmpty ?? true) {
-            let none = NSMenuItem(title: "No machines reachable", action: nil, keyEquivalent: "")
-            none.isEnabled = false
-            menu.addItem(none)
-        }
+        let imagesFolder = NSMenuItem(title: "Disk Image Folder\u{2026}",
+                                      action: #selector(chooseImagesFolder(_:)),
+                                      keyEquivalent: "")
+        imagesFolder.target = self
+        menu.addItem(imagesFolder)
     }
-
-    /// Whether a machine earns a spot in the Machines menu (the live-launch
-    /// surface). Emulated: running and ready. External: anything the prober
-    /// hasn't confirmed dead (up / unknown / unauthorized / noAgent) -- a box you
-    /// can reach some way. Mirrors the reach model behind `launcherEnabled`.
-    @MainActor
-    private func machineReachableForMenu(_ m: Machine) -> Bool {
-        if m.kind == .emulatedVM {
-            let ctrl = registry?.controller(m.id)
-            return ctrl?.engine.state == .running && (ctrl?.isReady ?? false)
-        }
-        return (probeResults[m.id]?.reach ?? .unknown) != .unreachable
-    }
-
-    /// Populate one machine's submenu: lifecycle verbs (every emulated VM, gated
-    /// by its own state), or the Helios-secret item (external), then its launchers.
-    @MainActor
-    private func buildMachineSubmenu(_ sub: NSMenu, machine m: Machine) {
-        let isEmulated = m.kind == .emulatedVM
-        let ctrl = registry?.controller(m.id)
-        let live = ctrl.map { $0.engine.state == .running || $0.engine.state == .shuttingDown } ?? false
-        let state: QemuEngine.State = live
-            ? ctrl!.engine.state
-            : (m.isInstalledEmulatedVM ? .stopped : .notInstalled)
-        let ready = ctrl?.isReady ?? false
-        let idString = m.id.uuidString as NSString
-
-        func add(_ title: String, _ action: Selector, enabled: Bool) {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
-            item.isEnabled = enabled
-            item.representedObject = idString
-            sub.addItem(item)
-        }
-
-        // Admin verbs mirror the Overview's Helios Admin Agents section exactly
-        // (audit F5, 2026-07-09: the menu and window used to disagree -- a
-        // menu-first user couldn't find File Transfer at all). Gates match
-        // machineRow: emulated = running and ready; external = the prober's
-        // last hello succeeded. DNS is not OS-gated (audit F4).
-        let canAdmin = isEmulated ? ready : (probeResults[m.id]?.reach == .up)
-
-        func addAdminSubmenu() {
-            let adminItem = NSMenuItem(title: "Admin", action: nil, keyEquivalent: "")
-            adminItem.isEnabled = canAdmin
-            let adminMenu = NSMenu(title: "Admin")
-            adminMenu.autoenablesItems = false
-            let transfer = NSMenuItem(title: "File Transfer\u{2026}",
-                                      action: #selector(fileTransferMenu(_:)), keyEquivalent: "")
-            transfer.target = self
-            transfer.isEnabled = canAdmin
-            transfer.representedObject = idString
-            adminMenu.addItem(transfer)
-            let dns = NSMenuItem(title: "DNS (/etc/resolv.conf)\u{2026}",
-                                 action: #selector(openDnsAdmin(_:)), keyEquivalent: "")
-            dns.target = self
-            dns.isEnabled = canAdmin
-            dns.representedObject = idString
-            adminMenu.addItem(dns)
-            // Users is OS-sensitive: needs the box answering AND its OS known.
-            let users = NSMenuItem(title: "Users\u{2026}",
-                                   action: #selector(openUsersAdmin(_:)), keyEquivalent: "")
-            users.target = self
-            users.isEnabled = canAdmin && (m.os != nil)
-            users.representedObject = idString
-            adminMenu.addItem(users)
-            adminItem.submenu = adminMenu
-            sub.addItem(adminItem)
-        }
-
-        if isEmulated {
-            // Same gating as the old SPARCstation submenu, per machine. Start
-            // covers the not-installed case (it opens the install flow); Shut
-            // Down needs the daemon up; Force Quit is the hard power-off.
-            add("Start", #selector(startMachineMenu(_:)),
-                enabled: state == .stopped || state == .notInstalled)
-            add("Shut Down", #selector(shutDownMachineMenu(_:)),
-                enabled: state == .running && ready)
-            add("Force Quit\u{2026}", #selector(forceQuitMachineMenu(_:)),
-                enabled: state == .running || state == .shuttingDown)
-            sub.addItem(.separator())
-            add("Show Console", #selector(showConsoleMenu(_:)), enabled: consoles[m.id] != nil)
-            add("Back Up Disk Image\u{2026}", #selector(backUpDiskImageMenu(_:)), enabled: state == .stopped)
-            addAdminSubmenu()
-        } else {
-            // (No Helios Secret item anymore: the entry point moved to
-            // Settings -> Connection 2026-07-09, and the menu mirrors the
-            // Overview's operate verbs, not Settings.)
-            addAdminSubmenu()
-        }
-
-        if !m.launchers.isEmpty {
-            sub.addItem(.separator())
-            let reach = isEmulated ? nil : (probeResults[m.id]?.reach ?? .unknown)
-            for l in m.launchers {
-                let item = NSMenuItem(title: l.name,
-                                      action: #selector(launchMachineLauncher(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = "\(m.id.uuidString)/\(l.name)" as NSString
-                // Same rule as the Overview chips (launcherEnabled): menu and
-                // window can never disagree.
-                item.isEnabled = launcherEnabled(machine: m, launcher: l,
-                                                 isEmulated: isEmulated,
-                                                 ready: ready, reach: reach)
-                sub.addItem(item)
-            }
-        }
-    }
-
-    // MARK: - Machines menu actions (machine id in representedObject)
-
-    /// The machine id a menu item carries. All the per-machine menu verbs route
-    /// through this.
-    private func machineID(from sender: Any?) -> UUID? {
-        guard let idStr = (sender as? NSMenuItem)?.representedObject as? String else { return nil }
-        return UUID(uuidString: idStr)
-    }
-
-    @MainActor @objc private func startMachineMenu(_ sender: NSMenuItem) {
-        if let id = machineID(from: sender) { startMachine(id) }
-    }
-
-    @MainActor @objc private func shutDownMachineMenu(_ sender: NSMenuItem) {
-        if let id = machineID(from: sender) { shutDownMachine(id) }
-    }
-
-    @MainActor @objc private func forceQuitMachineMenu(_ sender: NSMenuItem) {
-        if let id = machineID(from: sender) { confirmForceQuit(id) }
-    }
-
-    @MainActor @objc private func showConsoleMenu(_ sender: NSMenuItem) {
-        if let id = machineID(from: sender) { showConsoleWindow(id) }
-    }
-
-    @MainActor @objc private func backUpDiskImageMenu(_ sender: NSMenuItem) {
-        if let id = machineID(from: sender) { backUpDiskImage(id) }
-    }
-
-    @MainActor
-    @objc private func launchMachineLauncher(_ sender: NSMenuItem) {
-        guard let key = sender.representedObject as? String,
-              let slash = key.firstIndex(of: "/"),
-              let id = UUID(uuidString: String(key[..<slash])) else { return }
-        launchFromMachine(id, launcherName: String(key[key.index(after: slash)...]))
-    }
-
-    @MainActor
-    @objc private func fileTransferMenu(_ sender: NSMenuItem) {
-        if let id = machineID(from: sender) { openMachineFileTransfer(id) }
-    }
-    // (setHeliosSecretMenu retired 2026-07-09: the menu item moved out with
-    // the Overview button; the entry point is Settings -> Connection, wired
-    // through model.onSetHeliosSecret.)
 
 
     /// Resolve one machine's engine config: helper + firmware from the app
@@ -1053,9 +884,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         // Status-bar menu is deliberately minimal: the listening address
         // (so you can read off `xterm -display ...` at a glance) and a
-        // way to stop the server. Everything else — Preferences,
-        // editors, capture actions — lives in the standard app menu at
-        // the top of the screen.
+        // way to stop the server. Everything else — settings panes,
+        // editors, capture actions — lives in the X11Server menu at the
+        // top of the screen.
         let rowTitle = captureActive
             ? "\(listenerStatus) · capturing"
             : listenerStatus
@@ -1064,28 +895,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         menu.addItem(statusRow)
         menu.addItem(.separator())
 
-        // Machine dashboard: a one-line summary + a dot per machine. Info rows
-        // (click "Open Machine Manager" to act). Rebuilt on state change via
-        // refreshSparcMenu, so "N running" stays current.
-        if let snapshots = registry?.snapshot(), !snapshots.isEmpty {
-            let running = snapshots.filter { $0.running == true }.count
-            let header = NSMenuItem(title: "Machines: \(running) running", action: nil, keyEquivalent: "")
-            header.isEnabled = false
-            menu.addItem(header)
-            for s in snapshots {
-                let dot: String
-                if s.kind == .externalHost { dot = "\u{25C7}" }        // ◇ external
-                else if s.running == true && s.ready == true { dot = "\u{25CF}" }  // ● running+ready
-                else if s.running == true { dot = "\u{25D0}" }         // ◐ booting
-                else if !s.installed { dot = "\u{25CB}" }              // ○ not installed
-                else { dot = "\u{25CB}" }                              // ○ stopped
-                let row = NSMenuItem(title: "  \(dot)  \(s.name)", action: nil, keyEquivalent: "")
-                row.isEnabled = false
-                menu.addItem(row)
-            }
-            menu.addItem(.separator())
-        }
-
+        // (The per-machine dot list died 2026-07-28 with the Machines-menu
+        // submenus: the dashboard is the machine surface, and this menu just
+        // takes you there.)
         let openMgr = NSMenuItem(title: "Open Machine Manager\u{2026}",
                                  action: #selector(openMachinesWindow(_:)),
                                  keyEquivalent: "")
@@ -1107,9 +919,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let main = NSMenu()
 
         // App menu (the bold one, always titled with the process name). Kept to
-        // the macOS-standard minimum: About / Preferences / Hide / Quit. The
-        // server config editors and capture actions that used to live here moved
-        // to the X11Server menu where they belong (2026-07-10 menu reorg).
+        // the macOS-standard minimum: About / Hide / Quit. The server config
+        // editors and capture actions moved to the X11Server menu in the
+        // 2026-07-10 reorg; the tabbed Preferences window followed on
+        // 2026-07-28 -- its four panes are X server settings, so they're
+        // individual X11Server menu items now and nothing is left for an
+        // app-level Preferences item to open.
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(NSMenuItem(title: "About MacXServer",
@@ -1120,12 +935,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                           keyEquivalent: "")
         acknowledgements.target = self
         appMenu.addItem(acknowledgements)
-        appMenu.addItem(.separator())
-        let prefs = NSMenuItem(title: "Preferences\u{2026}",
-                               action: #selector(openPreferences(_:)),
-                               keyEquivalent: ",")
-        prefs.target = self
-        appMenu.addItem(prefs)
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: "Hide MacXServer",
                                    action: #selector(NSApplication.hide(_:)),
@@ -1146,13 +955,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         main.addItem(appMenuItem)
 
         // Machines menu -- the meat of the app, so it sits in the "File" slot
-        // right after the app menu. Rebuilt from the registry: the list window, a
-        // submenu per machine (bundled VM lifecycle verbs, launchers for all,
-        // Helios secret for external hosts), plus add/edit.
+        // right after the app menu. Static: it opens the dashboard (where every
+        // machine verb lives) and hosts the images-folder mover.
         let machinesMenuItem = NSMenuItem()
         let mMenu = NSMenu(title: "Machines")
-        self.machinesMenu = mMenu
-        rebuildMachinesMenu(mMenu)
+        buildMachinesMenu(mMenu)
         machinesMenuItem.submenu = mMenu
         main.addItem(machinesMenuItem)
 
@@ -1174,10 +981,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         main.addItem(editMenuItem)
 
         // X11Server menu -- everything scoped to the X server itself: its live
-        // status, the occasional control (Drop All Clients), the config editors
-        // (Resources, Font Mappings), and the capture actions in their own
-        // submenu (captures are recordings of the X protocol stream). The
-        // Preferences-tab config (scale, clipboard, Motif frame) stays in Prefs.
+        // status, the occasional control (Drop All Clients), the settings
+        // panes (Display, Mouse, Cut and Paste -- each its own window, the
+        // Edit Resources model), the config editors (Resources, Font
+        // Mappings), and the capture actions in their own submenu (captures
+        // are recordings of the X protocol stream; their settings pane lives
+        // in that submenu too).
         let serverMenuItem = NSMenuItem()
         let serverMenu = NSMenu(title: "X11Server")
         serverMenu.autoenablesItems = false
@@ -1195,6 +1004,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         serverMenu.addItem(drop)
 
         serverMenu.addItem(.separator())
+        let displaySettings = NSMenuItem(title: "Display Settings\u{2026}",
+                                         action: #selector(openDisplaySettings(_:)),
+                                         keyEquivalent: "")
+        displaySettings.target = self
+        serverMenu.addItem(displaySettings)
+        let mouseSettings = NSMenuItem(title: "Mouse Settings\u{2026}",
+                                       action: #selector(openMouseSettings(_:)),
+                                       keyEquivalent: "")
+        mouseSettings.target = self
+        serverMenu.addItem(mouseSettings)
+        let cutPasteSettings = NSMenuItem(title: "Cut and Paste Settings\u{2026}",
+                                          action: #selector(openCutPasteSettings(_:)),
+                                          keyEquivalent: "")
+        cutPasteSettings.target = self
+        serverMenu.addItem(cutPasteSettings)
+
+        serverMenu.addItem(.separator())
         let resources = NSMenuItem(title: "Edit Resources\u{2026}",
                                    action: #selector(openResources(_:)),
                                    keyEquivalent: "")
@@ -1206,11 +1032,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         fonts.target = self
         serverMenu.addItem(fonts)
 
-        // Capture submenu -- the toggle lives in Preferences (Capture tab); these
-        // are pure actions on the captures folder.
+        // Capture submenu -- the settings pane (the capture toggle) plus the
+        // pure actions on the captures folder.
         serverMenu.addItem(.separator())
         let captureItem = NSMenuItem(title: "Capture", action: nil, keyEquivalent: "")
         let captureMenu = NSMenu(title: "Capture")
+        let captureSettings = NSMenuItem(title: "Capture Settings\u{2026}",
+                                         action: #selector(openCaptureSettings(_:)),
+                                         keyEquivalent: "")
+        captureSettings.target = self
+        captureMenu.addItem(captureSettings)
+        captureMenu.addItem(.separator())
         let openCapture = NSMenuItem(title: "Open Capture\u{2026}",
                                      action: #selector(openCapture(_:)),
                                      keyEquivalent: "")
@@ -1241,16 +1073,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: - Actions
 
+    /// Open (or re-front) one settings pane's window. Controllers are cached
+    /// per pane so each pane keeps a single window across opens.
     @MainActor
-    @objc private func openPreferences(_ sender: Any?) {
-        if prefsController == nil {
-            prefsController = PreferencesWindowController(preferences: preferences)
+    private func openSettingsPane(_ pane: SettingsPane) {
+        if settingsControllers[pane] == nil {
+            settingsControllers[pane] = SettingsPaneWindowController(
+                pane: pane, preferences: preferences)
         }
-        // Always land on the first tab when opened from the menu. The window
-        // controller is reused, so without this the model retains the last
-        // tab and reopening drops you wherever you were, not at the top.
-        prefsController?.showWindow(selecting: .cutPaste)
+        settingsControllers[pane]?.showWindow()
     }
+
+    @MainActor
+    @objc private func openDisplaySettings(_ sender: Any?) { openSettingsPane(.display) }
+
+    @MainActor
+    @objc private func openMouseSettings(_ sender: Any?) { openSettingsPane(.mouse) }
+
+    @MainActor
+    @objc private func openCutPasteSettings(_ sender: Any?) { openSettingsPane(.cutPaste) }
+
+    @MainActor
+    @objc private func openCaptureSettings(_ sender: Any?) { openSettingsPane(.capture) }
 
     @MainActor
     @objc private func openResources(_ sender: Any?) {
@@ -1266,12 +1110,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             acknowledgementsController = AcknowledgementsWindowController()
         }
         acknowledgementsController?.showWindow()
-    }
-
-    @MainActor
-    @objc private func openDnsAdmin(_ sender: Any?) {
-        guard let id = machineID(from: sender) else { return }
-        openDnsAdmin(machineID: id)
     }
 
     @MainActor
@@ -1300,11 +1138,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 })
         }
         dnsAdminControllers[id]?.showWindow()
-    }
-
-    @objc private func openUsersAdmin(_ sender: Any?) {
-        guard let id = machineID(from: sender) else { return }
-        openUsersAdmin(machineID: id)
     }
 
     /// Open (or focus) the Users admin panel for a machine. Same live-provider
@@ -2068,14 +1901,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         console(for: machine).showWindow()
     }
 
-    /// Refresh every surface that reflects machine state: the Machines menu
-    /// (rebuilt from the registry with fresh per-item enablement), the list
-    /// window, and the status-item dashboard. Called from the engine callbacks
-    /// (onStateChange, onReady) and when the console is created. Named for its
-    /// history; it now drives all three surfaces, not just the old submenu.
+    /// Refresh every surface that reflects machine state: the list window and
+    /// the status item. Called from the engine callbacks (onStateChange,
+    /// onReady) and when the console is created. Named for its history; the
+    /// per-machine menu surfaces it once drove are gone (2026-07-28).
     @MainActor
     private func refreshSparcMenu() {
-        if let m = machinesMenu { rebuildMachinesMenu(m) }
         refreshMachines()
         updateStatusMenu()
     }
@@ -2706,6 +2537,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                    isDirectory: true)
     }
 
+    /// Machines > Disk Image Folder…: view + change where downloaded guest
+    /// images live, and move the machine-referenced images along with the
+    /// setting so machines never point at stranded files. The one post-install
+    /// surface for images.directory (the wizard's location step covers fresh
+    /// installs only). Backups and unrelated files stay behind on purpose --
+    /// the confirm dialog says so.
+    @MainActor
+    @objc private func chooseImagesFolder(_ sender: Any?) {
+        let current = effectiveImagesDirectory()
+        let panel = NSOpenPanel()
+        panel.title = "Disk Image Folder"
+        panel.prompt = "Use This Folder"
+        panel.message = "Downloaded disk images currently live in "
+            + "\((current.path as NSString).abbreviatingWithTildeInPath). "
+            + "Choose a different folder to move them."
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = current
+        guard panel.runModal() == .OK, let chosen = panel.url else { return }
+
+        let newDir = chosen.standardizedFileURL
+        guard newDir.resolvingSymlinksInPath().path
+                != current.standardizedFileURL.resolvingSymlinksInPath().path else { return }
+
+        let movable = registry?.machinesWithImages(in: current) ?? []
+        if !movable.isEmpty {
+            let plural = movable.count == 1 ? "" : "s"
+            let names = movable.map(\.name).joined(separator: ", ")
+            let destLabel = (newDir.path as NSString).abbreviatingWithTildeInPath
+            let confirm = NSAlert()
+            confirm.messageText = "Move \(movable.count) disk image\(plural)?"
+            confirm.informativeText = "The image\(plural) for \(names) will move "
+                + "to \(destLabel) and the machine\(plural) will follow. Backups "
+                + "and other files stay where they are."
+            confirm.addButton(withTitle: "Move")
+            confirm.addButton(withTitle: "Cancel")
+            guard confirm.runModal() == .alertFirstButtonReturn else { return }
+        }
+
+        let moved: Int
+        do {
+            moved = try registry?.moveImages(from: current, to: newDir) ?? 0
+        } catch {
+            showLaunchError("Couldn't move the disk images: "
+                + error.localizedDescription
+                + "\n\nThe images folder setting was not changed.")
+            afterMachineMutation()   // some machines may have moved; show truth
+            return
+        }
+        // Same normalization as the wizard's location step: the default
+        // location is stored as "" so the default can move in a future version.
+        let prefs = Preferences()
+        prefs.imagesDirectoryPath =
+            newDir.path == ImageDownloader.defaultImagesDirectory.path ? "" : newDir.path
+        afterMachineMutation()
+
+        let done = NSAlert()
+        done.messageText = "Images folder changed"
+        done.informativeText = "New downloads will land in "
+            + "\((newDir.path as NSString).abbreviatingWithTildeInPath)."
+            + (moved > 0 ? " \(moved) image" + (moved == 1 ? "" : "s") + " moved." : "")
+        done.addButton(withTitle: "OK")
+        done.runModal()
+    }
+
     /// The wizard's location step: a directories-only open panel.
     private func pickImagesDirectory() -> String? {
         let panel = NSOpenPanel()
@@ -2727,7 +2625,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @MainActor
     private func beginStarterInstall(machineID id: UUID, imagesDir: String,
                                      username: String, password: String,
-                                     dnsServer: String?) {
+                                     dnsServer: String?, dnsDomain: String?) {
         // The wizard's commit is a user gesture; if it can't run, say WHY.
         // (These were one silent compound guard until 2026-07-26, when a
         // refused install with no error cost a debugging session. Also:
@@ -2766,7 +2664,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         } else {
             prefs.imagesDirectoryPath = chosen
         }
-        pendingFirstLogin[id] = (user: username, password: password, dns: dnsServer)
+        pendingFirstLogin[id] = (user: username, password: password,
+                                 dns: dnsServer, domain: dnsDomain)
         if ImageCatalog.devCatalogActive {
             NSLog("macxserver: image catalog is the LOCAL DEV CATALOG (%@)",
                   ImageCatalog.devCatalogFileURL.path)
@@ -2825,7 +2724,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// `onReady` (the daemon must answer before /etc/passwd can be touched).
     @MainActor
     private func beginFirstLogin(machineID: UUID, user: String, password: String) {
-        pendingFirstLogin[machineID] = (user: user, password: password, dns: nil)
+        pendingFirstLogin[machineID] = (user: user, password: password,
+                                        dns: nil, domain: nil)
         startMachine(machineID)
     }
 
@@ -2861,8 +2761,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 _ = try UserAdmin.addUser(req, os: os, transport: client)
                 if let dns = creds.dns, !dns.isEmpty {
                     do {
-                        let payload = Data("nameserver \(dns)\n".utf8)
-                        _ = try client.writeFile("/etc/resolv.conf", data: payload)
+                        // `domain` + `nameserver` is the classic BSD resolver
+                        // syntax all three guest OSes share (SunOS 4, Solaris
+                        // 2.6, NetBSD) -- one payload shape, no per-OS split.
+                        var text = ""
+                        if let domain = creds.domain, !domain.isEmpty {
+                            text += "domain \(domain)\n"
+                        }
+                        text += "nameserver \(dns)\n"
+                        _ = try client.writeFile("/etc/resolv.conf",
+                                                 data: Data(text.utf8))
                     } catch {
                         dnsFailure = Self.describeUserAdminError(error)
                     }

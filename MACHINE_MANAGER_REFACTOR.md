@@ -89,7 +89,10 @@ In-app **add / edit / remove / clone** writes straight through a new
 `MachineRegistry.add` / `remove` / `imageClaimant` surface. **The per-launch
 launcher-file reconcile is retired** — `~/.macxserver-launchers` is imported once
 on first run (`loadOrMigrate`) and then ignored; the JSON registry is
-authoritative. The old launcher-file editor UI was deleted with it. **Clone**
+authoritative. The old launcher-file editor UI was deleted with it. (Fully
+killed 2026-07-28: `loadOrMigrate` now deletes the legacy file after import —
+and sweeps a lingering one on installs migrated earlier — the dead
+`reconcile(withMigrated:)` API and the `DefaultLaunchers` seed are gone.) **Clone**
 (Todd's ask) copies a machine's config + all its launchers but not the disk image
 or MAC (`Machine.cloned()`), so it seeds a new external host or a VM skeleton
 without duplicating a qcow2. Honest scope guards: the bundled VM's kind/host are

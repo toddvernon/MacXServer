@@ -235,39 +235,13 @@ public struct LauncherFile: Sendable {
     }
 }
 
-/// Loads (and seeds on first run) the launcher file from disk.
+/// The legacy `~/.macxserver-launchers` location. The file is migration
+/// input only: read once by `MachinesFileLoader.loadOrMigrate` when
+/// machines.json doesn't exist yet, then deleted (2026-07-28 -- nothing
+/// seeds or edits it anymore; machines.json is the launcher truth and the
+/// old loadOrSeed path died with the DefaultLaunchers seed).
 public enum LauncherFileLoader {
-    /// Default file location: `~/.macxserver-launchers`.
     public static let defaultPath: String = {
         (NSHomeDirectory() as NSString).appendingPathComponent(".macxserver-launchers")
     }()
-
-    /// Read and parse the launcher file. If it doesn't exist, write `seed()`
-    /// to disk first, then parse. Falls back to parsing the seed on I/O error.
-    public static func loadOrSeed(
-        path: String = defaultPath,
-        seed: @autoclosure () -> String,
-        log: ServerLogSink? = nil
-    ) -> LauncherFile {
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: path) {
-            let content = seed()
-            do {
-                try content.write(toFile: path, atomically: true, encoding: .utf8)
-                log?.log("launchers: seeded \(path)")
-            } catch {
-                log?.log("launchers: seed write failed: \(error)")
-                return LauncherFile.parse(content)
-            }
-        }
-        do {
-            let text = try String(contentsOfFile: path, encoding: .utf8)
-            let parsed = LauncherFile.parse(text)
-            for w in parsed.warnings { log?.log("launchers: \(w)") }
-            return parsed
-        } catch {
-            log?.log("launchers: read failed: \(error)")
-            return LauncherFile.parse(seed())
-        }
-    }
 }

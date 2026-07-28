@@ -1,35 +1,70 @@
 import AppKit
 import SwiftUI
 
-// Window controller for Preferences. SwiftUI content
-// (PreferencesPanelView) hosted in an NSPanel via NSHostingView —
-// same shape as ResourcesWindowController. The Preferences model is
-// owned by the app and passed in so settings writes flow through the
-// existing UserDefaults-backed Preferences class.
+// Window controllers for the X11 server settings panes (Cut and Paste,
+// Capture, Mouse, Display). Each pane is its own window opened from its own
+// X11Server menu item -- the Edit Resources model -- replacing the tabbed
+// app-Preferences window (2026-07-28 reorg). SwiftUI content hosted in an
+// NSPanel via NSHostingView, same shape as ResourcesWindowController. The
+// Preferences model is owned per-window; the panes' settings are disjoint,
+// and every write flows through the UserDefaults-backed Preferences class,
+// so two open panes can't fight over a field.
 
-final class PreferencesWindowController: NSWindowController {
+/// The four settings panes. AppDelegate keys its controller cache on this.
+enum SettingsPane {
+    case cutPaste, capture, mouse, display
 
-    /// Owned here (not created inside the SwiftUI view) so callers can drive
-    /// the selected tab.
+    var title: String {
+        switch self {
+        case .cutPaste: return "Cut and Paste Settings"
+        case .capture:  return "Capture Settings"
+        case .mouse:    return "Mouse Settings"
+        case .display:  return "Display Settings"
+        }
+    }
+
+    /// Window size per pane -- the panes lay out top-leading with Spacers,
+    /// so the frame is the design: tall enough for the content, no dead air.
+    var contentSize: NSSize {
+        switch self {
+        case .cutPaste: return NSSize(width: 560, height: 320)
+        case .capture:  return NSSize(width: 560, height: 340)
+        case .mouse:    return NSSize(width: 620, height: 560)
+        case .display:  return NSSize(width: 620, height: 620)
+        }
+    }
+}
+
+final class SettingsPaneWindowController: NSWindowController {
+
     private let model: PreferencesPanelModel
 
-    init(preferences: Preferences) {
+    init(pane: SettingsPane, preferences: Preferences) {
         let model = PreferencesPanelModel(preferences: preferences)
         self.model = model
-        let hostingView = NSHostingView(rootView: PreferencesPanelView(model: model))
 
-        // Width must fit all five tab labels across the top, or macOS SwiftUI
-        // collapses the whole tab bar into a ">>" overflow menu. 720 leaves
-        // comfortable room. Revisit if tabs are added. (SPARCstation settings
-        // moved out to SPARCstation > Config menu windows.)
+        let content: AnyView
+        switch pane {
+        case .cutPaste: content = AnyView(CutPastePane(model: model))
+        case .capture:  content = AnyView(CapturePane(model: model))
+        case .mouse:    content = AnyView(MousePane(model: model))
+        case .display:  content = AnyView(DisplayPane(model: model))
+        }
+
+        let size = pane.contentSize
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: size.width, height: size.height),
             styleMask: [.titled, .closable, .miniaturizable, .utilityWindow],
             backing: .buffered,
             defer: false
         )
-        panel.title = "MacXServer Preferences"
-        panel.contentView = hostingView
+        panel.title = pane.title
+        // Pin the SwiftUI content to the design size. The panes fill
+        // maxHeight .infinity (Spacer layouts), so an unpinned NSHostingView
+        // reports an unbounded ideal height and resizes the window to the
+        // full screen.
+        panel.contentView = NSHostingView(
+            rootView: content.frame(width: size.width, height: size.height))
         panel.isReleasedWhenClosed = false
         panel.center()
 
@@ -38,9 +73,7 @@ final class PreferencesWindowController: NSWindowController {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
-    /// Show the window, optionally jumping to a specific tab.
-    func showWindow(selecting tab: PreferencesTab? = nil) {
-        if let tab { model.selectedTab = tab }
+    func showWindow() {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

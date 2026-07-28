@@ -193,12 +193,12 @@ final class MachinesModel: ObservableObject {
     var onDownload: ((UUID) -> Void)?
     /// The install wizard's commit (DECISIONS 2026-07-16): everything the
     /// stranger flow collects in one gesture -- where images live, the login
-    /// to create at first boot, and an optional DNS server to point the guest
-    /// at. AppDelegate stashes the deferred work, kicks the curated download,
-    /// and boots at completion; nothing happens on Cancel.
+    /// to create at first boot, and an optional DNS server + domain name to
+    /// point the guest at. AppDelegate stashes the deferred work, kicks the
+    /// curated download, and boots at completion; nothing happens on Cancel.
     var onInstallStarter: ((_ id: UUID, _ imagesDir: String,
                             _ username: String, _ password: String,
-                            _ dnsServer: String?) -> Void)?
+                            _ dnsServer: String?, _ dnsDomain: String?) -> Void)?
     /// NSOpenPanel for the wizard's image-location step; returns the chosen
     /// directory path or nil.
     var onPickImagesDirectory: (() -> String?)?

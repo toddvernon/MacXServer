@@ -165,8 +165,8 @@ public final class SSHLauncher: @unchecked Sendable {
         // login shell is csh/tcsh (a common Unix-old-school setup) reject
         // `DISPLAY=...; export DISPLAY` outright -- csh wants `setenv`.
         // Same wrap as the telnet path; same single-quote gotcha applies
-        // (a literal single quote inside `command` breaks the wrap; the
-        // seed comment in DefaultLaunchers documents the workaround).
+        // (a literal single quote inside `command` breaks the wrap -- use
+        // double quotes or the standard '\''-escape idiom instead).
         // Prepend the guest's X bin dirs: sshd runs a non-login shell with a
         // minimal PATH, so a bare `xterm` that resolves over telnet/helios
         // (which prepend it) would otherwise not be found over ssh.

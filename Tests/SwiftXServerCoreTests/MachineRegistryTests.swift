@@ -82,35 +82,146 @@ final class MachineRegistryTests: XCTestCase {
         XCTAssertEqual(reloaded.machines[0].id, machine.id)
     }
 
-    func testReconcileSyncsLaunchersAndAddsNewHosts() {
-        let bundled = Machine(name: "solaris", kind: .emulatedVM, os: .solaris26,
-                              host: "127.0.0.1", user: "t", imagePath: "/img.qcow2")
-        let registry = MachineRegistry(machines: [bundled], path: tempPath("recon"))
-        registry.reconcile(withMigrated: [
-            Machine(name: "solaris", kind: .emulatedVM, os: .solaris26, host: "127.0.0.1",
-                    user: "t", imagePath: "/img.qcow2",
-                    launchers: [MachineLauncher(name: "xterm", command: "xterm")]),
-            Machine(name: "u5", kind: .externalHost, host: "u5.example.com", user: "a",
-                    launchers: [MachineLauncher(name: "xterm", command: "xterm")]),
-        ])
-        // Bundled machine keeps its stable id and gains the launcher.
-        XCTAssertEqual(registry.machine(bundled.id)?.launchers.count, 1)
-        // The new external host is added.
-        XCTAssertEqual(registry.machines.count, 2)
-        XCTAssertTrue(registry.machines.contains { $0.name == "u5" && $0.kind == .externalHost })
+    // (The reconcile(withMigrated:) tests died with the API on 2026-07-28:
+    // the legacy launchers file is one-shot migration input, deleted after
+    // import -- there is nothing to reconcile from anymore.)
+
+    func testMigrationDeletesLegacyLaunchersFile() throws {
+        let machinesPath = tempPath("kill-migrate")
+        let launchersPath = tempPath("kill-migrate-launchers")
+        defer {
+            try? FileManager.default.removeItem(atPath: machinesPath)
+            try? FileManager.default.removeItem(atPath: launchersPath)
+        }
+        try """
+        [host:u5]
+        host = u5.example.com
+        user = alice
+
+        [u5/xterm]
+        command = xterm
+        """.write(toFile: launchersPath, atomically: true, encoding: .utf8)
+
+        let file = MachinesFileLoader.loadOrMigrate(
+            path: machinesPath, launchersPath: launchersPath, bundledImagePath: "")
+        // The launchers made it into machines.json...
+        XCTAssertTrue(file.machines.contains { $0.name == "u5" })
+        // ...and the legacy file is gone.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: launchersPath))
     }
 
-    func testReconcileNeverRemovesMachines() {
-        let ss5 = Machine(name: "ss5", kind: .externalHost, host: "192.168.7.19", user: "t",
-                          launchers: [MachineLauncher(name: "x", command: "xterm")])
-        let registry = MachineRegistry(machines: [ss5], path: tempPath("recon2"))
-        // A migration that doesn't mention ss5 must not drop it (it may hold a secret).
-        registry.reconcile(withMigrated: [
-            Machine(name: "solaris", kind: .emulatedVM, os: .solaris26,
-                    host: "127.0.0.1", user: "t", imagePath: "/i"),
-        ])
-        XCTAssertTrue(registry.machines.contains { $0.name == "ss5" })
-        XCTAssertEqual(registry.machine(ss5.id)?.launchers.count, 1)
+    func testLoadSweepsLingeringLaunchersFileAfterEarlierMigration() throws {
+        // An install migrated before 2026-07-28 has machines.json AND the
+        // stale launchers file. A normal load removes the stale file and
+        // leaves the registry untouched.
+        let machinesPath = tempPath("kill-sweep")
+        let launchersPath = tempPath("kill-sweep-launchers")
+        defer {
+            try? FileManager.default.removeItem(atPath: machinesPath)
+            try? FileManager.default.removeItem(atPath: launchersPath)
+        }
+        let existing = MachinesFile(machines: MachineMigrator.bundledFixtures())
+        try existing.encoded().write(toFile: machinesPath, atomically: true, encoding: .utf8)
+        try "[host:u5]\nhost = u5.example.com\nuser = a\n"
+            .write(toFile: launchersPath, atomically: true, encoding: .utf8)
+
+        let file = MachinesFileLoader.loadOrMigrate(
+            path: machinesPath, launchersPath: launchersPath, bundledImagePath: "")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: launchersPath))
+        // The stale file's content did NOT leak into the registry.
+        XCTAssertFalse(file.machines.contains { $0.name == "u5" })
+    }
+
+    // MARK: - Images-folder move (2026-07-28)
+
+    private func makeImageDir(_ name: String, files: [String]) throws -> URL {
+        let dir = URL(fileURLWithPath: tempPath(name), isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for f in files {
+            try Data("qcow2-stub".utf8).write(to: dir.appendingPathComponent(f))
+        }
+        return dir
+    }
+
+    func testMoveImagesMovesReferencedFilesAndRewritesPaths() throws {
+        let old = try makeImageDir("mv-old", files: ["a.qcow2", "b.qcow2", "unrelated.txt"])
+        let new = URL(fileURLWithPath: tempPath("mv-new"), isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: old)
+            try? FileManager.default.removeItem(at: new)
+        }
+        let a = Machine(name: "a", kind: .emulatedVM, os: .solaris26, host: "127.0.0.1",
+                        user: "t", imagePath: old.appendingPathComponent("a.qcow2").path)
+        let b = Machine(name: "b", kind: .emulatedVM, os: .netbsd, host: "127.0.0.1",
+                        user: "t", imagePath: old.appendingPathComponent("b.qcow2").path)
+        // An external host and a machine with an image elsewhere are untouched.
+        let ext = Machine(name: "ext", kind: .externalHost, host: "h", user: "u")
+        let path = tempPath("mv-registry")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let registry = MachineRegistry(machines: [a, b, ext], path: path)
+
+        XCTAssertEqual(registry.machinesWithImages(in: old).map(\.name), ["a", "b"])
+        let moved = try registry.moveImages(from: old, to: new)
+        XCTAssertEqual(moved, 2)
+
+        // Files moved; unrelated file stayed; machine paths follow.
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: new.appendingPathComponent("a.qcow2").path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: old.appendingPathComponent("a.qcow2").path))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: old.appendingPathComponent("unrelated.txt").path))
+        XCTAssertEqual(registry.machine(a.id)?.imagePath,
+                       new.appendingPathComponent("a.qcow2").path)
+        XCTAssertTrue(registry.machine(a.id)!.isInstalledEmulatedVM)
+
+        // The rewrite persisted.
+        let reloaded = try MachinesFile.decode(String(contentsOfFile: path, encoding: .utf8))
+        XCTAssertEqual(reloaded.machines.first { $0.name == "a" }?.imagePath,
+                       new.appendingPathComponent("a.qcow2").path)
+    }
+
+    func testMoveImagesRefusesOccupiedDestinationBeforeMovingAnything() throws {
+        let old = try makeImageDir("mv-occ-old", files: ["a.qcow2", "b.qcow2"])
+        // Destination already holds b.qcow2 -- the up-front check must refuse
+        // before ANY file moves, so a.qcow2 stays put too.
+        let new = try makeImageDir("mv-occ-new", files: ["b.qcow2"])
+        defer {
+            try? FileManager.default.removeItem(at: old)
+            try? FileManager.default.removeItem(at: new)
+        }
+        let a = Machine(name: "a", kind: .emulatedVM, os: .solaris26, host: "127.0.0.1",
+                        user: "t", imagePath: old.appendingPathComponent("a.qcow2").path)
+        let b = Machine(name: "b", kind: .emulatedVM, os: .netbsd, host: "127.0.0.1",
+                        user: "t", imagePath: old.appendingPathComponent("b.qcow2").path)
+        let registry = MachineRegistry(machines: [a, b], path: tempPath("mv-occ-reg"))
+        defer { try? FileManager.default.removeItem(atPath: tempPath("mv-occ-reg")) }
+
+        XCTAssertThrowsError(try registry.moveImages(from: old, to: new)) { error in
+            guard case MachineRegistry.ImageMoveError.destinationOccupied = error else {
+                return XCTFail("wrong error: \(error)")
+            }
+        }
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: old.appendingPathComponent("a.qcow2").path))
+        XCTAssertEqual(registry.machine(a.id)?.imagePath,
+                       old.appendingPathComponent("a.qcow2").path)
+    }
+
+    func testMoveImagesNoOpWhenNothingReferenced() throws {
+        let old = try makeImageDir("mv-none", files: ["stray.qcow2"])
+        let new = URL(fileURLWithPath: tempPath("mv-none-new"), isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: old)
+            try? FileManager.default.removeItem(at: new)
+        }
+        let registry = MachineRegistry(
+            machines: [Machine(name: "x", kind: .externalHost, host: "h", user: "u")],
+            path: tempPath("mv-none-reg"))
+        XCTAssertEqual(try registry.moveImages(from: old, to: new), 0)
+        // Unreferenced files never move.
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: old.appendingPathComponent("stray.qcow2").path))
     }
 
     func testUpdateIgnoresUnknownId() {

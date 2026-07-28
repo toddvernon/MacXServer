@@ -66,6 +66,12 @@ public struct PointerConfig: Sendable {
         self.xtermScrollbarMotifSkin = xtermScrollbarMotifSkin
     }
 
+    /// The inert X11-identity baseline: 1/2/3 mapping, every xterm extension
+    /// off. This is what core and tests run with when nothing installs a
+    /// config -- it is NOT the new-user seed. The app's seed lives in the
+    /// registered defaults in `Preferences` (app side) and is installed over
+    /// this at startup via `applyPointerConfig`; the two differ on purpose
+    /// (the seed maps wheel-click to 1 and turns the xterm extensions on).
     public static let `default` = PointerConfig()
 
     /// Apply the per-Mac-physical-button mapping. `macPhysicalButton`:

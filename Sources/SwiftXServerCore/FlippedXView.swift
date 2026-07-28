@@ -285,10 +285,11 @@ public final class FlippedXView: NSView {
         // Server-side xterm hack (sibling of the scrollbar-thumb override):
         // on an xterm, a right-click pops a native Copy/Paste menu — the
         // iTerm2 pattern — instead of sending wire button 3. Gated on the
-        // per-window xterm flag AND the Preferences toggle, so it's off by
-        // default and never fires for Motif/CDE clients (button 3 = their
-        // own popup menus) or for any non-xterm window. Left-button text
-        // selection in the xterm content area is untouched.
+        // per-window xterm flag AND the derived config flag (right-click
+        // role == Menu, the seed default), so it never fires for Motif/CDE
+        // clients (button 3 = their own popup menus), for any non-xterm
+        // window, or when the user remaps right-click away from Menu.
+        // Left-button text selection in the xterm content area is untouched.
         //
         // popUpContextMenu runs its own modal tracking loop and consumes
         // the matching right-mouse-up, so we never dispatch a button-3

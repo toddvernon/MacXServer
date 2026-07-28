@@ -18,8 +18,10 @@ collects everything up front and commits nothing until the last step:
 2. **Your login** -- the old "one more thing" panel as a step: username
    prefilled from the Mac short name, password x2, the 8-char note.
 3. **Network** -- default "built-in, nothing to configure" (guest
-   untouched); optionally a DNS server, written to the guest at first
-   boot, changeable later in the DNS panel.
+   untouched); optionally a DNS server + domain name, written to the
+   guest's /etc/resolv.conf at first boot (`domain` + `nameserver` --
+   the classic BSD resolver syntax all three guest OSes share),
+   changeable later in the DNS panel.
 4. **Summary -> Install & Boot** -- the confirm. Download runs on the row
    thermometer, the machine boots at completion, and the account (+ DNS)
    applies at ready ("creating your login..." tail). No popups after the

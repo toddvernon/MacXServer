@@ -2,69 +2,18 @@ import SwiftUI
 import AppKit
 import SwiftXServerCore
 
-// SwiftUI Preferences panel. Tabs: Cut/Paste, Capture, Mouse, Display, and a
-// Network placeholder. Hero-panel layout inside each tab — SF Symbol header +
-// .title2 + caption — same vocabulary as the Resources editor so the two
-// windows feel like they belong to the same app. (SPARCstation settings used
-// to be a tab here; they're now SPARCstation > Config menu windows.)
+// The X11 server settings panes: Cut and Paste, Capture, Mouse, Display.
+// Each is its own window opened from the X11Server menu (the Edit Resources
+// model), hosted by SettingsPaneWindowController -- these are X server
+// settings, so they live in the X server's menu, not behind a tabbed app
+// Preferences window (that window died in the 2026-07-28 reorg; its empty
+// Network placeholder died with it). Hero-panel layout in each pane -- SF
+// Symbol header + .title2 + caption -- same vocabulary as the Resources
+// editor so the windows feel like they belong to the same app.
 
-/// Identifies the Preferences tabs so callers (e.g. the SPARCstation menu's
-/// Install action) can open the window to a specific tab.
-enum PreferencesTab: Hashable {
-    case cutPaste, capture, mouse, display, network
-}
+// MARK: - Cut/Paste pane
 
-struct PreferencesPanelView: View {
-
-    @ObservedObject var model: PreferencesPanelModel
-
-    init(model: PreferencesPanelModel) {
-        self.model = model
-    }
-
-    var body: some View {
-        TabView(selection: $model.selectedTab) {
-            CutPasteTab(model: model)
-                .tabItem {
-                    Label("Cut/Paste", systemImage: "doc.on.clipboard")
-                }
-                .tag(PreferencesTab.cutPaste)
-            CaptureTab(model: model)
-                .tabItem {
-                    Label("Capture", systemImage: "recordingtape")
-                }
-                .tag(PreferencesTab.capture)
-            MouseTab(model: model)
-                .tabItem {
-                    Label("Mouse", systemImage: "computermouse")
-                }
-                .tag(PreferencesTab.mouse)
-            DisplayTab(model: model)
-                .tabItem {
-                    Label("Display", systemImage: "display")
-                }
-                .tag(PreferencesTab.display)
-            PlaceholderTab(
-                icon: "network",
-                title: "Network",
-                message: "Network settings coming soon."
-            )
-                .tabItem {
-                    Label("Network", systemImage: "network")
-                }
-                .tag(PreferencesTab.network)
-        }
-        // minWidth must keep all five tabs on one row; below ~520pt macOS
-        // collapses the tab bar into a ">>" overflow menu (see the window
-        // controller's contentRect note).
-        .frame(minWidth: 700, minHeight: 400)
-        .padding(.top, 12)
-    }
-}
-
-// MARK: - Cut/Paste tab
-
-private struct CutPasteTab: View {
+struct CutPastePane: View {
     @ObservedObject var model: PreferencesPanelModel
 
     var body: some View {
@@ -105,9 +54,9 @@ private struct CutPasteTab: View {
     }
 }
 
-// MARK: - Capture tab
+// MARK: - Capture pane
 
-private struct CaptureTab: View {
+struct CapturePane: View {
     @ObservedObject var model: PreferencesPanelModel
 
     var body: some View {
@@ -147,7 +96,7 @@ private struct CaptureTab: View {
     }
 }
 
-// MARK: - Mouse tab
+// MARK: - Mouse pane
 
 /// The three "logical" X11 mouse buttons. Internal numbering matches
 /// the X wire protocol (button 1 = primary, 2 = middle, 3 = secondary)
@@ -174,7 +123,7 @@ private enum XButtonRole: UInt8, CaseIterable, Identifiable {
     }
 }
 
-private struct MouseTab: View {
+struct MousePane: View {
     @ObservedObject var model: PreferencesPanelModel
 
     var body: some View {
@@ -201,7 +150,10 @@ private struct MouseTab: View {
                 GridRow {
                     Text("Wheel click:")
                     rolePicker(selection: Binding(
-                        get: { XButtonRole(rawValue: model.pointerWheelClick) ?? .middle },
+                        // Fallback matches the clamp fallback in Preferences
+                        // (1, Select) -- unreachable in practice since reads
+                        // are clamped, but keep the two from drifting.
+                        get: { XButtonRole(rawValue: model.pointerWheelClick) ?? .primary },
                         set: { model.pointerWheelClick = $0.rawValue }
                     ))
                 }
@@ -233,7 +185,7 @@ private struct MouseTab: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 20)
-                Text("When the Motif window frame is on (Display tab), the xterm scrollbar automatically gets a matching Motif look \u{2014} a recessed trough, raised beveled slider, and stepper arrows \u{2014} replacing xterm\u{2019}s gray-stipple scrollbar.")
+                Text("When the Motif window frame is on (X11Server \u{203A} Display Settings), the xterm scrollbar automatically gets a matching Motif look \u{2014} a recessed trough, raised beveled slider, and stepper arrows \u{2014} replacing xterm\u{2019}s gray-stipple scrollbar.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -258,9 +210,9 @@ private struct MouseTab: View {
     }
 }
 
-// MARK: - Display tab
+// MARK: - Display pane
 
-private struct DisplayTab: View {
+struct DisplayPane: View {
     @ObservedObject var model: PreferencesPanelModel
 
     @State private var showingReseedConfirm = false
@@ -414,10 +366,6 @@ struct PanelHeader: View {
 final class PreferencesPanelModel: ObservableObject {
 
     private let prefs: Preferences
-
-    /// Which tab is showing. Driven by the tab bar, and set programmatically
-    /// when a caller opens Preferences to a specific tab.
-    @Published var selectedTab: PreferencesTab = .cutPaste
 
     @Published var clipboardEnabled: Bool {
         didSet {

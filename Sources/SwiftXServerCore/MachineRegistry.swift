@@ -211,39 +211,74 @@ public final class MachineRegistry {
         save()
     }
 
-    /// Merge machines freshly derived from the legacy launcher file into the
-    /// registry: for a match (the emulated VM, or an external host by host string)
-    /// keep the existing machine + its stable id and sync its launchers (and the
-    /// bundled image); an unmatched group becomes a new external machine. Never
-    /// removes a machine -- an external host you configured keeps its Keychain
-    /// secret even if you delete its launchers. Transitional: the launcher file
-    /// stays the editable launcher source until an in-app machine editor exists.
-    public func reconcile(withMigrated migrated: [Machine]) {
-        var changed = false
-        for m in migrated {
-            if let i = indexMatching(m) {
-                if machines[i].launchers != m.launchers {
-                    machines[i].launchers = m.launchers
-                    changed = true
-                }
-                if machines[i].kind == .emulatedVM, m.imagePath != nil,
-                   machines[i].imagePath != m.imagePath {
-                    machines[i].imagePath = m.imagePath
-                    changed = true
-                }
-            } else {
-                machines.append(m)
-                changed = true
-            }
+    // MARK: - Images-folder move (the images.directory mover, 2026-07-28)
+
+    /// The machines whose disk image file exists directly inside `dir`.
+    /// These are the movables when the user changes the images folder;
+    /// backups and unreferenced files are deliberately not included.
+    public func machinesWithImages(in dir: URL) -> [Machine] {
+        let parent = dir.standardizedFileURL.resolvingSymlinksInPath().path
+        return machines.filter { m in
+            guard m.kind == .emulatedVM, let image = m.image,
+                  FileManager.default.fileExists(atPath: image.path) else { return false }
+            return image.standardizedFileURL.resolvingSymlinksInPath()
+                .deletingLastPathComponent().path == parent
         }
-        if changed { save() }
     }
 
-    private func indexMatching(_ m: Machine) -> Int? {
-        if m.kind == .emulatedVM { return machines.firstIndex { $0.kind == .emulatedVM } }
-        return machines.firstIndex {
-            $0.kind == .externalHost && $0.host.lowercased() == m.host.lowercased()
+    public enum ImageMoveError: LocalizedError {
+        case machinesRunning([String])
+        case destinationOccupied(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .machinesRunning(let names):
+                return "Stop \(names.joined(separator: ", ")) first -- a running "
+                    + "machine's disk image can't be moved out from under it."
+            case .destinationOccupied(let name):
+                return "The new folder already contains a file named \(name). "
+                    + "Move or rename it first."
+            }
         }
+    }
+
+    /// Move every machine-referenced image inside `oldDir` into `newDir`,
+    /// rewriting each machine's imagePath, and persist. Refuses up front if
+    /// any affected machine is running or a destination filename is taken.
+    /// A filesystem failure mid-run stops there -- machines already moved
+    /// keep their new (correct) paths, machines not yet reached keep their
+    /// old (also correct) paths, so the state is always honest and re-running
+    /// after fixing the problem finishes the job. Returns the count moved.
+    /// Backup siblings and unrelated files in `oldDir` are not touched.
+    @discardableResult
+    public func moveImages(from oldDir: URL, to newDir: URL) throws -> Int {
+        let movable = machinesWithImages(in: oldDir)
+        guard !movable.isEmpty else { return 0 }
+
+        let running = movable.filter { runningMachineIDs.contains($0.id) }
+        guard running.isEmpty else {
+            throw ImageMoveError.machinesRunning(running.map(\.name))
+        }
+        let fm = FileManager.default
+        try fm.createDirectory(at: newDir, withIntermediateDirectories: true)
+        for m in movable {
+            let dest = newDir.appendingPathComponent(m.image!.lastPathComponent)
+            if fm.fileExists(atPath: dest.path) {
+                throw ImageMoveError.destinationOccupied(dest.lastPathComponent)
+            }
+        }
+
+        var moved = 0
+        defer { if moved > 0 { save() } }
+        for m in movable {
+            guard let i = machines.firstIndex(where: { $0.id == m.id }),
+                  let image = m.image else { continue }
+            let dest = newDir.appendingPathComponent(image.lastPathComponent)
+            try fm.moveItem(at: image, to: dest)
+            machines[i].imagePath = dest.path
+            moved += 1
+        }
+        return moved
     }
 
     public func save() {

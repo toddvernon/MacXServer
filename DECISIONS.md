@@ -1956,6 +1956,40 @@ is the worst possible first-run moment for a stranger.
 
 ---
 
+## 2026-07-28: Menus drive to the dashboard; per-machine menu surfaces killed
+
+The Machines menu's per-machine submenus (lifecycle verbs, Admin submenu,
+launchers) and the status item's per-machine dot list are gone. The
+Machines menu is static now: "Machines..." (Cmd-Shift-M) and "Disk Image
+Folder..."; the status item is back to listener address + Open Machine
+Manager + Stop Server. This partially reverses 2026-07-10's dynamic
+launch surface.
+
+**Why:** the menu was a verb-for-verb mirror of the dashboard, and every
+mirror needs machinery to keep it honest -- the shared launcherEnabled
+gating, the machineReachableForMenu filter, the "No machines reachable"
+placeholder, menu rebuilds on every probe result and state change. And it
+was the worse surface: the 2026-07-12 "words ride the colors" work exists
+because state needs explaining, and a menu item can't explain anything --
+it can only dim silently. Machines also appeared and vanished from the
+menu with probe state, which read as broken. The dashboard has every verb
+with dots, captions, and chips; the menus just take you there.
+
+**What survives:** launcherEnabled (the Overview chips are its real
+customer), all the admin/launcher plumbing behind model closures, and the
+same-day menu-scoping rule from the settings reorg: X-server settings
+live under X11Server as individual panes (the tabbed Preferences window
+and its app-menu item died -- Display / Mouse / Cut and Paste at top
+level, Capture Settings in the Capture submenu), machine-manager config
+lives under Machines.
+
+**Rejected:** keeping a launchers-only menu for launch-without-dashboard.
+Marginal against the dashboard being the app's main window anyway; if
+menu-bar quick-launch ever earns its keep, the status item is the right
+home, not the menu bar.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.
