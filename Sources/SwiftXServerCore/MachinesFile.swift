@@ -105,15 +105,23 @@ public enum MachineMigrator {
             Machine(name: os.displayName, kind: .emulatedVM, os: os, bundled: true,
                     host: "127.0.0.1", user: "", transport: .helios,
                     display: "10.0.2.2:0", imagePath: nil,
-                    launchers: defaultXtermLaunchers)
+                    launchers: defaultLaunchers(for: os))
         }
     }
 
-    /// The starter launcher set every bundled fixture seeds with: the color
-    /// xterm palette (mirrors Todd's curated set on the real hosts), so a
-    /// freshly-attached guest has something to click immediately. Helios
-    /// transport needs no password. One-shot seed data -- once a fixture
-    /// exists, its launchers live in machines.json and are edited there.
+    /// The full launcher seed for a bundled fixture: the color-xterm palette
+    /// first, then the per-OS curated apps. One-shot seed data -- once a
+    /// fixture exists, its launchers live in machines.json and are edited
+    /// there.
+    public static func defaultLaunchers(for os: MachineOS) -> [MachineLauncher] {
+        defaultXtermLaunchers + curatedAppLaunchers(for: os)
+    }
+
+    /// The color-xterm set every bundled fixture starts with (mirrors Todd's
+    /// curated set on the real hosts), so a freshly-attached guest has
+    /// something to click immediately. Helios transport needs no password.
+    /// Each xterm cascades +80+55 from the previous (about 6% of the nominal
+    /// 1280x900 logical root) so launching several doesn't stack them.
     public static let defaultXtermLaunchers: [MachineLauncher] = [
         ("xterm cyan",   "cyan",    "yellow"),
         ("xterm green",  "#7ec97e", "#f0c674"),
@@ -122,12 +130,63 @@ public enum MachineMigrator {
         ("xterm purple", "#c792ea", "#f0c674"),
         ("xterm orange", "#ff9966", "#7ec97e"),
         ("xterm mint",   "#95efaf", "#ff9966"),
-    ].map { (name: String, fg: String, cursor: String) -> MachineLauncher in
+    ].enumerated().map { (i, c: (name: String, fg: String, cursor: String)) -> MachineLauncher in
         let quote = { (c: String) in c.hasPrefix("#") ? "\"\(c)\"" : c }
         return MachineLauncher(
-            name: name,
-            command: "xterm -sb -bg black -fg \(quote(fg)) -cr \(quote(cursor)) -geometry 100x40")
+            name: c.name,
+            command: "xterm -sb -bg black -fg \(quote(c.fg)) -cr \(quote(c.cursor)) "
+                + "-geometry 100x40+\(30 + 80 * i)+\(30 + 55 * i)")
     }
+
+    /// Per-OS curated app launchers: the apps verified working on each guest
+    /// image (tested by hand, 2026-07-28). Ordering: alphabetical, except
+    /// Solaris puts its CDE apps between the xterms and the classic X apps.
+    /// Absolute paths on purpose -- the daemon's PATH is not the user's.
+    /// Each app takes its position from `appScatter` so no two seed
+    /// launchers land on the same spot. maze parses args with getopt
+    /// (single-letter flags only), so it gets `-g`; everything else takes
+    /// the standard toolkit `-geometry`.
+    public static func curatedAppLaunchers(for os: MachineOS) -> [MachineLauncher] {
+        let commands: [String]
+        switch os {
+        case .solaris26:
+            commands = ["dtcalc", "dtfile", "dtmail", "dtpad -standAlone", "dtterm"]
+                .map { "/usr/dt/bin/\($0)" }
+                + ["bitmap", "oclock", "xbiff", "xcalc", "xclipboard", "xclock",
+                   "xlogo", "xman"]
+                .map { "/usr/openwin/bin/\($0)" }
+        case .sunos414:
+            commands = ["dogs", "ico", "maze", "motifanim", "oclock", "periodic",
+                        "puzzle", "xcalc", "xclipboard", "xclock", "xeyes",
+                        "xfontsel", "xman", "xmeditor", "xmfonts", "xmforc",
+                        "xmlist", "xmmove"]
+                .map { "/usr/bin/X11/\($0)" }
+        case .netbsd:
+            commands = ["bitmap", "ico", "uxterm", "xcalc", "xclock", "xditview",
+                        "xedit", "xeyes", "xman", "xmore"]
+                .map { "/usr/X11R7/bin/\($0)" }
+        }
+        return commands.enumerated().map { i, command in
+            let binary = command.components(separatedBy: " ")[0]
+            let name = (binary as NSString).lastPathComponent
+            let flag = name == "maze" ? "-g" : "-geometry"
+            let spot = appScatter[i]
+            return MachineLauncher(name: name,
+                                   command: "\(command) \(flag) +\(spot.x)+\(spot.y)")
+        }
+    }
+
+    /// Hand-picked pseudo-random spread over the nominal 1280x900 logical
+    /// root, consumed in list order by `curatedAppLaunchers`. No two entries
+    /// within ~90px of each other, and everything stays inside x<=840 y<=560
+    /// so positions survive the smaller display presets. Long enough for the
+    /// longest curated list (SunOS 4.1.4, 18 apps) with room to grow.
+    static let appScatter: [(x: Int, y: Int)] = [
+        (620, 80), (140, 420), (760, 300), (330, 180), (60, 250),
+        (520, 460), (830, 140), (250, 540), (450, 60), (700, 500),
+        (90, 90), (560, 250), (360, 380), (800, 420), (180, 160),
+        (640, 380), (280, 300), (440, 550), (740, 60), (40, 520),
+    ]
 
     /// Guarantee every bundled fixture is present, injecting only the missing ones
     /// (matched by `bundled && os`, so an already-attached fixture is preserved).

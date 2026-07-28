@@ -351,14 +351,89 @@ final class MachineFileTests: XCTestCase {
         XCTAssertTrue(fixtures.allSatisfy { $0.image == nil && !$0.isInstalledEmulatedVM })
         // User-less by design: the first-run flow fills the login.
         XCTAssertTrue(fixtures.allSatisfy { $0.user.isEmpty })
-        // Every fixture seeds the starter xterm palette (helios transport, so
-        // no passwords), giving a freshly-attached guest launchers to click.
+        // Every fixture seeds the xterm palette plus its OS's curated apps
+        // (helios transport, so no passwords), giving a freshly-attached
+        // guest launchers to click.
         XCTAssertTrue(fixtures.allSatisfy {
-            $0.launchers == MachineMigrator.defaultXtermLaunchers && !$0.launchers.isEmpty
+            $0.launchers == MachineMigrator.defaultLaunchers(for: $0.os!)
+                && !$0.launchers.isEmpty
         })
         XCTAssertTrue(MachineMigrator.defaultXtermLaunchers.allSatisfy {
             $0.password == nil && $0.command?.hasPrefix("xterm ") == true
         })
+    }
+
+    func testCuratedLauncherSeedPerOS() throws {
+        for os in MachineOS.allCases {
+            let seed = MachineMigrator.defaultLaunchers(for: os)
+            let xterms = MachineMigrator.defaultXtermLaunchers
+
+            // xterms first, then the curated apps.
+            XCTAssertEqual(Array(seed.prefix(xterms.count)), xterms)
+            let apps = Array(seed.dropFirst(xterms.count))
+            XCTAssertFalse(apps.isEmpty)
+
+            // Every command is positioned, and no two seed launchers of one
+            // machine land on the same spot.
+            let offsets = try seed.map { l -> String in
+                let cmd = try XCTUnwrap(l.command)
+                let plus = try XCTUnwrap(cmd.firstIndex(of: "+"), "unpositioned: \(cmd)")
+                return String(cmd[plus...])
+            }
+            XCTAssertEqual(offsets.count, Set(offsets).count, "\(os): stacked launchers")
+
+            // Curated apps use absolute paths; xterm rides the user's PATH.
+            XCTAssertTrue(apps.allSatisfy { $0.command?.hasPrefix("/usr/") == true })
+            XCTAssertTrue(apps.allSatisfy { $0.password == nil })
+
+            // maze is the one getopt app: -g, never -geometry.
+            for l in apps where l.name == "maze" {
+                XCTAssertTrue(l.command?.contains(" -g +") == true)
+                XCTAssertFalse(l.command?.contains("-geometry") == true)
+            }
+        }
+
+        // The xterm cascade: each offset 5-10% of the nominal 1280x900 root
+        // from the previous, so successive launches don't stack.
+        let xtermOffsets = MachineMigrator.defaultXtermLaunchers.map { l -> (Int, Int) in
+            let parts = l.command!.components(separatedBy: "+")
+            return (Int(parts[1])!, Int(parts[2])!)
+        }
+        for (a, b) in zip(xtermOffsets, xtermOffsets.dropFirst()) {
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1)
+            XCTAssertTrue((64...128).contains(dx), "x step \(dx) outside 5-10% of 1280")
+            XCTAssertTrue((45...90).contains(dy), "y step \(dy) outside 5-10% of 900")
+        }
+
+        // Solaris ordering: CDE apps (alphabetical) between the xterms and
+        // the classic X apps (alphabetical).
+        let solaris = MachineMigrator.curatedAppLaunchers(for: .solaris26)
+        let dt = solaris.prefix { $0.command?.hasPrefix("/usr/dt/bin/") == true }
+        let classic = solaris.drop { $0.command?.hasPrefix("/usr/dt/bin/") == true }
+        XCTAssertEqual(dt.map(\.name), ["dtcalc", "dtfile", "dtmail", "dtpad", "dtterm"])
+        XCTAssertTrue(classic.allSatisfy { $0.command?.hasPrefix("/usr/openwin/bin/") == true })
+        XCTAssertEqual(classic.map(\.name), classic.map(\.name).sorted())
+
+        // The other two are plain alphabetical out of one bin dir.
+        let sunos = MachineMigrator.curatedAppLaunchers(for: .sunos414)
+        XCTAssertEqual(sunos.map(\.name), sunos.map(\.name).sorted())
+        XCTAssertTrue(sunos.allSatisfy { $0.command?.hasPrefix("/usr/bin/X11/") == true })
+        let netbsd = MachineMigrator.curatedAppLaunchers(for: .netbsd)
+        XCTAssertEqual(netbsd.map(\.name), netbsd.map(\.name).sorted())
+        XCTAssertTrue(netbsd.allSatisfy { $0.command?.hasPrefix("/usr/X11R7/bin/") == true })
+
+        // The scatter table itself: enough entries for the longest list, all
+        // inside the safe area, none within 90px of another.
+        let scatter = MachineMigrator.appScatter
+        XCTAssertGreaterThanOrEqual(scatter.count, sunos.count)
+        XCTAssertTrue(scatter.allSatisfy { $0.x <= 840 && $0.y <= 560 })
+        for i in scatter.indices {
+            for j in scatter.indices where j > i {
+                let (dx, dy) = (scatter[i].x - scatter[j].x, scatter[i].y - scatter[j].y)
+                XCTAssertGreaterThanOrEqual(dx * dx + dy * dy, 90 * 90,
+                                            "scatter \(i) and \(j) too close")
+            }
+        }
     }
 
     func testEnsuringBundledPreservesAttachedFixtureAndIsIdempotent() throws {
