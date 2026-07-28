@@ -12,6 +12,7 @@ final class ImageCatalogTests: XCTestCase {
           "url": "https://macxserver.com/images/solaris26-boot.qcow2.gz",
           "sizeGz": 262144000, "sha256Gz": "aa11",
           "size": 1395864371, "sha256": "bb22",
+          "reservedUsernames": ["root", "daemon", "bin", "nobody4"],
           "notes": "Solaris 2.6 + CDE, helios agent installed" },
         { "os": "netbsd",
           "version": "2026.07",
@@ -34,10 +35,14 @@ final class ImageCatalogTests: XCTestCase {
         XCTAssertEqual(solaris.size, 1_395_864_371)
         XCTAssertEqual(solaris.sha256, "bb22")
         XCTAssertEqual(solaris.notes, "Solaris 2.6 + CDE, helios agent installed")
+        XCTAssertEqual(solaris.reservedUsernames,
+                       ["root", "daemon", "bin", "nobody4"])
 
-        // notes is optional; an OS not in the catalog has no entry.
+        // notes and reservedUsernames are optional (a pre-2026-07 catalog
+        // has neither); an OS not in the catalog has no entry.
         let netbsd = try XCTUnwrap(catalog.entry(for: .netbsd))
         XCTAssertNil(netbsd.notes)
+        XCTAssertNil(netbsd.reservedUsernames)
         XCTAssertNil(catalog.entry(for: .sunos414))
     }
 

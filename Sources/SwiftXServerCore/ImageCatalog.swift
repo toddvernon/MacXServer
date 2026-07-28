@@ -28,13 +28,23 @@ public struct ImageCatalog: Equatable, Sendable {
         /// One human line for the confirm sheet ("Solaris 2.6 + CDE, helios
         /// agent installed").
         public let notes: String?
+        /// The account names that actually exist on this image, captured from
+        /// its passwd file by strip-release.sh after the publish surgery
+        /// (root + stock system accounts on a published image). The install
+        /// wizard validates the typed username against THIS, not a
+        /// hand-maintained guess -- only names that really exist can collide.
+        /// nil (an older catalog): the wizard falls back to the static
+        /// UserAdmin.reservedNames list.
+        public let reservedUsernames: [String]?
 
         public init(os: MachineOS, version: String, url: URL,
                     sizeGz: Int64, sha256Gz: String,
-                    size: Int64, sha256: String, notes: String? = nil) {
+                    size: Int64, sha256: String, notes: String? = nil,
+                    reservedUsernames: [String]? = nil) {
             self.os = os; self.version = version; self.url = url
             self.sizeGz = sizeGz; self.sha256Gz = sha256Gz
             self.size = size; self.sha256 = sha256; self.notes = notes
+            self.reservedUsernames = reservedUsernames
         }
     }
 

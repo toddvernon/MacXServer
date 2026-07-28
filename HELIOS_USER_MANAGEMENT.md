@@ -238,6 +238,12 @@ design session:
   `template` from each release copy (records + homes, readback-verified)
   and sweeps the homes parent down to lost+found; `publish-prep.sh` gates
   on all of it.
+- After the surgery, `strip-release.sh` captures the surviving passwd
+  names to `<os>-release.accounts`; `build-catalog.sh` bakes them into
+  the catalog entry as `reservedUsernames`, which is what the install
+  wizard's typing-time username check validates against (DECISIONS
+  2026-07-26 -- the static `UserAdmin.reservedNames` list is system
+  accounts only now, and just the fallback).
 - Open with it: the **root password** on published images (currently a
   documented dev password, flagged in guest-config/README.md). Options
   live in the first-launch discussion: ship it documented ("the appliance

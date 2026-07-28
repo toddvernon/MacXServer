@@ -148,7 +148,6 @@ final class UserAdminTests: XCTestCase {
         XCTAssertNotNil(UserAdmin.usernameProblem("root"))               // every OS
         XCTAssertNotNil(UserAdmin.usernameProblem("root", os: .netbsd))
         XCTAssertNotNil(UserAdmin.usernameProblem("template", os: .solaris26))
-        XCTAssertNotNil(UserAdmin.usernameProblem("tvernon", os: .sunos414))
         XCTAssertNotNil(UserAdmin.usernameProblem("toor", os: .netbsd))
         XCTAssertNotNil(UserAdmin.usernameProblem("ingres", os: .sunos414))
         // Another OS's system name is fine where it doesn't exist...
@@ -156,6 +155,28 @@ final class UserAdminTests: XCTestCase {
         // ...but with no OS known, the union applies.
         XCTAssertNotNil(UserAdmin.usernameProblem("ingres"))
         XCTAssertNil(UserAdmin.usernameProblem("todd", os: .netbsd))
+        // The static list is SYSTEM accounts only (2026-07-26): personal dev
+        // accounts are stripped from published images, so they're not
+        // reserved -- addUser's live check catches them where they do exist.
+        XCTAssertNil(UserAdmin.usernameProblem("tvernon", os: .sunos414))
+        XCTAssertNil(UserAdmin.usernameProblem("tvernon"))
+    }
+
+    func testReservedOverrideFromCatalog() {
+        // A caller holding the image's actual account list (the catalog
+        // entry's reservedUsernames) passes it as `reserved:` and it REPLACES
+        // the static list entirely.
+        let onImage: Set<String> = ["root", "daemon", "sysdiag"]
+        XCTAssertNotNil(UserAdmin.usernameProblem("root", os: .sunos414,
+                                                  reserved: onImage))
+        XCTAssertNotNil(UserAdmin.usernameProblem("sysdiag", os: .sunos414,
+                                                  reserved: onImage))
+        // Not on the image -> fine, even though the static list carries it.
+        XCTAssertNil(UserAdmin.usernameProblem("ingres", os: .sunos414,
+                                               reserved: onImage))
+        // The format rules still apply ahead of the reserved check.
+        XCTAssertNotNil(UserAdmin.usernameProblem("Root", os: .sunos414,
+                                                  reserved: onImage))
     }
 
     func testDesHashKnownVector() {

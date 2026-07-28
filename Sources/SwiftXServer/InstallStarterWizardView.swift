@@ -44,6 +44,14 @@ struct InstallStarterWizardView: View {
     @State private var dnsChoice: DNSChoice = .builtIn
     @State private var dnsServer = ""
 
+    /// The account names that actually exist on the catalog image for this
+    /// OS, fetched when the wizard opens. When present, username validation
+    /// checks against THIS instead of the static reserved-name guess -- only
+    /// names really on the image can collide. nil (fetch failed, or an older
+    /// catalog without the field): static fallback, with addUser's live
+    /// duplicate check as the apply-time backstop either way.
+    @State private var imageAccountNames: Set<String>?
+
     init(machineID: UUID, machineName: String, osName: String,
          os: MachineOS?, model: MachinesModel) {
         self.machineID = machineID
@@ -69,6 +77,13 @@ struct InstallStarterWizardView: View {
         }
         .padding(20)
         .frame(width: 460, height: 400, alignment: .top)
+        .task {
+            guard let os,
+                  let catalog = try? await ImageCatalog.fetch(),
+                  let names = catalog.entry(for: os)?.reservedUsernames
+            else { return }
+            imageAccountNames = Set(names)
+        }
     }
 
     // MARK: Steps
@@ -188,7 +203,9 @@ struct InstallStarterWizardView: View {
     }
 
     private var usernameProblem: String? {
-        username.isEmpty ? nil : UserAdmin.usernameProblem(username, os: os)
+        username.isEmpty ? nil
+            : UserAdmin.usernameProblem(username, os: os,
+                                        reserved: imageAccountNames)
     }
 
     private var canGoForward: Bool {
@@ -243,6 +260,8 @@ struct InstallStarterWizardView: View {
         // and dismiss runs inside a view update (the Add Machine wizard's
         // same ordering).
         DispatchQueue.main.async {
+            NSLog("macxserver: install wizard commit (%@, handler wired: %@)",
+                  id.uuidString, model.onInstallStarter == nil ? "NO" : "yes")
             model.onInstallStarter?(id, dir, user, pass, dns)
         }
     }

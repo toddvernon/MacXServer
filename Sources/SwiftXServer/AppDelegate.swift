@@ -2580,7 +2580,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// wrong image can't reach a wrong machine by construction.
     private func downloadCuratedImage(for id: UUID) {
         guard let registry, let m = registry.machine(id),
-              m.kind == .emulatedVM, m.image == nil, let os = m.os,
+              m.kind == .emulatedVM, !m.isInstalledEmulatedVM, let os = m.os,
               imageDownloadTasks[id] == nil else { return }
         Task { @MainActor in
             let catalog: ImageCatalog
@@ -2728,9 +2728,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func beginStarterInstall(machineID id: UUID, imagesDir: String,
                                      username: String, password: String,
                                      dnsServer: String?) {
-        guard let registry, let m = registry.machine(id),
-              m.kind == .emulatedVM, m.image == nil, let os = m.os,
-              imageDownloadTasks[id] == nil else { return }
+        // The wizard's commit is a user gesture; if it can't run, say WHY.
+        // (These were one silent compound guard until 2026-07-26, when a
+        // refused install with no error cost a debugging session. Also:
+        // the image check is the honest isInstalledEmulatedVM, not
+        // image == nil -- a machine whose imagePath points at a deleted
+        // file is exactly what the hero pane re-offers installs for.)
+        NSLog("macxserver: starter install commit for machine %@", id.uuidString)
+        guard let registry, let m = registry.machine(id) else {
+            showLaunchError("The machine this install was for no longer exists.")
+            return
+        }
+        guard m.kind == .emulatedVM, let os = m.os else {
+            showLaunchError("\u{201C}\(m.name)\u{201D} isn\u{2019}t an emulated "
+                + "machine with a known OS, so a starter image can\u{2019}t "
+                + "be installed on it.")
+            return
+        }
+        guard !m.isInstalledEmulatedVM else {
+            showLaunchError("\u{201C}\(m.name)\u{201D} already has a disk image "
+                + "(\(m.imagePath ?? "")). Detach it in Settings before "
+                + "installing a starter image.")
+            return
+        }
+        guard imageDownloadTasks[id] == nil else {
+            showLaunchError("A download for \u{201C}\(m.name)\u{201D} is "
+                + "already running.")
+            return
+        }
         // The directory choice persists as the one global preference, and
         // only when it differs from the default (an untouched prefill stays
         // "default" so the default can move in a future version).
@@ -2764,6 +2789,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     + "via \u{201C}Use a disk image I already have\u{201D}.")
                 return
             }
+            NSLog("macxserver: starter install starting download (%@, %@)",
+                  os.rawValue, entry.url.absoluteString)
             self.runImageDownload(machineID: id, entry: entry)
         }
     }

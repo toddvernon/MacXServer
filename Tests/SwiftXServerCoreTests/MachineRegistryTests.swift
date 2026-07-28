@@ -26,10 +26,16 @@ final class MachineRegistryTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: path))
     }
 
-    func testSnapshotDistinguishesEmulatedAndExternal() {
+    func testSnapshotDistinguishesEmulatedAndExternal() throws {
+        // installed is filesystem-honest (a deleted image un-installs the
+        // machine), so the fixture image must really exist.
+        let image = FileManager.default.temporaryDirectory
+            .appendingPathComponent("snap-\(UUID().uuidString).qcow2")
+        try Data("qcow2-stub".utf8).write(to: image)
+        defer { try? FileManager.default.removeItem(at: image) }
         let registry = MachineRegistry(machines: [
             Machine(name: "Solaris", kind: .emulatedVM, os: .solaris26,
-                    host: "127.0.0.1", user: "t", imagePath: "/tmp/s.qcow2"),
+                    host: "127.0.0.1", user: "t", imagePath: image.path),
             Machine(name: "ss5", kind: .externalHost, host: "192.168.7.19", user: "t"),
         ], path: tempPath("snap"))
         let snap = registry.snapshot()
@@ -42,6 +48,21 @@ final class MachineRegistryTests: XCTestCase {
         // External has no lifecycle we own -> nils.
         XCTAssertNil(external?.running)
         XCTAssertNil(external?.ready)
+    }
+
+    func testDeletingTheImageUninstallsTheMachine() throws {
+        // The 2026-07-26 wizard-retest find: imagePath stays set in
+        // machines.json after an install, so the check must be about the
+        // FILE, not the field -- rm the qcow2 and the machine honestly
+        // returns to imageless (hero pane / "Not installed").
+        let image = FileManager.default.temporaryDirectory
+            .appendingPathComponent("uninstall-\(UUID().uuidString).qcow2")
+        try Data("qcow2-stub".utf8).write(to: image)
+        let m = Machine(name: "NetBSD", kind: .emulatedVM, os: .netbsd,
+                        host: "127.0.0.1", user: "t", imagePath: image.path)
+        XCTAssertTrue(m.isInstalledEmulatedVM)
+        try FileManager.default.removeItem(at: image)
+        XCTAssertFalse(m.isInstalledEmulatedVM)
     }
 
     func testUpdatePersistsAndReloads() throws {

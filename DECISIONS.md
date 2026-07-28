@@ -1921,6 +1921,41 @@ collected it.
 
 ---
 
+## 2026-07-26: Reserved usernames ride the catalog, not a hardcoded list
+
+The install wizard's typing-time username check now validates against the
+ACTUAL account list of the catalog image: `strip-release.sh` captures the
+surviving /etc/passwd names to `<os>-release.accounts` right after the
+publish surgery (a live helios is already talking to the guest, so the
+capture is free), and `build-catalog.sh` bakes them into each catalog
+entry as `reservedUsernames`. The wizard fetches the catalog when it
+opens and passes the entry's list into `UserAdmin.usernameProblem` via
+its new `reserved:` override.
+
+The static `UserAdmin.reservedNames` list is trimmed to stock system
+accounts plus our `template` plumbing name -- `tvernon` is out -- and
+survives only as the fallback (older catalog without the field, fetch
+failure, and the non-wizard surfaces). `addUser`'s live duplicate check
+against the guest's real passwd stays the apply-time authority
+everywhere.
+
+**Why:** the hand-maintained list went stale the moment the images
+changed, in both directions. Stripped images no longer carry tvernon, so
+the "is a system account on this machine" refusal became a lie there
+(Todd hit exactly this in wizard testing); meanwhile fred and synology
+were never listed, so on gold-based images they still hit the opaque
+apply-time wall the list existed to prevent. We build these images -- the
+honest reserved list is the image's own passwd, captured when it's
+authoritative.
+
+**Rejected:** dropping typing-time validation entirely and leaning on the
+live check alone. The wizard collects the username before the 250 MB
+download and the multi-minute first boot; the collision would surface as
+an error alert minutes later instead of red text under the field, which
+is the worst possible first-run moment for a stranger.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

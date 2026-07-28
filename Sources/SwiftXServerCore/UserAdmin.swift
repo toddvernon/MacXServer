@@ -158,18 +158,23 @@ public enum UserAdmin {
 
     // MARK: Username + password
 
-    /// Account names that already exist on (or are conventional for) each
-    /// curated guest OS, plus our own staging names. Typing one into an
-    /// add-user surface would collide at apply time with an opaque refusal
-    /// -- the 2026-07-16 field find: "tvernon" on a gold-clone image, and a
-    /// stranger typing "root" hits the same wall on any published image --
-    /// so the validator catches it at typing time. Good-faith lists from the
-    /// stock passwd files; addUser's live duplicate check stays the backstop
-    /// for anything these miss. nil OS = the union (the safe answer when the
-    /// target system is unknown).
+    /// STOCK SYSTEM account names for each curated guest OS, plus our own
+    /// `template` plumbing name (uid 1999; deleteUser refuses it too).
+    /// Typing one into an add-user surface would collide at apply time with
+    /// an opaque refusal -- the 2026-07-16 field find -- so the validator
+    /// catches it at typing time. System accounts only, on purpose
+    /// (2026-07-26): the authoritative list of what actually exists on a
+    /// published image rides its catalog entry (`reservedUsernames`,
+    /// captured from the stripped image's own passwd by strip-release.sh)
+    /// and overrides this via usernameProblem's `reserved:`; this static
+    /// list is only the fallback when no catalog data is at hand. Personal
+    /// dev accounts (tvernon, fred, synology) don't belong here -- they're
+    /// stripped from published images, and on dev machines where they do
+    /// exist, addUser's live duplicate check is the backstop. nil OS = the
+    /// union (the safe answer when the target system is unknown).
     public static func reservedNames(os: MachineOS?) -> Set<String> {
         let common: Set<String> = ["root", "daemon", "bin", "sys", "adm",
-                                   "uucp", "nobody", "template", "tvernon"]
+                                   "uucp", "nobody", "template"]
         let solaris: Set<String> = ["lp", "smtp", "nuucp", "listen",
                                     "noaccess", "nobody4"]
         let sunos: Set<String>   = ["news", "ingres", "audit", "sync",
@@ -188,8 +193,14 @@ public enum UserAdmin {
     /// limit; also keeps NIS-ish tooling and 8-char utmp fields happy), and
     /// not a reserved system-account name for the target OS.
     /// Returns a user-facing reason, or nil when the name is fine.
+    ///
+    /// `reserved` overrides the static per-OS list with the ACTUAL account
+    /// names of the target image (the catalog entry's `reservedUsernames`) --
+    /// only names that really exist can collide, so a caller that has the
+    /// real list should always pass it.
     public static func usernameProblem(_ name: String,
-                                       os: MachineOS? = nil) -> String? {
+                                       os: MachineOS? = nil,
+                                       reserved: Set<String>? = nil) -> String? {
         if name.isEmpty { return "Enter a username." }
         if name.count > 8 {
             return "Usernames on these systems are at most 8 characters."
@@ -202,7 +213,7 @@ public enum UserAdmin {
         guard name.allSatisfy({ allowed.contains($0) }) else {
             return "Usernames may only contain lowercase letters and digits."
         }
-        if reservedNames(os: os).contains(name) {
+        if (reserved ?? reservedNames(os: os)).contains(name) {
             return "\u{201C}\(name)\u{201D} is a system account on this "
                  + "machine \u{2014} pick another name."
         }

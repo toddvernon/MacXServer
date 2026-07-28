@@ -347,9 +347,17 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
         return String(format: "02:%02X:%02X:%02X:%02X:%02X", b.0, b.1, b.2, b.3, b.4)
     }
 
-    /// True for an emulated VM with an image set (i.e. it can actually run).
+    /// True for an emulated VM whose disk image actually exists on disk
+    /// (i.e. it can really run). A set-but-missing imagePath counts as NOT
+    /// installed on purpose: deleting the image honestly returns the machine
+    /// to its imageless state -- starter hero pane, "Not installed" row --
+    /// per DECISIONS 2026-07-16 (found broken in wizard re-testing
+    /// 2026-07-26: the old path-is-set check kept a deleted install looking
+    /// stopped forever). An image on an unmounted volume reads the same way;
+    /// truthful, and it recovers the moment the file is back.
     public var isInstalledEmulatedVM: Bool {
-        kind == .emulatedVM && (imagePath?.isEmpty == false)
+        guard kind == .emulatedVM, let image else { return false }
+        return FileManager.default.fileExists(atPath: image.path)
     }
 
     // MARK: Runtime resolution
