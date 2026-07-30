@@ -1,93 +1,118 @@
-# Status 2026-07-28 (Mac Studio, end of day)
+# Status 2026-07-30 (Mac Studio, end of day)
 
-## Headline: big UX-consolidation day. Launcher seeding + the orphaned
-## reserved-usernames work landed in the morning; the afternoon drove
-## everything to the dashboard and cleaned up the config surface.
+## Headline: IRIX day. The PSU-repaired Indigo came back to life and by
+## end of day it's a full helios fleet member: cx libs, cm, and
+## heliosAgent all ported to IRIX 6.5, agent validated live over the
+## wire, deployed with boot wiring. First non-Sun machine on the fleet.
+## macXserver-side integration is deliberately deferred to a follow-up
+## session (list below).
 
 ## What happened today
 
-**Morning (already pushed):** the /sos found the reserved-usernames
-feature uncommitted from a prior session; reviewed and landed it
-(X d832ff6 + SPARCplug b78dc89). Per-OS curated launcher seeding
-(Phase 3c) shipped (0087fd7): bundled fixtures seed the 7 cascaded
-xterms plus the hand-verified per-OS app lists (Solaris CDE apps
-sandwiched between xterms and classic X apps; 4.1.4 and NetBSD
-alphabetical), scatter-positioned so nothing stacks; maze is
-getopt-only so it gets -g. Studio's live machines.json reseeded and
-parity-verified; laptop fixtures still carry the old xterm-only seed
-(one-shot edit next time there, or live with it -- code seed is in).
+All of today's code landed in the cx-family repos (cx, heliosAgent,
+cm), not this tree. This STATUS is the cross-reference.
 
-**Afternoon (committed at this /eos):**
+**The machine:** SGI Indigo R4400 (IP20), hostname indigo4k, revived by
+Todd's ITT PEC4044B power supply repair (writeup:
+https://oldsilicon.com/technologies/indigo-pec4044b-power-supply-repair/
+-- thermally drifting cap in the supervision circuitry commanding false
+shutdowns; scoped the status pin to prove commanded-vs-forced before
+touching parts).
 
-- Install wizard Network step gained an optional domain name; first
-  boot writes "domain X" + "nameserver Y" to /etc/resolv.conf (same
-  BSD resolver syntax on all three guest OSes).
-- Settings reorg: the tabbed Preferences window and its app-menu item
-  are dead. The four panes are individual X11Server menu items now
-  (Display / Mouse / Cut and Paste at top level, Capture Settings
-  inside the Capture submenu); the empty Network tab died. Windows
-  pin to design size (unpinned NSHostingView + maxHeight-infinity
-  panes grew to full screen).
-- New-user seed = my runtime settings except display=auto and capture
-  OFF (reversed my own "exactly like mine" call: a .xtap records
-  KeyPress events, so capture-by-default = recording keystrokes).
-  Pointer-defaults drift fixed: the Key comment's "identity" lie,
-  PointerConfig.default documented as the deliberate inert core
-  baseline, UI fallback aligned.
-- ~/.macxserver-launchers is KILLED: DefaultLaunchers.swift deleted,
-  dead reconcile(withMigrated:) removed, loadOrMigrate deletes the
-  legacy file after import and sweeps it on already-migrated installs
-  (laptop cleans itself on next launch). Mouse-pipeline audit done
-  first: architecture legit, single remap authority holds.
-- The two config gaps fixed: Machines > Disk Image Folder... (view +
-  change images.directory, moves machine-referenced images with the
-  setting, refuses while affected machines run) and Forget Password
-  on the machine form (clears Keychain entry + cleartext in one go).
-- Menus drive to the dashboard (new DECISIONS entry): per-machine
-  submenus and the status-item dot list are gone; Machines menu is
-  static (Machines... Cmd-Shift-M + Disk Image Folder...).
+**X server validation, zero changes needed:** IRIX xclock (with second
+hand, so a 1s redraw cadence soak), xman, and the stock /usr/bin/X11
+clients all rendered correctly against macxserver. First client lineage
+that isn't Sun/MIT-on-Sun. xscope exists on the box as an era-correct
+protocol second-opinion (proxy display :1) if we ever want to diff a
+decode against macXcapture's.
+
+**The port, in commit order of pain:**
+
+- cx libs built on IRIX essentially clean. One real fix: logfile.cpp
+  called pthread_self() everywhere but SunOS 4; on IRIX that's
+  libpthread-only, and linking libpthread into a forking daemon changes
+  6.5 libc process semantics, so the thread-id log column is guarded
+  out like SunOS. platform.mk also learned uname -s = IRIX64 (64-bit
+  kernels, same n32 userland -> same irix6 platform).
+- heliosAgent needed: a signal-handler cast (SGI C++ headers declare
+  handlers as `void (*)(...)`; "prohibits conversion from (int) to
+  (...)" is the tell), -lelf for nlist (xload's -lmld answer is
+  COFF/o32-era; no n32 libmld on 6.5), per-OS grep default
+  (/usr/freeware/bin/grep -- base grep has no -r), and the IRIX
+  shutdown command (/etc/shutdown -y -g0 -i0; init 5 is NOT power-off
+  there).
+- Full SysInfo collector for IRIX: mem via sysmp(MP_SAGET, MPSA_RMINFO),
+  swap via swapctl(SC_GETSWAPTOT/SC_GETFREESWAP), disks via
+  getmntent+statvfs, load via nlist("/unix","avenrun") + /dev/kmem at
+  FSCALE 1024, lifted from xload's #ifdef sgi in reference/X11R6.
+  Validated live: sysinfo load matched uptime to the digit, memMB 384,
+  hostid = IP (correct SGI behavior, not a bug).
+- Deploy: init/heliosagent.irix (SysV + chkconfig-aware, no eeprom
+  dance; secret comes from /etc/helios/helios.json like the real Suns),
+  deploy.sh IRIX|IRIX64 case (init.d + S98/K30 links + chkconfig -f on),
+  makefile install targets for irix/irix64 in heliosAgent AND cm (cm's
+  silent no-op install was a user-reported bug; ss left alone, it never
+  had guest installs).
+- Two post-validation fixes are in the repos but NOT yet on the box
+  (next tar ship-up): /proc leaked into the disks list (IRIX pseudo-fs
+  mounts from a '/'-prefixed source, so the shared isLocalDisk source
+  test passes it; now gated on mnt_type efs/xfs) and sysInfoStartup now
+  prefers sysmp(MP_KERNADDR, MPKA_AVENRUN) over nlist for the avenrun
+  address (asks the running kernel, no /unix dependency).
+
+**Deployed state on the Indigo:** agent 0.2.0 running as a boot service,
+secret file in /etc/helios/helios.json (fleet-standard value; unique
+per-box secrets remain the known fleet-wide gap). RTC had reset to 1970;
+date set by hand, clock-chip battery is a watch item (same failure
+family as the Sun NVRAMs).
 
 ## What's working / what's broken
 
-- swift build clean, zero warnings; 1587 tests green all day.
-- xcodegen re-run (DefaultLaunchers deletion); project.pbxproj in
-  this commit batch. Xcode should build clean.
-- The Debug app running during the day predates ALL of this; restart
-  it to see the new menus/launchers. If it wrote machines.json before
-  restart, re-check the fixture launcher seed.
-- Known theoretical edge from the mouse audit, documented not fixed:
-  chorded same-wire-mapped buttons across an xterm scrollbar +
-  content can strand a pendingButtonOverride (default 1/1/3 maps
-  left and wheel to the same wire button).
+- Working: hello / sysinfo / run_command validated from the Mac against
+  the deployed agent. IRIX X clients render on macxserver.
+- Deployed binary predates the /proc disk filter and the sysmp-first
+  avenrun lookup; harmless (one bogus disks row), fixed on next tar.
+- GNU grep not confirmed installed on the Indigo; search verb errors
+  until the freeware tardist goes in or HELIOS_GREP points somewhere
+  capable.
+- Indigo RTC battery suspect. If the clock is 1970 again after a power
+  cycle, it's the Dallas chip.
 
-## What's next
+## What's next (the macXserver integration session)
 
-1. Xcode rebuild + click through everything: wizard domain field,
-   four settings panes, seeded launcher positions on all three
-   guests, image-folder mover, Forget Password, slimmed menus.
-2. Todd's phase-1 publish half: pick the published root password,
-   cut/strip --root-password/gate/--publish x3, stranger download
-   test (strip now also captures release accounts + forces public
-   DNS; catalog carries reservedUsernames).
-3. A6 clean-Mac acceptance with the v0.9.9 beta artifact.
-4. Laptop: machines.json fixture reseed (optional; new installs get
-   the new seed anyway).
-5. Carried: CanonicalDotfiles DISPLAY decision, UserAdmin live test
-   on 2.6/4.1.4.
+1. MachineOS gains an IRIX case: shutdownCommand must be
+   /etc/shutdown -y -g0 -i0, kept in step with heliosAgent PROTOCOL.md
+   (same lockstep rule as the existing three).
+2. Add indigo4k as an external-host machine (helios port 2125); fleet
+   heuristics confirm-don't-decide applies -- it's a new OS lineage, so
+   expect every confirm.
+3. Remote app launcher: IRIX flavor. Absolute paths from /usr/bin/X11,
+   and a curated launcher list for the SGI (xterm, xclock, xcalc, xman
+   verified today; SGI toolchest/Motif apps unexplored).
+4. sysinfo prober: IRIX serves every field; check the dashboard renders
+   a non-Sun uname sanely (sysname "IRIX", machine "IP20").
+5. Carried from 07-28: Xcode rebuild + click-through of the UX
+   consolidation, Todd's phase-1 publish half, A6 clean-Mac acceptance,
+   laptop fixture reseed, CanonicalDotfiles DISPLAY decision, UserAdmin
+   live test on 2.6/4.1.4.
 
 ## Committed / push state
 
-- X, main: morning d832ff6 / 0087fd7, plus this /eos batch (hashes
-  in the /eos summary). Pushed.
-- SPARCplug, main: b78dc89 (morning). Nothing new this afternoon.
-- cx tree: untouched all day.
+- cx, main: logfile pthread guard, platform.mk IRIX64, PLATFORM_SUPPORT
+  IRIX notes section. Pushed.
+- heliosAgent, main: signal cast, IRIX SysInfo collector + post-
+  validation fixes, -lelf, grep/shutdown defaults, deploy.sh + new
+  init/heliosagent.irix, PROTOCOL/SYSINFO_PLAN doc rows. Pushed.
+- cm, main: irix/irix64 install branches. Pushed.
+- X, main: this STATUS roll only (no code). Pushed.
+- SPARCplug: untouched today.
 
 ## Switching Macs
 
-- git pull X on arrival; SPARCplug already synced from morning.
-- Laptop's ~/.macxserver-launchers deletes itself on next app launch
-  there; its machines.json fixture launchers are still old-seed.
-- Three qemu guests were left running on the Studio under the Debug
-  app (netbsd / solaris26 / sunos414 off ~/TESTIMAGES). No locks
-  under Dropbox; nothing blocks the laptop.
-- Let Dropbox finish syncing memory before opening the laptop.
+- cx family lives in ~/Dropbox/dev/cx (Dropbox-synced) AND is pushed to
+  GitHub; either sync path works on the laptop.
+- git pull X on arrival for this STATUS.
+- Memory got a new file (reference_heliosagent_irix_port) plus updates;
+  let Dropbox finish syncing before opening the laptop.
+- The Indigo stays up as a boot-wired fleet member; nothing running on
+  the Macs to hand off.
