@@ -1990,6 +1990,37 @@ home, not the menu bar.
 
 ---
 
+## 2026-07-28: The product is macSPARCstation (macsparcstation.com); rebrand before first real release
+
+The app ships under a new name: **macSPARCstation**, at
+**macsparcstation.com**. Not macXserver. (And not macsparcserver.com --
+I bought that domain first and it was the wrong Sun line; SPARCserver
+was the rack hardware, SPARCstation is the desktop this thing actually
+impersonates. The -server domain is dead, don't reference it.)
+
+**Why:** what started as "a modern X server" grew into "a SPARCstation
+on your Mac" -- bundled qemu engine, curated starter images, install
+wizard, Helios, launchers. macXserver names the display layer, not the
+product. And the rename costs the least it will ever cost right now:
+zero real users, the v2026.07 catalog deliberately un-published, no
+shipped binary anyone depends on. The final acceptance pass (virgin-box
+end-to-end download + install) has to exercise the real domain, the
+real app name, and the real pinned catalog URL, or it tests the wrong
+product. So the rebrand lands before that pass, not after.
+
+**What survives:** macxserver.com stays alive as the "built an X server
+with Claude Code in 30 days" engineering-story site, bannered over to
+the new domain. The Swift module names (SwiftXServerCore etc.) keep
+their names -- they honestly describe the X-server component and
+renaming modules churns the whole tree for zero user value. macXcapture
+is a separate product and keeps its own brand.
+
+**Rejected:** publishing under macXserver now and cutting over later.
+The cut never gets cheaper, and post-launch it means config-path
+migration code, stale links, and a re-run of the acceptance test.
+
+---
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

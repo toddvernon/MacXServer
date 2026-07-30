@@ -4,8 +4,9 @@
 ## end of day it's a full helios fleet member: cx libs, cm, and
 ## heliosAgent all ported to IRIX 6.5, agent validated live over the
 ## wire, deployed with boot wiring. First non-Sun machine on the fleet.
-## macXserver-side integration is deliberately deferred to a follow-up
-## session (list below).
+## macXserver-side integration deferred to a follow-up session.
+## NOTE: the 07-28 laptop session's rebrand-to-macSPARCstation queue is
+## still front-of-queue and untouched today; carried below in full.
 
 ## What happened today
 
@@ -77,42 +78,69 @@ family as the Sun NVRAMs).
   capable.
 - Indigo RTC battery suspect. If the clock is 1970 again after a power
   cycle, it's the Dallas chip.
+- Release images: all three cut, stripped, gated, publish-ready with
+  root password "root", living in ~/dev/SPARCplug/release-images/ ON
+  THE LAPTOP ONLY (local disk, not Dropbox, not git). Publish must
+  happen from that Mac or re-cut. HELD pending the rebrand URLs.
 
-## What's next (the macXserver integration session)
+## What's next
 
-1. MachineOS gains an IRIX case: shutdownCommand must be
+**Front of the queue (carried verbatim from the 07-28 laptop session,
+untouched today -- the rebrand must settle before publish):**
+
+1. Todd answers the four rebrand sub-decisions: (a) display casing
+   (assume macSPARCstation), (b) rename macxserver-images in place
+   (recommended: raw-URL redirect keeps v0.9.9 beta binaries alive) vs
+   fresh repo, (c) lockstep .macxserver-lock rename or leave, (d)
+   bundle id com.toddvernon.macsparcstation.
+2. Execute the rename batch: images repo + pinned URL FIRST (unblocks
+   --publish), then app identity + strings + config paths + migration.
+3. New site: clone MacXServerSite as the base for macsparcstation.com,
+   rework around the grander pitch; banner the old site over.
+4. ./build-catalog.sh --publish from THE LAPTOP (images gated and
+   waiting; tag defaults to v2026.07) once URLs are final.
+5. Virgin-box end-to-end acceptance: fresh account, real domain, real
+   download, install wizard, boot to ready.
+
+**The macXserver IRIX-integration session (new today):**
+
+6. MachineOS gains an IRIX case: shutdownCommand must be
    /etc/shutdown -y -g0 -i0, kept in step with heliosAgent PROTOCOL.md
    (same lockstep rule as the existing three).
-2. Add indigo4k as an external-host machine (helios port 2125); fleet
-   heuristics confirm-don't-decide applies -- it's a new OS lineage, so
-   expect every confirm.
-3. Remote app launcher: IRIX flavor. Absolute paths from /usr/bin/X11,
+7. Add indigo4k as an external-host machine (helios port 2125); fleet
+   heuristics confirm-don't-decide applies -- new OS lineage, expect
+   every confirm.
+8. Remote app launcher: IRIX flavor. Absolute paths from /usr/bin/X11,
    and a curated launcher list for the SGI (xterm, xclock, xcalc, xman
    verified today; SGI toolchest/Motif apps unexplored).
-4. sysinfo prober: IRIX serves every field; check the dashboard renders
+9. sysinfo prober: IRIX serves every field; check the dashboard renders
    a non-Sun uname sanely (sysname "IRIX", machine "IP20").
-5. Carried from 07-28: Xcode rebuild + click-through of the UX
-   consolidation, Todd's phase-1 publish half, A6 clean-Mac acceptance,
-   laptop fixture reseed, CanonicalDotfiles DISPLAY decision, UserAdmin
-   live test on 2.6/4.1.4.
+
+**Carried from the 07-28 Studio session:** Xcode rebuild +
+click-through of the UX consolidation (wizard domain field, settings
+panes, seeded launchers, image-folder mover, Forget Password, slimmed
+menus); laptop machines.json fixture reseed (optional); CanonicalDotfiles
+DISPLAY decision; UserAdmin live test on 2.6/4.1.4.
 
 ## Committed / push state
 
-- cx, main: logfile pthread guard, platform.mk IRIX64, PLATFORM_SUPPORT
-  IRIX notes section. Pushed.
-- heliosAgent, main: signal cast, IRIX SysInfo collector + post-
-  validation fixes, -lelf, grep/shutdown defaults, deploy.sh + new
-  init/heliosagent.irix, PROTOCOL/SYSINFO_PLAN doc rows. Pushed.
-- cm, main: irix/irix64 install branches. Pushed.
-- X, main: this STATUS roll only (no code). Pushed.
+- cx, main: 08d7bfc (logfile pthread guard, platform.mk IRIX64,
+  PLATFORM_SUPPORT IRIX notes). Pushed.
+- heliosAgent, main: 5746cfd (signal cast, IRIX SysInfo collector +
+  post-validation fixes, -lelf, grep/shutdown defaults, deploy.sh +
+  init/heliosagent.irix, doc rows). Pushed.
+- cm, main: 1f95db4 (irix/irix64 install branches). Pushed.
+- X, main: this STATUS roll merged with the laptop's c8dac63 rebrand
+  commit (DECISIONS.md rebrand entry rode in with the merge). Pushed.
 - SPARCplug: untouched today.
 
 ## Switching Macs
 
 - cx family lives in ~/Dropbox/dev/cx (Dropbox-synced) AND is pushed to
   GitHub; either sync path works on the laptop.
-- git pull X on arrival for this STATUS.
+- git pull X on arrival for this STATUS + the merged rebrand DECISIONS.
 - Memory got a new file (reference_heliosagent_irix_port) plus updates;
   let Dropbox finish syncing before opening the laptop.
 - The Indigo stays up as a boot-wired fleet member; nothing running on
   the Macs to hand off.
+- Release images wait on the LAPTOP; rebrand queue is the gate.
