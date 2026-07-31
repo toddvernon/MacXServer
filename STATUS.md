@@ -1,92 +1,82 @@
-# Status 2026-07-30 (Mac Studio, end of day)
+# Status 2026-07-31 (Mac Studio)
 
-## Headline: IRIX day. The PSU-repaired Indigo came back to life and by
-## end of day it's a full helios fleet member: cx libs, cm, and
-## heliosAgent all ported to IRIX 6.5, agent validated live over the
-## wire, deployed with boot wiring. First non-Sun machine on the fleet.
-## macXserver-side integration deferred to a follow-up session.
-## NOTE: the 07-28 laptop session's rebrand-to-macSPARCstation queue is
-## still front-of-queue and untouched today; carried below in full.
+## Headline: macXserver understands IRIX 6.5. Yesterday's Indigo became a
+## fleet member; today the Mac side caught up: MachineOS grew .irix65 (the
+## first external-host-only OS), with every per-OS value probed live on
+## the box over helios before it was written down. Items 6-9 of the
+## 07-30 IRIX-integration queue landed in one pass.
+## NOTE: the 07-28 rebrand-to-macSPARCstation queue is STILL front of
+## queue and untouched; carried below in full.
 
 ## What happened today
 
-All of today's code landed in the cx-family repos (cx, heliosAgent,
-cm), not this tree. This STATUS is the cross-reference.
+One commit in this tree: e9299ad "IRIX 6.5 joins MachineOS: first
+external-host-only OS". Committed to main, NOT yet pushed.
 
-**The machine:** SGI Indigo R4400 (IP20), hostname indigo4k, revived by
-Todd's ITT PEC4044B power supply repair (writeup:
-https://oldsilicon.com/technologies/indigo-pec4044b-power-supply-repair/
--- thermally drifting cap in the supervision circuitry commanding false
-shutdowns; scoped the status pin to prove commanded-vs-forced before
-touching parts).
+**The shape:** MachineOS gained `.irix65` plus an `emulatable` flag.
+IRIX can't be emulated by the bundled qemu-system-sparc, so the flag
+gates the emulation-only surfaces (bundled fixtures, starter-image
+seedOS picker, qcow2 OS picker, the emulated branch of the Settings OS
+picker); the emulation-only profile properties (bootDiskUnit,
+bootCommand, console markers, progress transcripts) hold commented
+inert values. The exhaustive-switch forcing function
+(GUEST_OS_PROFILE.md) worked exactly as designed: the build refused
+until all ~15 per-OS behaviors were answered. DECISIONS.md has the
+entry (one enum + capability flag, not a parallel ExternalOS type).
 
-**X server validation, zero changes needed:** IRIX xclock (with second
-hand, so a 1s redraw cadence soak), xman, and the stock /usr/bin/X11
-clients all rendered correctly against macxserver. First client lineage
-that isn't Sun/MIT-on-Sun. xscope exists on the box as an era-correct
-protocol second-opinion (proxy display :1) if we ever want to diff a
-decode against macXcapture's.
+**Every guest-facing value was probed live on indigo4k first** (small
+newline-JSON helios client from the Mac, run_command verbs):
 
-**The port, in commit order of pain:**
+- shutdownCommand `/etc/shutdown -y -g0 -i0`, lockstep with heliosAgent
+  PROTOCOL.md (init 5 is NOT power-off on IRIX).
+- detect() maps sysnames IRIX and IRIX64 both to .irix65, so the
+  sysinfo prober auto-adopts the OS on real SGI boxes.
+- ClockAdmin: `/sbin/date` (bin/date and usr/bin/date are symlinks),
+  SVR4 grammar. Both set forms (MMddHHmm.ss and MMddHHmmccyy) executed
+  on the box against its current time: exit 0, clock lands right, `+%Y`
+  prints 2026 -- no Y2K gate needed on 6.5.8f.
+- UserAdmin: stock 6.5 is unshadowed -- hash in /etc/passwd field 2,
+  4.1.4-style. Homes in /usr/people (learned, not assumed). SGI
+  reserved-name roster lifted from the actual stock passwd (sysadm,
+  cmwlogin, sgiweb, rfindd, ...; the mixed-case EZsetup/4Dgifts can't
+  collide with our [a-z] username rules). loginShell probe now walks
+  candidates ([/usr/local/bin/tcsh, /bin/tcsh]) so IRIX users get
+  /bin/tcsh instead of falling to csh.
+- xBinDirs `/usr/bin/X11`; curatedAppLaunchers(.irix65) = the 4
+  hand-verified apps (xterm/xclock/xcalc/xman) + 6 present-on-box and
+  proven under macxserver from the other guests' lists.
+- ImagePorts.externalHost (23/22/2125) is now a named constant, was two
+  drifting inline copies.
 
-- cx libs built on IRIX essentially clean. One real fix: logfile.cpp
-  called pthread_self() everywhere but SunOS 4; on IRIX that's
-  libpthread-only, and linking libpthread into a forking daemon changes
-  6.5 libc process semantics, so the thread-id log column is guarded
-  out like SunOS. platform.mk also learned uname -s = IRIX64 (64-bit
-  kernels, same n32 userland -> same irix6 platform).
-- heliosAgent needed: a signal-handler cast (SGI C++ headers declare
-  handlers as `void (*)(...)`; "prohibits conversion from (int) to
-  (...)" is the tell), -lelf for nlist (xload's -lmld answer is
-  COFF/o32-era; no n32 libmld on 6.5), per-OS grep default
-  (/usr/freeware/bin/grep -- base grep has no -r), and the IRIX
-  shutdown command (/etc/shutdown -y -g0 -i0; init 5 is NOT power-off
-  there).
-- Full SysInfo collector for IRIX: mem via sysmp(MP_SAGET, MPSA_RMINFO),
-  swap via swapctl(SC_GETSWAPTOT/SC_GETFREESWAP), disks via
-  getmntent+statvfs, load via nlist("/unix","avenrun") + /dev/kmem at
-  FSCALE 1024, lifted from xload's #ifdef sgi in reference/X11R6.
-  Validated live: sysinfo load matched uptime to the digit, memMB 384,
-  hostid = IP (correct SGI behavior, not a bug).
-- Deploy: init/heliosagent.irix (SysV + chkconfig-aware, no eeprom
-  dance; secret comes from /etc/helios/helios.json like the real Suns),
-  deploy.sh IRIX|IRIX64 case (init.d + S98/K30 links + chkconfig -f on),
-  makefile install targets for irix/irix64 in heliosAgent AND cm (cm's
-  silent no-op install was a user-reported bug; ss left alone, it never
-  had guest installs).
-- Two post-validation fixes are in the repos but NOT yet on the box
-  (next tar ship-up): /proc leaked into the disks list (IRIX pseudo-fs
-  mounts from a '/'-prefixed source, so the shared isLocalDisk source
-  test passes it; now gated on mnt_type efs/xfs) and sysInfoStartup now
-  prefers sysmp(MP_KERNADDR, MPKA_AVENRUN) over nlist for the avenrun
-  address (asks the running kernel, no /unix dependency).
-
-**Deployed state on the Indigo:** agent 0.2.0 running as a boot service,
-secret file in /etc/helios/helios.json (fleet-standard value; unique
-per-box secrets remain the known fleet-wide gap). RTC had reset to 1970;
-date set by hand, clock-chip battery is a watch item (same failure
-family as the Sun NVRAMs).
+**Tests:** 1588 pass. New IRIX pins in QemuEngine/ClockAdmin/UserAdmin
+tests; fixture-count tests now key on `emulatable`; the catalog
+unknown-OS fixture renamed to ultrix45 (irix65 is a known OS now).
 
 ## What's working / what's broken
 
-- Working: hello / sysinfo / run_command validated from the Mac against
-  the deployed agent. IRIX X clients render on macxserver.
-- Deployed binary predates the /proc disk filter and the sysmp-first
-  avenrun lookup; harmless (one bogus disks row), fixed on next tar.
-- GNU grep not confirmed installed on the Indigo; search verb errors
-  until the freeware tardist goes in or HELIOS_GREP points somewhere
-  capable.
-- Indigo RTC battery suspect. If the clock is 1970 again after a power
-  cycle, it's the Dallas chip.
-- Release images: all three cut, stripped, gated, publish-ready with
-  root password "root", living in ~/dev/SPARCplug/release-images/ ON
-  THE LAPTOP ONLY (local disk, not Dropbox, not git). Publish must
-  happen from that Mac or re-cut. HELD pending the rebrand URLs.
+- Working: swift build + full test suite green. Indigo4k already exists
+  in the live machines.json (external host, os unset); on the next app
+  rebuild the prober will adopt IRIX 6.5 and the dashboard line renders
+  "IRIX 6.5 IP20 · 384MB · ..." with no further config.
+- The RUNNING app predates all of this -- needs an Xcode rebuild before
+  any of it is visible.
+- Indigo4k entry rides telnet transport; with the agent live, helios is
+  the better daily path (passwordless, PATH from the OS profile). Its
+  launcher list is just one xterm; the curated IRIX set can be pasted
+  in while the app is quit.
+- Deployed agent on the Indigo still predates the /proc disk filter and
+  the sysmp-first avenrun fix (repo has both) -- dashboard will show a
+  bogus "/proc 14% full" row until the next tar ships up.
+- GNU grep still absent on the Indigo; helios search verb errors there.
+- Indigo RTC battery still a watch item (1970 after a power cycle = the
+  Dallas chip).
+- Release images: cut and publish-ready ON THE LAPTOP ONLY; held
+  pending the rebrand URLs.
 
 ## What's next
 
-**Front of the queue (carried verbatim from the 07-28 laptop session,
-untouched today -- the rebrand must settle before publish):**
+**Front of the queue (carried from 07-28, untouched again today -- the
+rebrand must settle before publish):**
 
 1. Todd answers the four rebrand sub-decisions: (a) display casing
    (assume macSPARCstation), (b) rename macxserver-images in place
@@ -102,45 +92,32 @@ untouched today -- the rebrand must settle before publish):**
 5. Virgin-box end-to-end acceptance: fresh account, real domain, real
    download, install wizard, boot to ready.
 
-**The macXserver IRIX-integration session (new today):**
+**IRIX follow-ups (small):**
 
-6. MachineOS gains an IRIX case: shutdownCommand must be
-   /etc/shutdown -y -g0 -i0, kept in step with heliosAgent PROTOCOL.md
-   (same lockstep rule as the existing three).
-7. Add indigo4k as an external-host machine (helios port 2125); fleet
-   heuristics confirm-don't-decide applies -- new OS lineage, expect
-   every confirm.
-8. Remote app launcher: IRIX flavor. Absolute paths from /usr/bin/X11,
-   and a curated launcher list for the SGI (xterm, xclock, xcalc, xman
-   verified today; SGI toolchest/Motif apps unexplored).
-9. sysinfo prober: IRIX serves every field; check the dashboard renders
-   a non-Sun uname sanely (sysname "IRIX", machine "IP20").
+6. Xcode rebuild + click-through: Indigo4k adopts IRIX 6.5 in the
+   Overview, Settings OS picker shows it (external hosts only), wizard
+   seedOS list does NOT show it.
+7. Indigo4k entry polish (app quit first): transport -> helios, paste
+   the curated launcher set, verify a helios xterm launch end-to-end.
+8. Ship the next heliosAgent tar to the Indigo (picks up the /proc
+   filter + sysmp avenrun); install GNU grep tardist or set HELIOS_GREP.
+9. Clock panel + user admin against the Indigo live (the builders are
+   probe-verified; the full pipelines haven't run against it yet).
 
-**Carried from the 07-28 Studio session:** Xcode rebuild +
-click-through of the UX consolidation (wizard domain field, settings
-panes, seeded launchers, image-folder mover, Forget Password, slimmed
-menus); laptop machines.json fixture reseed (optional); CanonicalDotfiles
-DISPLAY decision; UserAdmin live test on 2.6/4.1.4.
+**Carried from earlier sessions:** Xcode rebuild + click-through of the
+07-28 UX consolidation (wizard domain field, settings panes, seeded
+launchers, image-folder mover, Forget Password, slimmed menus); laptop
+machines.json fixture reseed (optional); CanonicalDotfiles DISPLAY
+decision; UserAdmin live test on 2.6/4.1.4.
 
 ## Committed / push state
 
-- cx, main: 08d7bfc (logfile pthread guard, platform.mk IRIX64,
-  PLATFORM_SUPPORT IRIX notes). Pushed.
-- heliosAgent, main: 5746cfd (signal cast, IRIX SysInfo collector +
-  post-validation fixes, -lelf, grep/shutdown defaults, deploy.sh +
-  init/heliosagent.irix, doc rows). Pushed.
-- cm, main: 1f95db4 (irix/irix64 install branches). Pushed.
-- X, main: this STATUS roll merged with the laptop's c8dac63 rebrand
-  commit (DECISIONS.md rebrand entry rode in with the merge). Pushed.
-- SPARCplug: untouched today.
+- X, main: e9299ad (IRIX MachineOS support, docs, tests) + this STATUS
+  roll. NOT pushed yet -- push at /eos.
+- cx family + SPARCplug: untouched today.
 
 ## Switching Macs
 
-- cx family lives in ~/Dropbox/dev/cx (Dropbox-synced) AND is pushed to
-  GitHub; either sync path works on the laptop.
-- git pull X on arrival for this STATUS + the merged rebrand DECISIONS.
-- Memory got a new file (reference_heliosagent_irix_port) plus updates;
-  let Dropbox finish syncing before opening the laptop.
-- The Indigo stays up as a boot-wired fleet member; nothing running on
-  the Macs to hand off.
-- Release images wait on the LAPTOP; rebrand queue is the gate.
+- Push X before leaving this Mac (the only repo with new commits).
+- The Indigo stays up as a boot-wired fleet member.
+- Release images still wait on the LAPTOP; rebrand queue is the gate.
