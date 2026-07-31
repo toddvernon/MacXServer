@@ -112,12 +112,15 @@ decision; UserAdmin live test on 2.6/4.1.4.
 
 ## Committed / push state
 
-- X, main: e9299ad (IRIX MachineOS support, docs, tests) + this STATUS
-  roll. NOT pushed yet -- push at /eos.
+- X, main: e9299ad (IRIX MachineOS support, docs, tests) + the STATUS
+  rolls. Pushed at /eos.
 - cx family + SPARCplug: untouched today.
+- Off-ledger: the Rachio yard weather page got its chart layout fixed
+  (wind + rainfall now full-width, x-axis labels thin to fit) and was
+  deployed to the pi. Lives in ~/Dropbox/dev/Rachio (Dropbox-synced,
+  not one of the session repos).
 
 ## Switching Macs
 
-- Push X before leaving this Mac (the only repo with new commits).
 - The Indigo stays up as a boot-wired fleet member.
 - Release images still wait on the LAPTOP; rebrand queue is the gate.
