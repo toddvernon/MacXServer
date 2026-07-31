@@ -13,10 +13,25 @@ public enum MachineKind: String, Equatable, Sendable, Codable, CaseIterable {
 /// Guest OS. Drives the per-OS port block, and later `-M`/guest bin dirs/Helios
 /// quirks. Auto-detected from the image where possible; user-set for external
 /// hosts. Nil when unknown (an external box we haven't classified).
+///
+/// Since 2026-07-31 this also profiles OSes we can only reach as external
+/// hosts (IRIX on real SGI hardware -- qemu-system-sparc can't emulate it);
+/// `emulatable` gates the emulation-only surfaces.
 public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
     case solaris26
     case sunos414
     case netbsd
+    case irix65
+
+    /// Whether the bundled qemu SS-5 engine can run this OS. False = external
+    /// hosts only: no bundled fixture, no starter image, no boot/halt console
+    /// plumbing -- the emulation-only properties below are inert for it.
+    public var emulatable: Bool {
+        switch self {
+        case .solaris26, .sunos414, .netbsd: return true
+        case .irix65: return false
+        }
+    }
 
     /// The historical per-OS host-port block. In P1 (one machine at a time) this
     /// is the machine's port triple; P2's dynamic allocator supersedes it for
@@ -26,6 +41,8 @@ public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
         case .solaris26: return .solaris26
         case .sunos414:  return .sunos414
         case .netbsd:    return .netbsd
+        // Never an emulated block: IRIX boxes are real hosts on real ports.
+        case .irix65:    return .externalHost
         }
     }
 
@@ -36,6 +53,7 @@ public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
         case .solaris26: return "Solaris 2.6"
         case .sunos414:  return "SunOS 4.1.4"
         case .netbsd:    return "NetBSD"
+        case .irix65:    return "IRIX 6.5"
         }
     }
 
@@ -48,6 +66,7 @@ public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
         switch self {
         case .sunos414: return 3
         case .solaris26, .netbsd: return 0
+        case .irix65: return 0      // inert: never emulated (see `emulatable`)
         }
     }
 
@@ -60,6 +79,7 @@ public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
         case .solaris26: return nil
         case .sunos414:  return "boot /iommu/sbus/espdma/esp/sd@3,0"
         case .netbsd:    return "boot /iommu/sbus/espdma/esp/sd@0,0"
+        case .irix65:    return nil // inert: never emulated
         }
     }
 
@@ -82,6 +102,9 @@ public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
         case .solaris26: return "/usr/sbin/init 5"
         case .sunos414:  return "/usr/etc/halt"
         case .netbsd:    return "/sbin/halt"
+        // init 5 is NOT power-off on IRIX; this is the SGI grammar. Must stay
+        // in step with heliosAgent PROTOCOL.md's per-OS shutdown table.
+        case .irix65:    return "/etc/shutdown -y -g0 -i0"
         }
     }
 
@@ -96,6 +119,7 @@ public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
         case .solaris26: return ["syncing file systems"]
         case .sunos414:  return ["syncing file systems", "halted"]
         case .netbsd:    return ["syncing disks", "halted", "rebooting"]
+        case .irix65:    return []  // inert: no qemu console to watch
         }
     }
 
@@ -113,6 +137,7 @@ public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
         case .solaris26: return ["RUN fsck MANUALLY"]
         case .sunos414:  return ["RUN fsck MANUALLY"]
         case .netbsd:    return ["RUN fsck_ffs MANUALLY", "RUN fsck MANUALLY"]
+        case .irix65:    return []  // inert: no qemu console to watch
         }
     }
 
@@ -127,6 +152,10 @@ public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
             if release.hasPrefix("4.") { return .sunos414 }
             if release.hasPrefix("5.") { return .solaris26 }
             return nil
+        // 64-bit IRIX kernels report IRIX64 (Octane, Origin); same 6.5
+        // userland, same profile. The 32-bit Indigo reports plain IRIX.
+        case "IRIX", "IRIX64":
+            return .irix65
         case "NetBSD":
             return .netbsd
         default:
@@ -136,12 +165,14 @@ public enum MachineOS: String, Equatable, Sendable, Codable, CaseIterable {
 
     /// PATH prefix so a bare `xterm` / `dtterm` resolves under the daemon's
     /// minimal env. Solaris ships OpenWindows + CDE; SunOS 4.1.4 has OpenWindows +
-    /// MIT X but no CDE (`/usr/dt`); NetBSD ships X under `/usr/X11R7`.
+    /// MIT X but no CDE (`/usr/dt`); NetBSD ships X under `/usr/X11R7`; IRIX
+    /// keeps everything in `/usr/bin/X11` (probed on indigo4k 2026-07-31).
     public var xBinDirs: String {
         switch self {
         case .solaris26: return "/usr/openwin/bin:/usr/dt/bin:/usr/bin/X11"
         case .sunos414:  return "/usr/openwin/bin:/usr/bin/X11"
         case .netbsd:    return "/usr/X11R7/bin"
+        case .irix65:    return "/usr/bin/X11"
         }
     }
 }
@@ -333,7 +364,7 @@ public struct Machine: Identifiable, Equatable, Sendable, Codable {
     public var resolvedPorts: ImagePorts {
         if let ports = ports { return ports }
         if kind == .emulatedVM { return os?.defaultPorts ?? .solaris26 }
-        return ImagePorts(telnet: 23, ssh: 22, helios: 2125)
+        return .externalHost
     }
 
     /// The effective guest MAC: the explicit override, else derived from `id` in

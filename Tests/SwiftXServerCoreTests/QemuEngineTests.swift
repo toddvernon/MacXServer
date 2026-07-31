@@ -475,6 +475,13 @@ final class QemuEngineTests: XCTestCase {
             // Milestones derive from the real boot transcript (ProgressReference),
             // so assert behavior against that table rather than brittle constants.
             let marks = ProgressReference.boot(for: os)
+            guard os.emulatable else {
+                // External-host-only OSes have no qemu console; their tables
+                // must be honestly empty, not padded with fake landmarks.
+                XCTAssertTrue(marks.isEmpty, "\(os)")
+                XCTAssertTrue(ProgressReference.shutdown(for: os).isEmpty, "\(os)")
+                continue
+            }
             let first = marks.first!
             let last = marks.last!
 
@@ -544,7 +551,7 @@ final class QemuEngineTests: XCTestCase {
             .sunos414:  "Jul  7 10:58:41 sunos halt: halted by root",
             .netbsd:    "Jul  7 16:56:20 netbsd halt: halted by tvernon",
         ]
-        for os in MachineOS.allCases {
+        for os in MachineOS.allCases where os.emulatable {
             let marks = ProgressReference.shutdown(for: os)
             let matched = marks.filter { firstLine[os]!.contains($0.0) }
             // The first line may match its OWN landmark (the top of the recede),
@@ -633,9 +640,24 @@ final class QemuEngineTests: XCTestCase {
         XCTAssertEqual(MachineOS.solaris26.shutdownCommand, "/usr/sbin/init 5")
         XCTAssertEqual(MachineOS.sunos414.shutdownCommand, "/usr/etc/halt")
         XCTAssertEqual(MachineOS.netbsd.shutdownCommand, "/sbin/halt")
+        // Lockstep with heliosAgent PROTOCOL.md; init 5 is NOT power-off on IRIX.
+        XCTAssertEqual(MachineOS.irix65.shutdownCommand, "/etc/shutdown -y -g0 -i0")
         XCTAssertTrue(MachineOS.solaris26.cleanHaltMarkers.contains("syncing file systems"))
         XCTAssertFalse(MachineOS.sunos414.xBinDirs.contains("/usr/dt/bin"))  // no CDE on 4.1.4
         XCTAssertTrue(MachineOS.netbsd.xBinDirs.contains("/usr/X11R7/bin"))
+        XCTAssertEqual(MachineOS.irix65.xBinDirs, "/usr/bin/X11")
+    }
+
+    /// IRIX is the first external-host-only OS: the sysinfo prober must adopt
+    /// it from both kernel spellings, and nothing emulation-side may claim it.
+    func testIrixIsExternalHostOnly() {
+        XCTAssertFalse(MachineOS.irix65.emulatable)
+        XCTAssertEqual(MachineOS.detect(unameSysname: "IRIX", release: "6.5"), .irix65)
+        XCTAssertEqual(MachineOS.detect(unameSysname: "IRIX64", release: "6.5"), .irix65)
+        // External standard ports, never an emulated 21x0 block.
+        XCTAssertEqual(MachineOS.irix65.defaultPorts, .externalHost)
+        XCTAssertNil(MachineOS.irix65.bootCommand)
+        XCTAssertTrue(MachineOS.irix65.cleanHaltMarkers.isEmpty)
     }
 
     // MARK: - helpers

@@ -47,6 +47,10 @@ public struct ImagePorts: Sendable, Equatable, Codable {
     public static let sunos414  = ImagePorts(telnet: 2133, ssh: 2232, helios: 2135)
     /// NetBSD/sparc -- planned.
     public static let netbsd    = ImagePorts(telnet: 2143, ssh: 2242, helios: 2145)
+    /// A real host on the LAN: the services' own well-known ports, no hostfwd
+    /// involved. One definition (was inlined in two places, drifting apart is
+    /// exactly the failure mode the blocks exist to prevent).
+    public static let externalHost = ImagePorts(telnet: 23, ssh: 22, helios: 2125)
 
     /// The block-numbering pattern behind the per-OS triples: block x is
     /// telnet 21x3 / ssh 22x2 / helios 21x5 (solaris26 = block 2, sunos414 = 3,

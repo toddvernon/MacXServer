@@ -1,8 +1,10 @@
 # Guest OS profile
 
-macXserver drives three guest OSes — Solaris 2.6, SunOS 4.1.4, NetBSD/sparc —
-and a lot of what the host does *differs by OS*. This doc is the single place
-that enumerates those differences, and the rule that keeps them from drifting.
+macXserver drives three emulated guest OSes — Solaris 2.6, SunOS 4.1.4,
+NetBSD/sparc — plus IRIX 6.5 on real SGI hardware (external hosts only;
+qemu-system-sparc can't emulate a MIPS SGI), and a lot of what the host does
+*differs by OS*. This doc is the single place that enumerates those
+differences, and the rule that keeps them from drifting.
 
 ## Why this exists
 
@@ -21,8 +23,16 @@ anyone look at shutdown. These are three genuinely different operating systems;
 (`Sources/SwiftXServerCore/Machine.swift`), computed with an exhaustive `switch`.**
 
 Swift refuses to compile a non-exhaustive `switch`, so:
-- adding a 4th OS won't build until every property has a case for it, and
-- adding a new divergent behavior forces you to answer it for all three OSes.
+- adding an OS won't build until every property has a case for it, and
+- adding a new divergent behavior forces you to answer it for every OS.
+
+IRIX (2026-07-31) proved the forcing function works: adding `.irix65` walked
+the compiler through every per-OS behavior in one pass. It also added the
+`emulatable` flag — an external-host-only OS answers the emulation-only
+properties (boot disk, boot command, console markers, progress transcripts)
+with clearly-commented inert values, and `emulatable` gates the surfaces that
+must never see it (bundled fixtures, starter-image download, the emulated-VM
+OS pickers).
 
 That converts a silent runtime gap into a compile error. Do **not** reintroduce a
 hardcoded Solaris path/command/marker on a guest-interaction path; add a property
@@ -31,19 +41,30 @@ derives everything from it (`config.profile`), so the engine has one per-OS inpu
 
 ## The matrix (current values)
 
-| Behavior (`MachineOS`)      | Solaris 2.6            | SunOS 4.1.4            | NetBSD                 |
-|-----------------------------|------------------------|------------------------|------------------------|
-| `displayName`               | Solaris 2.6            | SunOS 4.1.4            | NetBSD                 |
-| `bootDiskUnit` (ESP target) | 0                      | **3** (target↔sd swap) | 0                      |
-| `bootCommand`               | *(default auto-boot)*  | `boot …esp/sd@3,0`     | `boot …esp/sd@0,0`     |
-| `ports` (telnet/ssh/helios) | 2123/2222/2125         | 2133/2232/2135         | 2143/2242/2145         |
-| `shutdownCommand`           | `/usr/sbin/init 5`     | `/usr/etc/halt`        | `/sbin/halt`           |
-| `cleanHaltMarkers`          | "syncing file systems" | +"halted" *(guess)*    | "syncing disks"… *(guess)* |
-| `fsckStallMarkers`          | "RUN fsck MANUALLY"    | "RUN fsck MANUALLY"    | +"RUN fsck_ffs MANUALLY" |
-| `xBinDirs` (X PATH)         | openwin:dt:X11         | openwin:X11 (no CDE)   | /usr/X11R7/bin         |
-| progress transcripts        | 2026-06-23 capture     | 2026-07-07 capture     | 2026-07-07 capture     |
+| Behavior (`MachineOS`)      | Solaris 2.6            | SunOS 4.1.4            | NetBSD                 | IRIX 6.5               |
+|-----------------------------|------------------------|------------------------|------------------------|------------------------|
+| `emulatable`                | yes                    | yes                    | yes                    | **no** (real SGI only) |
+| `displayName`               | Solaris 2.6            | SunOS 4.1.4            | NetBSD                 | IRIX 6.5               |
+| `bootDiskUnit` (ESP target) | 0                      | **3** (target↔sd swap) | 0                      | *(inert)*              |
+| `bootCommand`               | *(default auto-boot)*  | `boot …esp/sd@3,0`     | `boot …esp/sd@0,0`     | *(inert)*              |
+| `ports` (telnet/ssh/helios) | 2123/2222/2125         | 2133/2232/2135         | 2143/2242/2145         | 23/22/2125 (real LAN)  |
+| `shutdownCommand`           | `/usr/sbin/init 5`     | `/usr/etc/halt`        | `/sbin/halt`           | `/etc/shutdown -y -g0 -i0` |
+| `cleanHaltMarkers`          | "syncing file systems" | +"halted" *(guess)*    | "syncing disks"… *(guess)* | *(inert)*          |
+| `fsckStallMarkers`          | "RUN fsck MANUALLY"    | "RUN fsck MANUALLY"    | +"RUN fsck_ffs MANUALLY" | *(inert)*            |
+| `xBinDirs` (X PATH)         | openwin:dt:X11         | openwin:X11 (no CDE)   | /usr/X11R7/bin         | /usr/bin/X11           |
+| progress transcripts        | 2026-06-23 capture     | 2026-07-07 capture     | 2026-07-07 capture     | *(inert, empty)*       |
+
+The per-OS admin tables ride the same forcing function outside `MachineOS`:
+`ClockAdmin` (IRIX: `/sbin/date`, SVR4 grammar — both set forms verified live
+on the Indigo 2026-07-31) and `UserAdmin` (IRIX: unshadowed `/etc/passwd`
+4.1.4-style, homes in `/usr/people`, SGI reserved names; all probed on the
+Indigo 2026-07-31 over helios).
 
 Notes:
+- *(inert)* = IRIX is never emulated, so the value can't be consumed; the
+  case exists only to satisfy the exhaustive switch and says so at the
+  call site. `detect()` maps both `IRIX` and `IRIX64` kernels to `.irix65`
+  (64-bit kernels report IRIX64; same 6.5 userland).
 - `shutdownCommand` is consumed **guest-side** by the daemon via `HELIOS_SHUTDOWN_CMD`
   (set per-OS in the guest-config deploy). The profile is the host-side source of
   truth the deploy must match; see SHORTCUTS "Helios shutdown per-OS".

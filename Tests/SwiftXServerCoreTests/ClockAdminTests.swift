@@ -67,6 +67,12 @@ final class ClockAdminTests: XCTestCase {
         // SVR4 grammar: [cc]yy trails, no seconds field exists.
         XCTAssertEqual(ClockAdmin.yearSetCommand(os: .solaris26, utc: mac),
                        "/usr/bin/date -u 071222592026")
+        // IRIX: SVR4 grammar off /sbin/date (both forms verified live on the
+        // Indigo, 2026-07-31).
+        XCTAssertEqual(ClockAdmin.yearSetCommand(os: .irix65, utc: mac),
+                       "/sbin/date -u 071222592026")
+        XCTAssertEqual(ClockAdmin.noYearSetCommand(os: .irix65, utc: mac),
+                       "/sbin/date -u 07122259.30")
     }
 
     func testYearChangesComparesUTCYears() {

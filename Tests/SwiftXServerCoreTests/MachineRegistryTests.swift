@@ -16,10 +16,12 @@ final class MachineRegistryTests: XCTestCase {
             path: path,
             launchersPath: "/nonexistent-launchers",   // force the empty-launchers path
             bundledImagePath: "/tmp/bundled.qcow2")
-        // First run seeds one imageless bundled fixture per guest OS, persisted.
-        XCTAssertEqual(registry.machines.count, MachineOS.allCases.count)
+        // First run seeds one imageless bundled fixture per emulatable guest
+        // OS, persisted (external-only OSes like IRIX have no fixture).
+        let emulatable = MachineOS.allCases.filter { $0.emulatable }
+        XCTAssertEqual(registry.machines.count, emulatable.count)
         XCTAssertTrue(registry.machines.allSatisfy { $0.bundled && $0.image == nil })
-        XCTAssertEqual(Set(registry.machines.compactMap { $0.os }), Set(MachineOS.allCases))
+        XCTAssertEqual(Set(registry.machines.compactMap { $0.os }), Set(emulatable))
         // Bundled fixtures keep deriving their well-known per-OS port blocks --
         // the load-time sticky assignment must not materialize blocks on them.
         XCTAssertTrue(registry.machines.allSatisfy { $0.ports == nil })

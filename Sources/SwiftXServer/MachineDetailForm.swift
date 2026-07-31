@@ -533,7 +533,11 @@ struct MachineDetailForm: View {
                 } else {
                     Picker("", selection: $draft.os) {
                         Text("auto / unspecified").tag(MachineOS?.none)
-                        ForEach(MachineOS.allCases, id: \.self) { os in
+                        // An emulated VM can only be an OS the engine can
+                        // run; external hosts get the full list (IRIX etc.).
+                        ForEach(MachineOS.allCases.filter {
+                            draft.kind == .externalHost || $0.emulatable
+                        }, id: \.self) { os in
                             Text(os.displayName).tag(MachineOS?.some(os))
                         }
                     }

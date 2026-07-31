@@ -68,6 +68,8 @@ public enum ClockAdmin {
         case .solaris26: return "/usr/bin/date"
         case .sunos414:  return "/bin/date"
         case .netbsd:    return "/bin/date"
+        // The real binary; /bin/date and /usr/bin/date are symlinks to it.
+        case .irix65:    return "/sbin/date"
         }
     }
 
@@ -87,6 +89,9 @@ public enum ClockAdmin {
         case .solaris26: return "\(datePath(os: os)) -u \(format(utc, "MMddHHmmyyyy"))"
         case .sunos414:  return "\(datePath(os: os)) -u \(format(utc, "yyMMddHHmm.ss"))"
         case .netbsd:    return "\(datePath(os: os)) -u \(format(utc, "yyyyMMddHHmm.ss"))"
+        // SVR4 grammar like Solaris. Both this and the no-year form verified
+        // live on the Indigo (6.5.8f) 2026-07-31: exit 0, clock lands right.
+        case .irix65:    return "\(datePath(os: os)) -u \(format(utc, "MMddHHmmyyyy"))"
         }
     }
 

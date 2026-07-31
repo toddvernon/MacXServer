@@ -146,12 +146,13 @@ struct AddMachineWizardView: View {
                             + "Two machines can\u{2019}t share one disk.")
                 }
                 if imagePath != nil, detection?.os == nil {
-                    LabeledContent("OS") { osPicker($os) }
+                    LabeledContent("OS") { osPicker($os, emulatableOnly: true) }
                 }
             } else {
                 LabeledContent("System") {
                     Picker("", selection: $seedOS) {
-                        ForEach(MachineOS.allCases, id: \.self) { os in
+                        // Starter images exist only for the emulatable OSes.
+                        ForEach(MachineOS.allCases.filter { $0.emulatable }, id: \.self) { os in
                             Text(os.displayName).tag(os)
                         }
                     }
@@ -501,10 +502,14 @@ struct AddMachineWizardView: View {
         .font(.callout)
     }
 
-    private func osPicker(_ selection: Binding<MachineOS?>) -> some View {
+    /// `emulatableOnly` for the qcow2-image branch (a SPARC disk can't hold
+    /// an external-only OS like IRIX); the external-host step shows them all.
+    private func osPicker(_ selection: Binding<MachineOS?>,
+                          emulatableOnly: Bool = false) -> some View {
         Picker("", selection: selection) {
             Text("Not sure").tag(MachineOS?.none)
-            ForEach(MachineOS.allCases, id: \.self) { os in
+            ForEach(MachineOS.allCases.filter { !emulatableOnly || $0.emulatable },
+                    id: \.self) { os in
                 Text(os.displayName).tag(MachineOS?.some(os))
             }
         }

@@ -155,6 +155,10 @@ public enum UserAdmin {
     public static let templateUID = 1999
     public static let templateHome = "/home/template"
     public static let loginShell = "/usr/local/bin/tcsh"
+    /// Where a tcsh may live, probed in order by planAddUser. The Suns carry
+    /// the convergence build at /usr/local/bin; IRIX ships its own /bin/tcsh
+    /// (probed on indigo4k 2026-07-31 -- there is no /usr/local/bin there).
+    public static let loginShellCandidates = [loginShell, "/bin/tcsh"]
 
     // MARK: Username + password
 
@@ -181,11 +185,19 @@ public enum UserAdmin {
                                     "sysdiag", "operator"]
         let netbsd: Set<String>  = ["toor", "operator", "games", "postfix",
                                     "named", "ntpd", "sshd"]
+        // From the Indigo's stock /etc/passwd (2026-07-31). The mixed-case
+        // SGI accounts (EZsetup, OutOfBox, 4Dgifts) can't collide -- the
+        // username rules only admit [a-z][a-z0-9]* -- so they're not listed.
+        let irix: Set<String>    = ["sysadm", "cmwlogin", "diag", "lp", "nuucp",
+                                    "auditor", "dbadmin", "sgiweb", "rfindd",
+                                    "demos", "guest", "noaccess"]
         switch os {
         case .solaris26: return common.union(solaris)
         case .sunos414:  return common.union(sunos)
         case .netbsd:    return common.union(netbsd)
-        case nil:        return common.union(solaris).union(sunos).union(netbsd)
+        case .irix65:    return common.union(irix)
+        case nil:        return common.union(solaris).union(sunos)
+                               .union(netbsd).union(irix)
         }
     }
 
@@ -372,7 +384,7 @@ public enum UserAdmin {
     public static func physicalHomeParent(os: MachineOS, recordParent: String) -> String {
         switch os {
         case .solaris26: return recordParent == "/home" ? "/export/home" : recordParent
-        case .sunos414, .netbsd: return recordParent
+        case .sunos414, .netbsd, .irix65: return recordParent
         }
     }
 
@@ -396,10 +408,14 @@ public enum UserAdmin {
         }
         let homeParent = deriveHomeParent(humans: humans, os: os)
 
-        // Preferred shell if the box has it, /bin/csh (universal) otherwise.
-        let probe = try transport.runCommand("test -x \(loginShell)", cwd: nil,
-                                             timeoutMs: 10_000, user: nil)
-        let shell = probe.exitCode == 0 ? loginShell : "/bin/csh"
+        // Preferred shell: the first tcsh the box actually has, /bin/csh
+        // (universal) otherwise.
+        var shell = "/bin/csh"
+        for candidate in loginShellCandidates {
+            let probe = try transport.runCommand("test -x \(candidate)", cwd: nil,
+                                                 timeoutMs: 10_000, user: nil)
+            if probe.exitCode == 0 { shell = candidate; break }
+        }
 
         return AddPlan(uid: uid, gid: group.gid, groupName: group.name,
                        homeParent: homeParent,
@@ -414,7 +430,9 @@ public enum UserAdmin {
     public static func recordFiles(os: MachineOS) -> [String] {
         switch os {
         case .solaris26: return ["/etc/shadow", "/etc/passwd"]
-        case .sunos414:  return ["/etc/passwd"]
+        // IRIX 6.5 CAN run shadowed but stock doesn't (no /etc/shadow on the
+        // Indigo, probed 2026-07-31); hash lives in passwd, 4.1.4-style.
+        case .sunos414, .irix65: return ["/etc/passwd"]
         case .netbsd:    return ["/etc/master.passwd"]
         }
     }
@@ -424,8 +442,8 @@ public enum UserAdmin {
     /// master file is the truth there.
     public static func accountsFile(os: MachineOS) -> String {
         switch os {
-        case .solaris26, .sunos414: return "/etc/passwd"
-        case .netbsd:               return "/etc/master.passwd"
+        case .solaris26, .sunos414, .irix65: return "/etc/passwd"
+        case .netbsd:                        return "/etc/master.passwd"
         }
     }
 
@@ -434,7 +452,7 @@ public enum UserAdmin {
     /// (and /etc/passwd). Absolute path per the per-OS agent audit rule.
     public static func activationCommand(os: MachineOS) -> String? {
         switch os {
-        case .solaris26, .sunos414: return nil
+        case .solaris26, .sunos414, .irix65: return nil
         case .netbsd: return "/usr/sbin/pwd_mkdb -p /etc/master.passwd"
         }
     }
@@ -475,7 +493,7 @@ public enum UserAdmin {
             return PasswdEntry(name: name, passwordField: "x", uid: plan.uid,
                                gid: plan.gid, gecos: gecos, home: home,
                                shell: plan.shell).line
-        case .sunos414:
+        case .sunos414, .irix65:
             return PasswdEntry(name: name, passwordField: hash, uid: plan.uid,
                                gid: plan.gid, gecos: gecos, home: home,
                                shell: plan.shell).line
@@ -713,7 +731,7 @@ public enum UserAdmin {
     public static func hashFile(os: MachineOS) -> String {
         switch os {
         case .solaris26: return "/etc/shadow"
-        case .sunos414:  return "/etc/passwd"
+        case .sunos414, .irix65: return "/etc/passwd"
         case .netbsd:    return "/etc/master.passwd"
         }
     }

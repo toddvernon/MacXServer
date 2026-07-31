@@ -60,6 +60,9 @@ enum ProgressReference {
         case .solaris26: return solaris26Boot
         case .sunos414:  return sunos414Boot
         case .netbsd:    return netbsdBoot
+        // External-host only (never emulated): there is no qemu console to
+        // pace a bar from, so the transcript is honestly empty.
+        case .irix65:    return ""
         }
     }
 
@@ -68,6 +71,7 @@ enum ProgressReference {
         case .solaris26: return solaris26Shutdown
         case .sunos414:  return sunos414Shutdown
         case .netbsd:    return netbsdShutdown
+        case .irix65:    return ""  // external-host only, as above
         }
     }
 

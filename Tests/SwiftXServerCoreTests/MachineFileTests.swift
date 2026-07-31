@@ -345,8 +345,11 @@ final class MachineFileTests: XCTestCase {
     func testEnsuringBundledSeedsOneImagelessFixturePerOS() throws {
         let seeded = MachineMigrator.ensuringBundled([])
         let fixtures = try XCTUnwrap(seeded)
-        XCTAssertEqual(fixtures.count, MachineOS.allCases.count)
-        XCTAssertEqual(Set(fixtures.compactMap { $0.os }), Set(MachineOS.allCases))
+        // One fixture per EMULATABLE OS -- external-only OSes (IRIX) ship
+        // nothing to bundle.
+        let emulatable = MachineOS.allCases.filter { $0.emulatable }
+        XCTAssertEqual(fixtures.count, emulatable.count)
+        XCTAssertEqual(Set(fixtures.compactMap { $0.os }), Set(emulatable))
         XCTAssertTrue(fixtures.allSatisfy { $0.bundled && $0.kind == .emulatedVM })
         XCTAssertTrue(fixtures.allSatisfy { $0.image == nil && !$0.isInstalledEmulatedVM })
         // User-less by design: the first-run flow fills the login.
@@ -443,7 +446,7 @@ final class MachineFileTests: XCTestCase {
                               bundled: true, host: "127.0.0.1", user: "tvernon",
                               imagePath: "/tmp/solaris.qcow2")
         let grown = try XCTUnwrap(MachineMigrator.ensuringBundled([solaris]))
-        XCTAssertEqual(grown.count, MachineOS.allCases.count)
+        XCTAssertEqual(grown.count, MachineOS.allCases.filter { $0.emulatable }.count)
         let kept = grown.first { $0.os == .solaris26 }
         XCTAssertEqual(kept?.id, solaris.id)
         XCTAssertEqual(kept?.image?.path, "/tmp/solaris.qcow2")

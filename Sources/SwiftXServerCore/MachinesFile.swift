@@ -91,7 +91,8 @@ public enum MachineMigrator {
         return machines
     }
 
-    /// The machines we ship: one bundled fixture per guest OS, imageless AND
+    /// The machines we ship: one bundled fixture per emulatable guest OS
+    /// (external-only OSes like IRIX have nothing to bundle), imageless AND
     /// user-less (the user attaches a disk image, then the first-run flow
     /// creates their login and fills `user`). Seeding a user here would write
     /// a lie for anyone who isn't the developer -- the empty user is the
@@ -101,7 +102,7 @@ public enum MachineMigrator {
     /// behavior (ports, boot command, halt) derives from `os`, so this stays
     /// a terse list.
     public static func bundledFixtures() -> [Machine] {
-        MachineOS.allCases.map { os in
+        MachineOS.allCases.filter(\.emulatable).map { os in
             Machine(name: os.displayName, kind: .emulatedVM, os: os, bundled: true,
                     host: "127.0.0.1", user: "", transport: .helios,
                     display: "10.0.2.2:0", imagePath: nil,
@@ -165,6 +166,15 @@ public enum MachineMigrator {
             commands = ["bitmap", "ico", "uxterm", "xcalc", "xclock", "xditview",
                         "xedit", "xeyes", "xman", "xmore"]
                 .map { "/usr/X11R7/bin/\($0)" }
+        case .irix65:
+            // Real-SGI set (no fixture ships this; it seeds hand-added IRIX
+            // machines). xterm/xclock/xcalc/xman hand-verified on the Indigo
+            // 2026-07-30; the rest are present in its /usr/bin/X11 (probed
+            // 2026-07-31) and proven under macxserver from the other guests'
+            // lists. SGI toolchest/Motif apps still unexplored.
+            commands = ["bitmap", "xbiff", "xcalc", "xclipboard", "xclock",
+                        "xditview", "xedit", "xfontsel", "xlogo", "xman"]
+                .map { "/usr/bin/X11/\($0)" }
         }
         return commands.enumerated().map { i, command in
             let binary = command.components(separatedBy: " ")[0]
@@ -209,7 +219,7 @@ public enum MachineMigrator {
     static func portsFor(kind: MachineKind, os: MachineOS?,
                          transport: LauncherTransport, port: UInt16) -> ImagePorts? {
         if kind == .emulatedVM { return nil }   // derive from os / defaults
-        let standard = ImagePorts(telnet: 23, ssh: 22, helios: 2125)
+        let standard = ImagePorts.externalHost
         if port == standard.port(for: transport) { return nil }   // nothing to override
         var ports = standard
         switch transport {

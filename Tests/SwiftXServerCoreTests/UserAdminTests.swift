@@ -214,16 +214,28 @@ final class UserAdminTests: XCTestCase {
                        "/home")
         XCTAssertEqual(UserAdmin.physicalHomeParent(os: .netbsd, recordParent: "/home"),
                        "/home")
+        // IRIX record path IS the physical path (homes live in /usr/people,
+        // learned from the box by planAddUser, no automount indirection).
+        XCTAssertEqual(UserAdmin.physicalHomeParent(os: .irix65, recordParent: "/usr/people"),
+                       "/usr/people")
 
         XCTAssertEqual(UserAdmin.recordFiles(os: .solaris26),
                        ["/etc/shadow", "/etc/passwd"])   // login-enabling last
         XCTAssertEqual(UserAdmin.recordFiles(os: .sunos414), ["/etc/passwd"])
         XCTAssertEqual(UserAdmin.recordFiles(os: .netbsd), ["/etc/master.passwd"])
+        // Stock IRIX 6.5 is unshadowed (probed on the Indigo 2026-07-31).
+        XCTAssertEqual(UserAdmin.recordFiles(os: .irix65), ["/etc/passwd"])
 
         XCTAssertNil(UserAdmin.activationCommand(os: .solaris26))
         XCTAssertNil(UserAdmin.activationCommand(os: .sunos414))
+        XCTAssertNil(UserAdmin.activationCommand(os: .irix65))
         XCTAssertEqual(UserAdmin.activationCommand(os: .netbsd),
                        "/usr/sbin/pwd_mkdb -p /etc/master.passwd")
+
+        // SGI system accounts are reserved; the mixed-case ones (EZsetup,
+        // 4Dgifts) are unreachable by the username rules and not listed.
+        XCTAssertTrue(UserAdmin.reservedNames(os: .irix65).contains("sysadm"))
+        XCTAssertTrue(UserAdmin.reservedNames(os: nil).contains("sgiweb"))
     }
 
     /// The images' convergence-scheme plan, for pinning record formats.

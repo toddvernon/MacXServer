@@ -2021,6 +2021,35 @@ migration code, stale links, and a re-run of the acceptance test.
 
 ---
 
+## 2026-07-31: IRIX 6.5 joins MachineOS as the first external-host-only OS
+
+**Decision:** the Indigo (and any other IRIX 6.5 box running heliosAgent)
+gets full machine-manager support by adding `.irix65` to `MachineOS`, with
+a new `emulatable` flag rather than a parallel enum or a nil-OS special
+case. `emulatable == false` gates the emulation-only surfaces (bundled
+fixtures, starter-image download, emulated-VM OS pickers); the
+emulation-only profile properties (bootDiskUnit, bootCommand, console
+markers, progress transcripts) answer with clearly-commented inert values.
+Everything host-to-guest that IS reachable on a real IRIX box — shutdown
+verb, clock sync, user admin, X launchers, sysinfo detect — carries real,
+on-box-verified values (probed live on indigo4k over helios, 2026-07-31:
+date grammar both forms, unshadowed /etc/passwd, /usr/people homes,
+/usr/bin/X11 inventory, stock account roster).
+
+**Why not a separate ExternalOS enum:** the per-OS admin tables
+(ClockAdmin, UserAdmin, launchers, shutdown) are exactly the same shape
+for emulated and real machines — that's the whole point of the guest
+profile — and splitting the type would duplicate every consumer. One enum
+plus one capability flag keeps the exhaustive-switch forcing function:
+adding the case refused to compile until all ~15 per-OS behaviors were
+answered, which is the drift protection working as designed
+(GUEST_OS_PROFILE.md).
+
+**Also:** `MachineOS.detect` maps both `IRIX` and `IRIX64` sysnames to
+`.irix65` (64-bit kernels report IRIX64, same 6.5 userland), and
+`ImagePorts.externalHost` (23/22/2125) became a named constant instead of
+two drifting inline copies.
+
 ## Decisions still to make
 
 These are open questions to resolve as the project progresses. Will become entries when decided.

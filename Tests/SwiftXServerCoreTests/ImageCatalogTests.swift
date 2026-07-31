@@ -52,8 +52,8 @@ final class ImageCatalogTests: XCTestCase {
         let json = """
         { "formatVersion": 1,
           "images": [
-            { "os": "irix65", "version": "2027.01",
-              "url": "https://macxserver.com/images/irix.gz",
+            { "os": "ultrix45", "version": "2027.01",
+              "url": "https://macxserver.com/images/ultrix.gz",
               "sizeGz": 1, "sha256Gz": "x", "size": 1, "sha256": "y" },
             { "os": "netbsd", "version": "2026.07",
               "url": "https://macxserver.com/images/netbsd-boot.qcow2.gz",
