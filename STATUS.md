@@ -1,76 +1,71 @@
-# Status 2026-07-31 (Mac Studio)
+# Status 2026-08-18 (Mac Studio)
 
-## Headline: macXserver understands IRIX 6.5. Yesterday's Indigo became a
-## fleet member; today the Mac side caught up: MachineOS grew .irix65 (the
-## first external-host-only OS), with every per-OS value probed live on
-## the box over helios before it was written down. Items 6-9 of the
-## 07-30 IRIX-integration queue landed in one pass.
+## Headline: second real Indigo brought to life as indigo4b. Todd's PSU/
+## battery/serial-cable bench work plus a full remote software rescue over
+## helios: the indigo4k clone got a new identity (indigo4b, 192.168.7.22),
+## a correct clock, and working LG2 graphics. The "won't boot graphical"
+## mystery was never hardware: the cloned disk only had Elan's drivers.
+## No repo code changed today; everything was on-box, DNS, and user config.
 ## NOTE: the 07-28 rebrand-to-macSPARCstation queue is STILL front of
 ## queue and untouched; carried below in full.
 
 ## What happened today
 
-One commit in this tree: e9299ad "IRIX 6.5 joins MachineOS: first
-external-host-only OS". Committed to main, NOT yet pushed.
+All bench + on-box work, no commits in any repo (this STATUS roll is the
+only tree change).
 
-**The shape:** MachineOS gained `.irix65` plus an `emulatable` flag.
-IRIX can't be emulated by the bundled qemu-system-sparc, so the flag
-gates the emulation-only surfaces (bundled fixtures, starter-image
-seedOS picker, qcow2 OS picker, the emulated branch of the Settings OS
-picker); the emulation-only profile properties (bootDiskUnit,
-bootCommand, console markers, progress transcripts) hold commented
-inert values. The exhaustive-switch forcing function
-(GUEST_OS_PROFILE.md) worked exactly as designed: the build refused
-until all ~15 per-OS behaviors were answered. DECISIONS.md has the
-entry (one enum + capability flag, not a parallel ExternalOS type).
+**The machine:** second SGI Indigo, R4000 100MHz IP20, 48MB, base LG1/LG2
+graphics (gfxinfo: LG2 rev 3, driver family LG1MC, 1024x768/8-bit which
+is the hardware max). Boots a ZuluSCSI Blaster clone of indigo4k's disk.
+Todd replaced the clock battery, built a serial cable, and reset the
+root password (value in Claude memory, not in this public tree).
 
-**Every guest-facing value was probed live on indigo4k first** (small
-newline-JSON helios client from the Mac, run_command verbs):
+**Identity:** now indigo4b / 192.168.7.22 (static, next slot after the
+fleet's .4-.21 block; DHCP pool is up high, Mac leases .207). /etc/sys_id
++ /etc/hosts edited over helios (backups *.indigo4k.bak on the box), DNS
+added on the Pi-hole (dnsmasq on .3), TZ fixed to MST7MDT (clone had a
+stray PST8PDT line), clock set, netwr_client chkconfig'd off (ipxlink
+noise). Both real Indigos can now coexist (4k=.7, 4b=.22).
 
-- shutdownCommand `/etc/shutdown -y -g0 -i0`, lockstep with heliosAgent
-  PROTOCOL.md (init 5 is NOT power-off on IRIX).
-- detect() maps sysnames IRIX and IRIX64 both to .irix65, so the
-  sysinfo prober auto-adopts the OS on real SGI boxes.
-- ClockAdmin: `/sbin/date` (bin/date and usr/bin/date are symlinks),
-  SVR4 grammar. Both set forms (MMddHHmm.ss and MMddHHmmccyy) executed
-  on the box against its current time: exit 0, clock lands right, `+%Y`
-  prints 2026 -- no Y2K gate needed on 6.5.8f.
-- UserAdmin: stock 6.5 is unshadowed -- hash in /etc/passwd field 2,
-  4.1.4-style. Homes in /usr/people (learned, not assumed). SGI
-  reserved-name roster lifted from the actual stock passwd (sysadm,
-  cmwlogin, sgiweb, rfindd, ...; the mixed-case EZsetup/4Dgifts can't
-  collide with our [a-z] username rules). loginShell probe now walks
-  candidates ([/usr/local/bin/tcsh, /bin/tcsh]) so IRIX users get
-  /bin/tcsh instead of falling to csh.
-- xBinDirs `/usr/bin/X11`; curatedAppLaunchers(.irix65) = the 4
-  hand-verified apps (xterm/xclock/xcalc/xman) + 6 present-on-box and
-  proven under macxserver from the other guests' lists.
-- ImagePorts.externalHost (23/22/2125) is now a named constant, was two
-  drifting inline copies.
+**Graphics rescue (the day's meat):** kernel + gfxinfo saw NO graphics
+board because inst installs only mach()-tagged files for the machine it
+runs on -- the clone had gr2.a (Elan), no lg1.a, no LG1 GL, no lg1mc.so
+X DDX. PROM hinv proved the board itself was fine. Fix: ripped Todd's
+IRIX 6.5 CD set on the Mac (Foundation 1+2, 6.5.8 Overlays 1-3), served
+them from a CD4/ folder on the Zulu SD card (multi-image CD at SCSI ID 4,
+`eject /CDROM` advances discs -- swapping done entirely over helios),
+staged the eoe/x_eoe products to /usr/dist/{foundation1,overlays1,2,3}
+on the box, then inst-reinstalled eoe.sw.gfx + eoe.sw.gltools +
+x_eoe.sw.Server with the machine override. THE TRAP (cost two failed
+passes): inst -m REPLACES the whole machine description with only what
+you pass, comma lists don't parse, CPUARCH isn't a variable. Correct
+form: `inst -m CPUBOARD=IP20 -m GFXBOARD=LIGHT -m SUBGR=LG1MC -m
+MODE=32bit`, one -m per assignment, and `admin hardware` in the command
+file to verify. autoconfig -f, reboot: login screen on the monitor.
+Bonus lesson: keyboard presence (not nvram console=d) decides whether
+the PROM uses the graphics head.
 
-**Tests:** 1588 pass. New IRIX pins in QemuEngine/ClockAdmin/UserAdmin
-tests; fixture-count tests now key on `emulatable`; the catalog
-unknown-OS fixture renamed to ultrix45 (irix65 is a known OS now).
+**Mac side:** machines.json got an Indigo4b entry (clone of Indigo4k,
+fresh UUID; app relaunched and the prober adopted it fine). dev-secrets
+got the indigo4b helios/telnet keys. Project .claude/settings.json
+gained a permissions allowlist (helios CLI, ping/dig/arp/nc, diskutil
+list/info/eject, xxd, ipconfig) so fleet probing doesn't prompt.
+Everything recorded in memory: reference_indigo4b_lg2_bringup.
 
 ## What's working / what's broken
 
-- Working: swift build + full test suite green. Indigo4k already exists
-  in the live machines.json (external host, os unset); on the next app
-  rebuild the prober will adopt IRIX 6.5 and the dashboard line renders
-  "IRIX 6.5 IP20 · 384MB · ..." with no further config.
-- The RUNNING app predates all of this -- needs an Xcode rebuild before
-  any of it is visible.
-- Indigo4k entry rides telnet transport; with the agent live, helios is
-  the better daily path (passwordless, PATH from the OS profile). Its
-  launcher list is just one xterm; the curated IRIX set can be pasted
-  in while the app is quit.
-- Deployed agent on the Indigo still predates the /proc disk filter and
-  the sysmp-first avenrun fix (repo has both) -- dashboard will show a
-  bogus "/proc 14% full" row until the next tar ships up.
-- GNU grep still absent on the Indigo; helios search verb errors there.
-- Indigo RTC battery still a watch item (1970 after a power cycle = the
-  Dallas chip).
-- Release images: cut and publish-ready ON THE LAPTOP ONLY; held
+- indigo4b: up, graphical login on the monitor, helios agent live at
+  .22:2125, macXserver dashboard line rendering. 6.5 media staged on its
+  disk AND on its Zulu SD -- future driver work needs no physical CD.
+- The ripped ISOs also sit in Mac /tmp/CD4 -- Todd wants them hosted on
+  oldsilicon.com. /tmp DIES ON MAC REBOOT: move them somewhere durable
+  first (and cmp after any NAS/SMB copy, that path corrupted before).
+- indigo4b agent binary is the same vintage as indigo4k's: predates the
+  /proc disk filter + sysmp avenrun fix; GNU grep still absent (search
+  verb errors). Same next-tar item as the 4k, now times two.
+- Original indigo4k untouched today (stayed off while its clone squatted
+  on .7; safe to power on again now).
+- Release images: still cut and publish-ready ON THE LAPTOP ONLY; held
   pending the rebrand URLs.
 
 ## What's next
@@ -92,17 +87,15 @@ rebrand must settle before publish):**
 5. Virgin-box end-to-end acceptance: fresh account, real domain, real
    download, install wizard, boot to ready.
 
-**IRIX follow-ups (small):**
+**Indigo follow-ups (small, now for BOTH machines):**
 
-6. Xcode rebuild + click-through: Indigo4k adopts IRIX 6.5 in the
-   Overview, Settings OS picker shows it (external hosts only), wizard
-   seedOS list does NOT show it.
-7. Indigo4k entry polish (app quit first): transport -> helios, paste
-   the curated launcher set, verify a helios xterm launch end-to-end.
-8. Ship the next heliosAgent tar to the Indigo (picks up the /proc
-   filter + sysmp avenrun); install GNU grep tardist or set HELIOS_GREP.
-9. Clock panel + user admin against the Indigo live (the builders are
-   probe-verified; the full pipelines haven't run against it yet).
+6. Ship the next heliosAgent tar to indigo4k AND indigo4b (/proc filter
+   + sysmp avenrun); GNU grep tardist or HELIOS_GREP on both.
+7. Indigo4k entry polish (app quit first): transport -> helios, curated
+   launcher set (4b already carries the curated 10).
+8. Clock panel + user admin live against a real Indigo (builders are
+   probe-verified; full pipelines still haven't run against one).
+9. Move /tmp/CD4 ISOs somewhere durable; oldsilicon.com hosting page.
 
 **Carried from earlier sessions:** Xcode rebuild + click-through of the
 07-28 UX consolidation (wizard domain field, settings panes, seeded
@@ -112,15 +105,14 @@ decision; UserAdmin live test on 2.6/4.1.4.
 
 ## Committed / push state
 
-- X, main: e9299ad (IRIX MachineOS support, docs, tests) + the STATUS
-  rolls. Pushed at /eos.
-- cx family + SPARCplug: untouched today.
-- Off-ledger: the Rachio yard weather page got its chart layout fixed
-  (wind + rainfall now full-width, x-axis labels thin to fit) and was
-  deployed to the pi. Lives in ~/Dropbox/dev/Rachio (Dropbox-synced,
-  not one of the session repos).
+- X, main: this STATUS roll only. Pushed at /eos.
+- cx family + SPARCplug: untouched today, all clean.
 
 ## Switching Macs
 
-- The Indigo stays up as a boot-wired fleet member.
+- indigo4b is a live fleet member now; nothing holds a lock anywhere.
+- machines.json / dev-secrets changes are Mac-Studio-local (per-Mac
+  config, doesn't sync) -- the laptop's app won't know indigo4b until
+  its own machines.json gets an entry or the wizard adds one.
+- Memory (reference_indigo4b_lg2_bringup) rides Dropbox -- let it sync.
 - Release images still wait on the LAPTOP; rebrand queue is the gate.
